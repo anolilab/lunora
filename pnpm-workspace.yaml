@@ -231,7 +231,7 @@ catalogs:
     "@semantic-release/exec": ^7.1.0
     "@total-typescript/ts-reset": ^0.6.1
     "@tsconfig/node24": ^24.0.4
-    conventional-changelog-conventionalcommits: 10.3.0
+    conventional-changelog-conventionalcommits: 9.3.1
     cross-env: ^10.1.0
   lint:
     # Held at 28.0.1: 28.1.x turns on ~20 new `unicorn/*` rules (filename-case,
