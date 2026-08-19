@@ -36,6 +36,7 @@ const SqlResultsPane = ({
     onShowExplain,
     onShowResults,
     chatOpen,
+    onDebugError,
     onToggleChat,
     onToggleSplit,
     pane,
@@ -53,6 +54,8 @@ const SqlResultsPane = ({
     /** Layout classes from the panel, which owns the stacked/split decision. */
     readonly className: string;
     readonly error: null | string;
+    /** Open the assistant on the failing statement. Omitted when there is nothing to debug. */
+    readonly onDebugError?: () => void;
     readonly onFormat: () => void;
     readonly onInferChart: () => void;
     readonly onRun: () => void;
@@ -204,9 +207,45 @@ const SqlResultsPane = ({
 
             <div className="min-h-0 flex-1 overflow-auto">
                 {error !== null && (
-                    <Alert className="m-3 font-mono text-xs" testId="sql-error" variant="destructive">
-                        {error}
-                    </Alert>
+                    <div className="m-3 flex flex-col items-start gap-2">
+                        <Alert className="w-full font-mono text-xs" testId="sql-error" variant="destructive">
+                            {error}
+                        </Alert>
+
+                        {/*
+                         * The debug affordance belongs HERE, on the failure.
+                         * "Fix this" already existed in the prompt bar at the top of
+                         * the editor — the one place an operator reading an error at
+                         * the bottom of a full-height editor cannot see it.
+                         *
+                         * It explains rather than silently rewriting the draft: an
+                         * error you do not understand is not fixed by a statement you
+                         * did not read either.
+                         */}
+                        {!assistant.unavailable && onDebugError !== undefined && (
+                            <button
+                                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                                data-testid="sql-debug-error"
+                                disabled={assistant.pending("chat")}
+                                onClick={onDebugError}
+                                type="button"
+                            >
+                                <svg
+                                    aria-hidden="true"
+                                    className="size-3.5"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={1.6}
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1.2-4.2A8 8 0 1 1 21 12Z" />
+                                </svg>
+                                {assistant.pending("chat") ? t("Thinking…") : t("Debug with AI")}
+                            </button>
+                        )}
+                    </div>
                 )}
 
                 {error === null && result === null && (

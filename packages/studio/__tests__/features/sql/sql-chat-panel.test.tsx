@@ -177,4 +177,53 @@ describe("sqlChatPanel", () => {
             expect(screen.queryByTestId("sql-chat")).toBeNull();
         });
     });
+
+    it("debugs a failed run from the error itself, carrying the statement and the message", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiChat) {
+                    return { degraded: false, partial: false, reply: "That column does not exist.", toolCalls: [], truncated: false };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 0 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    throw new Error("no such column: bodyy");
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+        await screen.findByTestId("sql-input");
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT bodyy FROM messages" } });
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        // The affordance lives ON the failure. "Fix this" already existed in the
+        // prompt bar at the top of the editor — the one place an operator reading
+        // an error at the bottom of a full-height editor cannot see it.
+        fireEvent.click(await screen.findByTestId("sql-debug-error"));
+
+        // Asserted through the DOM: the question the operator can SEE is the one
+        // that was asked, and it does not depend on how the client happens to shape
+        // its arguments.
+        const asked = await screen.findByTestId("sql-chat-turn-user");
+
+        // Both halves travel, so the answer can explain rather than guess.
+        expect(asked.textContent).toContain("SELECT bodyy FROM messages");
+        expect(asked.textContent).toContain("no such column: bodyy");
+
+        // …and it opened the assistant to show the answer.
+        expect(screen.getByTestId("sql-chat")).toBeDefined();
+    });
 });

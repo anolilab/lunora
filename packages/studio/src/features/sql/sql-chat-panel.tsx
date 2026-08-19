@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -79,6 +79,7 @@ const TurnRow = ({ onInsert, turn }: { readonly onInsert: (sql: string) => void;
                     className="self-start"
                     data-testid="sql-chat-insert"
 
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- the blocks of one immutable reply, in order; a reply never gains or loses one
                     key={`${String(index)}:${sql.slice(0, 32)}`}
                     onClick={() => {
                         onInsert(sql);
@@ -114,31 +115,38 @@ const SqlChatPanel = ({
     onInsert,
     open,
     schema,
+    seed,
 }: {
     readonly assistant: SqlAssistant;
     readonly onInsert: (sql: string) => void;
     /** Toggled from the results toolbar; closed, the panel renders nothing at all. */
     readonly open: boolean;
+
     /** Grounding for the turn — the same schema the editor autocompletes from. */
     readonly schema: SqlSchema;
+
+    /**
+     * A question to ask on the operator's behalf, from outside the panel — today
+     * the "Debug with AI" button on a failed run.
+     *
+     * Keyed by `id` rather than by the text, so asking about the SAME error twice
+     * asks twice instead of being swallowed as an unchanged prop.
+     */
+    readonly seed?: { readonly id: number; readonly text: string };
 }): ReactElement | null => {
     const t = useT();
     const [turns, setTurns] = useState<ChatTurn[]>([]);
     const [draft, setDraft] = useState("");
     const [truncated, setTruncated] = useState(false);
     const [outcome, setOutcome] = useState<undefined | { partial: boolean; read: number }>(undefined);
-
-    // Hooks run first: both of these are early returns, and React needs the state
-    // above them on every render.
-    if (assistant.unavailable || !open) {
-        return null;
-    }
+    // The last seed asked, so a re-render does not re-ask it.
+    const askedSeed = useRef<number | undefined>(undefined);
 
     const pending = assistant.pending("chat");
     const reason = assistant.reason("chat");
 
-    const send = (): void => {
-        const prompt = draft.trim();
+    const send = (text?: string): void => {
+        const prompt = (text ?? draft).trim();
 
         if (prompt === "" || pending) {
             return;
@@ -171,6 +179,48 @@ const SqlChatPanel = ({
         );
     };
 
+    /*
+     * Ask the seeded question once per `seed.id`.
+     *
+     * An effect because the trigger lives OUTSIDE this component — the operator
+     * pressed "Debug with AI" on a failed run — and reaching a model is exactly
+     * the external system an effect is for. Keyed on the id so the same error can
+     * be asked about twice, and guarded by a ref so a re-render never re-asks.
+     *
+     * ABOVE the early return, with every other hook: behind it the effect ran only
+     * while the panel was open, so opening the panel changed the hook count and
+     * React threw "rendered more hooks than during the previous render".
+     */
+    useEffect(() => {
+        if (seed === undefined || seed.id === askedSeed.current) {
+            return;
+        }
+
+        askedSeed.current = seed.id;
+
+        // Queued rather than called straight from the effect body. `send` sets
+        // state, and doing that synchronously inside an effect forces a second
+        // render pass before the browser paints — the operator sees the panel open
+        // empty, then the question appear. A microtask lets this render finish
+        // first, and the ref above still guarantees exactly one ask.
+        queueMicrotask(() => {
+            send(seed.text);
+        });
+        // `send` is re-created every render and is not a meaningful dependency —
+        // the seed's id is what decides whether to ask.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
+    }, [seed]);
+
+    if (assistant.unavailable || !open) {
+        return null;
+    }
+
+    // Wrapped: passing `send` straight to onClick would hand it the click EVENT as
+    // the prompt text.
+    const onSendClick = (): void => {
+        send();
+    };
+
     const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
         if (event.key === "Enter") {
             event.preventDefault();
@@ -185,7 +235,14 @@ const SqlChatPanel = ({
                 <span className="text-[11px] text-muted-foreground">{t("Answers are suggestions — nothing runs until you insert and run it.")}</span>
             </div>
             <ul className="min-h-0 flex-1 overflow-y-auto" data-testid="sql-chat-turns">
+                {/*
+                 * Index keys, deliberately: a transcript is strictly append-only —
+                 * never reordered, filtered, or spliced — which is precisely the
+                 * case where an index is a stable identity. Two turns can carry the
+                 * same role and the same text, so nothing else here is unique.
+                 */}
                 {turns.map((turn, index) => (
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- append-only list; see above
                     <TurnRow key={`${String(index)}:${turn.role}`} onInsert={onInsert} turn={turn} />
                 ))}
             </ul>
@@ -221,7 +278,7 @@ const SqlChatPanel = ({
                     placeholder={t("Ask about your data")}
                     value={draft}
                 />
-                <Button data-testid="sql-chat-send" disabled={pending || draft.trim() === ""} onClick={send} size="xs" type="button">
+                <Button data-testid="sql-chat-send" disabled={pending || draft.trim() === ""} onClick={onSendClick} size="xs" type="button">
                     {pending ? t("Thinking…") : t("Send")}
                 </Button>
             </div>

@@ -34,6 +34,7 @@ const MESSAGE_IDS = [
     "Answers are suggestions — nothing runs until you insert and run it.",
     "Ask about your data",
     "Assistant",
+    "Debug with AI",
     "Insert into editor",
     "Older turns were dropped to fit the context budget.",
     "SQL chat",

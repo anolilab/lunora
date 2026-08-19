@@ -76,6 +76,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     // Closed by default: an assistant that occupies the console before anyone asks
     // it anything is a cost every operator pays and few want.
     const [chatOpen, setChatOpen] = useState(false);
+    const [chatSeed, setChatSeed] = useState<undefined | { id: number; text: string }>(undefined);
 
     const { probe, schema } = useSqlSchema(shardKey);
 
@@ -245,6 +246,26 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         setChatOpen(!chatOpen);
     };
 
+    /*
+     * Open the assistant on the failing statement.
+     *
+     * The statement and the error travel in the QUESTION rather than as separate
+     * fields, because the transcript is what the model reads — a turn the operator
+     * can then follow up on ("why does that column not exist?") instead of a
+     * one-shot repair that rewrites their draft and explains nothing.
+     */
+    const debugError = (): void => {
+        if (failedRun === undefined) {
+            return;
+        }
+
+        setChatOpen(true);
+        setChatSeed({
+            id: Date.now(),
+            text: `This statement failed:\n${failedRun.sql}\n\nThe database said: ${failedRun.error}\n\nWhy, and what should it be?`,
+        });
+    };
+
     // Editor + results share a flex container; `splitView` flips its axis (and the
     // results pane from a bottom band to a right column) — the only layout change.
     const workspaceClass = splitView ? "flex min-h-0 flex-1 flex-row" : "flex min-h-0 flex-1 flex-col";
@@ -305,6 +326,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         chatOpen={chatOpen}
                         className={resultsClass}
                         error={error}
+                        onDebugError={failedRun === undefined ? undefined : debugError}
                         onFormat={formatDraft}
                         onInferChart={inferChart}
                         onRun={onRun}
@@ -334,7 +356,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
              * the assistant suggested, which is the whole point of having it here
              * rather than in a modal.
              */}
-            <SqlChatPanel assistant={assistant} onInsert={setDraft} open={chatOpen} schema={schema} />
+            <SqlChatPanel assistant={assistant} onInsert={setDraft} open={chatOpen} schema={schema} seed={chatSeed} />
         </div>
     );
 };
