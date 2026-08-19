@@ -16,6 +16,7 @@ import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
+import { encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
@@ -2920,7 +2921,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const store = options.notifySubscriptionStore;
 
         if (store === undefined) {
-            return Response.json({ subscriptions: [] }, { headers: { "content-type": "application/json" }, status: 200 });
+            return Response.json({ result: encodeWire({ subscriptions: [] }) }, { headers: { "content-type": "application/json" }, status: 200 });
         }
 
         const rawKind = args?.["kind"];
@@ -2964,7 +2965,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // endpoint / kind / owner / timestamps + last-send status.
             .map(({ keys: _keys, token: _token, ...device }) => device);
 
-        return Response.json({ subscriptions }, { headers: { "content-type": "application/json" }, status: 200 });
+        // Same envelope as the shard-forwarded admin ops — see the note on
+        // `getAuthAuditLog`. `client.query()` reads `decodeWire(body.result)`.
+        return Response.json({ result: encodeWire({ subscriptions }) }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     /**
