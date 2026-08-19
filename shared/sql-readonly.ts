@@ -89,6 +89,99 @@ const skipBlockComment = (sql: string, from: number): number => {
     return close === -1 ? -1 : close + 2;
 };
 
+/** Filler for masked content. A letter, so it can never look like a `;`, a quote, or a comment opener. */
+const MASK_CHAR = "x";
+
+/** Closing delimiter per quote opener. SQLite doubles the delimiter to escape it, except for `[...]`. */
+const QUOTE_CLOSERS: Readonly<Record<string, string>> = { '"': '"', "'": "'", "[": "]", "`": "`" };
+
+/**
+ * A same-length copy of `sql` with the CONTENT of string literals, quoted
+ * identifiers and comments replaced by {@link MASK_CHAR}, or `undefined` when a
+ * quote or block comment never closes.
+ *
+ * Only the batch check reads this, and only to answer "is this `;` a statement
+ * boundary". A `;` inside `'…'`, `"…"`, `` `…` ``, `[…]`, `-- …` or `/* … *\/` is
+ * content, not a boundary — SQLite's own parser never sees a second statement
+ * there — so scanning the raw text reported four separate false batches
+ * (`SELECT ';' AS a`, `SELECT 1 -- a; b`, `SELECT 1 /* a; b *\/`,
+ * `SELECT "a;b" FROM t`), each of which is a legal read-only query the console
+ * refused to run at all.
+ *
+ * It is deliberately NOT used for {@link FORBIDDEN_KEYWORD}. That check rejects a
+ * mutating word even inside a literal, and its docblock records that as an
+ * accepted trade for an admin tool that must never corrupt the doc-store's
+ * shadow tables. Masking there would relax a rule someone chose; masking here
+ * fixes one nobody did.
+ *
+ * **Fail-closed on anything unclosed.** An unterminated quote or block comment
+ * returns `undefined`, and the caller falls back to scanning the raw text — the
+ * behaviour that shipped. Such a statement is a syntax error to SQLite anyway,
+ * so the strictness costs nothing and the alternative (masking to end of input)
+ * would hide a real `;` behind a stray quote.
+ *
+ * Length is preserved so a rejection's `offset` still indexes the caller's own
+ * string. Newlines survive for the same reason.
+ */
+const maskNonCode = (sql: string): string | undefined => {
+    const out = [...sql];
+    let index = 0;
+
+    while (index < sql.length) {
+        const char = sql[index] ?? "";
+        const closer = QUOTE_CLOSERS[char];
+
+        if (char === "-" && sql[index + 1] === "-") {
+            const end = skipLineComment(sql, index);
+
+            out.fill(MASK_CHAR, index, end);
+            index = end;
+        } else if (char === "/" && sql[index + 1] === "*") {
+            const end = skipBlockComment(sql, index);
+
+            if (end === -1) {
+                return undefined;
+            }
+
+            out.fill(MASK_CHAR, index, end);
+            index = end;
+        } else if (closer !== undefined) {
+            let scan = index + 1;
+
+            while (scan < sql.length) {
+                if (sql[scan] !== closer) {
+                    scan += 1;
+                } else if (closer !== "]" && sql[scan + 1] === closer) {
+                    // A doubled delimiter escapes it — `''`, `""`, ` `` ` — and is
+                    // content, so step over both. `[...]` has no escape form.
+                    scan += 2;
+                } else {
+                    break;
+                }
+            }
+
+            if (scan >= sql.length) {
+                return undefined;
+            }
+
+            out.fill(MASK_CHAR, index, scan + 1);
+            index = scan + 1;
+        } else {
+            index += 1;
+        }
+    }
+
+    // Newlines are restored so line geometry — and therefore any offset an editor
+    // derives from it — is unchanged.
+    for (const [at, original] of [...sql].entries()) {
+        if (original === "\n") {
+            out[at] = "\n";
+        }
+    }
+
+    return out.join("");
+};
+
 /**
  * Index of the first character that is neither whitespace nor a SQL comment, so
  * the read-verb check sees the real first token. A single linear scan rather
@@ -146,8 +239,12 @@ const classifyStatement = (query: string): SqlRejection | undefined => {
     }
 
     // Allow a single trailing semicolon; any other `;` means a multi-statement batch.
+    // Located on a comment/quote-MASKED copy (same length, so the offset still
+    // indexes `query`), because a `;` inside a literal or a comment is content
+    // rather than a boundary. Anything unclosed masks to `undefined` and falls
+    // back to the raw scan — see {@link maskNonCode}.
     const single = trimmed.replace(TRAILING_SEMICOLON, "");
-    const batchAt = single.indexOf(";");
+    const batchAt = (maskNonCode(single) ?? single).indexOf(";");
 
     if (batchAt !== -1) {
         return {

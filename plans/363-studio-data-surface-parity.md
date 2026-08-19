@@ -1,7 +1,7 @@
 # Plan 363 — Close nine gaps in the Studio's data/SQL surface
 
 **Baseline:** `9a0b5263a` (2026-08-18)
-**Status:** DONE — W1–W4, W6–W10 all shipped; W5 spun out to [364](364-studio-conversational-assistant.md)
+**Status:** DONE — W1–W4, W6–W10 all shipped, plus both §8b findings; W5 spun out to [364](364-studio-conversational-assistant.md)
 
 ## 0. Headline finding
 
@@ -186,13 +186,12 @@ design review before code.
   special-casing the plan wanted to avoid. `script` sits alongside `result`
   instead, so the chart, export menu and row count gained no list handling.
 
-    **Found and deliberately NOT fixed:** `classifyStatement`'s batch check is a
-    bare `indexOf(";")` with no literal masking, so `SELECT ';' AS a` has always
-    been refused as a batch. That is a false positive in the server's enforcement
-    rule, it predates this work, and relaxing it is exactly what §8's STOP
-    condition forbids doing in passing — it needs its own change and its own
-    review. A test pins the current behaviour so the next reader knows the refusal
-    is the gate's, not the split's. Original text follows.
+    **Found while building it, and since fixed (§8b):** `classifyStatement`'s batch
+    check scanned raw text, so a `;` inside a literal, a comment, or a quoted
+    identifier was read as a statement boundary and four classes of legal
+    read-only query were refused outright. W4 left it alone at the time — correctly,
+    since §8's STOP condition forbids touching the gate in passing — and it was
+    then fixed on its own terms with its own tests. Original text follows.
 
     **Multi-statement scripts as N gated runs.** Split on statement
     boundaries in the editor using the comment scanner already in
@@ -335,23 +334,30 @@ before measuring anything in it (stale `dist` is the usual false failure), and
   an action, measure concurrent `runSql` p99 during a conversation; that number
   is the whole point of keeping it off the admin dispatch.
 
-## 8b. Found while executing, not fixed here
+## 8b. Found while executing — both since fixed
 
-- **`classifyStatement` refuses a semicolon inside a string literal.** The batch
-  check is `single.indexOf(";")` (`shared/sql-readonly.ts:148-150`) over text
-  whose comments are stripped but whose string literals are not, so
-  `SELECT ';' AS a` — a legal read-only query — has always been rejected as a
-  multi-statement batch. Pre-existing, on the server's enforcement path, and
-  therefore not something W4 was allowed to touch on its way past. Worth its own
-  plan: the fix is to mask literals before the scan, and the risk is that the
-  gate is the one thing standing between the console and a raw write.
-- **The data browser re-issues its admin reads under a remount-heavy suite.**
-  `describeTables` / `listTables` / `aiAvailable` / `maskPolicies` each trip the
-  studio's own "possible request loop" warning during
-  `data-browser.test.tsx`. Verified pre-existing by running the same file with
-  `origin/alpha`'s `data-browser.tsx` swapped in — identical count — so it is not
-  a regression from this wave, but nobody has looked at whether it also happens
-  in a real session.
+- **`classifyStatement` refused a semicolon inside a literal or a comment.** The
+  batch check was `single.indexOf(";")` over raw text, so **four** legal
+  read-only queries were rejected outright as batches, not one: a `;` in a string
+  literal, in a `--` line comment, in a `/* */` block comment, or in a `"…"` /
+  `` `…` `` / `[…]` quoted identifier. **Fixed** — the scan now runs on a
+  same-length masked copy, so offsets still index the caller's string, and
+  anything unclosed returns `undefined` and falls back to the raw scan that
+  shipped (such a statement is a syntax error to SQLite anyway). Deliberately NOT
+  extended to `FORBIDDEN_KEYWORD`: rejecting a mutating word even inside a
+  literal is documented on that constant as an accepted trade. Masking the batch
+  scan fixes a rule nobody chose; that one someone did.
+
+- **The "possible request loop" warning was the detector's bug, not the data
+  browser's.** A probe counting admin reads across one mount found each of
+  `describeTables` / `listTables` / `aiAvailable` / `maskPolicies` issued exactly
+  **once**. The bucket in `use-admin-query.ts` is module-level and never reset, so
+  it cannot tell "one component re-issuing 25 times" from "25 components
+  mounting" — and its comment justified the threshold with "TanStack dedupes
+  identical in-flight reads", which is true only of reads that overlap, never of
+  sequential mounts each awaited to completion. **Fixed** by excluding the test
+  environment from the detector and correcting that claim. A diagnostic that
+  cries wolf teaches people to ignore the one time it is right.
 
 ## 9. Open questions (answer during execution)
 

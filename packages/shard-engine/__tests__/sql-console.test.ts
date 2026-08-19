@@ -162,6 +162,49 @@ describe("classifyStatement offsets", () => {
 
         expect(classifyStatement("SELECT 1;")).toBeUndefined();
     });
+
+    it.each([
+        ["a string literal", "SELECT ';' AS a"],
+        ["a doubled-quote escape inside one", "SELECT 'a''b;c' AS x"],
+        ["a line comment", "SELECT 1 -- a; b"],
+        ["a block comment", "SELECT 1 /* a; b */"],
+        ['a "quoted" identifier', 'SELECT "a;b" FROM t'],
+        ["a backtick identifier", "SELECT `a;b` FROM t"],
+        ["a bracket identifier", "SELECT [a;b] FROM t"],
+        ["a CTE's literal", "WITH a AS (SELECT ';') SELECT * FROM a"],
+    ])("does not read a semicolon in %s as a statement boundary", (_label, query) => {
+        expect.assertions(1);
+
+        // Each of these is a legal read-only query that the batch check refused
+        // outright, because it scanned the raw text: SQLite's parser never sees a
+        // second statement inside a literal, an identifier, or a comment.
+        expect(classifyStatement(query)).toBeUndefined();
+    });
+
+    it.each([
+        ["a real batch after a literal", "SELECT 'a'; DROP TABLE x"],
+        ["a real batch after a comment line", "SELECT 1 -- x\n; SELECT 2"],
+        ["a backslash, which SQLite does not treat as an escape", String.raw`SELECT '\'; DROP TABLE x`],
+        ["an unterminated quote", "SELECT 'a; DROP TABLE x"],
+        ["an unterminated block comment", "SELECT 1 /* a; b"],
+    ])("still refuses %s", (_label, query) => {
+        expect.assertions(1);
+
+        // The last two fail closed on purpose: nothing can be masked reliably, so
+        // the scan falls back to the raw text it always used. Both are syntax
+        // errors to SQLite anyway.
+        expect(classifyStatement(query)?.code).toBe("SQL_MULTIPLE_STATEMENTS");
+    });
+
+    it("keeps refusing a mutating keyword inside a literal", () => {
+        expect.assertions(1);
+
+        // NOT relaxed by the masking above, and deliberately so: `FORBIDDEN_KEYWORD`
+        // documents rejecting a mutating word even in a literal as an accepted
+        // trade for a tool that must never corrupt the shadow tables. Masking the
+        // batch scan fixes a rule nobody chose; this one someone did.
+        expect(classifyStatement("SELECT 'DROP TABLE x'")?.code).toBe("SQL_NOT_READONLY");
+    });
 });
 
 describe("lintReadonlySql", () => {

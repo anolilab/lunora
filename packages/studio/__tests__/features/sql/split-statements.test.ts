@@ -35,14 +35,15 @@ describe("splitStatements", () => {
         expect(statements[2]?.sql).toBe("SELECT 2");
     });
 
-    it("reports the gate's OWN pre-existing view of a semicolon in a literal", () => {
-        expect.assertions(1);
+    it("passes a semicolon in a literal through to a runnable statement", () => {
+        expect.assertions(2);
 
-        // Not this module's behaviour and deliberately not changed here: the shared
-        // classifier does a bare `indexOf(";")` with no literal masking, so it has
-        // always refused this statement as a batch. It is the server's enforcement
-        // rule, so relaxing it is a separate change with its own review — this test
-        // exists so the next reader knows the refusal is the gate's, not the split's.
-        expect(splitStatements("SELECT ';' AS a")[0]?.rejection).toContain("single statement");
+        // The split and the gate now agree. They did not: the classifier scanned
+        // raw text for `;`, so this legal read-only query reached the server as a
+        // single statement and was refused there as a batch.
+        const [statement] = splitStatements("SELECT ';' AS a");
+
+        expect(statement?.sql).toBe("SELECT ';' AS a");
+        expect(statement?.rejection).toBeUndefined();
     });
 });
