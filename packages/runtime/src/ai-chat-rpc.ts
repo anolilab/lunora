@@ -15,7 +15,7 @@
  * a builder, and a `*_NOT_CONFIGURED` 400 — deliberately, so there is one
  * worker-RPC idiom rather than two.
  */
-import type { AiRunBinding, ChatArgs, ChatResult, SchemaFact } from "../../../shared/sql-assistant";
+import type { AiRunBinding, ChatArgs, ChatResult, ChatToolRunner, SchemaFact } from "../../../shared/sql-assistant";
 import { generateChat } from "../../../shared/sql-assistant";
 import { encodeWire } from "../../../shared/wire-codec";
 import { LunoraError } from "./errors";
@@ -34,6 +34,15 @@ interface AiChatRpcDeps {
     assertAdmin: (request: Request) => void;
     /** The app's Workers `AI` binding, or undefined when none is wired. */
     getBinding: () => AiRunBinding | undefined;
+
+    /**
+     * Dispatch one already-validated read-only tool call against `shardKey`.
+     *
+     * Injected rather than imported: the engine must not learn how to reach a
+     * shard, and this module must not reach into the worker's closure. Omit it
+     * and a turn simply runs without tools.
+     */
+    runTool?: (shardKey: string, request: Request) => ChatToolRunner;
 }
 
 /** The worker-served handler for {@link AI_CHAT_OP}. */
@@ -88,6 +97,10 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
             // here would be a second place for it to drift from the prompt that
             // relies on it.
             transcript: args["transcript"],
+            // Answers plan 364's open question 2: the tool reads the shard the
+            // console has OPEN, named by the caller, and the answer echoes which
+            // tools ran — so a reply is never ambiguous about what it read.
+            ...(deps.runTool === undefined ? {} : { runTool: deps.runTool(typeof args["shardKey"] === "string" ? args["shardKey"] : "", request) }),
         };
 
         const result: ChatResult = await generateChat(binding, chatArgs);

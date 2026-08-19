@@ -16,7 +16,7 @@ import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
-import type { AiRunBinding } from "../../../shared/sql-assistant";
+import type { AiRunBinding, ChatToolCall } from "../../../shared/sql-assistant";
 import { encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { AI_CHAT_OP, buildAiChat } from "./ai-chat-rpc";
@@ -2923,9 +2923,28 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // than its auth-audit sibling: not because its data lives elsewhere, but
     // because a multi-turn exchange must not occupy the DO's single-threaded
     // admin dispatch. See `ai-chat-rpc.ts`.
+    /*
+     * Assigned below, once `forwardRpcToShard` exists.
+     *
+     * A forward-declared binding rather than a direct reference: this closure is
+     * built long before the forwarder, and the repo bans both `function`
+     * declarations (`func-style`) and use-before-define. The alternative — moving
+     * a 5,000-line closure around — is worse than one `let` that says why.
+     */
+    let dispatchChatTool: (shardKey: string, request: Request, call: ChatToolCall) => Promise<unknown>;
+
     const aiChat = buildAiChat({
         assertAdmin: assertAdminAuthorized,
         getBinding: () => options.aiChatBinding,
+
+        /*
+         * Read-only tools, dispatched through the SAME forwarder and the same
+         * admin ops the studio itself calls — so the security question stays
+         * "does the existing gate still hold" rather than "is this new capability
+         * safe". `runSql`'s statement has already passed `classifyStatement` in
+         * the engine before it arrives.
+         */
+        runTool: (shardKey, request) => async (call) => dispatchChatTool(shardKey, request, call),
     });
 
     /**
@@ -3923,6 +3942,30 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 status: 400,
             });
         }
+    };
+
+    /**
+     * Forward one already-validated chat tool call to its shard.
+     *
+     * The same forwarder and the same admin ops the studio itself calls, so the
+     * security question stays "does the existing gate still hold" rather than "is
+     * this new capability safe". `runSql`'s statement has already passed
+     * `classifyStatement` in the engine before it arrives here.
+     */
+    dispatchChatTool = async (shardKey: string, request: Request, call: ChatToolCall): Promise<unknown> => {
+        // The admin bearer verbatim, not `resolveForwardContext`: an admin RPC is
+        // authorized by that bearer and resolves to a NULL identity by design (see
+        // the `__lunora_admin__:` exemption in `assertDispatchableEnvelope`), so
+        // resolving one here would compute a value the DO then ignores.
+        const authorization = request.headers.get("authorization");
+        const headers: Record<string, string> = {
+            "content-type": "application/json",
+            ...(authorization === null ? {} : { authorization }),
+        };
+        const path = call.name === "runSql" ? "__lunora_admin__:runSql" : "__lunora_admin__:describeTables";
+        const response = await forwardRpcToShard(request, path, call.sql === undefined ? {} : { sql: call.sql }, shardKey, headers);
+
+        return response.json();
     };
 
     const handleRpc = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
