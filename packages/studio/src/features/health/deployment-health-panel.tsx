@@ -87,16 +87,10 @@ const useDefaultProbe = (): DeploymentHealthProbe => {
     };
 };
 
-/** Overall severity, driving the status dot/ring colours. */
+/** Overall severity, driving the per-probe status dot colours. */
 type Level = "crit" | "ok" | "warn";
 
 const LEVEL_DOT: Record<Level, string> = { crit: "bg-destructive", ok: "bg-success", warn: "bg-warning" };
-const LEVEL_RING: Record<Level, string> = {
-    crit: "bg-destructive/10 text-destructive",
-    ok: "bg-success/10 text-success",
-    warn: "bg-warning/10 text-warning",
-};
-
 /** Map the aggregate body status to a severity level. */
 const statusLevel = (status: HealthBody["status"]): Level => {
     if (status === "unhealthy") {
@@ -227,9 +221,6 @@ export const DeploymentHealthPanel = ({ probe }: DeploymentHealthPanelProps): Re
             <Card className="gap-0 py-0">
                 <div className="flex flex-wrap items-center justify-between gap-4 p-4">
                     <div className="flex items-center gap-3">
-                        <span aria-hidden="true" className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", LEVEL_RING[level])}>
-                            <span className={cn("size-3 rounded-full", LEVEL_DOT[level])} />
-                        </span>
                         <div className="grid leading-tight">
                             <span className="text-sm font-semibold text-foreground" data-testid="dh-status">
                                 {statusLabel}

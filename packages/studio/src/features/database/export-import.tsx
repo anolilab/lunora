@@ -153,7 +153,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-export-import">
-            <Card className="rounded-xl border border-border bg-card shadow-xs">
+            <Card className="gap-0 py-0 rounded-xl border border-border bg-card shadow-xs">
                 <header className="border-b border-border px-4 py-3">
                     <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Export")}</span>
                 </header>
@@ -173,7 +173,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 </CardContent>
             </Card>
 
-            <Card className="rounded-xl border border-border bg-card shadow-xs">
+            <Card className="gap-0 py-0 rounded-xl border border-border bg-card shadow-xs">
                 <header className="border-b border-border px-4 py-3">
                     <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Import")}</span>
                 </header>
