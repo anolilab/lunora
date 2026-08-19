@@ -1,7 +1,7 @@
 # Plan 364 — A conversational assistant for the Studio, off the DO admin dispatch
 
 **Baseline:** `3a2e83d89` (2026-08-19)
-**Status:** TODO
+**Status:** W1–W4 SHIPPED; W5 BLOCKED — see §8b. The conversational assistant works end to end; only token streaming is outstanding, and it needs a transport that does not exist yet.
 **Spun out of:** [363](363-studio-data-surface-parity.md) W5, which required this
 plan before any code.
 
@@ -137,35 +137,60 @@ first is how the simple version never ships.
 
 ## 5. Workstreams
 
-- **W1 (M) — The worker-served op.** `__lunora_admin__:aiChat` in a new
-  `packages/runtime/src/ai-chat-rpc.ts`, built on `auth-audit-rpc.ts`'s shape:
-  `assertAdmin` first, `AI_CHAT_NOT_CONFIGURED` (400) when no `AI` binding is
-  wired, and the `sql-assistant.ts` engine for the inference itself. One turn in,
-  one turn out, no tools yet. Gate: a chat turn completes while a concurrent
-  `runSql` against the same shard returns within its normal latency — the whole
-  reason this op is here.
+- **W1 (M) — Done.** Shipped as `154068e99`.
+  `shared/sql-assistant.ts` answers open question 1: the engine's only import was
+  `shared/sql-readonly`, so it moved to `shared/` rather than creating a
+  `@lunora/runtime` → `@lunora/do` edge. `@lunora/do`'s API snapshot did not move.
+  Original text follows.
 
-- **W2 (S) — Transcript caps and fencing.** A cap on turns and on total
-  characters, applied server-side (a client cap is a suggestion), with every turn
-  inside the existing untrusted fence. Gate: a transcript over the cap is
-  truncated oldest-first and the response says so; a turn containing the fence
-  marker verbatim does not escape it.
+    **The worker-served op.** `__lunora_admin__:aiChat` in a new
+    `packages/runtime/src/ai-chat-rpc.ts`, built on `auth-audit-rpc.ts`'s shape:
+    `assertAdmin` first, `AI_CHAT_NOT_CONFIGURED` (400) when no `AI` binding is
+    wired, and the `sql-assistant.ts` engine for the inference itself. One turn in,
+    one turn out, no tools yet. Gate: a chat turn completes while a concurrent
+    `runSql` against the same shard returns within its normal latency — the whole
+    reason this op is here.
 
-- **W3 (M) — The chat surface.** A panel in the SQL console reusing
-  `useSqlAssistant`'s availability latch, with the transcript in React state (not
-  `localStorage` — see §4). "Insert into editor" is the only path from a response
-  to the editor, so nothing runs without a click. Gate: with no AI binding the
-  surface does not render; a response containing SQL offers insertion and never
-  execution.
+- **W2 (S) — Done.** Shipped as `154068e99`. Two budgets, not one: a thousand
+  one-character turns pass a character cap and twelve enormous ones pass a turn
+  cap, so either alone is escapable. Original text follows.
 
-- **W4 (M) — Read-only tool calls.** `describeTables` and gated `runSql` as
-  tools, dispatched server-side within the turn, each result fed back into the
-  loop with a per-turn call cap. Gate: a tool call that fails
-  `classifyStatement` is refused inside the loop and reported, not retried into
-  a different statement.
+    **Transcript caps and fencing.** A cap on turns and on total
+    characters, applied server-side (a client cap is a suggestion), with every turn
+    inside the existing untrusted fence. Gate: a transcript over the cap is
+    truncated oldest-first and the response says so; a turn containing the fence
+    marker verbatim does not escape it.
 
-- **W5 (S) — Token streaming.** Only after W1–W4. Gate: an interrupted stream
-  leaves no partial turn in the transcript.
+- **W3 (M) — Done.** Shipped as `76d220e09`. One deviation: the fenced-SQL
+  reader is a linear split, not a regex — the obvious pattern is
+  polynomial-backtracking, and a model reply is exactly the input not to hand an
+  ambiguous matcher. Answers open question 3: not persisted, not even to
+  `sessionStorage`. Original text follows.
+
+    **The chat surface.** A panel in the SQL console reusing
+    `useSqlAssistant`'s availability latch, with the transcript in React state (not
+    `localStorage` — see §4). "Insert into editor" is the only path from a response
+    to the editor, so nothing runs without a click. Gate: with no AI binding the
+    surface does not render; a response containing SQL offers insertion and never
+    execution.
+
+- **W4 (M) — Done.** Shipped as `daa0b8493`. Answers open questions 2 and 4: the
+  tool reads the shard the console has open, echoed back in `toolCalls`; and
+  reaching the cap answers with what it has, marked `partial`, rather than
+  erroring away the work. Original text follows.
+
+    **Read-only tool calls.** `describeTables` and gated `runSql` as
+    tools, dispatched server-side within the turn, each result fed back into the
+    loop with a per-turn call cap. Gate: a tool call that fails
+    `classifyStatement` is refused inside the loop and reported, not retried into
+    a different statement.
+
+- **W5 (S→L) — BLOCKED, and mis-sized here.** See §8b: the only streaming
+  primitive in the repo is DO-bound, so W5 needs a transport that does not exist
+  rather than the reuse this (S) assumed. Original text follows.
+
+    **Token streaming.** Only after W1–W4. Gate: an interrupted stream
+    leaves no partial turn in the transcript.
 
 ## 6. Platform parity
 
@@ -214,6 +239,32 @@ against a real DO with a slow model double, not a mock that resolves immediately
   same argument that module's own docblock makes.
 - **Perf watch:** concurrent `runSql` p99 during a chat turn. That number is the
   entire justification for the transport choice, so it is the one to record.
+
+## 8b. Found while executing
+
+- **W5 cannot reuse `client.stream()`, and its (S) rating assumed it could.**
+  The client has a streaming primitive (`lunora-client.ts:3313`), but it rides
+  the subscription WebSocket and is answered by the DO —
+  `shard-do.ts:4535` is what handles a `type: "stream"` envelope. Using it for
+  this op would route the conversation back through the single-threaded admin
+  dispatch, which is the STOP condition in §8 and the entire reason this plan
+  exists.
+
+    There is no other streaming path to borrow: `text/event-stream` appears
+    nowhere in `packages/runtime` or `packages/studio`. So W5 means a new
+    worker-side streaming response **and** a client reader that bypasses
+    `client.query`, which is a transport workstream, not the (S) this plan rated.
+
+    Deliberately not built as part of this change. §4 already says a turn that
+    returns whole is a complete feature and that building the transport first is
+    how the simple version never ships — that argument applies just as well to
+    building it last, in the same change, unreviewed. **Re-plan W5 on its own.**
+
+- **The chat op needed the RPC envelope from the start.** Worker-served ops must
+  answer `{ result: encodeWire(...) }`; a bare body decodes to `undefined` and
+  TanStack Query rejects that outright. Both existing worker-served ops shipped
+  this wrong (fixed in #427), so this one was written against the corrected
+  contract rather than rediscovering it.
 
 ## 9. Open questions (answer during execution)
 
