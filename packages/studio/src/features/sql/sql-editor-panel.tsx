@@ -153,8 +153,11 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         for (const statement of statements) {
             const refused: ScriptRun = { error: statement.rejection?.message ?? "", result: null, sql: statement.sql };
 
-            // eslint-disable-next-line no-await-in-loop -- sequential on purpose: a script's statements are ordered, and firing them concurrently would run a later one against state an earlier one has not established
-            runs.push(statement.rejection === undefined ? await runOne(statement.sql) : refused);
+            // Both suppressions say the same thing, and BOTH must sit adjacent to the
+            // statement — a disable comment separated from its line by another
+            // comment silently does nothing. Hence one above, one trailing.
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- ordering is the contract: a script's statements run in sequence, and `Promise.all` would fire a later one against state an earlier one has not established
+            runs.push(statement.rejection === undefined ? await runOne(statement.sql) : refused); // eslint-disable-line no-await-in-loop -- sequential on purpose: see above
         }
 
         recordShard(shardKey);

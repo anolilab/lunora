@@ -287,21 +287,30 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
         setInferringId(id);
 
         const apply = async (): Promise<void> => {
-            try {
-                const inferred = await assistant.inferChart({ columns: result.columns, rowCount: result.rowCount });
+            const inferred = await assistant.inferChart({ columns: result.columns, rowCount: result.rowCount });
 
-                if (inferred !== undefined) {
-                    setWidgets(applyInference(id, inferred));
-                }
-                // `inferChart` swallows its own failures and answers `undefined`
-                // for both an AI error and a degraded reply, so without reading
-                // the reason a failure is indistinguishable from "no change".
-            } finally {
-                setInferringId((current) => (current === id ? null : current));
+            if (inferred !== undefined) {
+                setWidgets(applyInference(id, inferred));
             }
         };
 
-        fireAndForget(apply());
+        /*
+         * `.finally()` on the promise, not a `try`/`finally` STATEMENT: React
+         * Compiler cannot lower a `TryStatement` here and bails on the whole
+         * component, so one spinner reset would cost every other value in this
+         * panel its memoization.
+         *
+         * Nothing is caught because `inferChart` swallows its own failures and
+         * answers `undefined` for both an AI error and a degraded reply; the
+         * operator sees the cause through the `assistant.reason("chart")` alert
+         * below. `.finally()` still runs on a rejection, so the spinner clears
+         * either way.
+         */
+        fireAndForget(
+            apply().finally(() => {
+                setInferringId((current) => (current === id ? null : current));
+            }),
+        );
     };
 
     const onRemove = (id: string): void => {

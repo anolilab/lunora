@@ -914,13 +914,19 @@ const DataBrowserTableView = ({
     // The keyboard-focused cell (row index + visible-column index). Arrow keys
     // move it; Enter opens the inline editor for an editable cell.
     const [active, setActive] = useState<null | { col: number; row: number }>(null);
-    // Cells the last paste declined, so a partial paste reports itself instead of
-    // looking like it applied cleanly.
-    const [pasteSkipped, setPasteSkipped] = useState<number>(0);
-    // The banner belongs to the table it was reported for. The component is not
-    // keyed per table, so without this a "3 pasted cells were skipped" notice
-    // follows the operator to the next table they open.
-    const pastedForColumns = useRef<string>("");
+    /*
+     * Cells the last paste declined, so a partial paste reports itself instead of
+     * looking like it applied cleanly — carried WITH the column signature it was
+     * reported for, in one state value.
+     *
+     * The signature is state rather than a ref because the banner reads it during
+     * render, and a ref read there is invisible to the compiler: it cannot know
+     * the value changed, so the banner could describe the previous table. (The
+     * component is not keyed per table, which is why the signature is needed at
+     * all — otherwise a "3 pasted cells were skipped" notice follows the operator
+     * to the next table they open.)
+     */
+    const [pasteSkipped, setPasteSkipped] = useState<{ columns: string; count: number }>({ columns: "", count: 0 });
     const columnCount = table.getVisibleLeafColumns().length;
 
     const onGridKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -1005,8 +1011,7 @@ const DataBrowserTableView = ({
             edit.stage(change.rowId, change.column, change.value);
         }
 
-        pastedForColumns.current = columnIds.join("\u0000");
-        setPasteSkipped(plan.skipped);
+        setPasteSkipped({ columns: columnIds.join("\u0000"), count: plan.skipped });
     };
 
     // Keep the focused row in view as it moves past the virtual window's edge.
@@ -1131,14 +1136,14 @@ const DataBrowserTableView = ({
 
     return (
         <GridContainer layout="fill">
-            {pasteSkipped > 0 &&
-                pastedForColumns.current ===
+            {pasteSkipped.count > 0 &&
+                pasteSkipped.columns ===
                     table
                         .getVisibleLeafColumns()
                         .map((column) => column.id)
                         .join("\u0000") && (
                     <p className="border-b border-warning/40 bg-warning/5 px-3 py-1.5 text-xs text-warning" data-testid="db-paste-skipped">
-                        {t("{count} pasted cells were skipped", { count: pasteSkipped })}
+                        {t("{count} pasted cells were skipped", { count: pasteSkipped.count })}
                     </p>
                 )}
             <div data-testid="db-scroll" onKeyDown={onGridKeyDown} onPaste={onGridPaste} ref={attachScroll} role="grid" style={SCROLL_STYLE} tabIndex={0}>
