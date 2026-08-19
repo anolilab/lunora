@@ -41,11 +41,7 @@ export const onEmail = mutation
     .mutation(async ({ args, ctx }): Promise<Id<"inbox">> => {
         const { from, messageId, receivedAt, subject, text, to } = args;
 
-        // `from`/`to` are logged, the body is not: an inbound message is user
-        // content, and a log line is the wrong place for it.
-        ctx.log.info("inbound email stored", { characters: text?.length ?? 0, from, recipients: to.length });
-
-        return ctx.db.insert("inbox", {
+        const inboxId = await ctx.db.insert("inbox", {
             body: text ?? "",
             from,
             messageId: messageId ?? "",
@@ -53,6 +49,12 @@ export const onEmail = mutation
             subject: subject ?? "",
             to,
         });
+
+        // After the insert, and counts only. The body is user content and the
+        // addresses are contact data — neither belongs in a log line.
+        ctx.log.info("inbound email stored", { characters: text?.length ?? 0, recipients: to.length });
+
+        return inboxId;
     });
 
 /** Most-recently-received inbox messages, newest first via the `by_received` index. */

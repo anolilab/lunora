@@ -81,13 +81,13 @@ node node_modules/lunorash/dist/bin.mjs seed --table demoRecords --count 250
 Four of its columns exist for their **declared type**, because the row editor and
 the grid header read the schema rather than the value in the cell:
 
-| Try this                                                                | Column                      | What it proves                                                                                                         |
-| ----------------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Edit a row — `status` and `currency` render dropdowns, not text boxes   | `v.union(v.literal…)`       | The editor reads `enumValues` off the schema, so an illegal value cannot be typed or pasted                            |
-| Paste a TSV block over a `status` column with a value outside the union | `status`                    | Paste validates against the **declared column**, and reports the cells it skipped rather than dropping them silently   |
-| Toggle `archived`; clear `notes`                                        | `v.boolean()`, `v.optional` | The editor renders a checkbox from the declared kind, and offers "clear" only for the column that is actually optional |
-| Look at `attachmentKey` cells                                           | `v.storage("avatars")`      | The grid resolves a signed URL and previews the object inline, from the **named** bucket                               |
-| Scan the grid header                                                    | all                         | Each header carries a one-character glyph for its validator kind; a column the schema does not describe carries none   |
+| Try this                                                                | Column                      | What it proves                                                                                                                    |
+| ----------------------------------------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Edit a row — `status` and `currency` render dropdowns, not text boxes   | `v.union(v.literal…)`       | The editor reads `enumValues` off the schema, so an illegal value cannot be typed or pasted                                       |
+| Paste a TSV block over a `status` column with a value outside the union | `status`                    | Paste validates against the **declared column**, and reports the cells it skipped rather than dropping them silently              |
+| Toggle `archived`; clear `notes`                                        | `v.boolean()`, `v.optional` | The editor renders a checkbox from the declared kind, and offers "clear" only for the optional columns (`notes`, `attachmentKey`) |
+| Look at `attachmentKey` cells                                           | `v.storage("avatars")`      | The grid resolves a signed URL and previews the object inline, from the **named** bucket                                          |
+| Scan the grid header                                                    | all                         | Each header carries a one-character glyph for its validator kind; a column the schema does not describe carries none              |
 
 ### SQL console
 
@@ -103,12 +103,12 @@ SELECT region, AVG(priority) AS avg_priority FROM demoRecords GROUP BY region;
 
 The gate is still per statement, and it is the enforcement point for the whole
 console — a write is refused in its own tab while the reads beside it still run.
-Two inputs worth pasting, both of which reached `sql.exec` before this surface
-was audited and are refused now:
+Two single statements worth pasting, both of which the batch scanner used to
+misread as two and reject outright:
 
 ```sql
-SELECT 'a;b' AS quoted_semicolon;   -- legal: the ; is inside a literal, not a boundary
-SELECT "a;b" FROM demoRecords;      -- legal: quoted IDENTIFIER, likewise not a boundary
+SELECT 'a;b' AS quoted_semicolon;   -- one statement: the ; is inside a literal, not a boundary
+SELECT "a;b" FROM demoRecords;      -- one statement: quoted IDENTIFIER, likewise not a boundary
 ```
 
 History is scoped per deployment and is **off by default**; the toggle purges

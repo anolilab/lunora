@@ -38,7 +38,9 @@ export const uploadAvatar = action
             throw new LunoraError("INTERNAL", "could not mint an avatar upload URL: object storage did not answer", { cause: error });
         }
 
-        ctx.log.info("avatar upload url minted", { contentType: args.contentType, key: scopedKey });
+        // The key is `avatars/<userId>/<name>` — logging it logs the identity.
+        // Content type and TTL are what a failed upload actually needs.
+        ctx.log.info("avatar upload url minted", { contentType: args.contentType, expiresInSeconds: 60 });
 
         return { key: scopedKey, url };
     });
