@@ -823,6 +823,7 @@ const MESSAGE_IDS = [
     "Disable two-factor",
     "No passkeys.",
     "Operations",
+    "Toggle operation console",
     "Organizations",
     "slug",
     "Members",

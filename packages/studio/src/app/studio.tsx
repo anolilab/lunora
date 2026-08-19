@@ -838,6 +838,19 @@ const StudioLayoutShell = (): ReactElement => {
         }),
     );
 
+    /*
+     * The operation console is reachable by keyboard chord only — no route, no
+     * button — so without this entry it is undiscoverable, and unreachable
+     * entirely once an operator rebinds the key and forgets what to. Appended
+     * rather than mixed into the nav list: it acts rather than navigates.
+     *
+     * Omitted when the console provider is not mounted, which is also when the
+     * chord binds nothing — an entry that silently did nothing would be worse
+     * than no entry.
+     */
+    const paletteItems =
+        toggleConsole === undefined ? commandItems : [...commandItems, { group: t("Operations"), label: t("Toggle operation console"), run: toggleConsole }];
+
     // The app-owned chrome (theme + admin token + rules banner) renders inside this
     // router-owned layout; absent when `<Studio>` is composed bare.
     const chrome = use(StudioChromeContext);
@@ -845,7 +858,7 @@ const StudioLayoutShell = (): ReactElement => {
 
     return (
         <SidebarProvider className="min-h-0 flex-1" data-testid="lunora-studio">
-            <CommandPalette items={commandItems} />
+            <CommandPalette items={paletteItems} />
 
             <StudioSidebar
                 chrome={chrome}

@@ -8,14 +8,23 @@ import { fireAndForget } from "../lib/internal";
 import { useShortcuts } from "../lib/shortcuts";
 import { cn } from "../lib/utils";
 
-/** A navigable destination shown in the palette. */
+/**
+ * One palette entry: a navigable destination, or an action to run.
+ *
+ * `run` exists because not everything the palette should reach is a page. The
+ * operation console has no route and no button — the keyboard chord was the only
+ * way in, which makes it undiscoverable, and unreachable at all once an operator
+ * rebinds the key and forgets what to.
+ */
 interface CommandItem {
     /** Localised domain label, shown as a muted suffix to disambiguate. */
     readonly group: string;
     /** Localised sub-page label, the primary search target. */
     readonly label: string;
-    /** Router path to navigate to on select (e.g. `/logs`). */
-    readonly to: string;
+    /** Run on select. Mutually exclusive with `to`. */
+    readonly run?: () => void;
+    /** Router path to navigate to on select (e.g. `/logs`). Mutually exclusive with `run`. */
+    readonly to?: string;
 }
 
 interface CommandPaletteProps {
@@ -159,7 +168,18 @@ const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
 
     const select = (item: CommandItem): void => {
         onOpenChange(false);
-        fireAndForget(navigate({ to: item.to }));
+
+        // An action runs in place; a destination navigates. Closing first either
+        // way, so a toggle does not fight the dialog for focus.
+        if (item.run !== undefined) {
+            item.run();
+
+            return;
+        }
+
+        if (item.to !== undefined) {
+            fireAndForget(navigate({ to: item.to }));
+        }
     };
 
     const onInputChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
@@ -239,7 +259,7 @@ const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
                                     active={index === activeIndex}
                                     index={index}
                                     item={item}
-                                    key={item.to}
+                                    key={item.to ?? `${item.group}:${item.label}`}
                                     onActivate={setActiveIndex}
                                     onSelect={select}
                                 />

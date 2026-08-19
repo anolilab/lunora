@@ -67,6 +67,30 @@ describe("command palette", () => {
         await expect(screen.findByTestId("dash-command-palette")).resolves.toBeDefined();
     });
 
+    it("opens the operation console, which has no route and no button", async () => {
+        expect.assertions(2);
+
+        render(renderStudio(createClient()));
+        await screen.findByTestId("lunora-studio");
+
+        act(() => {
+            openCommandPalette();
+        });
+
+        const input = await screen.findByTestId<HTMLInputElement>("dash-command-input");
+
+        fireEvent.change(input, { target: { value: "operation console" } });
+
+        expect(screen.getByTestId("dash-command-list").textContent).toContain("Toggle operation console");
+
+        // The console is reachable by keyboard chord ONLY — no route, no button —
+        // so this entry is what keeps it discoverable, and reachable at all once an
+        // operator rebinds the chord and forgets what to.
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        await expect(screen.findByTestId("lunora-operation-console")).resolves.toBeDefined();
+    });
+
     it("opens via the top-bar Search button's window event and navigates to a filtered destination", async () => {
         expect.assertions(2);
 
