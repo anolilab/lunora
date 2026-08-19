@@ -41,7 +41,14 @@ interface ScriptStatement {
  * `at` is where `raw` began in the draft; the trim is measured so `offset` points
  * at the statement's first real character rather than the whitespace before it.
  */
-const classify = (raw: string, at: number): ScriptStatement[] => {
+
+/**
+ * Gate ONE statement, without looking for boundaries inside it. Used by the
+ * unreadable-draft fallback below and by the EXPLAIN path, which wraps the whole
+ * draft and must therefore be refused as a batch rather than split into a
+ * prefix that gets explained and a tail that quietly runs.
+ */
+const classifyOne = (raw: string, at: number): ScriptStatement[] => {
     const sql = raw.trim();
 
     if (sql === "") {
@@ -60,7 +67,7 @@ const splitStatements = (sql: string): ScriptStatement[] => {
     // Unreadable (an unterminated quote or block comment): hand the gate the whole
     // draft as one statement rather than inventing boundaries inside it.
     if (masked === undefined) {
-        return classify(sql, 0);
+        return classifyOne(sql, 0);
     }
 
     const parts: ScriptStatement[] = [];
@@ -73,7 +80,7 @@ const splitStatements = (sql: string): ScriptStatement[] => {
 
         // Slice the ORIGINAL, not the mask: the mask exists only to locate the
         // boundary, and the operator's own text is what runs.
-        parts.push(...classify(sql.slice(start, index), start));
+        parts.push(...classifyOne(sql.slice(start, index), start));
 
         start = index + 1;
     }
@@ -81,5 +88,5 @@ const splitStatements = (sql: string): ScriptStatement[] => {
     return parts;
 };
 
-export { splitStatements };
+export { classifyOne, splitStatements };
 export type { ScriptStatement };

@@ -14,7 +14,7 @@ import { useSqlEditorSurface } from "./hooks/use-sql-editor-surface";
 import type { ScriptRun } from "./hooks/use-sql-editor-tabs";
 import { useSqlEditorTabs } from "./hooks/use-sql-editor-tabs";
 import { useSqlLibrary } from "./hooks/use-sql-library";
-import { splitStatements } from "./split-statements";
+import { classifyOne, splitStatements } from "./split-statements";
 import SqlEditorPane from "./sql-editor-pane";
 import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
 import SqlResultsPane from "./sql-results-pane";
@@ -141,13 +141,13 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         // response lands.
         patchActiveOutput({ running: true });
 
-        // EXPLAIN wraps the whole draft, so it is one statement by construction
-        // and is never split.
-        // EXPLAIN wraps the whole draft, so it is one statement by construction and
-        // is never split — but it still goes through the gate, so a script the
-        // operator asks to explain is refused with the same message the editor's
-        // own diagnostic shows rather than failing opaquely at the server.
-        const statements = mode === "explain" ? splitStatements(`EXPLAIN QUERY PLAN ${draft}`) : splitStatements(draft);
+        // EXPLAIN wraps the whole draft, so the wrapper must be gated as ONE
+        // statement — `classifyOne`, never `splitStatements`. Splitting it turned
+        // `EXPLAIN QUERY PLAN SELECT 1; SELECT 2` into an explained prefix plus a
+        // `SELECT 2` that simply ran, which is the opposite of what asking for a
+        // plan means. Gated as one, a script the operator asks to explain is
+        // refused with the same message the editor's own diagnostic shows.
+        const statements = mode === "explain" ? classifyOne(`EXPLAIN QUERY PLAN ${draft}`, 0) : splitStatements(draft);
         const runs: ScriptRun[] = [];
 
         for (const statement of statements) {

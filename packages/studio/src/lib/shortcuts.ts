@@ -26,14 +26,21 @@ const STORAGE_KEY = "lunora-studio-shortcuts";
  */
 const listeners = new Set<() => void>();
 
-/** A stored value is only honoured when BOTH fields are the single characters `setShortcut` would accept. */
+/**
+ * A stored value is only honoured when BOTH fields are the single characters
+ * `setShortcut` would accept.
+ *
+ * Case-folded before every check and returned folded, because the consumers
+ * compare against `event.key.toLowerCase()`: a binding persisted as `"K"` would
+ * otherwise validate, store, and then never match a keypress. Folding first also
+ * makes the duplicate check mean what it says — `"K"` and `"k"` are one binding,
+ * not two.
+ */
 const validate = (stored: Partial<Shortcuts> | undefined): Shortcuts => {
-    const toggle = stored?.console;
-    const palette = stored?.palette;
+    const toggle = typeof stored?.console === "string" ? stored.console.toLowerCase() : undefined;
+    const palette = typeof stored?.palette === "string" ? stored.palette.toLowerCase() : undefined;
 
-    return typeof toggle === "string" && toggle.length === 1 && typeof palette === "string" && palette.length === 1 && toggle !== palette
-        ? { console: toggle, palette }
-        : DEFAULT_SHORTCUTS;
+    return toggle?.length === 1 && palette?.length === 1 && toggle !== palette ? { console: toggle, palette } : DEFAULT_SHORTCUTS;
 };
 
 let current: Shortcuts = DEFAULT_SHORTCUTS;
