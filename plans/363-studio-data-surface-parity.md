@@ -1,7 +1,7 @@
 # Plan 363 — Close nine gaps in the Studio's data/SQL surface
 
 **Baseline:** `9a0b5263a` (2026-08-18)
-**Status:** DONE — W1–W4, W6–W10 all shipped, plus both §8b findings; W5 spun out to [364](364-studio-conversational-assistant.md)
+**Status:** DONE — W1–W4, W6–W10 all shipped, plus both §8b audit passes (the second caught two read-only-gate regressions W4 introduced); W5 spun out to [364](364-studio-conversational-assistant.md)
 
 ## 0. Headline finding
 
@@ -334,7 +334,16 @@ before measuring anything in it (stale `dist` is the usual false failure), and
   an action, measure concurrent `runSql` p99 during a conversation; that number
   is the whole point of keeping it off the admin dispatch.
 
-## 8b. Found while executing — both since fixed
+## 8b. Found while executing — all since fixed
+
+Two passes. The first (`432e078f8`) found defects that predate this branch. The
+second (`11d7240a8`) audited this branch's own output, and the two it found in
+the read-only gate are **regressions W4 introduced** — each one let a statement
+reach `sql.exec` that alpha refused. A gate is exactly the thing whose repair
+must be audited as harshly as the hole it closed, so both are recorded here in
+full rather than summarised.
+
+### First pass — pre-existing on alpha (`432e078f8`)
 
 - **`classifyStatement` refused a semicolon inside a literal or a comment.** The
   batch check was `single.indexOf(";")` over raw text, so **four** legal
@@ -358,6 +367,48 @@ before measuring anything in it (stale `dist` is the usual false failure), and
   sequential mounts each awaited to completion. **Fixed** by excluding the test
   environment from the detector and correcting that claim. A diagnostic that
   cries wolf teaches people to ignore the one time it is right.
+
+### Second pass — this branch's own output (`11d7240a8`)
+
+- **The new mask indexed code points while every caller indexed code units.**
+  The buffer was built with `[...sql]` — a code-point array — so one astral
+  character desynchronised the two index spaces, the fill ran a slot short, and
+  it ate the character after the closing quote. When that character was the
+  statement-separating semicolon, the gate stopped seeing a batch:
+  `SELECT '<emoji>';ANALYZE` masked to `SELECT xxxxANALYZE` and was **allowed
+  through to `sql.exec`**. Alpha refused the same input. The returned string was
+  also shorter than its input, so a rejection's offset no longer indexed the
+  caller's string. **Fixed** — both index spaces are code units, fuzzed over
+  200k inputs for length and newline geometry.
+
+- **The statement splitter masked with the STUDIO's `maskNonCode`.** That mask
+  deliberately leaves `"…"` as code, because it exists to resolve identifiers.
+  Splitting with it tore `SELECT "a;b" FROM t` into `SELECT "a` — which passes
+  the gate and **was sent** — plus a `b" FROM t` that came back as a bogus
+  not-readonly. **Fixed** — the scanner is now its own `shared/sql-mask.ts`, and
+  the gate and the splitter share it, which is what the gate's docblock
+  instructed once a third consumer appeared. The studio's identifier mask stays
+  as it is: boundary detection and identifier resolution are different
+  questions.
+
+- **The draft linter classified the whole draft, not each statement.** A script
+  drew a red "only a single statement may be run" while the runner executed it
+  happily — precisely the warn/reject drift `shared/sql-readonly.ts` says can
+  never appear. **Fixed** — it lints per statement and shifts each diagnostic
+  onto the draft.
+
+- **Seven smaller gaps the branch left.** Paste judged values by the cell's
+  current value rather than the declared column, so a null numeric column
+  accepted `"n/a"` and booleans accepted anything; the paste anchor was set only
+  by the arrow keys, so click-then-paste landed the block at the top-left cell;
+  the row editor keyed its clear option off `optional`, which is also true of a
+  `.default(...)` column and collides with a legal `v.literal("")`; the storage
+  preview ignored the bucket names `v.storage(bucket)` carries; the palette
+  hotkey gained no target guard when it became rebindable, so binding it to `a`
+  would have eaten Ctrl+A everywhere; the shortcut capture box swallowed Tab and
+  was a keyboard trap; and the on-disk SQL history a previous build wrote was
+  never purged, leaving an unchecked "keep history" box lying about what is on
+  disk. All fixed in the same commit.
 
 ## 9. Open questions (answer during execution)
 
