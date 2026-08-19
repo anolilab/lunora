@@ -78,8 +78,10 @@ export default defineSchema({
      *   the set cannot be pasted into the grid.
      * - `archived` is a plain `boolean`, so the editor offers a checkbox rather
      *   than a text box and the header carries the boolean glyph. Deliberately
-     *   NOT `.default(false)`: the seeder skips defaulted columns so the write
-     *   layer can apply them, which would have left this blank in every row.
+     *   NOT `.default(false)`: the seeder omits a defaulted column and the write
+     *   layer fills it (`applyInsertDefaults`, which keys off PRESENCE so a
+     *   `false` survives), so every row would read the same value — correct, but
+     *   nothing to look at in a grid.
      * - `attachmentKey` is a `v.storage("avatars")` key, so the grid can resolve
      *   a signed URL and preview the object inline, and the file browser can
      *   join the row to the bucket that actually holds it.
