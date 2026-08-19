@@ -1,7 +1,7 @@
 /**
  * Aggregate spend caps (GAPS.md C1) over the **full Cloudflare bill**.
  * Per-invocation runtime limits cap a single request; this caps an org's
- * aggregate* period spend so a compromised or abusive account can't rack up
+ * **aggregate** period spend so a compromised or abusive account can't rack up
  * unbounded usage. Pure: the evaluator takes the period usage and returns a
  * decision; the enforcement cron does the I/O.
  *
