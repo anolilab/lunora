@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import SqlResultChart from "../../components/result-chart";
 import { ShardInput } from "../../components/shard-input";
 import { Alert } from "../../components/ui/alert";
-import type { AssistantOps } from "../../hooks/use-assistant-ops";
+import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
 import type { AssistantChartConfig, SqlConsoleResult } from "../../lib/admin";
 import { ExportMenu } from "../data/grid-features";
@@ -23,7 +23,7 @@ const tabClass = (selected: boolean): string =>
  * pane can be rendered stacked or side-by-side purely by its `className`.
  */
 const SqlResultsPane = ({
-    assistant,
+    rpc,
     chart,
     className,
     error,
@@ -48,7 +48,6 @@ const SqlResultsPane = ({
     shardKey,
     splitView,
 }: {
-    readonly assistant: AssistantOps;
     /** Model-inferred axes for this result, or undefined for the manual chart. */
     readonly chart?: AssistantChartConfig;
     /** Whether the assistant panel is showing. */
@@ -58,9 +57,9 @@ const SqlResultsPane = ({
     readonly error: null | string;
     /** Open the assistant on the failing statement. Omitted when there is nothing to debug. */
     readonly onDebugError?: () => void;
-    /** Ask the assistant to read the query plan currently shown. Omitted when there is no plan or no assistant. */
+    /** Ask the assistant to read the query plan currently shown. Omitted when there is no plan or no rpc. */
     readonly onExplainPlan?: () => void;
-    /** Ask the assistant to explain the draft in the editor. Omitted when there is nothing to explain or no assistant. */
+    /** Ask the assistant to explain the draft in the editor. Omitted when there is nothing to explain or no rpc. */
     readonly onExplainSql?: () => void;
     readonly onFormat: () => void;
     readonly onInferChart: () => void;
@@ -76,6 +75,7 @@ const SqlResultsPane = ({
     readonly onToggleSplit: () => void;
     readonly pane: ResultTab;
     readonly result: null | SqlConsoleResult;
+    readonly rpc: AssistantRpc;
     readonly running: boolean;
     /** Every statement of a multi-statement script; absent for a single one. */
     readonly script?: { readonly runs: ReadonlyArray<ScriptRun>; readonly selected: number };
@@ -94,15 +94,9 @@ const SqlResultsPane = ({
                     {t("Chart")}
                 </button>
                 {/* Chart inference, hidden without an AI binding. */}
-                {!assistant.unavailable && pane === "chart" && result !== null && (
-                    <button
-                        className={tabClass(false)}
-                        data-testid="sql-infer-chart"
-                        disabled={assistant.pending("chart")}
-                        onClick={onInferChart}
-                        type="button"
-                    >
-                        {assistant.pending("chart") ? t("Thinking…") : t("Suggest chart")}
+                {!rpc.unavailable && pane === "chart" && result !== null && (
+                    <button className={tabClass(false)} data-testid="sql-infer-chart" disabled={rpc.pending("chart")} onClick={onInferChart} type="button">
+                        {rpc.pending("chart") ? t("Thinking…") : t("Suggest chart")}
                     </button>
                 )}
                 <button className={tabClass(pane === "explain")} data-testid="sql-tab-explain" onClick={onShowExplain} type="button">
@@ -116,7 +110,7 @@ const SqlResultsPane = ({
                      * results toolbar and took vertical space whether or not
                      * anyone was talking to it.
                      */}
-                    {!assistant.unavailable && onToggleChat !== undefined && (
+                    {onToggleChat !== undefined && (
                         <button
                             aria-label={t("Ask about your data")}
                             aria-pressed={chatOpen}
@@ -183,22 +177,22 @@ const SqlResultsPane = ({
                      * On the Explain tab it asks about the PLAN instead: the operator
                      * is looking at a plan, so that is what "explain this" means there.
                      */}
-                    {!assistant.unavailable && pane === "explain" && onExplainPlan !== undefined && (
+                    {pane === "explain" && onExplainPlan !== undefined && (
                         <button
                             className="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50"
                             data-testid="sql-explain-plan"
-                            disabled={running || assistant.pending("chat")}
+                            disabled={running || rpc.pending("chat")}
                             onClick={onExplainPlan}
                             type="button"
                         >
                             {t("Read this plan")}
                         </button>
                     )}
-                    {!assistant.unavailable && pane !== "explain" && onExplainSql !== undefined && (
+                    {pane !== "explain" && onExplainSql !== undefined && (
                         <button
                             className="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50"
                             data-testid="sql-explain-query"
-                            disabled={running || assistant.pending("chat")}
+                            disabled={running || rpc.pending("chat")}
                             onClick={onExplainSql}
                             type="button"
                         >
@@ -260,11 +254,11 @@ const SqlResultsPane = ({
                          * error you do not understand is not fixed by a statement you
                          * did not read either.
                          */}
-                        {!assistant.unavailable && onDebugError !== undefined && (
+                        {!rpc.unavailable && onDebugError !== undefined && (
                             <button
                                 className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
                                 data-testid="sql-debug-error"
-                                disabled={assistant.pending("chat")}
+                                disabled={rpc.pending("chat")}
                                 onClick={onDebugError}
                                 type="button"
                             >
@@ -280,7 +274,7 @@ const SqlResultsPane = ({
                                 >
                                     <path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1.2-4.2A8 8 0 1 1 21 12Z" />
                                 </svg>
-                                {assistant.pending("chat") ? t("Thinking…") : t("Debug with AI")}
+                                {rpc.pending("chat") ? t("Thinking…") : t("Debug with AI")}
                             </button>
                         )}
                     </div>

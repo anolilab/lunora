@@ -297,4 +297,71 @@ describe("assistantPanel", () => {
         expect(asked.textContent).toContain("SELECT count(*) FROM messages");
         expect(screen.getByTestId<HTMLTextAreaElement>("sql-input").value).toBe("SELECT count(*) FROM messages");
     });
+
+    it("holds a seeded question until the model is free instead of dropping it", async () => {
+        expect.hasAssertions();
+
+        // `pending` is per-hook, not per-session: one turn in flight blocks every
+        // session's send. Clearing the ask before `send` could run meant a question
+        // asked while another was thinking vanished — blank session, nothing sent,
+        // no error.
+        let release: (() => void) | undefined;
+        const mock = createMockClient({
+            query: async (reference): Promise<unknown> => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiChat) {
+                    await new Promise<void>((resolve) => {
+                        release = resolve;
+                    });
+
+                    return { degraded: false, partial: false, reply: "Answered.", toolCalls: [], truncated: false };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 0 }];
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("first question");
+        await screen.findByTestId("assistant-turn-user");
+
+        // A second surface seeds a question while the first turn is still in flight.
+        fireEvent.click(screen.getByTestId("sql-explain-query"));
+
+        release?.();
+
+        // Both turns reach the server — the seeded one is held, not swallowed.
+        await waitFor(() => {
+            expect(mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toHaveLength(2);
+        });
+    });
+
+    it("offers no entry point at all when the deployment cannot run the assistant", async () => {
+        expect.hasAssertions();
+
+        // Every shell-wide entry point must gate on the DEPLOYMENT's answer, not on
+        // "is a provider mounted". Gating on the latter painted the button in every
+        // ErrorAlert, every advisor row and the command palette on an app with no
+        // `AI` binding — and clicking one fired a real RPC before the panel vanished.
+        const mock = chatMock("unused", false);
+
+        render(renderPanel(mock));
+        await screen.findByTestId("lunora-sql-editor");
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("sql-chat-toggle")).toBeNull();
+        });
+
+        expect(screen.queryByTestId("sql-explain-query")).toBeNull();
+        expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toBe(false);
+    });
 });

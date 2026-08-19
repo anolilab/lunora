@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AiRunBinding } from "../../../shared/sql-assistant";
-import { MAX_TOOL_CALLS, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_TURNS } from "../../../shared/sql-assistant";
-import { decodeWire } from "../../../shared/wire-codec";
+import type { AiRunBinding } from "../../../shared/ai-chat";
+import { MAX_TOOL_CALLS, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_TURNS } from "../../../shared/ai-chat";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { AI_CHAT_OP } from "../src/ai-chat-rpc";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
@@ -15,6 +15,9 @@ const fakeContext: ExecutionContextLike = {
 
 /** The one method of {@link AiRunBinding}, named so the six doubles below can be typed rather than `any`. */
 type AiRun = AiRunBinding["run"];
+
+/** The engine's closing untrusted delimiter, so the assertion below can find the observation. */
+const UNTRUSTED_END_MARKER = "-----END UNTRUSTED DATA-----";
 
 const ADMIN_TOKEN = "chat-admin";
 
@@ -497,7 +500,10 @@ describe("createWorker — aiChat data-sharing level", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             aiChatBinding: scriptedBinding(['```tool\n{"name":"runSql","sql":"SELECT 1"}\n```', "No."]),
-            aiOptInLevel: "schema_and_everything",
+            // Cast because the option is typed as the closed union — a hand-written
+            // typo is now a compile error. What this asserts is the OTHER path: the
+            // value codegen passes comes off `env` and is genuinely unvalidated.
+            aiOptInLevel: "schema_and_everything" as never,
             shardDO: recordingShard(forwarded),
         });
 
@@ -535,5 +541,79 @@ describe("createWorker — aiChat data-sharing level", () => {
 
         expect(system).toContain("describeTables");
         expect(system).not.toContain("runSql");
+    });
+
+    it("refuses readLogs at the schema tier and dispatches it at the log tier", async () => {
+        expect.hasAssertions();
+
+        const refusedAt: string[] = [];
+        const allowedAt: string[] = [];
+
+        // The MIDDLE rung of a four-rung ladder — the one the runSql tests skip over
+        // entirely, and the only tool that reaches an admin op nothing else here uses.
+        await createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"readLogs"}\n```', "I cannot read logs here."]),
+            shardDO: recordingShard(refusedAt),
+        }).fetch(rpc({ prompt: "what went wrong?" }), {}, fakeContext);
+
+        await createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"readLogs"}\n```', "Two errors."]),
+            aiOptInLevel: "schema_and_log",
+            shardDO: recordingShard(allowedAt),
+        }).fetch(rpc({ prompt: "what went wrong?" }), {}, fakeContext);
+
+        expect(refusedAt).not.toContain("__lunora_admin__:getLogs");
+        expect(allowedAt).toContain("__lunora_admin__:getLogs");
+    });
+
+    it("fits an oversized tool result to the budget without cutting mid-object", async () => {
+        expect.hasAssertions();
+
+        // `getLogs` answers the WHOLE in-memory buffer. A blunt character cap on the
+        // serialised payload hands the model a fragment ending mid-object and lets it
+        // read that as data.
+        const entries = Array.from({ length: 200 }, (_entry, index) => {
+            return { functionPath: "app:doThing", level: "error", message: `failure number ${String(index)}`, timestamp: index };
+        });
+
+        let observed = "";
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: {
+                run: vi.fn<AiRun>(async (_model, options) => {
+                    const user = (options as { messages: { content: string; role: string }[] }).messages.find((message) => message.role === "user");
+
+                    if (user?.content.includes("Tool result:") === true) {
+                        observed = user.content;
+
+                        return { response: "Done." };
+                    }
+
+                    return { response: '```tool\n{"name":"readLogs"}\n```' };
+                }),
+            },
+            aiOptInLevel: "schema_and_log",
+            shardDO: {
+                get: () => {
+                    return { fetch: async () => Response.json({ result: encodeWire({ entries }) }, { status: 200 }) };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
+        });
+
+        await worker.fetch(rpc({ prompt: "what went wrong?" }), {}, fakeContext);
+
+        // `lastIndexOf`: the prompt opens with the TRANSCRIPT's own fenced block, so
+        // the first end-marker is that one, not the observation's.
+        const result = observed.slice(observed.indexOf("Tool result: ") + "Tool result: ".length, observed.lastIndexOf(UNTRUSTED_END_MARKER)).trim();
+        const payload = result.replace(/ \(\d+ more omitted\)$/u, "");
+
+        // Whatever survived is COMPLETE JSON, and it says what it dropped.
+        expect(() => JSON.parse(payload) as unknown).not.toThrow();
+        expect(result).toContain("more omitted");
     });
 });

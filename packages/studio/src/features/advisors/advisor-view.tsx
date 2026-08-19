@@ -128,6 +128,7 @@ export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }
     // `undefined` when no assistant is mounted above this tree — then no button,
     // rather than one that cannot work. Same contract as `useOperationConsole`.
     const assistant = useAssistant();
+    const canAsk = assistant !== undefined && !assistant.unavailable;
     const [active, setActive] = useState<AdvisorLevel>("error");
 
     const counts = tallyByLevel(rows);
@@ -193,30 +194,32 @@ export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }
                                         <TableCell className="font-mono text-xs text-muted-foreground">{row.entity ?? "—"}</TableCell>
                                         <TableCell className="text-muted-foreground">
                                             <span>{row.description}</span>
-                                            <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                                                {row.action}
-                                                {assistant !== undefined && (
-                                                    <button
-                                                        className="text-xs underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                        data-testid="advisor-ask-assistant"
-                                                        onClick={() => {
-                                                            /*
-                                                             * The finding travels VERBATIM — headline, entity and
-                                                             * description — because that is exactly what the operator
-                                                             * is looking at. A lint id alone would make the model
-                                                             * guess at what the studio already knows.
-                                                             */
-                                                            assistant.openAssistant({
-                                                                ask: `The Lunora advisor reported: ${row.issueType}${row.entity === undefined ? "" : ` on ${row.entity}`}.\n\n${row.description}\n\nWhat does this mean for my app, and how should I fix it?`,
-                                                                title: row.issueType,
-                                                            });
-                                                        }}
-                                                        type="button"
-                                                    >
-                                                        {t("Ask the assistant")}
-                                                    </button>
-                                                )}
-                                            </span>
+                                            {(row.action !== undefined || canAsk) && (
+                                                <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                                    {row.action}
+                                                    {canAsk && (
+                                                        <button
+                                                            className="text-xs underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                            data-testid="advisor-ask-assistant"
+                                                            onClick={() => {
+                                                                /*
+                                                                 * The finding travels VERBATIM — headline, entity and
+                                                                 * description — because that is exactly what the operator
+                                                                 * is looking at. A lint id alone would make the model
+                                                                 * guess at what the studio already knows.
+                                                                 */
+                                                                assistant.openAssistant({
+                                                                    ask: `The Lunora advisor reported: ${row.issueType}${row.entity === undefined ? "" : ` on ${row.entity}`}.\n\n${row.description}\n\nWhat does this mean for my app, and how should I fix it?`,
+                                                                    title: row.issueType,
+                                                                });
+                                                            }}
+                                                            type="button"
+                                                        >
+                                                            {t("Ask the assistant")}
+                                                        </button>
+                                                    )}
+                                                </span>
+                                            )}
                                         </TableCell>
                                     </TableRow>
                                 ))

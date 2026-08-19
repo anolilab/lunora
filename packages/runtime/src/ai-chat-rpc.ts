@@ -15,8 +15,8 @@
  * a builder, and a `*_NOT_CONFIGURED` 400 — deliberately, so there is one
  * worker-RPC idiom rather than two.
  */
-import type { AiOptInLevel, AiRunBinding, ChatArgs, ChatResult, ChatToolCall, ChatToolRunner, SchemaFact } from "../../../shared/sql-assistant";
-import { generateChat } from "../../../shared/sql-assistant";
+import type { AiOptInLevel, AiRunBinding, ChatArgs, ChatResult, ChatToolCall, ChatToolRunner, SchemaFact } from "../../../shared/ai-chat";
+import { generateChat } from "../../../shared/ai-chat";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 
 /**
@@ -102,22 +102,6 @@ const TOOL_OPS: Readonly<Record<ChatToolCall["name"], string>> = {
     runSql: "__lunora_admin__:runSql",
 };
 
-/** Log lines handed to one turn. The buffer holds far more, and `observation()` would truncate mid-JSON. */
-const MAX_LOG_LINES = 20;
-
-/**
- * Trim a `getLogs` payload to what a turn can use.
- *
- * The op answers the WHOLE in-memory buffer, newest first, which is orders of
- * magnitude past the observation cap — without this the model reads a JSON
- * fragment cut off mid-object rather than twenty complete lines.
- */
-const recentLogs = (decoded: unknown): unknown => {
-    const entries = (decoded as { entries?: unknown } | null | undefined)?.entries;
-
-    return Array.isArray(entries) ? { entries: entries.slice(0, MAX_LOG_LINES) } : decoded;
-};
-
 /**
  * Build a tool runner over the worker's forwarder.
  *
@@ -148,9 +132,8 @@ const chatToolRunner =
         // hands the model the envelope plus bigint/bytes sentinels rather than the
         // rows. Every other consumer decodes; so must this one.
         const body: { result?: unknown } = await response.json();
-        const decoded = decodeWire(body.result);
 
-        return call.name === "readLogs" ? recentLogs(decoded) : decoded;
+        return decodeWire(body.result);
     };
 
 /**

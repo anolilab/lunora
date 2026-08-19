@@ -4,10 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import type { AssistantSession, AssistantValue } from "../../components/assistant-provider";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
-import { useAssistantOps } from "../../hooks/use-assistant-ops";
+import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
 import type { ChatTurn, GenerateSqlDegradedReason } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
+import sqlBlocks from "../../lib/sql-blocks";
 
 /**
  * Operator-facing copy per failure reason. `ai-disabled` and `no-ai-binding`
@@ -19,39 +20,6 @@ import { fireAndForget } from "../../lib/internal";
  */
 const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof useT>): string =>
     reason === "empty-response" ? t("The model returned nothing usable.") : t("The model could not be reached.");
-
-/** Opening fence of the only block shape offered for insertion. */
-const SQL_FENCE = "```sql";
-
-/** Closing fence. */
-const FENCE = "```";
-
-/**
- * Pull the fenced SQL out of a reply.
- *
- * A scan rather than a regex: the obvious pattern (`/```sql\s*([\S\s]*?)```/`)
- * is polynomial-backtracking on a model reply, which is exactly the input not to
- * hand an ambiguous matcher.
- *
- * Deliberately narrow in what it accepts, too. Only a fenced ```sql block counts;
- * a looser reading — "any line starting with SELECT" — would offer prose as a
- * statement, and this button is the one path from a model reply into the editor.
- * An unterminated block yields nothing, because half a statement is not one.
- */
-const sqlBlocks = (reply: string): string[] => {
-    const blocks: string[] = [];
-
-    for (const part of reply.split(SQL_FENCE).slice(1)) {
-        const end = part.indexOf(FENCE);
-        const sql = end === -1 ? "" : part.slice(0, end).trim();
-
-        if (sql !== "") {
-            blocks.push(sql);
-        }
-    }
-
-    return blocks;
-};
 
 /** One rendered turn, with an insert button per SQL block the reply carries. */
 const TurnRow = ({ onInsert, turn }: { readonly onInsert: ((sql: string) => void) | undefined; readonly turn: ChatTurn }): ReactElement => {
@@ -124,7 +92,7 @@ const SessionBar = ({ assistant }: { readonly assistant: AssistantValue }): Reac
                 className="shrink-0"
                 data-testid="assistant-session-new"
                 onClick={() => {
-                    newChat();
+                    newChat({ title: t("New chat") });
                 }}
                 size="xs"
                 type="button"
@@ -159,7 +127,7 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
     const t = useT();
 
     const session: AssistantSession | undefined = assistant.sessions.find((candidate) => candidate.id === assistant.activeId);
-    const ops = useAssistantOps(session?.shardKey ?? "");
+    const ops = useAssistantRpc(session?.shardKey ?? "");
 
     const [draft, setDraft] = useState("");
     const [truncated, setTruncated] = useState(false);
@@ -247,7 +215,17 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
 
     /* eslint-disable react-you-might-not-need-an-effect/no-event-handler -- external trigger: the operator clicked "Debug with AI" / "Ask the assistant" on ANOTHER component, which queued a question here. Reaching a model is the external system an effect is for, and `takeAsk` makes it fire exactly once. */
     useEffect(() => {
-        if (ask === undefined || ask.sessionId !== sessionId) {
+        /*
+         * `pending` is part of the condition, not just of `send`'s early return.
+         *
+         * `pending` is per-hook, not per-session: one turn in flight blocks every
+         * session's send. Clearing the ask first and letting `send` bail meant a
+         * question asked while another was thinking vanished — the operator landed
+         * on a blank session with nothing sent, no answer and no error. Holding the
+         * ask until the model is free means this effect simply re-runs when
+         * `pending` clears, and the question goes out then.
+         */
+        if (ask === undefined || ask.sessionId !== sessionId || pending) {
             return;
         }
 
@@ -263,7 +241,7 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
         // `send` is re-created every render and is not a meaningful dependency —
         // the ask's identity is what decides whether to send.
         // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
-    }, [ask, sessionId, takeAsk]);
+    }, [ask, sessionId, takeAsk, pending]);
     /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
 
     if (ops.unavailable || !assistant.open || session === undefined) {

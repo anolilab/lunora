@@ -220,6 +220,7 @@ import {
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
+import { asOptInLevel } from "../../../shared/ai-chat";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
@@ -7151,7 +7152,7 @@ abstract class ShardDO {
      * no binding at all and so records nothing.
      */
     private async handleExplainIssue(args: Record<string, unknown>): Promise<Response> {
-        const result = await explainIssue((this.env as Record<string, unknown> | undefined)?.["AI"], args);
+        const result = await explainIssue(this.aiBinding(), args);
 
         if (!result.degraded) {
             this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, model: result.model } });
@@ -7184,7 +7185,7 @@ abstract class ShardDO {
         const schema = listTables(sql).map((table) => {
             return { columns: this.tableColumns(table.name).map((column) => column.name), table: table.name };
         });
-        const result = await generateSql((this.env as Record<string, unknown> | undefined)?.["AI"], args, schema);
+        const result = await generateSql(this.aiBinding(), args, schema);
 
         if (result.degraded) {
             if (result.reason !== "no-ai-binding") {
@@ -7221,7 +7222,7 @@ abstract class ShardDO {
 
         const table = typeof args["table"] === "string" ? args["table"] : "";
         const columns = table === "" ? [] : this.tableColumns(table).map((column) => column.name);
-        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns);
+        const result = await generateFilter(this.aiBinding(), args, columns);
 
         if (result.degraded && result.reason !== "no-ai-binding") {
             this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });
@@ -7248,7 +7249,26 @@ abstract class ShardDO {
      * No model call, no audit entry — it reads one property off `env`.
      */
     private handleAiAvailable(): Response {
-        return adminResponse({ available: (this.env as Record<string, unknown> | undefined)?.["AI"] !== undefined });
+        return adminResponse({ available: this.aiBinding() !== undefined });
+    }
+
+    /**
+     * The `AI` binding this shard may use, or `undefined`.
+     *
+     * `undefined` for two different deployments — one with no binding, and one
+     * whose operator disabled the assistant through its opt-in var — because every
+     * surface treats them identically: degrade, latch, hide the affordance.
+     *
+     * Read HERE rather than at each of the five call sites so `disabled` cannot
+     * mean "the chat assistant is off, but Draft SQL, the filter bar, chart
+     * inference and issue explanation still call the provider". `handleAiAvailable`
+     * goes through it too, which is what makes the studio's latch honest about a
+     * disabled deployment rather than painting buttons that fail on first click.
+     */
+    private aiBinding(): unknown {
+        const env = this.env as Record<string, unknown> | undefined;
+
+        return asOptInLevel(env?.["LUNORA_AI_OPT_IN"]) === "disabled" ? undefined : env?.["AI"];
     }
 
     /**
@@ -7272,7 +7292,7 @@ abstract class ShardDO {
                 ? undefined
                 : Object.fromEntries(Object.entries(rawTypes).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
         const rowCount = typeof args["rowCount"] === "number" ? args["rowCount"] : 0;
-        const result = await generateChart((this.env as Record<string, unknown> | undefined)?.["AI"], args, { columns, rowCount, types });
+        const result = await generateChart(this.aiBinding(), args, { columns, rowCount, types });
 
         if (result.degraded && result.reason !== "no-ai-binding") {
             this.recordAudit("aiChartConfig", { detail: { reason: result.reason } });

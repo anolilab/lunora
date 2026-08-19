@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Input } from "../../components/ui/input";
-import type { AssistantOps } from "../../hooks/use-assistant-ops";
+import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
 import type { GenerateSqlDegradedReason } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
@@ -26,28 +26,28 @@ const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof u
  * anything they typed. It has already passed the same read-only gate the server
  * enforces before it gets here.
  */
-const AssistantOpsBar = ({
-    assistant,
+const SqlAssistantBar = ({
+    rpc,
     failed,
     onGenerated,
 }: {
-    readonly assistant: AssistantOps;
     /** The last failed run, enabling the repair affordance. */
     readonly failed?: { error: string; sql: string };
     readonly onGenerated: (sql: string) => void;
+    readonly rpc: AssistantRpc;
 }): ReactElement | null => {
     const t = useT();
 
     const [prompt, setPrompt] = useState("");
 
-    if (assistant.unavailable) {
+    if (rpc.unavailable) {
         return null;
     }
 
     // Only THIS surface's task — a chart inference running in the editor below
     // must not spin this button or print its error here.
-    const pending = assistant.pending("sql");
-    const reason = assistant.reason("sql");
+    const pending = rpc.pending("sql");
+    const reason = rpc.reason("sql");
 
     const submit = (repair: boolean): void => {
         const text = prompt.trim();
@@ -57,7 +57,7 @@ const AssistantOpsBar = ({
         }
 
         const apply = async (): Promise<void> => {
-            const sql = await assistant.generate(text === "" ? "fix the failing statement" : text, repair ? failed : undefined);
+            const sql = await rpc.generate(text === "" ? "fix the failing statement" : text, repair ? failed : undefined);
 
             if (sql !== undefined) {
                 onGenerated(sql);
@@ -125,4 +125,4 @@ const AssistantOpsBar = ({
         </div>
     );
 };
-export default AssistantOpsBar;
+export default SqlAssistantBar;

@@ -343,10 +343,16 @@ title })`. The panel moved to `features/assistant/assistant-panel.tsx` and is
       protecting them from their own database — it decides whether rows their END
       USERS wrote reach an inference provider, and a disclosure defaults to off.
 
-    No transcript sanitiser was needed, unlike the obvious reference design: our
-    transcript carries prose turns only. Tool results live inside one turn's
-    prompt and never re-enter the client-held history, so a transcript replayed at
-    a lower level cannot leak an earlier level's rows.
+    No transcript sanitiser was needed for tool OUTPUT: the transcript carries prose
+    turns only, and a tool result lives inside one turn's server-side prompt and
+    never re-enters the client-held history. The narrower true statement, since the
+    first draft of this section overstated it: a reply produced at
+    `schema_and_log_and_data` may _quote_ the rows it read, and that prose does
+    re-enter the transcript and is re-sent on later turns. Lowering the level with
+    a tab still open keeps sending those quotes until the session is dropped.
+    Narrow — sessions die on reload, and the data already reached the same provider
+    — but the invariant is "raw tool output never replays", not "nothing from a
+    higher level ever replays".
 
 - **W8 (S) — Distribution and two readers.** `ErrorAlert` gained "Ask the
   assistant", which is the highest-leverage entry point in the Studio: every panel

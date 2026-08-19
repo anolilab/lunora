@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import { EmptyState } from "../../components/ui/empty-state";
-import type { AssistantOps } from "../../hooks/use-assistant-ops";
+import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta, TablePage } from "../../lib/admin";
 import { jsonRowReplacer } from "../../lib/internal";
@@ -160,7 +160,7 @@ const DataBrowserPage = ({
     queryBar,
     references,
 }: {
-    readonly assistant: AssistantOps;
+    readonly assistant: AssistantRpc;
     /** Reverse-relation columns: what is available, which are on, and their counts. */
     readonly backRelations: {
         available: ReadonlyArray<{ column: string; table: string }>;

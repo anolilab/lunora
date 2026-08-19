@@ -5,7 +5,7 @@ import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
-import { useAssistantOps } from "../../hooks/use-assistant-ops";
+import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
 import type { AssistantChartConfig, SqlConsoleResult } from "../../lib/admin";
 import { newId, usePersistedList } from "../../lib/browser-storage";
@@ -237,7 +237,7 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
     // One assistant for the whole dashboard, not one per card: the AI binding is
     // a property of the deployment, so N cards would mean N identical
     // availability subscriptions. The shard only decides where the call lands.
-    const assistant = useAssistantOps(initialShardKey ?? "");
+    const assistant = useAssistantRpc(initialShardKey ?? "");
     // Which card is waiting, tracked here rather than reading `assistant.pending`
     // — that status is per TASK, so it would spin every card's button at once.
     const [inferringId, setInferringId] = useState<null | string>(null);

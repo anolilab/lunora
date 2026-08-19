@@ -32,6 +32,7 @@ const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement
     // Same contract as the console above: `undefined` when no assistant is mounted,
     // and then no button rather than an inert one.
     const assistant = useAssistant();
+    const canAsk = assistant !== undefined && !assistant.unavailable;
     const hint = errorHint(error);
     const documentationUrl = errorDocumentationUrl(error);
     // `recordedCall` tags a rejection with its operation-tape entry, so this
@@ -60,7 +61,7 @@ const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement
 
         assistant?.openAssistant({
             ask: `The studio reported this error:\n${errorMessage(error)}${detail}\n\nWhat causes it, and how do I fix it?`,
-            title: "Debug error",
+            title: t("Debug error"),
         });
     };
 
@@ -89,7 +90,7 @@ const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement
                     {t("Show in console")}
                 </button>
             )}
-            {assistant === undefined ? null : (
+            {canAsk ? (
                 <button
                     className="mt-1 block text-xs underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     data-testid="error-ask-assistant"
@@ -98,7 +99,7 @@ const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement
                 >
                     {t("Ask the assistant")}
                 </button>
-            )}
+            ) : null}
         </Alert>
     );
 };

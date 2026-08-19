@@ -1,7 +1,9 @@
-import type { Dispatch, ReactElement, ReactNode, SetStateAction } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useState } from "react";
 
-import type { ChatTurn, SchemaFact } from "../lib/admin";
+import { useAdminQuery } from "../hooks/use-admin-query";
+import type { AiAvailableResult, ChatTurn, SchemaFact } from "../lib/admin";
+import { ADMIN_FUNCTIONS } from "../lib/admin";
 
 /** What a surface hands the assistant when it opens it. */
 interface AssistantSeed {
@@ -31,7 +33,14 @@ interface AssistantSeed {
     /** Which shard the turn's tools read. Absent means the worker's root shard. */
     readonly shardKey?: string;
 
-    /** A name for the session this seed opens, shown in the session list. */
+    /**
+     * A name for the session this seed opens, shown in the session list.
+     *
+     * Already display-ready: a caller with a catalog id translates it itself (it
+     * has `t`), and a caller naming runtime data — an advisor finding's headline —
+     * passes that through. The provider has no `t` and must not invent an id for
+     * text it did not author.
+     */
     readonly title?: string;
 }
 
@@ -71,8 +80,8 @@ interface AssistantValue {
      * insert button at all.
      */
     readonly insert: ((sql: string) => void) | undefined;
-    /** Start a fresh session and open the panel on it. Returns its id. */
-    readonly newChat: (seed?: AssistantSeed) => string;
+    /** Start a fresh session and open the panel on it. */
+    readonly newChat: (seed?: AssistantSeed) => void;
     readonly open: boolean;
 
     /**
@@ -86,7 +95,6 @@ interface AssistantValue {
     readonly openAssistant: (seed?: AssistantSeed) => void;
     /** The seeded question awaiting a send, or `undefined`. Cleared by {@link AssistantValue.takeAsk}. */
     readonly pendingAsk: PendingAsk | undefined;
-    readonly renameChat: (id: string, name: string) => void;
     readonly selectChat: (id: string) => void;
     readonly sessions: ReadonlyArray<AssistantSession>;
     /** Register (or, with `undefined`, withdraw) the page's insert target. */
@@ -96,6 +104,18 @@ interface AssistantValue {
     /** Mark the pending ask consumed, so a re-render never re-asks it. */
     readonly takeAsk: (id: number) => void;
     readonly toggle: () => void;
+
+    /**
+     * True once the deployment has reported it cannot run the assistant — no `AI`
+     * binding, or `LUNORA_AI_OPT_IN=disabled`.
+     *
+     * Owned HERE rather than by each surface, and asked ONCE for the shell. Every
+     * entry point must gate on it: a button that opens a panel which then reports
+     * it cannot work is the exact failure `aiAvailable` was added to prevent, and
+     * before this the four shell-wide entry points reintroduced it — they gated on
+     * "is a provider mounted", which is a different question.
+     */
+    readonly unavailable: boolean;
 }
 
 /**
@@ -106,6 +126,9 @@ interface AssistantValue {
  * "Ask the assistant" button at all instead of one that silently does nothing.
  */
 const AssistantContext = createContext<AssistantValue | undefined>(undefined);
+
+/** Stable empty args, so the availability query is not re-keyed every render. */
+const NO_ARGS: Record<string, unknown> = {};
 
 /** The default name a session gets before the operator or a seed names it. */
 const UNTITLED = "New chat";
@@ -130,9 +153,6 @@ const sessionFrom = (id: string, seed: AssistantSeed | undefined): AssistantSess
     return { id, name: seed?.title ?? UNTITLED, schema: seed?.schema ?? [], shardKey: seed?.shardKey, turns: [] };
 };
 
-/** Everything on the context except the state it reads. Hoisted so the actions can live at module scope. */
-type AssistantActions = Omit<AssistantValue, "activeId" | "draft" | "insert" | "open" | "pendingAsk" | "sessions">;
-
 /** Append a session, evicting the oldest past the cap. */
 const withSession = (current: AssistantState, session: AssistantSession): ReadonlyArray<AssistantSession> =>
     [...current.sessions, session].slice(-MAX_SESSIONS);
@@ -154,121 +174,12 @@ const start = (current: AssistantState, seed: AssistantSeed | undefined): Assist
     };
 };
 
-/**
- * The context's actions, over an injected `setState`.
- *
- * At module scope rather than inside the provider because nothing here reads the
- * component beyond that setter — and inside it, the
- * component → initialiser → action → updater chain nested one level past what
- * `sonarjs/no-nested-functions` allows.
- */
-const buildActions = (setState: Dispatch<SetStateAction<AssistantState>>): AssistantActions => {
-    return {
-        close: (): void => {
-            setState((current) => {
-                return { ...current, open: false };
-            });
-        },
+/** One session dropped. Hoisted for the same reason as {@link retold}. */
+const without = (sessions: ReadonlyArray<AssistantSession>, id: string): ReadonlyArray<AssistantSession> => sessions.filter((session) => session.id !== id);
 
-        deleteChat: (id: string): void => {
-            setState((current) => {
-                const sessions = current.sessions.filter((session) => session.id !== id);
-
-                return {
-                    ...current,
-                    // Falling back to the LAST remaining session rather than to
-                    // `undefined`: deleting the active one should land the operator on
-                    // another conversation, not on an empty panel they have to reopen.
-                    activeId: current.activeId === id ? sessions.at(-1)?.id : current.activeId,
-                    sessions,
-                };
-            });
-        },
-
-        newChat: (seed?: AssistantSeed): string => {
-            // The id is derived from `seq`, which only the updater can read, so it is
-            // computed inside and reported back through this closure variable.
-            let created = "";
-
-            setState((current) => {
-                const next = start(current, seed);
-
-                created = next.activeId ?? "";
-
-                return next;
-            });
-
-            return created;
-        },
-
-        openAssistant: (seed?: AssistantSeed): void => {
-            setState((current) => {
-                // A seeded question always gets its own session — see the docblock on
-                // `openAssistant`. So does the very first open, which has none to reuse.
-                if (seed?.ask !== undefined || current.activeId === undefined) {
-                    return start(current, seed);
-                }
-
-                return {
-                    ...current,
-                    draft: seed?.draft === undefined ? current.draft : { id: current.seq + 1, text: seed.draft },
-                    open: true,
-                    seq: current.seq + 1,
-                };
-            });
-        },
-
-        renameChat: (id: string, name: string): void => {
-            setState((current) => {
-                return {
-                    ...current,
-                    sessions: current.sessions.map((session) => (session.id === id ? { ...session, name } : session)),
-                };
-            });
-        },
-
-        setInsert: (insert: ((sql: string) => void) | undefined): void => {
-            setState((current) => {
-                return { ...current, insert };
-            });
-        },
-
-        selectChat: (id: string): void => {
-            setState((current) => {
-                return { ...current, activeId: id, open: true };
-            });
-        },
-
-        setTurns: (id: string, turns: ReadonlyArray<ChatTurn>): void => {
-            setState((current) => {
-                return {
-                    ...current,
-                    sessions: current.sessions.map((session) => (session.id === id ? { ...session, turns } : session)),
-                };
-            });
-        },
-
-        toggle: (): void => {
-            setState((current) => {
-                // Toggling open with nothing to show starts a session, so the panel is
-                // never opened onto an empty shell.
-                if (!current.open && current.activeId === undefined) {
-                    return start(current, undefined);
-                }
-
-                return { ...current, open: !current.open };
-            });
-        },
-
-        takeAsk: (id: number): void => {
-            setState((current) =>
-                // Compared by id, so a seed that arrived while this one was being consumed
-                // is not thrown away with it.
-                current.pendingAsk?.id === id ? { ...current, pendingAsk: undefined } : current,
-            );
-        },
-    };
-};
+/** One session's transcript replaced. Hoisted so the action below stays one nesting level shallower. */
+const retold = (sessions: ReadonlyArray<AssistantSession>, id: string, turns: ReadonlyArray<ChatTurn>): ReadonlyArray<AssistantSession> =>
+    sessions.map((session) => (session.id === id ? { ...session, turns } : session));
 
 /**
  * Holds the assistant's sessions and open state for the whole Studio shell.
@@ -285,6 +196,11 @@ const buildActions = (setState: Dispatch<SetStateAction<AssistantState>>): Assis
  * reload.
  */
 export const AssistantProvider = ({ children }: { readonly children: ReactNode }): ReactElement => {
+    // Asked once for the whole shell, on the root shard: whether the assistant can
+    // run is a property of the DEPLOYMENT, not of the page or the shard being
+    // browsed, so re-asking it per surface would be the same answer N times.
+    const availability = useAdminQuery<AiAvailableResult>(ADMIN_FUNCTIONS.aiAvailable, NO_ARGS, { shardKey: "" });
+
     const [state, setState] = useState<AssistantState>({
         activeId: undefined,
         draft: undefined,
@@ -295,21 +211,97 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
         sessions: [],
     });
 
-    /*
-     * Actions created ONCE by a lazy `useState` initialiser rather than a ref or a
-     * memo — the same constraint `OperationConsoleProvider` documents: a ref read
-     * during render to build the context value is what React Compiler forbids,
-     * and a `[state]` memo would give `toggle` a new identity on every open/close
-     * and tear down any effect depending on it. Every setter is an updater
-     * function, so none of them closes over the current state.
-     */
-    const [actions] = useState<AssistantActions>(() => buildActions(setState));
-    /*
-     * Built inline, NOT memoized — React Compiler auto-memoizes the context value
-     * for this package (which is why `react/jsx-no-constructed-context-values` is
-     * off in the repo config), and `actions` is already identity-stable, so the
-     * value only changes when `state` does.
-     */
+    // Same lazy-initialiser contract as `OperationConsoleProvider` — see the note
+    // there for why it is not a ref and not a `[state]` memo. Every setter is an
+    // updater function, so none of them closes over the current state.
+    const [actions] = useState(() => {
+        return {
+            close: (): void => {
+                setState((current) => {
+                    return { ...current, open: false };
+                });
+            },
+
+            deleteChat: (id: string): void => {
+                setState((current) => {
+                    const sessions = without(current.sessions, id);
+
+                    return {
+                        ...current,
+                        // Falling back to the LAST remaining session rather than to
+                        // `undefined`: deleting the active one should land the operator on
+                        // another conversation, not on an empty panel they have to reopen.
+                        activeId: current.activeId === id ? sessions.at(-1)?.id : current.activeId,
+                        sessions,
+                    };
+                });
+            },
+
+            newChat: (seed?: AssistantSeed): void => {
+                setState((current) => start(current, seed));
+            },
+
+            openAssistant: (seed?: AssistantSeed): void => {
+                setState((current) => {
+                    // A seeded question always gets its own session — see the docblock on
+                    // `openAssistant`. So does the very first open, which has none to reuse.
+                    if (seed?.ask !== undefined || current.activeId === undefined) {
+                        return start(current, seed);
+                    }
+
+                    return {
+                        ...current,
+                        draft: seed?.draft === undefined ? current.draft : { id: current.seq + 1, text: seed.draft },
+                        open: true,
+                        seq: current.seq + 1,
+                    };
+                });
+            },
+
+            setInsert: (insert: ((sql: string) => void) | undefined): void => {
+                setState((current) => {
+                    return { ...current, insert };
+                });
+            },
+
+            selectChat: (id: string): void => {
+                setState((current) => {
+                    return { ...current, activeId: id, open: true };
+                });
+            },
+
+            setTurns: (id: string, turns: ReadonlyArray<ChatTurn>): void => {
+                setState((current) => {
+                    return {
+                        ...current,
+                        sessions: retold(current.sessions, id, turns),
+                    };
+                });
+            },
+
+            toggle: (): void => {
+                setState((current) => {
+                    // Toggling open with nothing to show starts a session, so the panel is
+                    // never opened onto an empty shell.
+                    if (!current.open && current.activeId === undefined) {
+                        return start(current, undefined);
+                    }
+
+                    return { ...current, open: !current.open };
+                });
+            },
+
+            takeAsk: (id: number): void => {
+                setState((current) =>
+                    // Compared by id, so a seed that arrived while this one was being consumed
+                    // is not thrown away with it.
+                    current.pendingAsk?.id === id ? { ...current, pendingAsk: undefined } : current,
+                );
+            },
+        };
+    });
+    // Built inline, not memoized: React Compiler auto-memoizes the context value
+    // for this package, and `actions` is already identity-stable.
     const value: AssistantValue = {
         ...actions,
         activeId: state.activeId,
@@ -318,6 +310,7 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
         open: state.open,
         pendingAsk: state.pendingAsk,
         sessions: state.sessions,
+        unavailable: availability.data?.available === false,
     };
 
     return <AssistantContext value={value}>{children}</AssistantContext>;
