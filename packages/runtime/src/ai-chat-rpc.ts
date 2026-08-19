@@ -15,10 +15,9 @@
  * a builder, and a `*_NOT_CONFIGURED` 400 — deliberately, so there is one
  * worker-RPC idiom rather than two.
  */
-import type { AiRunBinding, ChatArgs, ChatResult, ChatToolRunner, SchemaFact } from "../../../shared/sql-assistant";
+import type { AiRunBinding, ChatArgs, ChatResult, ChatToolCall, ChatToolRunner, SchemaFact } from "../../../shared/sql-assistant";
 import { generateChat } from "../../../shared/sql-assistant";
-import { encodeWire } from "../../../shared/wire-codec";
-import { LunoraError } from "./errors";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 
 /**
  * Reserved RPC path the studio's chat panel invokes via `useAdminQuery`. Shares
@@ -32,21 +31,30 @@ const AI_CHAT_OP = "__lunora_admin__:aiChat";
 interface AiChatRpcDeps {
     /** Throw 403 (`ADMIN_FORBIDDEN`) unless the request carries a valid admin bearer. */
     assertAdmin: (request: Request) => void;
-    /** The app's Workers `AI` binding, or undefined when none is wired. */
-    getBinding: () => AiRunBinding | undefined;
+    /** The worker's root shard key, used when the caller names no shard. */
+    defaultShardKey: () => string;
 
     /**
-     * Dispatch one already-validated read-only tool call against `shardKey`.
+     * The worker's shard forwarder, and the admin headers to forward with.
      *
-     * Injected rather than imported: the engine must not learn how to reach a
-     * shard, and this module must not reach into the worker's closure. Omit it
-     * and a turn simply runs without tools.
+     * Injected rather than imported. Omit it and a turn simply runs without tools.
+     * `headers` is resolved per request by the caller because an Access-authorized
+     * admin presents no bearer of their own — see `resolveAdminForwardContext`.
      */
-    runTool?: (shardKey: string, request: Request) => ChatToolRunner;
+    forwardToShard?: (request: Request) => Promise<{ forward: ForwardToShard; headers: Record<string, string> }>;
+
+    /** The app's Workers `AI` binding, or undefined when none is wired. */
+    getBinding: () => AiRunBinding | undefined;
 }
 
 /** The worker-served handler for {@link AI_CHAT_OP}. */
 type AiChatRpcHandler = (request: Request, args: Record<string, unknown>) => Promise<Response>;
+
+/** Most grounding facts accepted from a caller. `groundingBlock` slices to 40; this bounds what reaches it. */
+const MAX_SCHEMA_FACTS = 60;
+
+/** Cap on a caller-supplied table or column name. */
+const NAME_CAP = 120;
 
 /** Narrow one caller-supplied grounding fact, or drop it. */
 const schemaFact = (value: unknown): SchemaFact | undefined => {
@@ -60,8 +68,57 @@ const schemaFact = (value: unknown): SchemaFact | undefined => {
         return undefined;
     }
 
-    return { columns: columns.filter((column): column is string => typeof column === "string"), table };
+    return {
+        // Length-capped like every other caller-supplied field: this is the one
+        // input on this op that is neither prompt nor transcript, so it would
+        // otherwise be the only unbounded one.
+        columns: columns.filter((column): column is string => typeof column === "string").map((column) => column.slice(0, NAME_CAP)),
+        table: table.slice(0, NAME_CAP),
+    };
 };
+
+/** The worker's shard forwarder, as this module needs it. Injected, so nothing here learns how to reach a shard. */
+type ForwardToShard = (
+    request: Request,
+    functionPath: string,
+    args: Record<string, unknown>,
+    shardKey: string,
+    headers: Record<string, string>,
+) => Promise<Response>;
+
+/**
+ * Build a tool runner over the worker's forwarder.
+ *
+ * Lives here rather than in `create-worker.ts` because it closes over nothing
+ * from that closure except `forward` itself — everything else is an argument. Put
+ * there it needed a forward-declared `let` and a hand-kept type annotation a
+ * thousand lines from its definition; here it is an ordinary function.
+ *
+ * Goes through the same forwarder and the same admin ops the studio itself calls,
+ * so the security question stays "does the existing gate still hold" rather than
+ * "is this new capability safe". `runSql`'s statement has already passed
+ * `classifyStatement` in the engine before it arrives.
+ */
+const chatToolRunner =
+    (forward: ForwardToShard, shardKey: string, headers: Record<string, string>, request: Request): ChatToolRunner =>
+    async (call: ChatToolCall): Promise<unknown> => {
+        const path = call.name === "runSql" ? "__lunora_admin__:runSql" : "__lunora_admin__:describeTables";
+        const response = await forward(request, path, call.sql === undefined ? {} : { sql: call.sql }, shardKey, headers);
+
+        // A non-2xx body is an error envelope, not data. Without this check it was
+        // JSON-stringified into an observation prefixed "Tool result:", telling the
+        // model that a 403 was what the table contained.
+        if (!response.ok) {
+            return { error: `the tool call failed (${response.status.toString()})` };
+        }
+
+        // Shard admin ops answer `{ result: encodeWire(...) }`, so the raw body
+        // hands the model the envelope plus bigint/bytes sentinels rather than the
+        // rows. Every other consumer decodes; so must this one.
+        const body: { result?: unknown } = await response.json();
+
+        return decodeWire(body.result);
+    };
 
 /**
  * Build the `__lunora_admin__:aiChat` handler.
@@ -79,31 +136,63 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
         deps.assertAdmin(request);
 
         const binding = deps.getBinding();
-
-        if (binding === undefined) {
-            throw new LunoraError("the studio chat assistant requires a Workers `AI` binding on the worker", {
-                code: "AI_CHAT_NOT_CONFIGURED",
-                status: 400,
-            });
-        }
-
         const rawSchema = args["schema"];
         const chatArgs: ChatArgs = {
             ...(typeof args["model"] === "string" ? { model: args["model"] } : {}),
             prompt: args["prompt"],
-            schema: Array.isArray(rawSchema) ? rawSchema.map((fact) => schemaFact(fact)).filter((fact): fact is SchemaFact => fact !== undefined) : [],
             // Passed through unnarrowed on purpose: `generateChat` owns the
             // transcript budget and the per-turn fencing, because a cap applied
             // here would be a second place for it to drift from the prompt that
             // relies on it.
             transcript: args["transcript"],
-            // Answers plan 364's open question 2: the tool reads the shard the
-            // console has OPEN, named by the caller, and the answer echoes which
-            // tools ran — so a reply is never ambiguous about what it read.
-            ...(deps.runTool === undefined ? {} : { runTool: deps.runTool(typeof args["shardKey"] === "string" ? args["shardKey"] : "", request) }),
         };
 
-        const result: ChatResult = await generateChat(binding, chatArgs);
+        const schema = Array.isArray(rawSchema)
+            ? rawSchema
+                  .slice(0, MAX_SCHEMA_FACTS)
+                  .map((fact) => schemaFact(fact))
+                  .filter((fact): fact is SchemaFact => fact !== undefined)
+            : [];
+
+        /*
+         * A missing binding degrades rather than throwing a 400.
+         *
+         * The panel's visibility latch is driven by `no-ai-binding`, and it is
+         * sticky — so answering that way is what makes the surface disappear on an
+         * app with no `AI` binding. A 400 left the panel rendered and every send
+         * failing with a generic "could not be reached", which is the exact
+         * failure mode the latch exists to prevent.
+         */
+        if (binding === undefined) {
+            return Response.json(
+                { result: encodeWire({ degraded: true, reason: "no-ai-binding" } satisfies ChatResult) },
+                { headers: { "content-type": "application/json" }, status: 200 },
+            );
+        }
+
+        const runner =
+            deps.forwardToShard === undefined
+                ? undefined
+                : await (async (): Promise<ChatToolRunner> => {
+                      const { forward, headers } = await (deps.forwardToShard as NonNullable<AiChatRpcDeps["forwardToShard"]>)(request);
+
+                      /*
+                       * The shard the console has OPEN, named by the caller — which
+                       * answers plan 364's open question 2, and which the reply
+                       * echoes back in `toolCalls`.
+                       *
+                       * An absent or empty key means the ROOT shard, the same
+                       * convention every other dispatch path uses. Forwarding `""`
+                       * raw addressed a Durable Object literally named "", which
+                       * has no tables — so every tool read came back empty.
+                       */
+                      const named = args["shardKey"];
+                      const shardKey = typeof named === "string" && named !== "" ? named : deps.defaultShardKey();
+
+                      return chatToolRunner(forward, shardKey, headers, request);
+                  })();
+
+        const result: ChatResult = await generateChat(binding, chatArgs, schema, runner);
 
         // The RPC envelope, not a bare body — `client.query()` reads
         // `decodeWire(body.result)`, and a bare body decodes to `undefined`.

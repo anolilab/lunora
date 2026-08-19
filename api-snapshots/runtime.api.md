@@ -38,6 +38,14 @@ interface AccessIdentityLike {
 type AdminTableResolver = (table: string) => ShardingInfo | undefined;
 ```
 
+### `AiRunBinding` (interface)
+
+```ts
+interface AiRunBinding {
+    run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+}
+```
+
 ### `AirbyteMessage` (type)
 
 ```ts

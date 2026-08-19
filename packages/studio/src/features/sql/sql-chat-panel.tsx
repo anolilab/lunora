@@ -4,9 +4,10 @@ import { useState } from "react";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { useT } from "../../i18n/i18n-context";
-import type { ChatTurn, GenerateSqlDegradedReason } from "../../lib/admin";
+import type { ChatTurn, GenerateSqlDegradedReason, SchemaFact } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
 import type { SqlAssistant } from "./hooks/use-sql-assistant";
+import type { SqlSchema } from "./sql-autocomplete";
 
 /**
  * Operator-facing copy per failure reason. `no-ai-binding` never reaches here —
@@ -52,6 +53,18 @@ const sqlBlocks = (reply: string): string[] => {
     return blocks;
 };
 
+/**
+ * The editor's schema, as the engine's grounding block wants it.
+ *
+ * A table whose columns have not been probed yet still contributes its NAME — the
+ * system prompt tells the model to invent nothing, so knowing a table exists is
+ * worth more than omitting it until its columns arrive.
+ */
+const groundingFacts = (schema: SqlSchema): SchemaFact[] =>
+    schema.tables.map((table) => {
+        return { columns: [...(schema.columns[table] ?? [])], table };
+    });
+
 /** One rendered turn, with an insert button per SQL block the reply carries. */
 const TurnRow = ({ onInsert, turn }: { readonly onInsert: (sql: string) => void; readonly turn: ChatTurn }): ReactElement => {
     const t = useT();
@@ -96,11 +109,21 @@ const TurnRow = ({ onInsert, turn }: { readonly onInsert: (sql: string) => void;
  * editor is the operator pressing Insert, and what lands there still has to be
  * Run like anything they typed.
  */
-const SqlChatPanel = ({ assistant, onInsert }: { readonly assistant: SqlAssistant; readonly onInsert: (sql: string) => void }): ReactElement | null => {
+const SqlChatPanel = ({
+    assistant,
+    onInsert,
+    schema,
+}: {
+    readonly assistant: SqlAssistant;
+    readonly onInsert: (sql: string) => void;
+    /** Grounding for the turn — the same schema the editor autocompletes from. */
+    readonly schema: SqlSchema;
+}): ReactElement | null => {
     const t = useT();
     const [turns, setTurns] = useState<ChatTurn[]>([]);
     const [draft, setDraft] = useState("");
     const [truncated, setTruncated] = useState(false);
+    const [outcome, setOutcome] = useState<undefined | { partial: boolean; read: number }>(undefined);
 
     if (assistant.unavailable) {
         return null;
@@ -125,12 +148,16 @@ const SqlChatPanel = ({ assistant, onInsert }: { readonly assistant: SqlAssistan
         setDraft("");
 
         fireAndForget(
-            assistant.chat(prompt, sent).then((answer) => {
+            assistant.chat(prompt, sent, groundingFacts(schema)).then((answer) => {
                 // A degraded turn adds nothing to the transcript — the reason is
                 // rendered from the assistant's own per-task status instead, so a
                 // failure never looks like a reply.
                 if (answer !== undefined) {
                     setTruncated(answer.truncated);
+                    // What the turn actually read, surfaced rather than dropped: an
+                    // answer built from three table reads must not look identical to
+                    // one invented from nothing.
+                    setOutcome({ partial: answer.partial, read: answer.toolCalls.filter((call) => call.refused === undefined).length });
                     setTurns((current) => [...current, { role: "assistant", text: answer.reply }]);
                 }
 
@@ -153,6 +180,13 @@ const SqlChatPanel = ({ assistant, onInsert }: { readonly assistant: SqlAssistan
                     <TurnRow key={`${String(index)}:${turn.role}`} onInsert={onInsert} turn={turn} />
                 ))}
             </ul>
+
+            {outcome !== undefined && (outcome.read > 0 || outcome.partial) && (
+                <p className="px-3 py-1 text-[11px] text-muted-foreground" data-testid="sql-chat-outcome">
+                    {outcome.read > 0 && t("Answered after reading your data.")}
+                    {outcome.partial && t("Stopped early — this answer is incomplete.")}
+                </p>
+            )}
 
             {truncated && (
                 <p className="px-3 py-1 text-[11px] text-muted-foreground" data-testid="sql-chat-truncated">

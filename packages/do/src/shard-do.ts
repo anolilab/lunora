@@ -232,6 +232,7 @@ import type { MetricEvent } from "../../../shared/metric-event";
 import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
+import { generateChart, generateFilter, generateSql } from "../../../shared/sql-assistant";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type {
@@ -293,7 +294,6 @@ import {
 } from "./admin-rpc-args";
 import { buildBatchEntryRequest } from "./batch";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
-import { generateChart, generateFilter, generateSql } from "../../../shared/sql-assistant";
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}

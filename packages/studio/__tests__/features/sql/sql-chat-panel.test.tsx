@@ -23,7 +23,7 @@ const chatMock = (reply: string, available = true): MockClientHooks =>
             }
 
             if (reference === ADMIN_FUNCTIONS.aiChat) {
-                return { degraded: false, reply, truncated: false };
+                return { degraded: false, partial: false, reply, toolCalls: [], truncated: false };
             }
 
             if (reference === ADMIN_FUNCTIONS.listTables) {
@@ -121,6 +121,28 @@ describe("sqlChatPanel", () => {
             const second = chats[1]?.[1] as { transcript: { text: string }[] };
 
             expect(second.transcript.map((turn) => turn.text)).toStrictEqual(["first question", "Sure."]);
+        });
+    });
+
+    it("sends the console's schema and shard, so the turn is grounded and reads the right shard", async () => {
+        expect.hasAssertions();
+
+        const mock = chatMock("Sure.");
+
+        render(renderPanel(mock));
+        await screen.findByTestId("sql-chat");
+
+        ask("what tables do I have?");
+
+        await waitFor(() => {
+            const [, args] = mock.query.mock.calls.find((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat) ?? [];
+
+            // Both were missing: `schema: []` was hardcoded and `shardKey` never
+            // left the client, so the model was told to use only listed tables and
+            // given none, and every tool read went to the root shard whatever the
+            // operator had open.
+            expect((args as { schema: unknown[] }).schema).toContainEqual({ columns: [], table: "messages" });
+            expect(args as Record<string, unknown>).toHaveProperty("shardKey");
         });
     });
 });

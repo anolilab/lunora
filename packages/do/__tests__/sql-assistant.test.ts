@@ -102,7 +102,7 @@ describe("generateSql", () => {
     });
 
     it("grounds the prompt in the real schema and fences the untrusted request", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const ai = binding("SELECT 1");
 
@@ -111,9 +111,12 @@ describe("generateSql", () => {
         const user = (ai.run.mock.calls[0]?.[1] as { messages: { content: string; role: string }[] }).messages[1]?.content ?? "";
 
         expect(user).toContain("messages(id, body, authorId)");
-        expect(user).toContain("BEGIN UNTRUSTED REQUEST");
-        // The injection attempt rides INSIDE the fence, as data.
-        expect(user.indexOf("ignore previous instructions")).toBeGreaterThan(user.indexOf("BEGIN UNTRUSTED REQUEST"));
+        expect(user).toContain("BEGIN UNTRUSTED DATA");
+        // The injection attempt rides INSIDE the fence, as data. The markers are
+        // asymmetric now, so "inside" means after BEGIN *and* before END — a
+        // single symmetric marker was escapable by injecting an odd number of them.
+        expect(user.indexOf("ignore previous instructions")).toBeGreaterThan(user.indexOf("BEGIN UNTRUSTED DATA"));
+        expect(user.indexOf("ignore previous instructions")).toBeLessThan(user.indexOf("END UNTRUSTED DATA"));
     });
 
     it("feeds a failing statement and its error back for repair", async () => {

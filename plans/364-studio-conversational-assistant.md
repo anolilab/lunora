@@ -86,6 +86,17 @@ start smaller than "an agent".
   `inferChart` sends column names, types and row count only
   (`use-sql-assistant.ts:33-36`). A chat turn that quotes a result must be an
   explicit operator action, not an automatic context attachment.
+
+    **Revised by W4 — say so rather than let it drift.** A `runSql` tool result is
+    row values, chosen by the MODEL and attached with no operator click, which is
+    the opposite of the rule above. That is the deliberate substance of W4, not an
+    oversight, and the boundary it actually holds is narrower: values never leave
+    the deployment (the model runs on the app's own binding), never reach the
+    browser except inside a reply the operator reads, and only ever come from a
+    statement that passed the read-only gate. The surface now reports when a turn
+    read data, so the operator can see it happened. `generateChart`'s stricter rule
+    is unchanged — it still sends shape only.
+
 - **Degrade, never throw.** Every failure arm returns a reason the UI renders;
   `no-ai-binding` stays sticky and hides the surface.
 - **The three existing RPCs keep working unchanged.** The SQL bar, the filter

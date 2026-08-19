@@ -168,6 +168,23 @@ export interface BulkDeleteResult {
     hasMore: boolean;
 }
 
+/*
+ * The chat transcript and result types come from the ENGINE rather than being
+ * restated here.
+ *
+ * They were duplicated, and had already drifted: the local copy omitted
+ * `toolCalls` and `partial`, so the studio silently dropped the two fields that
+ * say what a turn actually did. A type-only import from `shared/` costs nothing
+ * at runtime and makes that class of drift impossible — the studio already reads
+ * other types from there the same way.
+ */
+export type { ChatResult, ChatTurn, SchemaFact } from "../../../../shared/sql-assistant";
+
+/** Result of `__lunora_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
+export interface CapturedMailResult {
+    entries: CapturedMail[];
+}
+
 /**
  * One captured outbound email as served by `__lunora_admin__:getCapturedMail`.
  * Persisted by `@lunora/mail`'s dev capture transport into the root-shard
@@ -182,22 +199,6 @@ export interface BulkDeleteResult {
  * added in `@lunora/mail` flows here automatically.
  */
 export type { CapturedMail } from "@lunora/mail";
-
-/** Result of `__lunora_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
-export interface CapturedMailResult {
-    entries: CapturedMail[];
-}
-
-/**
- * One registered `@lunora/notify` device subscription, re-exported verbatim from
- * `@lunora/notify` (its canonical owner) — the secret-stripped
- * {@link PushSubscriptionDevice} the `__lunora_admin__:listPushSubscriptions` RPC
- * returns (endpoint / kind / owner / timestamps + last-send status & error). The
- * Web Push encryption `keys` and the FCM `token` are dropped server-side and are
- * NOT part of this shape. Like `CapturedMail`, it shares the real source of truth,
- * so a field added in `@lunora/notify` flows here automatically.
- */
-export type { PushSubscriptionDevice } from "@lunora/notify";
 
 /** Payload of a `__lunora_admin__:listPushSubscriptions` call — the registered devices, newest register/send touch first. */
 export interface PushSubscriptionsResult {
@@ -1423,24 +1424,16 @@ export interface AiAvailableResult {
     available: boolean;
 }
 
-/** One exchange in the chat transcript, as the client holds and re-sends it. */
-export interface ChatTurn {
-    role: "assistant" | "user";
-    text: string;
-}
-
 /**
- * Payload of an `aiChat` call.
- *
- * Unlike its three siblings this op is served at the WORKER, not the shard — the
- * DO's admin dispatch is single-threaded and a conversation would hold it open.
- * The call site is identical either way (`client.query` + `adminRef`), which is
- * the point.
- *
- * `truncated` reports that the server dropped the oldest turns to fit its budget,
- * so the surface can say so rather than silently losing context.
+ * One registered `@lunora/notify` device subscription, re-exported verbatim from
+ * `@lunora/notify` (its canonical owner) — the secret-stripped
+ * {@link PushSubscriptionDevice} the `__lunora_admin__:listPushSubscriptions` RPC
+ * returns (endpoint / kind / owner / timestamps + last-send status & error). The
+ * Web Push encryption `keys` and the FCM `token` are dropped server-side and are
+ * NOT part of this shape. Like `CapturedMail`, it shares the real source of truth,
+ * so a field added in `@lunora/notify` flows here automatically.
  */
-export type ChatResult = { degraded: false; reply: string; truncated: boolean } | { degraded: true; reason: GenerateSqlDegradedReason };
+export type { PushSubscriptionDevice } from "@lunora/notify";
 
 /** Payload of an `aiChartConfig` call. */
 export type GenerateChartResult = { chart: AssistantChartConfig; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };

@@ -65,7 +65,7 @@ export type {
     VectorQueryMatch,
     WorkerOptions,
 } from "./create-worker";
-export type { KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult } from "./create-worker";
+export type { AiRunBinding, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult } from "./create-worker";
 export {
     composeIdentityResolvers,
     composeWorker,

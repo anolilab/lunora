@@ -12,6 +12,7 @@ import type {
     GenerateFilterResult,
     GenerateSqlDegradedReason,
     GenerateSqlResult,
+    SchemaFact,
 } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions } from "../../../lib/internal";
@@ -34,7 +35,13 @@ interface SqlAssistant {
      * re-sent; the server caps and fences it, so a long conversation degrades by
      * losing its oldest turns rather than by failing.
      */
-    readonly chat: (prompt: string, transcript: ReadonlyArray<ChatTurn>) => Promise<undefined | { reply: string; truncated: boolean }>;
+    readonly chat: (
+        prompt: string,
+        transcript: ReadonlyArray<ChatTurn>,
+        schema: ReadonlyArray<SchemaFact>,
+    ) => Promise<
+        undefined | { partial: boolean; reply: string; toolCalls: ReadonlyArray<{ name?: string; refused?: string; sql?: string }>; truncated: boolean }
+    >;
     /** Ask for a draft, or a repair when `failed` is supplied. */
     readonly generate: (prompt: string, failed?: { error: string; sql: string }) => Promise<string | undefined>;
 
@@ -125,18 +132,26 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
         }
     };
 
-    const chat = async (prompt: string, transcript: ReadonlyArray<ChatTurn>): Promise<undefined | { reply: string; truncated: boolean }> => {
+    const chat: SqlAssistant["chat"] = async (prompt, transcript, schema) => {
         begin("chat");
 
         try {
-            // Worker-served, so no `shardKey` is threaded: there is no shard for it
-            // to land on. `callOptions(shardKey)` would be inert rather than wrong,
-            // but omitting it says which plane this op is on.
-            const result = (await client.query(AI_CHAT, { prompt, schema: [], transcript })) as ChatResult;
+            /*
+             * `shardKey` travels in the ARGS, not in `callOptions`.
+             *
+             * The op is worker-served, so there is no shard for the call itself to
+             * land on — but its read-only tools reach one, and it has to be the
+             * shard this console has open. Omitting it sent every tool read to the
+             * root shard regardless of what the operator was looking at.
+             *
+             * `schema` likewise: the panel's parent already has it, and without it
+             * the model is told to use only listed tables and given none.
+             */
+            const result = (await client.query(AI_CHAT, { prompt, schema, shardKey, transcript })) as ChatResult;
 
             finish("chat", result.degraded ? result.reason : undefined);
 
-            return result.degraded ? undefined : { reply: result.reply, truncated: result.truncated };
+            return result.degraded ? undefined : { partial: result.partial, reply: result.reply, toolCalls: result.toolCalls, truncated: result.truncated };
         } catch {
             finish("chat", "ai-error");
 

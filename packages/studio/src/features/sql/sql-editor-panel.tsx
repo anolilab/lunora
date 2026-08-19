@@ -292,7 +292,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                      * Renders nothing without an `AI` binding, on the same latch as
                      * the prompt bar.
                      */}
-                    <SqlChatPanel assistant={assistant} onInsert={setDraft} />
+                    <SqlChatPanel assistant={assistant} onInsert={setDraft} schema={schema} />
 
                     <SqlResultsPane
                         assistant={assistant}
