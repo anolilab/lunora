@@ -5,6 +5,8 @@ import { useAdminQuery } from "../../../hooks/use-admin-query";
 import type {
     AiAvailableResult,
     AssistantChartConfig,
+    ChatResult,
+    ChatTurn,
     FilterClause,
     GenerateChartResult,
     GenerateFilterResult,
@@ -20,12 +22,19 @@ const NO_ARGS: Record<string, unknown> = {};
 const AI_GENERATE_SQL = adminRef(ADMIN_FUNCTIONS.aiGenerateSql);
 const AI_TABLE_FILTER = adminRef(ADMIN_FUNCTIONS.aiTableFilter);
 const AI_CHART_CONFIG = adminRef(ADMIN_FUNCTIONS.aiChartConfig);
+const AI_CHAT = adminRef(ADMIN_FUNCTIONS.aiChat);
 
 /** The three independent operations. Status is keyed by these so it never bleeds across them. */
-type AssistantTaskKey = "chart" | "filter" | "sql";
+type AssistantTaskKey = "chart" | "chat" | "filter" | "sql";
 
 /** What a surface needs to render one assistant affordance. */
 interface SqlAssistant {
+    /**
+     * One conversational turn. `transcript` is the prior turns, client-held and
+     * re-sent; the server caps and fences it, so a long conversation degrades by
+     * losing its oldest turns rather than by failing.
+     */
+    readonly chat: (prompt: string, transcript: ReadonlyArray<ChatTurn>) => Promise<undefined | { reply: string; truncated: boolean }>;
     /** Ask for a draft, or a repair when `failed` is supplied. */
     readonly generate: (prompt: string, failed?: { error: string; sql: string }) => Promise<string | undefined>;
 
@@ -116,6 +125,25 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
         }
     };
 
+    const chat = async (prompt: string, transcript: ReadonlyArray<ChatTurn>): Promise<undefined | { reply: string; truncated: boolean }> => {
+        begin("chat");
+
+        try {
+            // Worker-served, so no `shardKey` is threaded: there is no shard for it
+            // to land on. `callOptions(shardKey)` would be inert rather than wrong,
+            // but omitting it says which plane this op is on.
+            const result = (await client.query(AI_CHAT, { prompt, schema: [], transcript })) as ChatResult;
+
+            finish("chat", result.degraded ? result.reason : undefined);
+
+            return result.degraded ? undefined : { reply: result.reply, truncated: result.truncated };
+        } catch {
+            finish("chat", "ai-error");
+
+            return undefined;
+        }
+    };
+
     const suggestFilter = async (prompt: string, table: string): Promise<FilterClause[] | undefined> => {
         begin("filter");
 
@@ -152,7 +180,7 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
     const pending = (task: AssistantTaskKey): boolean => pendingByTask[task] === true;
     const reason = (task: AssistantTaskKey): GenerateSqlDegradedReason | undefined => reasonByTask[task];
 
-    return { generate, inferChart, pending, reason, suggestFilter, unavailable };
+    return { chat, generate, inferChart, pending, reason, suggestFilter, unavailable };
 };
 
 export { useSqlAssistant };

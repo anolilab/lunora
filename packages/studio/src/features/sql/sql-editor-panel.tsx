@@ -15,6 +15,7 @@ import type { ScriptRun } from "./hooks/use-sql-editor-tabs";
 import { useSqlEditorTabs } from "./hooks/use-sql-editor-tabs";
 import { useSqlLibrary } from "./hooks/use-sql-library";
 import { classifyOne, splitStatements } from "./split-statements";
+import SqlChatPanel from "./sql-chat-panel";
 import SqlEditorPane from "./sql-editor-pane";
 import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
 import SqlResultsPane from "./sql-results-pane";
@@ -284,6 +285,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         onRevealDiagnostic={surface.revealDiagnostic}
                         overlayRef={surface.overlayRef}
                     />
+
+                    {/*
+                     * Below the editor, above the results: a reply that suggests a
+                     * statement is one Insert away from the editor it sits under.
+                     * Renders nothing without an `AI` binding, on the same latch as
+                     * the prompt bar.
+                     */}
+                    <SqlChatPanel assistant={assistant} onInsert={setDraft} />
 
                     <SqlResultsPane
                         assistant={assistant}

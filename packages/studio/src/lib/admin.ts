@@ -35,6 +35,7 @@ export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 export const ADMIN_FUNCTIONS = {
     aiAvailable: "__lunora_admin__:aiAvailable",
     aiChartConfig: "__lunora_admin__:aiChartConfig",
+    aiChat: "__lunora_admin__:aiChat",
     aiGenerateSql: "__lunora_admin__:aiGenerateSql",
     aiTableFilter: "__lunora_admin__:aiTableFilter",
     assignIssue: "__lunora_admin__:assignIssue",
@@ -1421,6 +1422,25 @@ export interface AssistantChartConfig {
 export interface AiAvailableResult {
     available: boolean;
 }
+
+/** One exchange in the chat transcript, as the client holds and re-sends it. */
+export interface ChatTurn {
+    role: "assistant" | "user";
+    text: string;
+}
+
+/**
+ * Payload of an `aiChat` call.
+ *
+ * Unlike its three siblings this op is served at the WORKER, not the shard — the
+ * DO's admin dispatch is single-threaded and a conversation would hold it open.
+ * The call site is identical either way (`client.query` + `adminRef`), which is
+ * the point.
+ *
+ * `truncated` reports that the server dropped the oldest turns to fit its budget,
+ * so the surface can say so rather than silently losing context.
+ */
+export type ChatResult = { degraded: false; reply: string; truncated: boolean } | { degraded: true; reason: GenerateSqlDegradedReason };
 
 /** Payload of an `aiChartConfig` call. */
 export type GenerateChartResult = { chart: AssistantChartConfig; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
