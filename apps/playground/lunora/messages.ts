@@ -55,7 +55,7 @@ export const send = mutation
     .mutation(async ({ args, ctx }): Promise<Id<"messages">> => {
         const { channelId, createdAt, id, text } = args;
 
-        return ctx.db.insert(
+        const messageId = await ctx.db.insert(
             "messages",
             {
                 channelId,
@@ -65,4 +65,10 @@ export const send = mutation
             },
             id ? { clientId: id } : undefined,
         );
+
+        // After the insert: "sent" has to mean the row landed. Shape and size
+        // only — the text is user content and the author is an identity.
+        ctx.log.info("message sent", { channelId, characters: text.length });
+
+        return messageId;
     });

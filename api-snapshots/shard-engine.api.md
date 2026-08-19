@@ -360,8 +360,11 @@ type Clock = () => number;
 
 ```ts
 interface ColumnMeta {
+    bucket?: string;
+    enumValues?: string[];
     isStorage?: boolean;
     name: string;
+    nullable?: boolean;
     optional: boolean;
     pk?: boolean;
     ref?: string;

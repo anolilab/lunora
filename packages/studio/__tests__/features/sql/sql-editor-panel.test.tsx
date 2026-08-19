@@ -37,6 +37,7 @@ const schemaMock = (): MockClientHooks =>
 describe("sqlEditorPanel", () => {
     afterEach(() => {
         localStorage.clear();
+        sessionStorage.clear();
     });
 
     it("runs a query and renders the result rows + count", async () => {
@@ -147,8 +148,73 @@ describe("sqlEditorPanel", () => {
         expect(within(screen.getByTestId("sql-history")).getAllByTestId("sql-history-item")).toHaveLength(1);
     });
 
-    it("clears the history", async () => {
+    it("runs a script as separate gated calls and never sends a joined string", async () => {
+        expect.assertions(4);
+
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT 1; SELECT 2; SELECT 3" } });
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        const strip = await screen.findByTestId("sql-statements");
+
+        expect(within(strip).getAllByRole("button")).toHaveLength(3);
+
+        const sent = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql).map((call) => (call[1] as { sql: string }).sql);
+
+        expect(sent).toStrictEqual(["SELECT 1", "SELECT 2", "SELECT 3"]);
+        // The gate is the console's enforcement point; splitting happens above it
+        // and a `;`-joined string must never reach the server.
+        expect(sent.some((sql) => sql.includes(";"))).toBe(false);
+        // The last statement is what the panes show.
+        expect(screen.getByTestId("sql-statement-2").getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("reports a statement the gate refuses without sending it, and still runs the rest", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT 1; DELETE FROM messages; SELECT 2" } });
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        await screen.findByTestId("sql-statements");
+
+        const sent = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql).map((call) => (call[1] as { sql: string }).sql);
+
+        // The refusal is local — the write never leaves the browser — and it does
+        // not abort the statements after it.
+        expect(sent).toStrictEqual(["SELECT 1", "SELECT 2"]);
+
+        fireEvent.click(screen.getByTestId("sql-statement-1"));
+
+        expect(screen.getByTestId("sql-error").textContent).toContain("read-only");
+        expect(screen.queryByTestId("sql-rows")).toBeNull();
+    });
+
+    it("purges an on-disk history left by a build that always persisted it", async () => {
         expect.assertions(2);
+
+        // The upgrade path. Before the toggle existed the history always lived in
+        // localStorage; an operator who never opts in must not be shown an empty,
+        // unchecked history while last week's statements sit on disk.
+        localStorage.setItem("lunora-studio-sql-history", JSON.stringify([{ at: 1, sql: "SELECT * FROM users WHERE email = 'x@y.z'" }]));
+
+        render(renderPanel(createMockClient({ query: oneRowResult })));
+
+        await waitFor(() => {
+            expect(localStorage.getItem("lunora-studio-sql-history")).toBeNull();
+        });
+
+        expect(screen.queryByTestId("sql-history")).toBeNull();
+    });
+
+    it("clears the history", async () => {
+        expect.assertions(3);
 
         const mock = createMockClient({ query: oneRowResult });
 
@@ -160,7 +226,55 @@ describe("sqlEditorPanel", () => {
         fireEvent.click(screen.getByTestId("sql-history-clear"));
 
         expect(screen.queryByTestId("sql-history")).toBeNull();
-        expect(localStorage.getItem("lunora-studio-sql-history")).toBe("[]");
+        // Both areas: clearing has to reach the on-disk copy even when the history
+        // is currently session-scoped, or "Clear history" leaves the statements it
+        // claims to have removed sitting in `localStorage`.
+        expect(localStorage.getItem("lunora-studio-sql-history") ?? "").not.toContain("sqlite_master");
+        expect(sessionStorage.getItem("lunora-studio-sql-history") ?? "").not.toContain("sqlite_master");
+    });
+
+    it("keeps the run history to the tab unless asked to remember it", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createMockClient({ query: oneRowResult })));
+
+        fireEvent.click(screen.getByTestId("sql-run"));
+        await screen.findByTestId("sql-history");
+
+        // The default. A statement that happened to succeed is not something an
+        // operator asked to keep, and before this every one of them outlived the
+        // browser on whatever origin the studio was opened from.
+        expect(localStorage.getItem("lunora-studio-sql-history")).toBeNull();
+        expect(sessionStorage.getItem("lunora-studio-sql-history")).toContain("sqlite_master");
+
+        fireEvent.click(screen.getByTestId("sql-history-remember"));
+
+        await waitFor(() => {
+            expect(localStorage.getItem("lunora-studio-sql-history")).toContain("sqlite_master");
+        });
+    });
+
+    it("deletes the on-disk history when remembering is turned back off", async () => {
+        expect.hasAssertions();
+
+        render(renderPanel(createMockClient({ query: oneRowResult })));
+
+        fireEvent.click(screen.getByTestId("sql-run"));
+        await screen.findByTestId("sql-history");
+
+        fireEvent.click(screen.getByTestId("sql-history-remember"));
+
+        await waitFor(() => {
+            expect(localStorage.getItem("lunora-studio-sql-history")).toContain("sqlite_master");
+        });
+
+        fireEvent.click(screen.getByTestId("sql-history-remember"));
+
+        // A toggle that hid the history but left it on disk would be a setting
+        // that lies about what it does.
+        await waitFor(() => {
+            expect(localStorage.getItem("lunora-studio-sql-history")).toBeNull();
+        });
     });
 
     it("formats the current draft in place", () => {

@@ -13,6 +13,21 @@ const schema: SqlSchema = {
 };
 
 describe("maskNonCode", () => {
+    it("lints a script per statement, agreeing with what Run does", () => {
+        expect.assertions(2);
+
+        // The linter used to classify the WHOLE draft, so every multi-statement
+        // script drew a red "only a single statement may be run" underline while
+        // the runner executed it happily — the warn/reject disagreement
+        // `shared/sql-readonly.ts` says can never be allowed to appear.
+        expect(lintDraft("SELECT 1;\nSELECT 2", schema)).toStrictEqual([]);
+
+        // A refusal inside a script still lands, and on the offending statement.
+        const [diagnostic] = lintDraft("SELECT 1; DELETE FROM messages", schema);
+
+        expect(diagnostic?.message).toContain("read-only");
+    });
+
     it("blanks string literals and comments while preserving offsets", () => {
         expect.assertions(2);
 

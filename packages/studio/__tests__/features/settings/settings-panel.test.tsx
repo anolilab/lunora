@@ -1,11 +1,12 @@
 import { LunoraProvider } from "@lunora/react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { SettingsPanel } from "../../../src/features/settings/settings-panel";
 import type { SettingsResult } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import { resetShortcuts } from "../../../src/lib/shortcuts";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -36,6 +37,54 @@ const clientWith = (settings: SettingsResult): MockClientHooks =>
     });
 
 describe("settingsPanel", () => {
+    afterEach(() => {
+        // The shortcut store is a module-level singleton — without this it carries
+        // one test's rebinding into the next.
+        resetShortcuts();
+        localStorage.clear();
+    });
+
+    it("rebinds a shortcut from a keypress and persists it", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(clientWith(SETTINGS)));
+
+        const input = await screen.findByTestId<HTMLInputElement>("set-shortcut-input-palette");
+
+        fireEvent.keyDown(input, { key: "J" });
+
+        expect(input.value).toBe("j");
+        expect(localStorage.getItem("lunora-studio-shortcuts")).toContain('"palette":"j"');
+    });
+
+    it("refuses a modifier key, which would bind a shortcut that can never fire", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(clientWith(SETTINGS)));
+
+        const input = await screen.findByTestId<HTMLInputElement>("set-shortcut-input-console");
+
+        fireEvent.keyDown(input, { key: "Shift" });
+
+        expect(input.value).toBe("`");
+    });
+
+    it("restores the shipped bindings", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(clientWith(SETTINGS)));
+
+        const input = await screen.findByTestId<HTMLInputElement>("set-shortcut-input-palette");
+
+        fireEvent.keyDown(input, { key: "j" });
+
+        expect(input.value).toBe("j");
+
+        fireEvent.click(screen.getByTestId("set-shortcut-reset"));
+
+        expect(input.value).toBe("k");
+    });
+
     it("renders one row per setting with its name, kind, and masked value", async () => {
         expect.assertions(3);
 

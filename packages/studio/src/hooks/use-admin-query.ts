@@ -113,22 +113,34 @@ interface UseClientQueryOptions {
 // the tab locks up — and nothing throws, the requests just pile up (the studio
 // hit exactly this against a cold/cross-origin worker). Count queryFn
 // invocations per key in a rolling 1s window and scream ONCE, with the offending
-// key + a stack, when a single key fires improbably often. 25×/s for one key is
-// never legitimate: TanStack dedupes identical in-flight reads, so this only
-// trips under a loop. Browser-console only; the server-side counterpart is the
-// `LUNORA_DEBUG_RPC` log in `@lunora/runtime`'s RPC handler (visible in the dev
-// terminal).
+// key + a stack, when a single key fires improbably often. Browser-console only;
+// the server-side counterpart is the `LUNORA_DEBUG_RPC` log in `@lunora/runtime`'s
+// RPC handler (visible in the dev terminal).
+//
+// The window counts fetches, not components, and the bucket is module-level with
+// no reset — so it cannot tell "one component re-issuing 25 times" from "25
+// components mounting". In a browser that distinction is academic (nobody opens
+// a page 25 times a second), which is why the heuristic is good enough there and
+// why the gate below excludes `test`: a suite that mounts a panel once per case
+// trips this constantly, and a diagnostic that cries wolf teaches people to
+// ignore the one time it is right.
+//
+// An earlier version of this comment claimed 25×/s "is never legitimate, because
+// TanStack dedupes identical in-flight reads". Dedupe only covers reads that
+// overlap; sequential mounts each awaited to completion never do, which is
+// exactly the case a test suite produces.
 const RPC_LOOP_WINDOW_MS = 1000;
 const RPC_LOOP_THRESHOLD = 25;
 const rpcCallTimes = new Map<string, number[]>();
 
 // The detector is a DEV-ONLY aid: it adds a `JSON.stringify` + `Map` write on
 // every query and retains a bucket per unique key for the tab's lifetime — fine
-// while debugging, but needless overhead (and a slow leak) in a shipped app.
+// while debugging, but needless overhead (and a slow leak) in a shipped app, and
+// pure noise under a test runner (see above).
 // Gate on `process.env.NODE_ENV` — the React-ecosystem convention every bundler
 // inlines (Vite, packem `--development`/`--production`) — so a production build
 // dead-code-eliminates the wrapper and queries call `queryFunction` directly.
-const isDevelopment = process.env.NODE_ENV !== "production";
+const isDevelopment = process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test";
 
 const noteQueryFetch = (key: string): void => {
     const now = Date.now();

@@ -3081,8 +3081,137 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             expect(output).toContain("const LUNORA_TABLE_COLUMNS");
             expect(output).toContain(
-                "LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>> = {}",
+                "Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>",
             );
+        });
+
+        it("names the members of a string-literal union so the row editor can offer them", () => {
+            expect.assertions(2);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        {
+                            indexes: [],
+                            name: "posts",
+                            rankIndexes: [],
+                            relations: [],
+                            searchIndexes: [],
+                            shape: {
+                                status: {
+                                    kind: "union",
+                                    members: [
+                                        { kind: "literal", literalValue: '"draft"' },
+                                        { kind: "literal", literalValue: '"published"' },
+                                    ],
+                                },
+                            },
+                            shardMode: "root",
+                            vectorIndexes: [],
+                        },
+                    ],
+                    vectorIndexes: [],
+                },
+            });
+
+            expect(output).toContain('"enumValues"');
+            // The parsed VALUES, not the source text `parse-validator` stores — a
+            // dropdown built from the latter offers `"draft"` with the quotes in it.
+            expect(output).toContain('"draft"');
+        });
+
+        it("reports nullability separately from insert-optionality", () => {
+            expect.assertions(3);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        {
+                            indexes: [],
+                            name: "posts",
+                            rankIndexes: [],
+                            relations: [],
+                            searchIndexes: [],
+                            shape: {
+                                // `.nullable()` — may hold null.
+                                note: { column: { notNull: false }, kind: "string" },
+                                // `.default(...)` — omittable on INSERT, but NOT nullable.
+                                slug: { column: { hasDefault: true, notNull: true }, kind: "string" },
+                            },
+                            shardMode: "root",
+                            vectorIndexes: [],
+                        },
+                    ],
+                    vectorIndexes: [],
+                },
+            });
+
+            const noteAt = output.indexOf('"name": "note"');
+            const slugAt = output.indexOf('"name": "slug"');
+            const note = output.slice(noteAt, output.indexOf("}", noteAt));
+            const slug = output.slice(slugAt, output.indexOf("}", slugAt));
+
+            expect(note).toContain('"nullable": true');
+            // The distinction the studio's row editor needs: a defaulted column is
+            // optional on insert and must NOT be offered a control that writes null.
+            expect(slug).toContain('"optional": true');
+            expect(slug).not.toContain("nullable");
+        });
+
+        it("names the bucket a v.storage(bucket) column's keys live in", () => {
+            expect.assertions(2);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        {
+                            indexes: [],
+                            name: "uploads",
+                            rankIndexes: [],
+                            relations: [],
+                            searchIndexes: [],
+                            shape: { avatar: { bucket: "media", kind: "storage" }, raw: { kind: "storage" } },
+                            shardMode: "root",
+                            vectorIndexes: [],
+                        },
+                    ],
+                    vectorIndexes: [],
+                },
+            });
+
+            // Without this the studio resolved every storage key against the
+            // deployment's default bucket, so a non-default one never previewed.
+            expect(output).toContain('"bucket": "media"');
+            // `v.storage()` with no argument names none, which IS the default bucket.
+            expect(output.match(/"bucket"/gu)).toHaveLength(1);
+        });
+
+        it("omits enumValues for a union with a non-literal member", () => {
+            expect.assertions(1);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        {
+                            indexes: [],
+                            name: "posts",
+                            rankIndexes: [],
+                            relations: [],
+                            searchIndexes: [],
+                            shape: {
+                                // A mixed union has legal values outside any list, so a
+                                // dropdown built from it would silently forbid one.
+                                status: { kind: "union", members: [{ kind: "literal", literalValue: '"draft"' }, { kind: "string" }] },
+                            },
+                            shardMode: "root",
+                            vectorIndexes: [],
+                        },
+                    ],
+                    vectorIndexes: [],
+                },
+            });
+
+            expect(output).not.toContain('"enumValues"');
         });
     });
 

@@ -23,7 +23,7 @@
  * back to the operator's text exactly and both features agree on what a
  * qualifier means.
  */
-import { classifyStatement } from "../../../../../shared/sql-readonly";
+import { splitStatements } from "./split-statements";
 import type { SqlSchema } from "./sql-autocomplete";
 import { sqlContextOf } from "./sql-context";
 
@@ -141,20 +141,45 @@ const lintDraft = (draft: string, schema: SqlSchema): SqlDiagnostic[] => {
         return [];
     }
 
-    const rejection = classifyStatement(draft);
+    // Per STATEMENT, matching what Run does. Linting the whole draft flagged every
+    // multi-statement script as "only a single statement may be run" while the
+    // runner executed it happily — the exact warn/reject disagreement
+    // `shared/sql-readonly.ts` says can never be allowed to appear.
+    const statements = splitStatements(draft);
+    const known = new Set(schema.tables.map((table) => table.toLowerCase()));
+    const diagnostics: SqlDiagnostic[] = [];
 
-    if (rejection !== undefined) {
-        if (rejection.code === "SQL_EMPTY") {
-            return [];
+    for (const statement of statements) {
+        const { offset, rejection } = statement;
+
+        if (rejection !== undefined) {
+            if (rejection.code !== "SQL_EMPTY") {
+                diagnostics.push({
+                    length: rejection.length,
+                    message: rejection.message,
+                    // The gate's offset is statement-relative; shift it onto the draft.
+                    offset: rejection.offset === undefined ? offset : offset + rejection.offset,
+                    severity: "error",
+                    source: "gate",
+                });
+            }
+
+            continue;
         }
 
-        return [{ length: rejection.length, message: rejection.message, offset: rejection.offset, severity: "error", source: "gate" }];
+        const { ctes, masked, targets } = sqlContextOf(statement.sql, schema.tables);
+
+        diagnostics.push(
+            ...[...unknownTableDiagnostics(masked, known, ctes), ...unknownColumnDiagnostics(masked, schema, targets)].map((diagnostic) => {
+                return {
+                    ...diagnostic,
+                    offset: diagnostic.offset === undefined ? offset : offset + diagnostic.offset,
+                };
+            }),
+        );
     }
 
-    const { ctes, masked, targets } = sqlContextOf(draft, schema.tables);
-    const known = new Set(schema.tables.map((table) => table.toLowerCase()));
-
-    return [...unknownTableDiagnostics(masked, known, ctes), ...unknownColumnDiagnostics(masked, schema, targets)];
+    return diagnostics;
 };
 
 export { lintDraft };

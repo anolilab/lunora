@@ -10,6 +10,8 @@ import { useT } from "../../i18n/i18n-context";
 import type { DeployInfo, SettingEntry, SettingsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_WORKERS_URL } from "../../lib/cf-links";
+import type { Shortcuts } from "../../lib/shortcuts";
+import { resetShortcuts, setShortcut, useShortcuts } from "../../lib/shortcuts";
 
 interface SettingsPanelProps {
     /** Shard key the settings read targets on first load. Defaults to the root shard. */
@@ -62,6 +64,57 @@ const toDeployRows = (deploy: DeployInfo | undefined, t: TFunction): { label: st
  * you can edit there. Deployment config is static at runtime (it only changes on
  * redeploy), so this loads once on mount — there is no live channel or poll.
  */
+
+/**
+ * One rebindable shortcut: its label, its fixed modifier, and a capture box.
+ *
+ * Only the KEY is rebindable, never the modifiers. Those carry constraints the
+ * operator cannot see — the console is Ctrl-only because macOS owns ⌘` as
+ * "cycle this app's windows" — so offering them as a choice would offer bindings
+ * that silently never fire.
+ */
+const ShortcutRow = ({ modifier, name, label }: { readonly label: string; readonly modifier: string; readonly name: keyof Shortcuts }): ReactElement => {
+    const shortcuts = useShortcuts();
+
+    const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+        // Tab, Shift-Tab and Escape are NOT consumed: swallowing them made this box
+        // a keyboard trap (WCAG 2.1.2) — a keyboard or screen-reader user who
+        // focused it could not leave without a pointer.
+        if (["Escape", "Tab"].includes(event.key)) {
+            return;
+        }
+
+        // A binding that needs Shift can never fire: `useConsoleShortcut` requires
+        // `!event.shiftKey`, so storing `?` would produce a shortcut the operator
+        // cannot trigger and cannot see is broken.
+        if (event.shiftKey) {
+            event.preventDefault();
+
+            return;
+        }
+
+        event.preventDefault();
+        setShortcut(name, event.key);
+    };
+
+    return (
+        <div className="contents" data-testid={`set-shortcut-${name}`}>
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="flex items-center gap-1.5">
+                <kbd className="rounded border border-border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{modifier}</kbd>
+                <input
+                    aria-label={label}
+                    className="h-7 w-12 rounded-md border border-border bg-background text-center font-mono text-xs uppercase outline-none focus-visible:border-ring"
+                    data-testid={`set-shortcut-input-${name}`}
+                    onKeyDown={onKeyDown}
+                    readOnly
+                    value={shortcuts[name]}
+                />
+            </dd>
+        </div>
+    );
+};
+
 export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactElement => {
     const t = useT();
 
@@ -117,6 +170,31 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
                     </CardContent>
                 </Card>
             )}
+
+            {/* Browser preferences, not deployment config — everything above this
+                card is served by the worker and read-only; everything in it lives
+                in this browser and is the only thing on the page an operator can
+                actually change. */}
+            <Card className="py-0" data-testid="set-preferences">
+                <header className="flex items-center justify-between border-b border-border px-4 py-3">
+                    <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Keyboard shortcuts")}</span>
+                    <button
+                        className="rounded px-1 text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground"
+                        data-testid="set-shortcut-reset"
+                        onClick={resetShortcuts}
+                        type="button"
+                    >
+                        {t("Reset")}
+                    </button>
+                </header>
+                <CardContent className="py-3">
+                    <dl className="grid grid-cols-[10rem_minmax(0,1fr)] items-center gap-x-4 gap-y-2 text-sm">
+                        <ShortcutRow label={t("Command palette")} modifier="⌘/Ctrl" name="palette" />
+                        <ShortcutRow label={t("Operation console")} modifier="Ctrl" name="console" />
+                    </dl>
+                    <p className="pt-3 text-xs text-muted-foreground">{t("Stored in this browser. Focus a box and press a key to rebind it.")}</p>
+                </CardContent>
+            </Card>
 
             <Card className="py-0">
                 <header className="border-b border-border px-4 py-3">

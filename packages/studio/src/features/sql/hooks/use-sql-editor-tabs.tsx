@@ -19,6 +19,13 @@ type BulkClose = "all" | "others" | "right";
  * "Fix this" in tab B against a statement B never ran, and let A's inferred axes
  * render over B's unrelated columns.
  */
+/** One statement of a script and how it went. */
+interface ScriptRun {
+    readonly error: null | string;
+    readonly result: null | SqlConsoleResult;
+    readonly sql: string;
+}
+
 interface TabOutput {
     /** Model-inferred chart for THIS tab's result, or undefined for the manual one. */
     readonly chart?: AssistantChartConfig;
@@ -35,6 +42,17 @@ interface TabOutput {
      * lands — not whenever the panel's active tab happens to change.
      */
     readonly running: boolean;
+
+    /**
+     * Every statement of a multi-statement script, in order, with whichever one
+     * `result`/`error` currently shows marked by `selected`.
+     *
+     * Absent for a single statement, which is the overwhelming case and behaves
+     * exactly as it did before scripts were possible. Kept ALONGSIDE `result`
+     * rather than replacing it so the chart, the export menu and the row count
+     * keep reading one result and gained no list handling.
+     */
+    readonly script?: { readonly runs: ReadonlyArray<ScriptRun>; readonly selected: number };
 }
 
 /** A tab's output before it has run anything. */
@@ -272,4 +290,4 @@ const useSqlEditorTabs = (seedTab: () => SqlTab): SqlEditorTabsModel => {
 };
 
 export { useSqlEditorTabs };
-export type { SqlEditorTabsModel, SqlTabStripModel };
+export type { ScriptRun, SqlEditorTabsModel, SqlTabStripModel };

@@ -58,5 +58,7 @@ export const create = mutation
         // schedule — it posts a greeting, sleeps a minute, then posts a tip.
         await ctx.workflows.get("channelWelcome").create({ params: { channelId } });
 
+        ctx.log.info("channel created", { channelId });
+
         return channelId;
     });

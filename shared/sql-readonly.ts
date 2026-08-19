@@ -21,13 +21,15 @@
  * browser half needs an offset to underline and the server half needs an error
  * code to serialize. Callers add their own error type.
  *
- * The comment scanner below is a near-twin of the one in the studio's
- * `features/sql/sql-context.ts`, and that duplication is deliberate: this file is
- * inlined into `@lunora/do`, which must stay free of studio feature modules, and
- * `shared/` may only import other zero-dependency `shared/` files. If a third
- * consumer appears, promote the scanner to its own `shared/` module rather than
- * pointing this one at the studio.
+ * The boundary scanner it uses lives in `shared/sql-mask.ts` — promoted out of
+ * this file when a third consumer (the Studio's statement splitter) appeared,
+ * exactly as the note that used to sit here instructed. It stays separate from
+ * the studio's own `maskNonCode` in `features/sql/sql-context.ts`, which
+ * deliberately treats `"…"` as code because it resolves identifiers rather than
+ * finding statement boundaries.
  */
+
+import { maskSqlNonCode } from "./sql-mask";
 
 /** Why a statement was rejected. Mirrors the codes the DO serializes to the client. */
 type SqlRejectionCode = "SQL_EMPTY" | "SQL_MULTIPLE_STATEMENTS" | "SQL_NOT_READONLY";
@@ -146,8 +148,12 @@ const classifyStatement = (query: string): SqlRejection | undefined => {
     }
 
     // Allow a single trailing semicolon; any other `;` means a multi-statement batch.
+    // Located on a comment/quote-MASKED copy (same length, so the offset still
+    // indexes `query`), because a `;` inside a literal or a comment is content
+    // rather than a boundary. Anything unclosed masks to `undefined` and falls
+    // back to the raw scan — see {@link maskSqlNonCode}.
     const single = trimmed.replace(TRAILING_SEMICOLON, "");
-    const batchAt = single.indexOf(";");
+    const batchAt = (maskSqlNonCode(single) ?? single).indexOf(";");
 
     if (batchAt !== -1) {
         return {

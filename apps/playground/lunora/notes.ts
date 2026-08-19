@@ -54,10 +54,17 @@ export const add = mutation
     })
     .use(dbRateLimit(limits, "add", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anonymous" }))
     .use(notesWriteRls)
-    .mutation(async ({ args, ctx }): Promise<Id<"notes">> =>
-        ctx.db.insert("notes", {
+    .mutation(async ({ args, ctx }): Promise<Id<"notes">> => {
+        const noteId = await ctx.db.insert("notes", {
             createdAt: args.createdAt,
             ownerId: ctx.auth.userId ?? "anonymous",
             text: args.text,
-        }),
-    );
+        });
+
+        // After the insert, and without the owner: this table is the RLS surface,
+        // so a log line naming who owns which note leaks exactly what the policy
+        // exists to keep apart.
+        ctx.log.info("note added", { characters: args.text.length });
+
+        return noteId;
+    });

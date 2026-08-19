@@ -631,6 +631,133 @@ describe("dataBrowser — editable", () => {
         await screen.findByTestId("db-page");
     };
 
+    /** Fire a clipboard paste carrying `text` at the grid's scroll container. */
+    const pasteIntoGrid = (text: string): void => {
+        fireEvent.paste(screen.getByTestId("db-scroll"), { clipboardData: { getData: () => text } });
+    };
+
+    it("stages a pasted TSV block and reports the cells it skipped", async () => {
+        expect.assertions(3);
+
+        await openMessages(createEditableClient());
+
+        // The focus anchor defaults to the first cell, which is the primary key —
+        // so each line's first value lands on a column nothing may write.
+        pasteIntoGrid("ignored\tfirst\nignored\tsecond");
+
+        const staged = await screen.findByTestId("db-staged-list");
+
+        expect(within(staged).getAllByRole("listitem")).toHaveLength(2);
+        expect(staged.textContent).toContain("second");
+        // Reported, not silent: a paste that quietly dropped half its block would
+        // read as a clean apply.
+        expect(screen.getByTestId("db-paste-skipped").textContent).toContain("2");
+    });
+
+    it("judges a pasted value against the DECLARED column, not the cell's current value", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "posts", rowCount: 2 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return {
+                        columnsByTable: {
+                            posts: [
+                                { name: "views", optional: false, type: "number" },
+                                { enumValues: ["draft", "published"], name: "status", optional: false, type: "union" },
+                            ],
+                        },
+                    };
+                }
+
+                return {
+                    columns: ["__id__", "views", "status"],
+                    // `views` is NULL on both rows: judging by the value would read
+                    // "no type at all" and wave anything through.
+                    rows: [
+                        { __id__: "p1", status: "draft", views: null },
+                        { __id__: "p2", status: "draft", views: null },
+                    ],
+                    total: 2,
+                };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-page");
+
+        // The anchor defaults to the first column, the primary key, so each line
+        // leads with a value nothing may write.
+        pasteIntoGrid("ignored\tn/a\tarchived\nignored\t7\tpublished");
+
+        const staged = await screen.findByTestId("db-staged-list");
+
+        // Only `7` (fits the declared number) and `published` (a declared union
+        // member) survive; `n/a` and `archived` do not, and neither does either
+        // primary-key cell.
+        expect(within(staged).getAllByRole("listitem")).toHaveLength(2);
+        expect(screen.getByTestId("db-paste-skipped").textContent).toContain("4");
+    });
+
+    it("anchors a paste at the cell the operator clicked", async () => {
+        expect.assertions(1);
+
+        const mock = createEditableClient();
+
+        await openMessages(mock);
+
+        // Click the `text` cell of the second row, then paste one value. Before
+        // this, `active` was written only by the arrow keys, so a pointer-selected
+        // cell was ignored and the block landed at the top-left of the page.
+        fireEvent.pointerDown(screen.getAllByTestId("db-expand-text")[1] as HTMLElement);
+        pasteIntoGrid("clicked");
+
+        const staged = await screen.findByTestId("db-staged-list");
+
+        expect(staged.textContent).toContain("clicked");
+    });
+
+    it("refuses a pasted value that does not fit a numeric column", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "scores", rowCount: 2 }];
+                }
+
+                return {
+                    columns: ["__id__", "points"],
+                    rows: [
+                        { __id__: "s1", points: 1 },
+                        { __id__: "s2", points: 2 },
+                    ],
+                    total: 2,
+                };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-scores"));
+        await screen.findByTestId("db-page");
+
+        pasteIntoGrid("ignored\t7\nignored\tn/a");
+
+        const staged = await screen.findByTestId("db-staged-list");
+
+        // The parseable one stages; "n/a" does not become the string "n/a" in a
+        // numeric column, which is what a plain inline edit would have allowed.
+        expect(within(staged).getAllByRole("listitem")).toHaveLength(1);
+        expect(screen.getByTestId("db-paste-skipped").textContent).toContain("3");
+    });
+
     it("hides edit controls unless `editable` is set", async () => {
         expect.assertions(2);
 
@@ -717,6 +844,140 @@ describe("dataBrowser — editable", () => {
         const call = mock.query.mock.calls.find((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ doc: { text: "from-form" }, op: "insert", table: "messages" });
+    });
+
+    it("renders a declared string-literal union as a dropdown, and a null boolean as a tri-state", async () => {
+        expect.assertions(5);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "posts", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return {
+                        columnsByTable: {
+                            posts: [
+                                { enumValues: ["draft", "published"], name: "status", optional: false, type: "union" },
+                                { name: "pinned", optional: true, type: "boolean" },
+                            ],
+                        },
+                    };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.writeRow) {
+                    return { id: "p1", op: "patch" };
+                }
+
+                return { columns: ["__id__", "status", "pinned"], rows: [{ __id__: "p1", pinned: null, status: "draft" }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-edit-p1"));
+
+        const status = await screen.findByTestId<HTMLSelectElement>("db-field-status");
+
+        // Before this the widget came from the VALUE, so a literal union was a
+        // free-text box and a null boolean was a free-text box too.
+        expect(status.tagName).toBe("SELECT");
+        expect([...status.options].map((option) => option.value)).toStrictEqual(["draft", "published"]);
+
+        // A checkbox has two states and this column has three. The row holds
+        // `null`, which a checkbox renders as unchecked — indistinguishable from
+        // a stored `false`, and with no way back to `null` once ticked. This
+        // assertion used to demand that checkbox.
+        const pinned = screen.getByTestId<HTMLSelectElement>("db-field-pinned");
+
+        expect(pinned.tagName).toBe("SELECT");
+        expect([...pinned.options].map((option) => option.value)).toStrictEqual(["\u0000clear", "true", "false"]);
+
+        fireEvent.change(status, { target: { value: "published" } });
+        fireEvent.click(screen.getByTestId("db-editor-save"));
+
+        await waitFor(() => {
+            if (!mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)) {
+                throw new Error("writeRow not called yet");
+            }
+        });
+
+        const call = mock.query.mock.calls.find((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+
+        expect((call[1] as { doc: Record<string, unknown> }).doc).toMatchObject({ status: "published" });
+    });
+
+    it("marks each header with its declared type, and leaves an undescribed column bare", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "posts", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return {
+                        columnsByTable: {
+                            posts: [
+                                { name: "title", optional: false, type: "string" },
+                                { name: "views", optional: false, type: "number" },
+                            ],
+                        },
+                    };
+                }
+
+                return { columns: ["__id__", "title", "views"], rows: [{ __id__: "p1", title: "hi", views: 3 }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-rows");
+
+        expect(screen.getByTestId("db-type-title").textContent).toBe("T");
+        expect(screen.getByTestId("db-type-views").textContent).toBe("#");
+        // `__id__` is a page column the schema does not describe — a glyph there
+        // would be an assertion about a type nobody declared.
+        expect(screen.queryByTestId("db-type-__id__")).toBeNull();
+    });
+
+    it("keeps a stored value the union no longer declares, rather than rewriting it", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "posts", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return { columnsByTable: { posts: [{ enumValues: ["draft", "published"], name: "status", optional: false, type: "union" }] } };
+                }
+
+                return { columns: ["__id__", "status"], rows: [{ __id__: "p1", status: "archived" }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-edit-p1"));
+
+        const status = await screen.findByTestId<HTMLSelectElement>("db-field-status");
+
+        // A row written before the union changed keeps what it holds; a dropdown
+        // that silently snapped it to the first option would edit a field nobody
+        // touched.
+        expect(status.value).toBe("archived");
+        expect([...status.options].map((option) => option.value)).toContain("archived");
     });
 
     it("stages an inline cell edit and commits it as a patch of just that field", async () => {
@@ -1322,6 +1583,57 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         fireEvent.click(screen.getByTestId("grid-cell-close"));
 
         expect(screen.queryByTestId("grid-cell-dialog")).toBeNull();
+    });
+
+    it("previews a v.storage() cell as an image, and leaves an ordinary cell as text", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "files", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return {
+                        columnsByTable: {
+                            files: [
+                                { isStorage: true, name: "avatar", optional: false, type: "storage" },
+                                { name: "note", optional: false, type: "string" },
+                            ],
+                        },
+                    };
+                }
+
+                const { table } = args as { table: string };
+
+                if (table !== "files") {
+                    throw new Error(`unknown table: ${table}`);
+                }
+
+                return { columns: ["__id__", "avatar", "note"], rows: [{ __id__: "f1", avatar: "avatars/ada.png", note: "not a key" }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-files"));
+        await screen.findByTestId("db-rows");
+
+        fireEvent.click(screen.getByTestId("db-expand-avatar"));
+
+        const image = await screen.findByTestId("grid-cell-image");
+
+        expect(image.getAttribute("src")).toBe("https://mock.example/avatars/ada.png?sig=test");
+        // The key stays visible under the preview — it is what an operator copies.
+        expect(screen.getByTestId("grid-cell-value").textContent).toBe("avatars/ada.png");
+
+        fireEvent.click(screen.getByTestId("grid-cell-close"));
+        fireEvent.click(screen.getByTestId("db-expand-note"));
+        await screen.findByTestId("grid-cell-value");
+
+        // A plain column is never fetched as an object, whatever its value looks like.
+        expect(screen.queryByTestId("grid-cell-image")).toBeNull();
     });
 
     it("hides a column via the Columns menu", async () => {

@@ -307,6 +307,35 @@ export const DataBrowser = ({
 
     const client = useLunora();
 
+    // The open table's declared columns, keyed by name — what the row editor reads
+    // to pick a field widget. Sourced from the same `describeTables` read the
+    // diagram and the back-relations use, not from `useGenerateRows`'s
+    // `describeTable`: that one is only fetched when the generate dialog opens.
+    const editorColumnMeta = Object.fromEntries((columnsByTable[selectedTable ?? ""] ?? []).map((meta) => [meta.name, meta]));
+
+    // The `v.storage(...)` columns of the table on screen. Their values are R2
+    // object keys, which is what lets an expanded cell show the object instead of
+    // the key — every other column's value IS the value.
+    // One pass, and it carries the bucket: a `Map` rather than a `Set` because the
+    // cell needs to know WHICH bucket to resolve against, not merely that it is a
+    // storage column. An entry with no bucket means `v.storage()` with no argument.
+    const storageColumns = new Map<string, string | undefined>();
+
+    for (const meta of columnsByTable[selectedTable ?? ""] ?? []) {
+        if (meta.isStorage === true) {
+            storageColumns.set(meta.name, meta.bucket);
+        }
+    }
+
+    // Resolves against the bucket `v.storage(bucket)` named, which codegen now
+    // reports on the column. A column declared without one resolves against the
+    // deployment's default bucket, which is what `v.storage()` itself means.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: this is an effect dependency in `StoragePreview`, and a fresh closure per render would re-fetch the signed URL on every keystroke elsewhere in the browser
+    const resolveStorageUrl = useCallback(
+        async (key: string, bucket?: string): Promise<string> => client.signedStorageUrl(key, bucket === undefined ? {} : { bucket }),
+        [client],
+    );
+
     // Fetch the table list for a given shard key — used by the ShardExplorer to
     // show a live table/row-count summary when the operator picks a recent shard.
     const onFetchShardTables = async (targetShard: string): Promise<ReadonlyArray<TableInfo> | undefined> => {
@@ -422,6 +451,7 @@ export const DataBrowser = ({
                             onToggle: onToggleBackRelation,
                         }}
                         browser={browser}
+                        columnMeta={editorColumnMeta}
                         edit={edit}
                         editable={editable}
                         onAskAiFilter={askAiFilter}
@@ -442,7 +472,15 @@ export const DataBrowser = ({
                 <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={handleNavigateRef} refs={page.refs} row={inspecting} />
             )}
 
-            {expandedCell !== null && <CellDetailDialog column={expandedCell.column} onClose={closeExpandedCell} value={expandedCell.value} />}
+            {expandedCell !== null && (
+                <CellDetailDialog
+                    bucket={storageColumns.get(expandedCell.column)}
+                    column={expandedCell.column}
+                    onClose={closeExpandedCell}
+                    resolveUrl={storageColumns.has(expandedCell.column) ? resolveStorageUrl : undefined}
+                    value={expandedCell.value}
+                />
+            )}
 
             {generateOpen && selectedTable !== null && columnMeta !== undefined && (
                 <GenerateRowsDialog

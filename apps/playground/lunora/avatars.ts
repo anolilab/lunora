@@ -1,5 +1,6 @@
 import type { RateLimitConfigMap } from "@lunora/ratelimit";
 import { dbRateLimit } from "@lunora/ratelimit";
+import { LunoraError } from "lunorash/server";
 
 import { action, query, v } from "./_generated/server.js";
 
@@ -24,9 +25,22 @@ export const uploadAvatar = action
     .action(async ({ args, ctx }): Promise<{ key: string; url: string }> => {
         const userId = ctx.auth.userId ?? "anonymous";
         const scopedKey = `avatars/${userId}/${args.key}`;
+
         // A `PUT` URL with the content-type pinned into the HMAC — the client must
-        // upload with exactly this `Content-Type`.
-        const url = await ctx.storage.generateUploadUrl(scopedKey, { contentType: args.contentType, expiresInSeconds: 60 });
+        // upload with exactly this `Content-Type`. Wrapped because R2 is an
+        // outbound dependency: an unwrapped failure reaches the browser as a bare
+        // stack with nothing naming which service was unreachable.
+        let url: string;
+
+        try {
+            url = await ctx.storage.generateUploadUrl(scopedKey, { contentType: args.contentType, expiresInSeconds: 60 });
+        } catch (error) {
+            throw new LunoraError("INTERNAL", "could not mint an avatar upload URL: object storage did not answer", { cause: error });
+        }
+
+        // The key is `avatars/<userId>/<name>` — logging it logs the identity.
+        // Content type and TTL are what a failed upload actually needs.
+        ctx.log.info("avatar upload url minted", { contentType: args.contentType, expiresInSeconds: 60 });
 
         return { key: scopedKey, url };
     });
