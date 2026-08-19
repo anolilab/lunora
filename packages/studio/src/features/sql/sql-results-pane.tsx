@@ -35,6 +35,8 @@ const SqlResultsPane = ({
     onShowChart,
     onShowExplain,
     onShowResults,
+    chatOpen,
+    onToggleChat,
     onToggleSplit,
     pane,
     result,
@@ -46,6 +48,8 @@ const SqlResultsPane = ({
     readonly assistant: SqlAssistant;
     /** Model-inferred axes for this result, or undefined for the manual chart. */
     readonly chart?: AssistantChartConfig;
+    /** Whether the assistant panel is showing. */
+    readonly chatOpen: boolean;
     /** Layout classes from the panel, which owns the stacked/split decision. */
     readonly className: string;
     readonly error: null | string;
@@ -58,6 +62,7 @@ const SqlResultsPane = ({
     readonly onShowChart: () => void;
     readonly onShowExplain: () => void;
     readonly onShowResults: () => void;
+    readonly onToggleChat: () => void;
     readonly onToggleSplit: () => void;
     readonly pane: ResultTab;
     readonly result: null | SqlConsoleResult;
@@ -94,6 +99,38 @@ const SqlResultsPane = ({
                     {t("Explain")}
                 </button>
                 <div className="ms-auto flex items-center gap-2">
+                    {/*
+                     * The assistant panel's only affordance. Hidden without an `AI`
+                     * binding, like every other assistant control — and a toggle
+                     * rather than an always-open bar, which read as part of the
+                     * results toolbar and took vertical space whether or not
+                     * anyone was talking to it.
+                     */}
+                    {!assistant.unavailable && (
+                        <button
+                            aria-label={t("Ask about your data")}
+                            aria-pressed={chatOpen}
+                            className={`inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1.5 outline-none transition-colors hover:bg-accent focus-visible:bg-accent ${chatOpen ? "bg-accent text-foreground" : "text-muted-foreground"}`}
+                            data-testid="sql-chat-toggle"
+                            onClick={onToggleChat}
+                            title={t("Ask about your data")}
+                            type="button"
+                        >
+                            <svg
+                                aria-hidden="true"
+                                className="size-4"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={1.6}
+                                viewBox="0 0 24 24"
+                            >
+                                <path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1.2-4.2A8 8 0 1 1 21 12Z" />
+                            </svg>
+                            <span className="text-xs">{t("Assistant")}</span>
+                        </button>
+                    )}
                     <button
                         aria-label={t("Split editor and results")}
                         aria-pressed={splitView}

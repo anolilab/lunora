@@ -31,6 +31,7 @@ const MESSAGE_IDS = [
     "Agents",
     "Agent",
     "Answered after reading your data.",
+    "Answers are suggestions — nothing runs until you insert and run it.",
     "Ask about your data",
     "Assistant",
     "Insert into editor",

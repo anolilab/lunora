@@ -73,6 +73,9 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     // Editor↔results layout: stacked (default) or side-by-side, persisted across reloads.
     const [splitView, setSplitView] = usePersistedValue<boolean>(SPLIT_VIEW_KEY, false);
+    // Closed by default: an assistant that occupies the console before anyone asks
+    // it anything is a cost every operator pays and few want.
+    const [chatOpen, setChatOpen] = useState(false);
 
     const { probe, schema } = useSqlSchema(shardKey);
 
@@ -238,6 +241,10 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         setSplitView(!splitView);
     };
 
+    const toggleChat = (): void => {
+        setChatOpen(!chatOpen);
+    };
+
     // Editor + results share a flex container; `splitView` flips its axis (and the
     // results pane from a bottom band to a right column) — the only layout change.
     const workspaceClass = splitView ? "flex min-h-0 flex-1 flex-row" : "flex min-h-0 flex-1 flex-col";
@@ -292,11 +299,10 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                      * Renders nothing without an `AI` binding, on the same latch as
                      * the prompt bar.
                      */}
-                    <SqlChatPanel assistant={assistant} onInsert={setDraft} schema={schema} />
-
                     <SqlResultsPane
                         assistant={assistant}
                         chart={inferredChart}
+                        chatOpen={chatOpen}
                         className={resultsClass}
                         error={error}
                         onFormat={formatDraft}
@@ -307,6 +313,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         onShowChart={showChart}
                         onShowExplain={showExplain}
                         onShowResults={showResults}
+                        onToggleChat={toggleChat}
                         onToggleSplit={toggleSplit}
                         pane={tab}
                         result={result}
@@ -317,6 +324,17 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                     />
                 </div>
             </div>
+
+            {/*
+             * A right-hand column, outside the editor/results stack.
+             *
+             * Below them it competed for the same vertical space the results need
+             * and read as part of the results toolbar; beside them the transcript
+             * stays visible while the operator reads a result and edits the query
+             * the assistant suggested, which is the whole point of having it here
+             * rather than in a modal.
+             */}
+            <SqlChatPanel assistant={assistant} onInsert={setDraft} open={chatOpen} schema={schema} />
         </div>
     );
 };

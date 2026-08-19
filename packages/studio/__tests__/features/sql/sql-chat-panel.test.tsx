@@ -34,6 +34,13 @@ const chatMock = (reply: string, available = true): MockClientHooks =>
         },
     });
 
+/** Open the assistant, which is closed until the operator asks for it. */
+const openChat = async (): Promise<HTMLElement> => {
+    fireEvent.click(await screen.findByTestId("sql-chat-toggle"));
+
+    return screen.findByTestId("sql-chat");
+};
+
 const ask = (question: string): void => {
     fireEvent.change(screen.getByTestId("sql-chat-input"), { target: { value: question } });
     fireEvent.click(screen.getByTestId("sql-chat-send"));
@@ -51,9 +58,13 @@ describe("sqlChatPanel", () => {
         render(renderPanel(chatMock("unused", false)));
 
         // The latch the other assistant affordances use: a surface that can only
-        // fail is worse than no surface.
+        // fail is worse than no surface. The TOGGLE is what must be absent — the
+        // panel itself is closed by default, so asserting on it would pass even
+        // with the latch broken.
+        await screen.findByTestId("lunora-sql-editor");
+
         await waitFor(() => {
-            expect(screen.queryByTestId("sql-chat")).toBeNull();
+            expect(screen.queryByTestId("sql-chat-toggle")).toBeNull();
         });
     });
 
@@ -63,7 +74,7 @@ describe("sqlChatPanel", () => {
         const mock = chatMock("Try this:\n```sql\nSELECT count(*) FROM messages\n```");
 
         render(renderPanel(mock));
-        await screen.findByTestId("sql-chat");
+        await openChat();
 
         ask("how many messages?");
 
@@ -89,7 +100,7 @@ describe("sqlChatPanel", () => {
         // A looser reading — "any line starting with SELECT" — would offer this
         // prose as a statement.
         render(renderPanel(chatMock("You could SELECT from messages, but I'd check the index first.")));
-        await screen.findByTestId("sql-chat");
+        await openChat();
 
         ask("what should I look at?");
 
@@ -104,7 +115,7 @@ describe("sqlChatPanel", () => {
         const mock = chatMock("Sure.");
 
         render(renderPanel(mock));
-        await screen.findByTestId("sql-chat");
+        await openChat();
 
         ask("first question");
         await screen.findByTestId("sql-chat-turn-assistant");
@@ -130,7 +141,7 @@ describe("sqlChatPanel", () => {
         const mock = chatMock("Sure.");
 
         render(renderPanel(mock));
-        await screen.findByTestId("sql-chat");
+        await openChat();
 
         ask("what tables do I have?");
 
@@ -143,6 +154,27 @@ describe("sqlChatPanel", () => {
             // operator had open.
             expect((args as { schema: unknown[] }).schema).toContainEqual({ columns: [], table: "messages" });
             expect(args as Record<string, unknown>).toHaveProperty("shardKey");
+        });
+    });
+
+    it("stays closed until the operator opens it, and closes again", async () => {
+        expect.hasAssertions();
+
+        render(renderPanel(chatMock("Sure.")));
+        await screen.findByTestId("sql-chat-toggle");
+
+        // Closed by default: an assistant occupying the console before anyone has
+        // asked it anything is a cost every operator pays and few want.
+        expect(screen.queryByTestId("sql-chat")).toBeNull();
+
+        await openChat();
+
+        expect(screen.getByTestId("sql-chat")).toBeDefined();
+
+        fireEvent.click(screen.getByTestId("sql-chat-toggle"));
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("sql-chat")).toBeNull();
         });
     });
 });

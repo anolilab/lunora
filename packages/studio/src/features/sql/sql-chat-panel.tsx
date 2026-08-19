@@ -112,10 +112,13 @@ const TurnRow = ({ onInsert, turn }: { readonly onInsert: (sql: string) => void;
 const SqlChatPanel = ({
     assistant,
     onInsert,
+    open,
     schema,
 }: {
     readonly assistant: SqlAssistant;
     readonly onInsert: (sql: string) => void;
+    /** Toggled from the results toolbar; closed, the panel renders nothing at all. */
+    readonly open: boolean;
     /** Grounding for the turn — the same schema the editor autocompletes from. */
     readonly schema: SqlSchema;
 }): ReactElement | null => {
@@ -125,7 +128,9 @@ const SqlChatPanel = ({
     const [truncated, setTruncated] = useState(false);
     const [outcome, setOutcome] = useState<undefined | { partial: boolean; read: number }>(undefined);
 
-    if (assistant.unavailable) {
+    // Hooks run first: both of these are early returns, and React needs the state
+    // above them on every render.
+    if (assistant.unavailable || !open) {
         return null;
     }
 
@@ -174,7 +179,11 @@ const SqlChatPanel = ({
     };
 
     return (
-        <section aria-label={t("SQL chat")} className="flex min-h-0 flex-col border-t border-border" data-testid="sql-chat">
+        <section aria-label={t("SQL chat")} className="flex h-full w-96 min-w-0 shrink-0 flex-col border-s border-border bg-card" data-testid="sql-chat">
+            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
+                <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{t("Assistant")}</span>
+                <span className="text-[11px] text-muted-foreground">{t("Answers are suggestions — nothing runs until you insert and run it.")}</span>
+            </div>
             <ul className="min-h-0 flex-1 overflow-y-auto" data-testid="sql-chat-turns">
                 {turns.map((turn, index) => (
                     <TurnRow key={`${String(index)}:${turn.role}`} onInsert={onInsert} turn={turn} />
