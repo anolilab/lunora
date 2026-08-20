@@ -131,4 +131,54 @@ describe("assistantProvider", () => {
         expect(result.current.pendingAsk).toBeDefined();
         expect(result.current.pendingAsk?.text).toBe("second");
     });
+
+    it("offers an insert only when a page says it has an editor", () => {
+        expect.assertions(2);
+
+        const { result } = render();
+
+        // On a page with no editor the panel must not offer the button at all —
+        // a reply on the Issues page may well contain SQL, and inserting it
+        // somewhere the operator cannot see is a button that silently does nothing.
+        expect(result.current.hasEditor).toBe(false);
+
+        act(() => {
+            result.current.setHasEditor(true);
+        });
+
+        expect(result.current.hasEditor).toBe(true);
+    });
+
+    it("clears an insert request only by its own id", () => {
+        expect.assertions(3);
+
+        const { result } = render();
+
+        act(() => {
+            result.current.requestInsert("SELECT 1");
+        });
+
+        const first = result.current.insertRequest?.id as number;
+
+        act(() => {
+            // The same statement offered twice is two events, not one swallowed
+            // prop change — which is why the request is id-keyed rather than a bare
+            // string.
+            result.current.requestInsert("SELECT 1");
+        });
+
+        expect(result.current.insertRequest?.id).not.toBe(first);
+
+        act(() => {
+            result.current.takeInsert(first);
+        });
+
+        expect(result.current.insertRequest).toBeDefined();
+
+        act(() => {
+            result.current.takeInsert(result.current.insertRequest?.id as number);
+        });
+
+        expect(result.current.insertRequest).toBeUndefined();
+    });
 });

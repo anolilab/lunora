@@ -70,18 +70,32 @@ interface AssistantValue {
     readonly draft: { readonly id: number; readonly text: string } | undefined;
 
     /**
-     * Where "Insert into editor" puts a statement, or `undefined` when the page
-     * showing has no editor.
+     * Whether the page showing has somewhere to put a statement.
      *
-     * Registered by the page rather than owned by the panel, because the panel is
-     * shell-wide and the editor is not: on the Issues page a reply may well
-     * contain SQL, and offering to insert it somewhere the operator cannot see
-     * would be a button that silently does nothing. Absent, the panel renders no
-     * insert button at all.
+     * A boolean rather than the callback it replaced. The panel is shell-wide and
+     * the editor is not — on the Issues page a reply may well contain SQL, and
+     * offering to insert it somewhere the operator cannot see would be a button
+     * that silently does nothing — so the page still has to say. But *where* it
+     * goes is the page's business, not the provider's: storing a closure here made
+     * this state unserialisable, needed a mirrored ref at the registration site to
+     * avoid pinning the sink to one render's tab, and let two mounted editors
+     * clobber each other's sink. A boolean is idempotent, so the worst a double
+     * registration can do is set true twice.
      */
-    readonly insert: ((sql: string) => void) | undefined;
+    readonly hasEditor: boolean;
+
+    /**
+     * A statement the panel asked the page to insert, awaiting collection.
+     *
+     * Id-keyed like {@link AssistantValue.draft} and
+     * {@link AssistantValue.pendingAsk} — the same "one side offers, the other
+     * takes it exactly once" shape this provider already uses twice, so inserting
+     * the SAME statement twice is two events rather than one swallowed prop change.
+     */
+    readonly insertRequest: { readonly id: number; readonly sql: string } | undefined;
     /** Start a fresh session and open the panel on it. */
     readonly newChat: (seed?: AssistantSeed) => void;
+
     readonly open: boolean;
 
     /**
@@ -95,14 +109,18 @@ interface AssistantValue {
     readonly openAssistant: (seed?: AssistantSeed) => void;
     /** The seeded question awaiting a send, or `undefined`. Cleared by {@link AssistantValue.takeAsk}. */
     readonly pendingAsk: PendingAsk | undefined;
+    /** Offer a statement to whatever page is showing. Called by the panel. */
+    readonly requestInsert: (sql: string) => void;
     readonly selectChat: (id: string) => void;
     readonly sessions: ReadonlyArray<AssistantSession>;
-    /** Register (or, with `undefined`, withdraw) the page's insert target. */
-    readonly setInsert: (insert: ((sql: string) => void) | undefined) => void;
+    /** Declare whether this page can accept an insert. Called by the page, withdrawn on unmount. */
+    readonly setHasEditor: (present: boolean) => void;
     /** Replace a session's transcript. The panel owns sending; this is where the result lands. */
     readonly setTurns: (id: string, turns: ReadonlyArray<ChatTurn>) => void;
     /** Mark the pending ask consumed, so a re-render never re-asks it. */
     readonly takeAsk: (id: number) => void;
+    /** Mark an insert request collected, so a re-render never re-inserts it. */
+    readonly takeInsert: (id: number) => void;
     readonly toggle: () => void;
 
     /**
@@ -140,7 +158,8 @@ const MAX_SESSIONS = 10;
 interface AssistantState {
     readonly activeId: string | undefined;
     readonly draft: { readonly id: number; readonly text: string } | undefined;
-    readonly insert: ((sql: string) => void) | undefined;
+    readonly hasEditor: boolean;
+    readonly insertRequest: { readonly id: number; readonly sql: string } | undefined;
     readonly open: boolean;
     readonly pendingAsk: PendingAsk | undefined;
     /** Monotonic, so two identical seeds are two distinct events rather than one swallowed prop change. */
@@ -164,9 +183,11 @@ const start = (current: AssistantState, seed: AssistantSeed | undefined): Assist
     return {
         activeId: id,
         draft: seed?.draft === undefined ? undefined : { id: current.seq + 1, text: seed.draft },
-        // Carried over rather than cleared: the insert target belongs to the PAGE,
-        // and starting a conversation does not navigate anywhere.
-        insert: current.insert,
+        // Carried over rather than cleared: whether the page has an editor belongs
+        // to the PAGE, and starting a conversation does not navigate anywhere. Any
+        // uncollected request is dropped, though — it belonged to the old session.
+        hasEditor: current.hasEditor,
+        insertRequest: undefined,
         open: true,
         pendingAsk: seed?.ask === undefined ? undefined : { id: current.seq + 1, sessionId: id, text: seed.ask },
         seq: current.seq + 1,
@@ -204,7 +225,8 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
     const [state, setState] = useState<AssistantState>({
         activeId: undefined,
         draft: undefined,
-        insert: undefined,
+        hasEditor: false,
+        insertRequest: undefined,
         open: false,
         pendingAsk: undefined,
         seq: 0,
@@ -258,10 +280,22 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
                 });
             },
 
-            setInsert: (insert: ((sql: string) => void) | undefined): void => {
+            requestInsert: (sql: string): void => {
                 setState((current) => {
-                    return { ...current, insert };
+                    return { ...current, insertRequest: { id: current.seq + 1, sql }, seq: current.seq + 1 };
                 });
+            },
+
+            setHasEditor: (present: boolean): void => {
+                setState((current) => current.hasEditor === present ? current : { ...current, hasEditor: present });
+            },
+
+            takeInsert: (id: number): void => {
+                setState((current) => 
+                    // By id, so a request that arrived while this one was being
+                    // collected is not thrown away with it.
+                     current.insertRequest?.id === id ? { ...current, insertRequest: undefined } : current
+                );
             },
 
             selectChat: (id: string): void => {
@@ -306,7 +340,8 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
         ...actions,
         activeId: state.activeId,
         draft: state.draft,
-        insert: state.insert,
+        hasEditor: state.hasEditor,
+        insertRequest: state.insertRequest,
         open: state.open,
         pendingAsk: state.pendingAsk,
         sessions: state.sessions,

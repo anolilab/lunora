@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 
 import { useAssistant } from "../../components/assistant-provider";
 import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
-import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import type { SchemaFact, SqlConsoleResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -114,31 +113,49 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     };
 
     /*
-     * Register this console as the assistant's insert target for as long as it is
-     * mounted, and withdraw it on the way out.
-     *
-     * Mirrored rather than passed directly because `setDraft` closes over the
-     * active tab and is re-created every render — registering it raw would re-run
-     * this effect on every keystroke, and registering it once would pin the sink
-     * to the first render's tab. The mirror publishes only committed values, so
-     * the sink always writes to the tab that is actually open.
+     * Tell the assistant this page can accept an insert, and withdraw on the way
+     * out. A boolean rather than a callback: `setDraft` closes over the active tab
+     * and is re-created every render, so registering IT would either re-run this
+     * effect on every keystroke or pin the target to the first render's tab.
      */
-    const setDraftRef = useMirroredRef(setDraft);
-    const setInsert = assistantShell?.setInsert;
+    const setHasEditor = assistantShell?.setHasEditor;
 
     useEffect(() => {
-        if (setInsert === undefined) {
+        if (setHasEditor === undefined) {
             return undefined;
         }
 
-        setInsert((sql: string) => {
-            setDraftRef.current(sql);
-        });
+        setHasEditor(true);
 
         return () => {
-            setInsert(undefined);
+            setHasEditor(false);
         };
-    }, [setInsert, setDraftRef]);
+    }, [setHasEditor]);
+
+    /*
+     * Collect a statement the assistant offered.
+     *
+     * An effect because the trigger is outside this component — the operator
+     * pressed Insert in the shell-wide panel — and this runs with the CURRENT
+     * render's `setDraft`, so it always writes to the tab that is actually open.
+     * That is what the mirrored ref used to buy, and it is free once what crosses
+     * the boundary is a value rather than a closure. `takeInsert` clears it by id,
+     * so a re-render never re-inserts and the same statement can be inserted twice.
+     */
+    const insertRequest = assistantShell?.insertRequest;
+    const takeInsert = assistantShell?.takeInsert;
+
+    useEffect(() => {
+        if (insertRequest === undefined || takeInsert === undefined) {
+            return;
+        }
+
+        takeInsert(insertRequest.id);
+        setDraft(insertRequest.sql);
+        // `setDraft` is re-created every render and is not a meaningful dependency —
+        // the request's identity is what decides whether to insert.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
+    }, [insertRequest, takeInsert]);
 
     const diagnostics = useSqlDiagnostics(draft, schema, shardKey);
     const rpc = useAssistantRpc(shardKey);

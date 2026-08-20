@@ -118,10 +118,10 @@ const SessionBar = ({ assistant }: { readonly assistant: AssistantValue }): Reac
  * surface that can only fail is worse than none.
  *
  * **Nothing here executes.** A reply is prose; the only path from it to the SQL
- * editor is the operator pressing Insert, and what lands there still has to be
- * Run like anything they typed. The insert target is registered by the page that
- * has one — so on every page except the SQL console the button is not offered at
- * all, rather than offered and inert.
+ * editor is the operator pressing Insert, which asks the page to take a statement
+ * — and what lands there still has to be Run like anything they typed. A page
+ * without an editor says so (`hasEditor`), and the button is then not offered at
+ * all rather than offered and inert.
  */
 const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): ReactElement | null => {
     const t = useT();
@@ -294,7 +294,7 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                  */}
                 {turns.map((turn, index) => (
                     // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- append-only list; see above
-                    <TurnRow key={`${String(index)}:${turn.role}`} onInsert={assistant.insert} turn={turn} />
+                    <TurnRow key={`${String(index)}:${turn.role}`} onInsert={assistant.hasEditor ? assistant.requestInsert : undefined} turn={turn} />
                 ))}
             </ul>
 
