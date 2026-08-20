@@ -363,8 +363,67 @@ title })`. The panel moved to `features/assistant/assistant-panel.tsx` and is
   travel, because a plan the operator can see and the model cannot is the thing
   they are asking about.
 
+## 11. W9 — reading the reply, and a way in
+
+- **Markdown.** Replies were preformatted text, so every answer carrying a list, a
+  table or a fenced block arrived as a wall of syntax — which is most of them.
+  `streamdown` renders them, chosen over `react-markdown` (whose API it is
+  compatible with) for the hardening it ships, because what is rendered here is
+  model output. A QUESTION is still shown exactly as typed: markdown-rendering the
+  operator's own words would be the surface reinterpreting their input. Measured
+  rather than assumed — +484K, in a chunk the entry does not statically reach, and
+  mermaid/shiki/katex are not bundled at all.
+
+    Images are DROPPED, not merely sanitized. `rehype-harden` blocks a
+    `javascript:` link but allows every image protocol and prefix, and an image URL
+    in model output is a beacon: it fires on render and carries whatever the model
+    put in it — which, since a turn can read rows, is whatever it just saw.
+
+- **What a turn did, per turn.** The panel printed one line for the whole session,
+  so a turn that ran three statements and one that invented an answer looked
+  identical, and a refusal looked like nothing. Tool calls now ride on a
+  studio-local `SessionTurn`, never on the wire turn: the transcript the server
+  budgets is prose, and handing it back a log of its own calls would spend that
+  budget on what it already knows.
+
+- **A way in.** Starter questions come from the surface that opened the panel — the
+  SQL console builds them from the schema it has PROBED, so they name real tables.
+  Plus copy / branch-from-here / delete-from-here on each turn.
+
+- **`readAdvisors`** over the existing `getAdvisories` op, at the `schema` tier: an
+  advisory names a table and a rule and carries no rows, so gating it higher would
+  withhold the one thing the model can say about an app it is otherwise guessing
+  at. It is the default tier, so it is the first tool that improves an
+  out-of-the-box deployment's answers.
+
+## 12. Found while executing W6-W9
+
+- **The standalone bundle had been shipping DEVELOPMENT React and could not stop.**
+  `build-standalone.mjs` probe-builds under production React and falls back if the
+  dev JSX runtime is still needed — but it decided by grepping output TEXT for the
+  identifier, which cannot tell a hazard from a mention. Two harmless mentions
+  enter the graph as soon as anything renders markdown: `hast-util-to-jsx-runtime`
+  guards on an options property of that name, and React's own production
+  dev-runtime shim assigns it `void 0`. `dist:check` had the same flaw. Both now
+  key on whether React's dev JSX runtime is in the graph — an import, not an
+  identifier. Nothing had shipped: `@lunora/studio` on npm is a placeholder and the
+  published CLI does not embed the bundle.
+
+- **The playground's Workers AI binding killed the entire E2E suite.** That binding
+  has no local emulation, so declaring it opens a remote proxy session needing a
+  Cloudflare API token; without one the dev server does not boot, so every
+  Playwright test fails rather than just the AI ones. Removed — the no-binding path
+  is the designed and tested one.
+
+- **Access-only admins could not use ANY worker-served admin op.** `applyAdminGate`
+  skips the RPC path to keep the gate off the data hot path, but `aiChat`,
+  `getAuthAuditLog` and `listPushSubscriptions` are all reached over exactly that
+  path, so no grant was ever recorded. Pre-existing, fixed here: the gate now runs
+  keyed on the envelope's admin prefix, so ordinary calls still never pay for it.
+
 **Deliberately not built.** Session persistence: §4's argument is unchanged, and
 sessions surviving navigation (which is what was actually missing) does not
-require surviving a reload. Inline ⌘K diff-editing in the editor gutter, and RLS
-policy authoring — the latter is a write tool and hits the §8 STOP condition, so
-it stays its own plan.
+require surviving a reload. Inline diff-editing in the editor gutter — the SQL
+editor is a `<textarea>`, so that is an editor decision before it is an AI one.
+RLS policy authoring — a write tool, which hits the §8 STOP condition and stays
+its own plan. Token streaming remains W5, still blocked on a transport (§8b).
