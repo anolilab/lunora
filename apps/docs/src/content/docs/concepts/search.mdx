@@ -184,9 +184,28 @@ and run the backfill yourself.
 
 A staged index is maintained on every write from the moment it is declared, but
 starts out empty: until it is backfilled it only finds documents written after
-the deploy. Run `backfillSearchIndexes` (sharded tables) or
-`backfillD1SearchIndexes` (`.global()` tables) from a one-shot admin path to
-complete it; both are resumable and safe to re-run.
+the deploy. **The backfill is not optional** — skip it and every row that
+predates the deploy stays unsearchable indefinitely.
+
+For sharded tables, drive it against a running deployment with the
+`backfillSearch` admin op:
+
+```bash
+lunora run '__lunora_admin__:backfillSearch' --args '{"maxPages":20}'
+```
+
+Each call indexes at most `maxPages` pages (500 rows each) and answers
+`{ done, pages }`; repeat until `done` is `true`. Progress is durable, so a call
+that times out or is interrupted resumes where it stopped, and re-running a
+finished index is a no-op. Omit `maxPages` to run to completion in one call —
+fine for a small table, but on the large tables `staged` exists for it is what
+the page budget is there to avoid. Add `--shard <key>` on a `.shardBy()` table to
+target one shard, and `--url` / `LUNORA_ADMIN_TOKEN` to reach a remote worker.
+
+For `.global()` tables the equivalent entry point is `backfillD1SearchIndexes`
+(or `backfillSqlSearchIndexes` for a Hyperdrive backend), called with the
+store's exec from a host-side admin path; both are resumable and safe to
+re-run.
 
 ## Native engine indexes
 
