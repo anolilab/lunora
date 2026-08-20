@@ -7,7 +7,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
-import { COLUMN_LABEL, StatusBadge, Upsell } from "./section-ui";
+import { formatDateTime } from "./format";
+import { COLUMN_LABEL } from "./section-styles";
+import { StatusBadge, Upsell } from "./section-ui";
 import type { SectionProps } from "./tabs";
 
 /** Format a `[0,1]` uptime fraction as a percentage, to two decimals. */
@@ -79,7 +81,7 @@ export const UptimeSection = ({ organizationId, preloaded }: SectionProps<Return
                                             {row.consecutiveFailures > 0 ? <StatusBadge tone="danger">{row.consecutiveFailures}</StatusBadge> : "—"}
                                         </TableCell>
                                         <TableCell className="text-muted-foreground font-mono text-xs whitespace-nowrap">
-                                            {new Date(row.lastCheckedAt).toLocaleString()}
+                                            {formatDateTime(row.lastCheckedAt)}
                                         </TableCell>
                                     </TableRow>
                                 ))}

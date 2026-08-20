@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
+import { formatDate } from "./format";
 import { Field, FieldForm, FormError, Row, RowActions, RowList } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
 
@@ -75,7 +76,7 @@ export const SecretsSection = ({ organizationId, preloaded }: SecretsSectionProp
                                     {rows.map((secret) => (
                                         <Row key={secret.name}>
                                             <span className="shrink-0 font-medium">{secret.name}</span>
-                                            <span className="text-muted-foreground">set {new Date(secret.updatedAt).toLocaleDateString()}</span>
+                                            <span className="text-muted-foreground">set {formatDate(secret.updatedAt)}</span>
                                             <RowActions>
                                                 <Button
                                                     className="text-destructive hover:text-destructive"

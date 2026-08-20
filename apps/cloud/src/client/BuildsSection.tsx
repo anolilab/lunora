@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { api } from "../../lunora/_generated/api.js";
 import type { Id } from "../../lunora/_generated/dataModel.js";
 import { AsyncList } from "./AsyncList";
+import { formatDateTime } from "./format";
 import { Field, Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import type { ProjectId } from "./types";
@@ -84,7 +85,7 @@ export const BuildsSection = ({ organizationId, preloaded }: SectionProps<Return
                                             <span className="text-muted-foreground truncate font-mono text-xs">{build.branch}</span>
                                             <StatusBadge tone={BUILD_TONE[build.status]}>{build.status}</StatusBadge>
                                             <span className="text-muted-foreground hidden font-mono text-xs whitespace-nowrap sm:inline">
-                                                {new Date(build.createdAt).toLocaleString()}
+                                                {formatDateTime(build.createdAt)}
                                             </span>
                                             <RowActions>
                                                 <Button

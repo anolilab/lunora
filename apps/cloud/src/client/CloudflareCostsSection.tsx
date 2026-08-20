@@ -8,7 +8,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 
 import { api } from "../../lunora/_generated/api.js";
-import { COLUMN_LABEL, Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
+import { formatNumber } from "./format";
+import { COLUMN_LABEL } from "./section-styles";
+import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { OrgId } from "./types";
 
 interface CloudflareCostsSectionProps {
@@ -22,13 +24,27 @@ type SummaryResult = ReturnOf<typeof api.cloudflare_billing.summary>;
 
 const LOCALE = "en-GB";
 
+/**
+ * One `Intl.NumberFormat` per currency, kept for the module's lifetime.
+ * Constructing one is the expensive part (it resolves locale data); formatting
+ * with it is cheap. A Cloudflare bill names one or two currencies, so this
+ * caches a handful of instances instead of building one per rendered row.
+ * `null` records a currency the runtime rejected, so the fallback path is taken
+ * without re-throwing on every render.
+ */
+const moneyFormatters = new Map<string, Intl.NumberFormat | null>();
+
 /** Minor units (cents) → a currency string, pinned to one locale so SSR/client agree. Falls back for unknown ISO codes. */
 const formatMoney = (minor: number, currency: string): string => {
-    try {
-        return new Intl.NumberFormat(LOCALE, { currency, style: "currency" }).format(minor / 100);
-    } catch {
-        return `${(minor / 100).toFixed(2)} ${currency}`;
+    if (!moneyFormatters.has(currency)) {
+        try {
+            moneyFormatters.set(currency, new Intl.NumberFormat(LOCALE, { currency, style: "currency" }));
+        } catch {
+            moneyFormatters.set(currency, null);
+        }
     }
+
+    return moneyFormatters.get(currency)?.format(minor / 100) ?? `${(minor / 100).toFixed(2)} ${currency}`;
 };
 
 /** Human line for each non-ok summary status. */
@@ -57,7 +73,7 @@ const CostOverview = ({ view }: { view: NonNullable<SummaryResult["view"]> }): R
                         <span className="shrink-0 font-medium">{line.product}</span>
                         {line.quantity === null ? null : (
                             <StatusBadge>
-                                {new Intl.NumberFormat(LOCALE).format(line.quantity)}
+                                {formatNumber(line.quantity)}
                                 {line.unit ? ` ${line.unit}` : ""}
                             </StatusBadge>
                         )}

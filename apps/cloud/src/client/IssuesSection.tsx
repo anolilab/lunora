@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
+import { formatDateTime } from "./format";
 import { StatusBadge, Upsell } from "./section-ui";
 import type { OrgId } from "./types";
 
@@ -56,7 +57,7 @@ export const IssuesSection = ({ organizationId, preloaded }: IssuesSectionProps)
                             <TableBody>
                                 {rows.map((issue) => (
                                     <TableRow key={issue._id}>
-                                        <TableCell className="text-muted-foreground">{new Date(issue.lastSeen).toLocaleString()}</TableCell>
+                                        <TableCell className="text-muted-foreground">{formatDateTime(issue.lastSeen)}</TableCell>
                                         <TableCell>{issue.title}</TableCell>
                                         <TableCell className="text-muted-foreground">{issue.culprit}</TableCell>
                                         <TableCell>

@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
+import { formatDateTime, formatTime } from "./format";
 import { ProjectGraph } from "./ProjectGraph";
 import { StatusBadge } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
@@ -57,6 +58,13 @@ const STATUS_META: Record<string, { dot: string; label: string; tone: StatusTone
 const statusMeta = (status: string): { dot: string; label: string; tone: StatusTone } =>
     STATUS_META[status] ?? { dot: "bg-muted-foreground", label: status, tone: "neutral" };
 
+/**
+ * How long a deployment took, or has taken so far. Settled deployments have both
+ * ends recorded; an in-flight one is measured against now.
+ */
+const elapsedFor = (deployment: Deployment): number =>
+    deployment.status === "live" || deployment.status === "superseded" ? deployment.updatedAt - deployment.createdAt : Date.now() - deployment.createdAt;
+
 const relativeTime = (ms: number): string => {
     const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
 
@@ -89,8 +97,6 @@ const formatDuration = (ms: number): string => {
     return `${String(Math.floor(seconds / 60))}m ${String(seconds % 60)}s`;
 };
 
-const formatTime = (ms: number): string => new Date(ms).toLocaleString();
-
 /** The mono-uppercase back affordance shared by the hero and the empty state. */
 const BackLink = ({ onBack }: { onBack: () => void }): ReactElement => (
     <button
@@ -122,8 +128,8 @@ const ProjectHero = ({
     visitUrl?: string;
 }): ReactElement => {
     const meta = statusMeta(deployment.status);
-    const settled = deployment.status === "live" || deployment.status === "superseded";
-    const readyMs = settled ? deployment.updatedAt - deployment.createdAt : Date.now() - deployment.createdAt;
+    // react-doctor-disable-next-line react-hooks-js/purity -- an unsettled deployment has no end timestamp yet, so "ready in" is elapsed-so-far and has to read the wall clock. Display-only, and it is MEANT to advance: the live query re-renders this card on every status write, which is exactly when the operator wants a fresher number.
+    const readyMs = elapsedFor(deployment);
 
     return (
         <div className="flex flex-col gap-5 border-b border-border pb-6">
@@ -324,7 +330,7 @@ const BuildLogsCard = ({ buildId, organizationId }: { buildId: BuildId; organiza
                     <pre className="bg-muted/40 max-h-96 overflow-auto p-4 font-mono text-xs leading-relaxed">
                         {shown.map((entry) => (
                             <span className={logLineClass(entry)} key={`${String(entry.createdAt)}-${entry.line}`}>
-                                [{new Date(entry.createdAt).toLocaleTimeString()}] {entry.line}
+                                [{formatTime(entry.createdAt)}] {entry.line}
                                 {"\n"}
                             </span>
                         ))}
@@ -397,7 +403,7 @@ const DeploymentsTable = ({
                                 )}
                             </TableCell>
                             <TableCell>{deployment.branch ?? <span className="text-muted-foreground">—</span>}</TableCell>
-                            <TableCell className="text-muted-foreground">{formatTime(deployment.createdAt)}</TableCell>
+                            <TableCell className="text-muted-foreground">{formatDateTime(deployment.createdAt)}</TableCell>
                             <TableCell>
                                 {deployment.status === "superseded" ? (
                                     <Button
