@@ -13,6 +13,8 @@ import { join } from "node:path";
 
 import { build } from "esbuild";
 
+import needsDevJsxRuntime from "./needs-dev-jsx-runtime.mjs";
+
 const mountEntry = ["dist/mount.js", "dist/mount.mjs"].find((candidate) => existsSync(join(process.cwd(), candidate)));
 
 if (mountEntry === undefined) {
@@ -61,16 +63,29 @@ const baseOptions = {
     legalComments: "none",
 };
 
-// Some bundled deps (e.g. `@base-ui/react`) compile JSX to `jsxDEV`
-// (`react/jsx-dev-runtime`), which React only *exports* from its DEVELOPMENT
+// Some bundled deps compile JSX to `jsxDEV` (`react/jsx-dev-runtime`), which
+// React only *exports* from its DEVELOPMENT build; under
 // eslint-disable-next-line no-secrets/no-secrets -- prose mentioning the prod env flag, not a secret
-// build; under `NODE_ENV=production` that module lacks `jsxDEV`, so the bundle
+// `NODE_ENV=production` that module exports `jsxDEV = void 0`, so the bundle
 // loads to `jsxDEV is not a function`. The marker lives in a transitive dep, not
-// our own dist, so detect it from the actual bundle output rather than guessing:
-// probe-build in memory, and only ship the production React paths when nothing in
-// the graph needs the dev JSX runtime.
-const probe = await build({ ...baseOptions, define: { "process.env.NODE_ENV": '"production"' }, write: false });
-const nodeEnv = probe.outputFiles.some((file) => file.text.includes("jsxDEV")) ? "development" : "production";
+// our own dist, so detect it from the actual graph rather than guessing:
+// probe-build in memory, and only ship the production React paths when nothing
+// needs the dev JSX runtime.
+//
+// Detect the IMPORT, not the identifier. This used to grep the output text for
+// `jsxDEV`, which cannot tell a hazard from a mention — and two harmless
+// mentions are always in the graph once anything renders markdown:
+// `hast-util-to-jsx-runtime` guards `typeof options.jsxDEV !== "function"` on a
+// branch it only takes when asked for `development: true`, and React's own
+// `react-jsx-dev-runtime.production.js` literally contains
+// `exports.jsxDEV = void 0`. Either one pinned every build to development mode
+// forever, silently shipping dev React to the three static hosts.
+//
+// The metafile's input list answers the real question exactly: is React's dev
+// JSX runtime in the graph at all? Nothing can call `jsxDEV` without importing
+// it, and importing it is precisely what breaks under production React.
+const probe = await build({ ...baseOptions, define: { "process.env.NODE_ENV": '"production"' }, metafile: true, write: false });
+const nodeEnv = needsDevJsxRuntime(Object.keys(probe.metafile.inputs)) ? "development" : "production";
 
 // esbuild appends to `outdir` without cleaning it, so stale (content-hashed)
 // chunks from a previous build would pile up beside the current ones. Wipe the
