@@ -970,13 +970,26 @@ const readSqlCdcChanges = async (
  * entirely. `cursor` is `MAX(seq)` over the WHOLE log rather than the filtered
  * range, so a caller that advances to it cannot re-see the changes it just
  * skipped over on the next tick.
+ *
+ * The head is read FIRST and the table scan is then bounded by it. The two
+ * statements are separate round-trips, so a write can commit between them — and
+ * in the other order that write would be missing from `tables` while sitting at
+ * or below the `cursor` the caller adopts, which silently loses it for good. Read
+ * the head first and the same write simply lands past the cursor, so the next
+ * tick reports it.
  */
 const readSqlCdcChangedTables = async (exec: SqlCtxExec, sinceSeq: number, dialect: SqlDialect): Promise<{ cursor: number; tables: string[] }> => {
-    const rows = await queryAll(exec, dialect, sql`SELECT DISTINCT ${sql.identifier("table")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq}`);
     const head = await queryAll(exec, dialect, sql`SELECT MAX(seq) AS seq FROM ${sql.identifier(CDC_LOG_TABLE)}`);
-    const cursor = Number(head[0]?.["seq"] ?? 0);
+    const rawCursor = Number(head[0]?.["seq"] ?? 0);
+    const cursor = Number.isFinite(rawCursor) ? rawCursor : 0;
 
-    return { cursor: Number.isFinite(cursor) ? cursor : 0, tables: rows.map((row) => String(row["table"])) };
+    const rows = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT DISTINCT ${sql.identifier("table")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq} AND seq <= ${cursor}`,
+    );
+
+    return { cursor, tables: rows.map((row) => String(row["table"])) };
 };
 
 /** Drop changelog entries at or below a checkpointed `throughSeq` (retention). */

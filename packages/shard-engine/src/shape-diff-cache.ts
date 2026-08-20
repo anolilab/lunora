@@ -80,7 +80,12 @@ const shapeRangeKey = (table: string, sinceSeq: number, upTo: number): string =>
  */
 const shapeProbeKey = (resolved: ResolvedShape, ids: ReadonlyArray<string>): string | undefined => {
     try {
-        return joinKeyParts([resolved.table, predicateKey(resolved), ids.join(",")]);
+        // The ids go through {@link joinKeyParts} too, for the same reason the
+        // outer parts do: a row id is only a UUID on the default insert path —
+        // the trusted-import path (`allowExplicitId`) admits any string, comma
+        // included — so `ids.join(",")` would let `["a,b"]` and `["a", "b"]`
+        // share one entry and serve each other's member map.
+        return joinKeyParts([resolved.table, predicateKey(resolved), joinKeyParts(ids)]);
     } catch {
         return undefined;
     }

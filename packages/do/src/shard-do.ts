@@ -177,7 +177,6 @@ import {
     MAX_PAGE_SIZE,
     mergeChangedKeys,
     migrateClientWatermark,
-    minCdcDocSeq,
     minCdcSeq,
     minShapePokeCursor,
     parseExportShardArgs,
@@ -2925,24 +2924,34 @@ abstract class ShardDO {
             return { changes: [], cursor: args.sinceSeq };
         }
 
+        const page = readCdcChanges(sql, { limit: args.limit, sinceSeq: args.sinceSeq });
+
         // Payload-compaction guard. A compacted row keeps its key and loses its
         // `doc`, which is exactly what a shape diff wants and exactly what a
         // change-feed consumer must never be handed silently: a doc-less
         // insert/update is indistinguishable on the wire from a delete, so
         // serving one would corrupt a warehouse table rather than fail. A
-        // consumer whose cursor sits below the retained payload floor is told so,
-        // and re-syncs from a snapshot.
-        const documentFloor = minCdcDocSeq(sql);
+        // consumer whose page contains one is told so, and re-syncs from a
+        // snapshot.
+        //
+        // The test is "a row that SHOULD carry a post-image and doesn't", not
+        // "the oldest row that carries one": a `delete` stores a NULL doc by
+        // design, so a log whose retained prefix opens with deletes — a fresh
+        // changelog, or one this sweep trimmed to a delete boundary — is
+        // perfectly serveable and must not be refused. Compaction only ever
+        // clears a PREFIX of the log, so a compacted row in the requested range
+        // always lands in this first page.
+        const compacted = page.changes.find((change) => change.op !== "delete" && change.doc === undefined);
 
-        if (documentFloor !== undefined && documentFloor > args.sinceSeq + 1) {
+        if (compacted !== undefined) {
             throw new LunoraError(
                 "CDC_PAYLOAD_COMPACTED",
-                `cdc payloads before seq ${String(documentFloor)} have been compacted; resume from a snapshot (sinceSeq ${String(args.sinceSeq)} is below the retained window)`,
+                `cdc payloads at or before seq ${String(compacted.seq)} have been compacted; resume from a snapshot (sinceSeq ${String(args.sinceSeq)} is below the retained payload window)`,
                 { status: 409 },
             );
         }
 
-        return readCdcChanges(sql, { limit: args.limit, sinceSeq: args.sinceSeq });
+        return page;
     }
 
     /**
@@ -10052,8 +10061,15 @@ abstract class ShardDO {
      */
     private async pollGlobalShapes(trace?: TraceRefLike): Promise<number> {
         const sockets = [...this.runner.sockets()];
-        const tick = await this.openGlobalPollTick(trace);
         let remaining = 0;
+
+        // Resolve who this tick has work for BEFORE opening it. The tick's own
+        // changelog probe is a read against the global backend, and this alarm is
+        // shared with the TTL and external-source tiers — so opening it up front
+        // would bill a `.global()` round-trip on every tick of a shard whose
+        // alarm is armed for something else entirely, which is the cost this
+        // whole path exists to remove.
+        const pending: { attachment: SocketAttachment; ws: ShardSocketLike }[] = [];
 
         for (const ws of sockets) {
             if (this.isSocketExpired(ws)) {
@@ -10063,16 +10079,23 @@ abstract class ShardDO {
             }
 
             const attachment = this.readAttachment(ws);
-            const { shapes } = attachment;
 
-            if (!shapes) {
-                continue;
+            if (attachment.shapes) {
+                pending.push({ attachment, ws });
             }
+        }
 
+        if (pending.length === 0) {
+            return 0;
+        }
+
+        const tick = await this.openGlobalPollTick(trace);
+
+        for (const { attachment, ws } of pending) {
             const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
 
             // eslint-disable-next-line no-await-in-loop -- per-socket reads are intentionally serialized to bound concurrent global reads per tick
-            remaining += await this.pollSocketGlobalShapes(ws, shapes, identity, attachment.connectionId ?? "", tick, trace);
+            remaining += await this.pollSocketGlobalShapes(ws, attachment.shapes ?? {}, identity, attachment.connectionId ?? "", tick, trace);
         }
 
         this.globalPoll = recordShapeProbePass(this.globalPoll, tick.rows.size, tick.skipped);

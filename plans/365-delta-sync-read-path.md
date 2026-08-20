@@ -374,3 +374,55 @@ run entirely through `SqlExec`, and W6 through the existing global-backend seam,
    holds the key set at 200 rows and grows the range 20x for ~5.4x the cost.
 5. At what `.global()` membership size does W6 stop being enough — i.e. where does
    D7's "no external index" answer expire?
+
+## 10. Defects this branch introduced, and the review that caught them
+
+A review pass over this branch's own output found five issues, **three of them
+defects the implementation introduced**. Each is fixed, with a regression test
+where one applies.
+
+- **The payload-compaction guard refused a log it should have served.** It gated
+  on `minCdcDocSeq` (the oldest row carrying a post-image), but a `delete` stores
+  a NULL post-image _by design_ — so a retained prefix opening with deletes read
+  as "compacted" and permanently 409'd every change-feed consumer and the
+  read-replica tier (`replicaOwnerHost.readChanges`), with nothing having been
+  compacted at all. The retention sweep W5 added makes delete-boundary prefixes
+  considerably more likely. The test is now "a row that SHOULD carry a post-image
+  and doesn't", evaluated over the page already read — exact, and one query
+  cheaper than the guard it replaced. Compaction only ever clears a prefix, so a
+  compacted row in the requested range always surfaces in that page.
+- **`readSqlCdcChangedTables` could lose a write.** It read `DISTINCT "table"`
+  before `MAX(seq)` — two round-trips, so a write landing between them was absent
+  from `tables` yet covered by the `cursor` the poll then adopted, freezing that
+  shape until the next resync. The head is now read first and the table scan
+  bounded by it, so an interleaved write lands _past_ the cursor and the next tick
+  reports it.
+- **`shapeProbeKey` joined ids with `","`** inside an otherwise length-prefixed
+  key — reintroducing exactly the ambiguity `joinKeyParts` exists to prevent. Row
+  ids are only UUIDs on the default insert path; `allowExplicitId` admits any
+  string, comma included, so `["a,b"]` and `["a", "b"]` could share one cache
+  entry and serve each other's member map.
+- **The global changelog probe ran with no shape subscribers at all.**
+  `pollGlobalShapes` opened the tick before checking whether any socket held a
+  shape, and the alarm is shared with the TTL and external-source tiers — so a
+  shard paid a `.global()` round-trip on every tick for nothing, which is the
+  exact cost W6 exists to remove. It now resolves who it has work for first.
+- A `compactCdcDocs` comment claimed a PITR gate in the sweep that does not
+  exist; the real protection is the read-path refusal. Corrected.
+
+## 11. Verification
+
+`lint:types` clean repo-wide; `lint:eslint` clean on every touched package;
+`lint:package-json` clean; `dist:check` clean against a production build;
+`api:check` clean (the review's fixes changed no public surface; the earlier
+`api:update` covered W1–W6, and the only removals in that diff are the two
+deliberate replacements — `selectShapeMemberIds` → `selectShapeMembers`,
+`readShapeCdcPage` → `readShapeCdcKeys` — which is the `alpha` convention).
+
+Per-package suites: `shard-engine` 1152, `do` 566, `sql-store` 108, `studio`
+1075, `codegen` 1290, `errors` 577, `d1` 271, `hyperdrive` 63 — all green. Benches
+run clean: `cdc-resume-probe`, `shape-diff-catchup`, `shape-poke-fanout`.
+
+One pre-existing failure is unrelated and reproduces on a clean tree:
+`@lunora/config` → `lint-ignores.test.ts` → "reports a writer failure instead of
+throwing it at the caller".

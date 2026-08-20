@@ -223,9 +223,14 @@ const trimCdcChanges = (sql: SqlExec, throughSeq: number): void => {
  * essentially all the bytes are: a key row is a few dozen bytes against a
  * document that is routinely kilobytes.
  *
- * Only replay-PITR ({@link applyCdcChanges}) genuinely needs the post-image, and
- * a shard that has enabled it must not compact — see `ShardDO`'s sweep, which
- * refuses to call this when PITR is on.
+ * Only a payload consumer — streaming export, replay-PITR ({@link
+ * applyCdcChanges}) — genuinely needs the post-image, and compaction is opt-in
+ * (`LUNORA_CDC_PAYLOAD_RETENTION`) precisely because this shard cannot see where
+ * such a consumer's cursor sits. What protects them is the READ path, not the
+ * sweep: `ShardDO.runShardCdcSync` refuses to serve a page containing a
+ * doc-less insert/update and raises `CDC_PAYLOAD_COMPACTED`, so a consumer
+ * re-syncs from a snapshot instead of silently recording a compacted row as a
+ * delete.
  */
 const compactCdcDocs = (sql: SqlExec, throughSeq: number): void => {
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the storage-level "payload dropped"; the key columns stay.

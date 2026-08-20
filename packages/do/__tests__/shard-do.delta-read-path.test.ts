@@ -1,6 +1,7 @@
-import type { DatabaseWriterLike, ShapeProbeCounters, SocketAttachment } from "@lunora/shard-engine";
+import type { CdcChange, DatabaseWriterLike, ShapeProbeCounters, SocketAttachment } from "@lunora/shard-engine";
 import {
     CDC_LOG_TABLE_SEQ_INDEX,
+    compactCdcDocs,
     createShardCtxDb as createShardContextDatabase,
     minCdcDocSeq,
     minCdcSeq,
@@ -84,6 +85,16 @@ class ProbeCountingShard extends ShardDO {
     /** Write straight through the ctx-db writer, outside the dispatch path (no flush, no poke). */
     public async seed(id: string, channelId: string): Promise<void> {
         await this.getWriter().insert("messages", { _id: id, authorId: "u1", channelId, text: id }, { allowExplicitId: true });
+    }
+
+    /** The changelog page a streaming-export / read-replica consumer pulls, exposed so a test can assert what it refuses. */
+    public syncCdc(sinceSeq: number): { changes: CdcChange[]; cursor: number } {
+        return this.runShardCdcSync({ sinceSeq });
+    }
+
+    /** Hard-delete through the ctx-db writer, so the changelog records a `delete` (post-image NULL by design). */
+    public async wipe(id: string): Promise<void> {
+        await this.getWriter().delete(id, undefined, { hard: true });
     }
 
     // eslint-disable-next-line class-methods-use-this -- test stub override: resolves by `name`/`args` alone, no instance state.
@@ -253,6 +264,52 @@ describe("delta-sync read path", () => {
             // Two distinct predicates ⇒ two distinct questions ⇒ two queries.
             expect(metrics.run).toBe(2);
             expect(metrics.served).toBe(0);
+        });
+    });
+
+    describe("payload-compaction guard", () => {
+        /** A shard sharing the suite's SQLite handle — `runShardCdcSync` only ever touches `__cdc_log`. */
+        const buildShard = (): ProbeCountingShard => new ProbeCountingShard(makeState([]), {});
+
+        it("serves a log whose retained prefix opens with deletes", async () => {
+            expect.assertions(2);
+
+            const shard = buildShard();
+
+            await shard.seed("m0", "c1");
+            await shard.wipe("m0");
+
+            // Trim the insert, exactly as the retention sweep would: the log now
+            // starts with a `delete`, whose NULL post-image is correct rather than
+            // compacted. Refusing here would break every change-feed consumer and
+            // every read replica on a shard that has ever deleted a row near its
+            // retention boundary — with nothing having been compacted at all.
+            harness.sql.exec(`DELETE FROM __cdc_log WHERE seq = 1`);
+            await shard.seed("m1", "c1");
+
+            // The doc floor is genuinely above the consumer's cursor…
+            expect(minCdcDocSeq(harness.sql) ?? 0).toBeGreaterThan(2);
+
+            // …and the page is still served, because no row in it LOST a payload.
+            expect(shard.syncCdc(1).changes.map((change) => change.op)).toStrictEqual(["delete", "insert"]);
+        });
+
+        it("refuses a page carrying a genuinely compacted post-image", async () => {
+            expect.assertions(2);
+
+            const shard = buildShard();
+
+            await shard.seed("m0", "c1");
+            await shard.seed("m1", "c1");
+
+            compactCdcDocs(harness.sql, 1);
+
+            // The compacted row is an `insert` with no post-image — the one thing
+            // a change feed must never be handed silently.
+            expect(() => shard.syncCdc(0)).toThrow(/compacted/u);
+
+            // A consumer already past the compacted prefix is unaffected.
+            expect(shard.syncCdc(1).changes).toHaveLength(1);
         });
     });
 
