@@ -34,6 +34,16 @@ interface AssistantSeed {
     readonly shardKey?: string;
 
     /**
+     * Starter questions for an empty panel.
+     *
+     * A blank composer asks the operator to invent a question about a surface they
+     * opened precisely because they did not know what to ask. The surface that
+     * opened it usually does know — the SQL console can offer questions about the
+     * schema it has probed, an advisor row about the finding it is showing.
+     */
+    readonly suggestions?: ReadonlyArray<string>;
+
+    /**
      * A name for the session this seed opens, shown in the session list.
      *
      * Already display-ready: a caller with a catalog id translates it itself (it
@@ -51,7 +61,23 @@ interface AssistantSession {
     /** Grounding and shard for THIS session, captured from the seed that opened it. */
     readonly schema: ReadonlyArray<SchemaFact>;
     readonly shardKey: string | undefined;
-    readonly turns: ReadonlyArray<ChatTurn>;
+    /** Starter questions shown while the transcript is empty. */
+    readonly suggestions: ReadonlyArray<string>;
+    readonly turns: ReadonlyArray<SessionTurn>;
+}
+
+/**
+ * One turn as the STUDIO holds it: the wire turn plus what the server reported
+ * that turn did.
+ *
+ * `toolCalls` is local-only and never re-sent — the transcript the server budgets
+ * and fences is prose, and echoing a record of its own tool calls back at it
+ * would spend that budget on something it already knows.
+ */
+interface SessionTurn extends ChatTurn {
+    /** True when the turn hit the per-turn tool cap and answered with what it had. */
+    readonly partial?: boolean;
+    readonly toolCalls?: ReadonlyArray<{ readonly name?: string; readonly refused?: string; readonly sql?: string }>;
 }
 
 /** A pending seeded question, keyed so asking the SAME thing twice asks twice. */
@@ -64,8 +90,11 @@ interface PendingAsk {
 /** The assistant's shell-wide state, shared so any panel can open it without prop-drilling. */
 interface AssistantValue {
     readonly activeId: string | undefined;
+    /** Copy a session's turns up to and including `index` into a new session, and open it. */
+    readonly branchFrom: (id: string, index: number) => void;
     readonly close: () => void;
     readonly deleteChat: (id: string) => void;
+
     /** The composer's prefilled text and the seed that set it, so a re-seed replaces it. */
     readonly draft: { readonly id: number; readonly text: string } | undefined;
 
@@ -93,6 +122,7 @@ interface AssistantValue {
      * the SAME statement twice is two events rather than one swallowed prop change.
      */
     readonly insertRequest: { readonly id: number; readonly sql: string } | undefined;
+
     /** Start a fresh session and open the panel on it. */
     readonly newChat: (seed?: AssistantSeed) => void;
 
@@ -116,12 +146,14 @@ interface AssistantValue {
     /** Declare whether this page can accept an insert. Called by the page, withdrawn on unmount. */
     readonly setHasEditor: (present: boolean) => void;
     /** Replace a session's transcript. The panel owns sending; this is where the result lands. */
-    readonly setTurns: (id: string, turns: ReadonlyArray<ChatTurn>) => void;
+    readonly setTurns: (id: string, turns: ReadonlyArray<SessionTurn>) => void;
     /** Mark the pending ask consumed, so a re-render never re-asks it. */
     readonly takeAsk: (id: number) => void;
     /** Mark an insert request collected, so a re-render never re-inserts it. */
     readonly takeInsert: (id: number) => void;
     readonly toggle: () => void;
+    /** Drop every turn from `index` onward — the operator rewinding a conversation that went wrong. */
+    readonly truncateFrom: (id: string, index: number) => void;
 
     /**
      * True once the deployment has reported it cannot run the assistant — no `AI`
@@ -169,7 +201,7 @@ interface AssistantState {
 
 /** Fresh session from a seed. */
 const sessionFrom = (id: string, seed: AssistantSeed | undefined): AssistantSession => {
-    return { id, name: seed?.title ?? UNTITLED, schema: seed?.schema ?? [], shardKey: seed?.shardKey, turns: [] };
+    return { id, name: seed?.title ?? UNTITLED, schema: seed?.schema ?? [], shardKey: seed?.shardKey, suggestions: seed?.suggestions ?? [], turns: [] };
 };
 
 /** Append a session, evicting the oldest past the cap. */
@@ -195,11 +227,14 @@ const start = (current: AssistantState, seed: AssistantSeed | undefined): Assist
     };
 };
 
+/** One session by id, or `undefined`. Hoisted so the actions that need it stay one nesting level shallower. */
+const sessionById = (sessions: ReadonlyArray<AssistantSession>, id: string): AssistantSession | undefined => sessions.find((session) => session.id === id);
+
 /** One session dropped. Hoisted for the same reason as {@link retold}. */
 const without = (sessions: ReadonlyArray<AssistantSession>, id: string): ReadonlyArray<AssistantSession> => sessions.filter((session) => session.id !== id);
 
 /** One session's transcript replaced. Hoisted so the action below stays one nesting level shallower. */
-const retold = (sessions: ReadonlyArray<AssistantSession>, id: string, turns: ReadonlyArray<ChatTurn>): ReadonlyArray<AssistantSession> =>
+const retold = (sessions: ReadonlyArray<AssistantSession>, id: string, turns: ReadonlyArray<SessionTurn>): ReadonlyArray<AssistantSession> =>
     sessions.map((session) => (session.id === id ? { ...session, turns } : session));
 
 /**
@@ -287,14 +322,14 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
             },
 
             setHasEditor: (present: boolean): void => {
-                setState((current) => current.hasEditor === present ? current : { ...current, hasEditor: present });
+                setState((current) => (current.hasEditor === present ? current : { ...current, hasEditor: present }));
             },
 
             takeInsert: (id: number): void => {
-                setState((current) => 
+                setState((current) =>
                     // By id, so a request that arrived while this one was being
                     // collected is not thrown away with it.
-                     current.insertRequest?.id === id ? { ...current, insertRequest: undefined } : current
+                    current.insertRequest?.id === id ? { ...current, insertRequest: undefined } : current,
                 );
             },
 
@@ -304,7 +339,24 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
                 });
             },
 
-            setTurns: (id: string, turns: ReadonlyArray<ChatTurn>): void => {
+            branchFrom: (id: string, index: number): void => {
+                setState((current) => {
+                    const source = sessionById(current.sessions, id);
+
+                    if (source === undefined) {
+                        return current;
+                    }
+
+                    // A branch carries the source's grounding as well as its turns:
+                    // the new conversation is about the same shard and the same
+                    // schema, and re-deriving that would make it about neither.
+                    const next = start(current, { schema: source.schema, shardKey: source.shardKey, title: source.name });
+
+                    return { ...next, sessions: retold(next.sessions, next.activeId ?? "", source.turns.slice(0, index + 1)) };
+                });
+            },
+
+            setTurns: (id: string, turns: ReadonlyArray<SessionTurn>): void => {
                 setState((current) => {
                     return {
                         ...current,
@@ -322,6 +374,14 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
                     }
 
                     return { ...current, open: !current.open };
+                });
+            },
+
+            truncateFrom: (id: string, index: number): void => {
+                setState((current) => {
+                    const source = sessionById(current.sessions, id);
+
+                    return source === undefined ? current : { ...current, sessions: retold(current.sessions, id, source.turns.slice(0, index)) };
                 });
             },
 
@@ -358,4 +418,4 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
  */
 export const useAssistant = (): AssistantValue | undefined => use(AssistantContext);
 
-export type { AssistantSeed, AssistantSession, AssistantValue };
+export type { AssistantSeed, AssistantSession, AssistantValue, SessionTurn };

@@ -39,6 +39,21 @@ const SPLIT_VIEW_KEY = "lunora-studio-sql-split-view";
 const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
 
 /**
+ * Starter questions for a freshly opened console session.
+ *
+ * Built from the probed schema so they name real tables. A generic prompt list is
+ * only marginally better than a blank box — the point of a suggestion is that it
+ * is answerable HERE.
+ */
+const consoleSuggestions = (schema: SqlSchema, t: ReturnType<typeof useT>): string[] => {
+    const table = schema.tables[0];
+
+    return table === undefined
+        ? [t("What tables does this app have?")]
+        : [t("What tables does this app have?"), t("Show me the most recent rows in {table}", { table }), t("Is anything wrong with my schema?")];
+};
+
+/**
  * The editor's schema, as the chat engine's grounding block wants it.
  *
  * A table whose columns have not been probed yet still contributes its NAME — the
@@ -327,7 +342,15 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         // Grounding travels with the toggle, not just with a seeded question: an
         // operator who opens the assistant and types their own question should get
         // the same schema the "Debug with AI" path does.
-        assistantShell.openAssistant({ schema: groundingFacts(schema), shardKey, title: t("SQL console") });
+        assistantShell.openAssistant({
+            schema: groundingFacts(schema),
+            shardKey,
+            // Named from the schema this console has actually probed, so the
+            // starters mention the operator's own tables rather than a generic
+            // "ask me about your data".
+            suggestions: consoleSuggestions(schema, t),
+            title: t("SQL console"),
+        });
     };
 
     /*

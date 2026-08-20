@@ -415,4 +415,104 @@ describe("assistantPanel", () => {
         // eslint-disable-next-line testing-library/no-node-access -- see above: asserting a roleless element is absent
         expect(reply.querySelector("script")).toBeNull();
     });
+
+    it("says what a turn read, per turn, rather than summarising the session", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiChat) {
+                    return {
+                        degraded: false,
+                        partial: false,
+                        reply: "Two tables.",
+                        toolCalls: [{ name: "describeTables" }, { name: "runSql", sql: "SELECT count(*) FROM messages" }],
+                        truncated: false,
+                    };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 0 }];
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("what have I got?");
+
+        // A turn that ran two reads must not look like one invented from nothing —
+        // and the old single summary line could not say WHICH turn read anything.
+        const calls = await screen.findByTestId("assistant-tool-calls");
+
+        expect(calls.textContent).toContain("describeTables");
+        expect(calls.textContent).toContain("SELECT count(*) FROM messages");
+    });
+
+    it("keeps the transcript it forks from and leaves the original alone", async () => {
+        expect.hasAssertions();
+
+        render(renderPanel(chatMock("Sure.")));
+        await openChat();
+
+        ask("first question");
+        await screen.findByTestId("assistant-turn-assistant");
+
+        // Branch from the first turn: the new session carries it, the old one still
+        // has both.
+        fireEvent.click(screen.getAllByTestId("assistant-branch")[0] as HTMLElement);
+
+        await waitFor(() => {
+            expect(screen.getAllByTestId("assistant-session")).toHaveLength(2);
+        });
+
+        expect(screen.getByTestId("assistant-turns").textContent).toContain("first question");
+        expect(screen.getByTestId("assistant-turns").textContent).not.toContain("Sure.");
+    });
+
+    it("rewinds a conversation from a chosen turn", async () => {
+        expect.hasAssertions();
+
+        render(renderPanel(chatMock("Sure.")));
+        await openChat();
+
+        ask("first question");
+        await screen.findByTestId("assistant-turn-assistant");
+
+        // Delete from the REPLY onward: the question survives, the answer does not.
+        fireEvent.click(screen.getAllByTestId("assistant-truncate")[1] as HTMLElement);
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("assistant-turn-assistant")).toBeNull();
+        });
+
+        expect(screen.getByTestId("assistant-turn-user").textContent).toContain("first question");
+    });
+
+    it("offers starter questions naming the operator's own tables", async () => {
+        expect.hasAssertions();
+
+        render(renderPanel(chatMock("unused")));
+        await openChat();
+
+        // A blank composer asks the operator to invent a question about a surface
+        // they opened because they did not know what to ask.
+        const suggestions = await screen.findByTestId("assistant-suggestions");
+
+        expect(suggestions.textContent).toContain("messages");
+
+        fireEvent.click(screen.getAllByTestId("assistant-suggestion")[0] as HTMLElement);
+
+        // Clicking one asks it, rather than only filling the box.
+        await screen.findByTestId("assistant-turn-user");
+
+        expect(screen.queryByTestId("assistant-suggestions")).toBeNull();
+    });
 });

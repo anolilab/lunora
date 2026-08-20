@@ -98,6 +98,7 @@ type ForwardToShard = (
 /** The admin op behind each tool. A record, so a tool added without an op is a compile error. */
 const TOOL_OPS: Readonly<Record<ChatToolCall["name"], string>> = {
     describeTables: "__lunora_admin__:describeTables",
+    readAdvisors: "__lunora_admin__:getAdvisories",
     readLogs: "__lunora_admin__:getLogs",
     runSql: "__lunora_admin__:runSql",
 };

@@ -34,7 +34,7 @@ export interface ChatTurn {
 }
 
 /** The read-only tools a chat turn may ask for. Nothing here has no existing admin op behind it. */
-export type ChatToolName = "describeTables" | "readLogs" | "runSql";
+export type ChatToolName = "describeTables" | "readAdvisors" | "readLogs" | "runSql";
 
 /**
  * How much of the deployment the assistant may read.
@@ -62,6 +62,9 @@ const OPT_IN_LADDER: ReadonlyArray<AiOptInLevel> = ["disabled", "schema", "schem
  */
 const TOOL_LEVEL: Readonly<Record<ChatToolName, AiOptInLevel>> = {
     describeTables: "schema",
+    // Findings ABOUT the schema, not data in it: an advisory names a table and a
+    // rule, and carries no rows and no log lines. Same tier as reading the schema.
+    readAdvisors: "schema",
     readLogs: "schema_and_log",
     runSql: "schema_and_log_and_data",
 };
@@ -270,7 +273,7 @@ const validateTool = (raw: string, level: AiOptInLevel): ChatToolCall | ToolRefu
 
     const { name, sql } = parsed as { name?: unknown; sql?: unknown };
 
-    if (name !== "describeTables" && name !== "readLogs" && name !== "runSql") {
+    if (name !== "describeTables" && name !== "readAdvisors" && name !== "readLogs" && name !== "runSql") {
         return { refused: `there is no tool named ${typeof name === "string" ? capped(name, 40) : "(unnamed)"}` };
     }
 
@@ -285,7 +288,7 @@ const validateTool = (raw: string, level: AiOptInLevel): ChatToolCall | ToolRefu
         return { name, refused: `${name} needs the ${TOOL_LEVEL[name]} data-sharing level and this deployment is set to ${level}` };
     }
 
-    if (name === "describeTables" || name === "readLogs") {
+    if (name === "describeTables" || name === "readAdvisors" || name === "readLogs") {
         return { name };
     }
 
@@ -363,6 +366,7 @@ const observation = (text: string): string => `${UNTRUSTED_BEGIN}\nTool result: 
 /** How each tool is offered to the model. One line per tool, so the prompt lists exactly what the level allows. */
 const TOOL_OFFER: Readonly<Record<ChatToolName, string>> = {
     describeTables: '{"name":"describeTables"} for the schema',
+    readAdvisors: '{"name":"readAdvisors"} for the advisor\'s current findings about this app',
     readLogs: '{"name":"readLogs"} for recent log lines',
     runSql: '{"name":"runSql","sql":"SELECT ..."} to read rows',
 };

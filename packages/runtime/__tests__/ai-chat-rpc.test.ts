@@ -526,6 +526,23 @@ describe("createWorker — aiChat data-sharing level", () => {
         expect(binding.run).not.toHaveBeenCalled();
     });
 
+    it("dispatches readAdvisors at the default level, since a finding is not data", async () => {
+        expect.hasAssertions();
+
+        const forwarded = [];
+
+        // The DEFAULT level. An advisory names a table and a rule; it carries no
+        // rows and no log lines, so gating it above `schema` would withhold the one
+        // thing the model can say about an app it is otherwise guessing at.
+        await createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"readAdvisors"}\n```', "Two findings."]),
+            shardDO: recordingShard(forwarded),
+        }).fetch(rpc({ prompt: "anything wrong with my schema?" }), {}, fakeContext);
+
+        expect(forwarded).toContain("__lunora_admin__:getAdvisories");
+    });
+
     it("hands the model only the tools its level allows", async () => {
         expect.hasAssertions();
 
@@ -540,7 +557,9 @@ describe("createWorker — aiChat data-sharing level", () => {
         const system = call?.[1].messages.find((message) => message.role === "system")?.content ?? "";
 
         expect(system).toContain("describeTables");
+        expect(system).toContain("readAdvisors");
         expect(system).not.toContain("runSql");
+        expect(system).not.toContain("readLogs");
     });
 
     it("refuses readLogs at the schema tier and dispatches it at the log tier", async () => {

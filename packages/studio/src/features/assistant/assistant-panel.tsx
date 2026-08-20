@@ -2,13 +2,13 @@ import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
 
-import type { AssistantSession, AssistantValue } from "../../components/assistant-provider";
+import type { AssistantSession, AssistantValue, SessionTurn } from "../../components/assistant-provider";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
 import type { ChatTurn, GenerateSqlDegradedReason } from "../../lib/admin";
-import { fireAndForget } from "../../lib/internal";
+import { copyToClipboard, fireAndForget } from "../../lib/internal";
 import sqlBlocks from "../../lib/sql-blocks";
 
 /**
@@ -21,6 +21,39 @@ import sqlBlocks from "../../lib/sql-blocks";
  */
 const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof useT>): string =>
     reason === "empty-response" ? t("The model returned nothing usable.") : t("The model could not be reached.");
+
+/**
+ * What one turn actually did, listed rather than summarised.
+ *
+ * The panel used to print a single line — "Answered after reading your data" —
+ * for the whole session, which said an answer touched the database but not what
+ * it read or whether anything was refused. A turn that ran three statements and
+ * one that ran none looked identical, and a refusal looked like nothing at all.
+ */
+const ToolCalls = ({ turn }: { readonly turn: SessionTurn }): ReactElement | null => {
+    const t = useT();
+    const calls = turn.toolCalls ?? [];
+
+    if (calls.length === 0 && turn.partial !== true) {
+        return null;
+    }
+
+    return (
+        <ul className="flex flex-col gap-0.5 border-s border-border ps-2 text-[11px] text-muted-foreground" data-testid="assistant-tool-calls">
+            {calls.map((call, at) => (
+                <li
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- the calls of one immutable turn, in order
+                    key={`${String(at)}:${call.name ?? "?"}`}
+                >
+                    <span className="font-mono">{call.name ?? t("(no such tool)")}</span>
+                    {call.sql === undefined ? null : <span className="ms-1 font-mono opacity-80">{call.sql}</span>}
+                    {call.refused === undefined ? null : <span className="ms-1 text-destructive">{t("refused")}</span>}
+                </li>
+            ))}
+            {turn.partial === true && <li data-testid="assistant-turn-partial">{t("Stopped early — this answer is incomplete.")}</li>}
+        </ul>
+    );
+};
 
 /**
  * One rendered turn, with an insert button per SQL block the reply carries.
@@ -37,7 +70,19 @@ const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof u
  * a remote image into the console. The SQL-block extraction below still reads the
  * RAW text — the insert path must not depend on how the reply is displayed.
  */
-const TurnRow = ({ onInsert, turn }: { readonly onInsert: ((sql: string) => void) | undefined; readonly turn: ChatTurn }): ReactElement => {
+const TurnRow = ({
+    index,
+    onBranch,
+    onInsert,
+    onTruncate,
+    turn,
+}: {
+    readonly index: number;
+    readonly onBranch: (index: number) => void;
+    readonly onInsert: ((sql: string) => void) | undefined;
+    readonly onTruncate: (index: number) => void;
+    readonly turn: SessionTurn;
+}): ReactElement => {
     const t = useT();
     const blocks = turn.role === "assistant" && onInsert !== undefined ? sqlBlocks(turn.text) : [];
 
@@ -53,13 +98,13 @@ const TurnRow = ({ onInsert, turn }: { readonly onInsert: ((sql: string) => void
                     {turn.text}
                 </p>
             )}
-            {blocks.map((sql, index) => (
+            {blocks.map((sql, at) => (
                 <Button
                     className="self-start"
                     data-testid="assistant-insert"
 
                     // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- the blocks of one immutable reply, in order; a reply never gains or loses one
-                    key={`${String(index)}:${sql.slice(0, 32)}`}
+                    key={`${String(at)}:${sql.slice(0, 32)}`}
                     onClick={() => {
                         onInsert?.(sql);
                     }}
@@ -70,6 +115,42 @@ const TurnRow = ({ onInsert, turn }: { readonly onInsert: ((sql: string) => void
                     {t("Insert into editor")}
                 </Button>
             ))}
+            {turn.role === "assistant" && <ToolCalls turn={turn} />}
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <button
+                    className="underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    data-testid="assistant-copy"
+                    onClick={() => {
+                        copyToClipboard(turn.text);
+                    }}
+                    type="button"
+                >
+                    {t("Copy")}
+                </button>
+                {/* Branching keeps the conversation up to HERE and forks the rest:
+                    the way out of "that answer took us somewhere wrong" without
+                    losing the part that was going somewhere right. */}
+                <button
+                    className="underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    data-testid="assistant-branch"
+                    onClick={() => {
+                        onBranch(index);
+                    }}
+                    type="button"
+                >
+                    {t("Branch from here")}
+                </button>
+                <button
+                    className="underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    data-testid="assistant-truncate"
+                    onClick={() => {
+                        onTruncate(index);
+                    }}
+                    type="button"
+                >
+                    {t("Delete from here")}
+                </button>
+            </div>
         </li>
     );
 };
@@ -154,7 +235,6 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
 
     const [draft, setDraft] = useState("");
     const [truncated, setTruncated] = useState(false);
-    const [outcome, setOutcome] = useState<undefined | { partial: boolean; read: number }>(undefined);
 
     // The draft seed already applied, so a re-render does not re-prefill over
     // whatever the operator has since typed.
@@ -167,6 +247,18 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
     const turns = session?.turns ?? [];
     const sessionId = session?.id;
 
+    const branchHere = (index: number): void => {
+        if (sessionId !== undefined) {
+            assistant.branchFrom(sessionId, index);
+        }
+    };
+
+    const truncateHere = (index: number): void => {
+        if (sessionId !== undefined) {
+            assistant.truncateFrom(sessionId, index);
+        }
+    };
+
     const send = (text?: string): void => {
         const prompt = (text ?? draft).trim();
 
@@ -178,27 +270,37 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
         // they asked while it is in flight. The turns SENT are the ones from before
         // it, which is what the server would rebuild anyway.
         const sent = session.turns;
-        const asked: ChatTurn[] = [...sent, { role: "user", text: prompt }];
+        const asked: SessionTurn[] = [...sent, { role: "user", text: prompt }];
 
         setTurns(session.id, asked);
         setDraft("");
 
         fireAndForget(
-            ops.chat(prompt, sent, session.schema).then((answer) => {
-                // A degraded turn adds nothing to the transcript — the reason is
-                // rendered from the ops' own per-task status instead, so a failure
-                // never looks like a reply.
-                if (answer !== undefined) {
-                    setTruncated(answer.truncated);
-                    // What the turn actually read, surfaced rather than dropped: an
-                    // answer built from three table reads must not look identical to
-                    // one invented from nothing.
-                    setOutcome({ partial: answer.partial, read: answer.toolCalls.filter((call) => call.refused === undefined).length });
-                    setTurns(session.id, [...asked, { role: "assistant", text: answer.reply }]);
-                }
+            ops
+                .chat(
+                    prompt,
+                    // Prose only. `toolCalls`/`partial` are the studio's record of what
+                    // a turn did; the server budgets and fences TEXT, and handing it
+                    // back its own tool log would spend that budget on what it knows.
+                    sent.map((turn): ChatTurn => {
+                        return { role: turn.role, text: turn.text };
+                    }),
+                    session.schema,
+                )
+                .then((answer) => {
+                    // A degraded turn adds nothing to the transcript — the reason is
+                    // rendered from the ops' own per-task status instead, so a failure
+                    // never looks like a reply.
+                    if (answer !== undefined) {
+                        setTruncated(answer.truncated);
+                        // What the turn actually did travels WITH the turn, so an answer
+                        // built from three reads never looks like one invented from
+                        // nothing — and a later turn's silence does not erase it.
+                        setTurns(session.id, [...asked, { partial: answer.partial, role: "assistant", text: answer.reply, toolCalls: answer.toolCalls }]);
+                    }
 
-                return answer;
-            }),
+                    return answer;
+                }),
         );
     };
 
@@ -308,6 +410,25 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
 
             <SessionBar assistant={assistant} />
 
+            {turns.length === 0 && session.suggestions.length > 0 && (
+                <div className="flex flex-col gap-1 px-3 py-2" data-testid="assistant-suggestions">
+                    <span className="text-[11px] text-muted-foreground">{t("Try asking")}</span>
+                    {session.suggestions.map((suggestion) => (
+                        <button
+                            className="self-start rounded-md border border-border px-2 py-1 text-start text-xs outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                            data-testid="assistant-suggestion"
+                            key={suggestion}
+                            onClick={() => {
+                                send(suggestion);
+                            }}
+                            type="button"
+                        >
+                            {suggestion}
+                        </button>
+                    ))}
+                </div>
+            )}
+
             <ul className="min-h-0 flex-1 overflow-y-auto" data-testid="assistant-turns">
                 {/*
                  * Index keys, deliberately: a transcript is strictly append-only —
@@ -317,16 +438,16 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                  */}
                 {turns.map((turn, index) => (
                     // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- append-only list; see above
-                    <TurnRow key={`${String(index)}:${turn.role}`} onInsert={assistant.hasEditor ? assistant.requestInsert : undefined} turn={turn} />
+                    <TurnRow
+                        index={index}
+                        key={`${String(index)}:${turn.role}`}
+                        onBranch={branchHere}
+                        onInsert={assistant.hasEditor ? assistant.requestInsert : undefined}
+                        onTruncate={truncateHere}
+                        turn={turn}
+                    />
                 ))}
             </ul>
-
-            {outcome !== undefined && (outcome.read > 0 || outcome.partial) && (
-                <p className="px-3 py-1 text-[11px] text-muted-foreground" data-testid="assistant-outcome">
-                    {outcome.read > 0 && t("Answered after reading your data.")}
-                    {outcome.partial && t("Stopped early — this answer is incomplete.")}
-                </p>
-            )}
 
             {truncated && (
                 <p className="px-3 py-1 text-[11px] text-muted-foreground" data-testid="assistant-truncated">
