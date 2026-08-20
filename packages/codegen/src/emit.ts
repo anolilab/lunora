@@ -4017,11 +4017,13 @@ const emitX402Fragments = (hasX402: boolean): { build: string; configField: stri
 /**
  * The `@lunora/do` type names the generated shard imports. The base set is always
  * present; `WorkflowsResult` / `QueuesResult` are added only when the project
- * declares workflows / queues (their `*Metadata()` overrides reference them) and
- * `WriteHook` only when it has vector indexes (the auto-sync write hook), so a
- * workflow-/queue-/vector-free app's import line stays minimal.
+ * declares workflows / queues (their `*Metadata()` overrides reference them),
+ * `SearchBackfillProgress` only when it has shard-local search indexes (the
+ * `backfillSearch` override's return type) and `WriteHook` only when it has
+ * vector indexes (the auto-sync write hook), so a workflow-/queue-/search-/
+ * vector-free app's import line stays minimal.
  */
-const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean, hasFlags: boolean): string[] => [
+const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean, hasFlags: boolean, hasShardSearchIndexes: boolean): string[] => [
     "AdvisorProcedure",
     "AdvisoryFinding",
     "DatabaseWriterLike",
@@ -4043,6 +4045,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "RunShardWriteArgs",
     "RunShardWriteResult",
     "SchedulerLike",
+    ...(hasShardSearchIndexes ? ["SearchBackfillProgress"] : []),
     "TransactionHeadroomTracker",
     "SchemaLike",
     "ShardDOState",
@@ -4304,6 +4307,10 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // this, so a schema with no sourced table emits a byte-identical `shard.ts`.
     const hasSourcedTables = schema.tables.some((table) => table.externalSource !== undefined);
     const hasMemoryTables = schema.tables.some((table) => table.memory === true);
+    // Shard-local search indexes are what the `__lunora_admin__:backfillSearch`
+    // override serves; a schema with none leaves the base class's "unsupported"
+    // hook in place rather than emitting a call that can only report zero pages.
+    const hasShardSearchIndexes = schema.tables.some((table) => table.shardMode !== "global" && table.searchIndexes.length > 0);
 
     if (hasD1Global && hasHyperdriveGlobal) {
         // Mixing backends needs a per-table routing writer (id-addressed ops must
@@ -4324,7 +4331,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
     // (from `@lunora/server`) now owns the per-table accessor binding.
-    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0, hasFlags);
+    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0, hasFlags, hasShardSearchIndexes);
 
     // A shape's `resolveShape` override returns an `effectiveWhere: WhereInput`,
     // so the DO's `WhereInput` type is pulled in only when the project has shapes.
@@ -4424,7 +4431,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${hasShardSearchIndexes ? "backfillSearchIndexes, " : ""}buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         // `TraceRefLike` rides along with the source imports: the poll override
         // takes the alarm's trace so its contained failures are correlated, and
         // `@lunora/do` projects it structurally rather than re-exporting the
@@ -5522,7 +5529,20 @@ ${adminWriterPrelude}
             runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false${snapshotArgument} });
             this.migrated = true;
         }
+${
+    hasShardSearchIndexes
+        ? `
+        protected override runShardSearchBackfill(options: { maxPages?: number }): SearchBackfillProgress {
+            // Migrations create the fts5 companions; without them every backfill
+            // statement would raise "no such table" on a shard that has never
+            // served a request.
+            this.ensureMigrated();
 
+            return backfillSearchIndexes(this.sql as SqlExec, schema as unknown as SchemaLike, options);
+        }
+`
+        : ""
+}
         private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /

@@ -105,6 +105,7 @@ import type {
     ResolvedShape,
     RlsPoliciesResult,
     RpcRequest,
+    SearchBackfillProgress,
     ShapeDiffCache,
     ShapePokePart,
     ShapeProbeCounters,
@@ -2554,6 +2555,22 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated migration registry
     protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
         return Promise.reject(new LunoraError("MIGRATION_NOT_FOUND", `data migration "${args.id}" is not registered`, { status: 404 }));
+    }
+
+    /**
+     * Index the rows that predate a `.searchIndex()` into its companion, a
+     * bounded number of pages per call, and report whether anything is left.
+     *
+     * This is the exit from `staged: true`. A staged index is skipped by every
+     * migration pass by design — the option exists for tables too large to walk
+     * during a cold start — so without an explicit run its pre-existing rows are
+     * unsearchable forever. The base class can't reach the project's generated
+     * `schema`, so it reports the op unsupported; the codegen subclass overrides
+     * it to call `backfillSearchIndexes`.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated schema
+    protected runShardSearchBackfill(_options: { maxPages?: number }): SearchBackfillProgress {
+        throw new LunoraError("INTERNAL", "search backfill is unavailable: this shard was built without a generated schema", { status: 501 });
     }
 
     /**
@@ -6740,63 +6757,21 @@ abstract class ShardDO {
 
     /**
      * Dispatch the side-effecting / non-read admin ops that `handleAdminRpc`
-     * doesn't handle inline: the auth-event + mail-capture writes and the native
-     * PITR ops. Returns the op's `Response`, or `undefined` when `functionPath`
+     * doesn't handle inline: the auth-event + mail-capture writes, the search
+     * backfill, and the native PITR ops. Returns the op's `Response`, or `undefined` when `functionPath`
      * isn't one of these (so the caller answers 404). Kept out of
      * `handleAdminRpc` to hold that dispatcher under the complexity budget,
      * mirroring `handlePitrAdminOp`.
      */
     private async handleExtraAdminOp(functionPath: string, args: Record<string, unknown>): Promise<Response | undefined> {
-        if (functionPath === ADMIN_FUNCTIONS.recordAuthEvent) {
-            return this.handleRecordAuthEvent(args);
-        }
+        // One `path → handler` lookup rather than an arm per op: each of these is
+        // the same shape (take the decoded args, answer a Response), and growing
+        // the chain by one `if` per new op is what pushed this dispatcher past
+        // its complexity budget.
+        const handler = this.simpleAdminHandlers()[functionPath];
 
-        if (functionPath === ADMIN_FUNCTIONS.recordContainerEvent) {
-            return this.handleRecordContainerEvent(args);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.recordMail) {
-            return this.handleRecordMail(args);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.clearCapturedMail) {
-            return this.handleClearCapturedMail();
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.sendTestMail) {
-            return this.handleSendTestMail(args);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.recordQueueMessage) {
-            return this.handleRecordQueueMessage(args);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.clearQueueMessages) {
-            return this.handleClearQueueMessages();
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.sendQueueMessage) {
-            return this.handleSendQueueMessage(args);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.replayQueueMessage) {
-            return this.handleReplayQueueMessage(args);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.createWorkflowInstance) {
-            return this.handleCreateWorkflowInstance(args);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.getWorkflowInstanceStatus) {
-            return this.handleGetWorkflowInstanceStatus(args);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.listFlags) {
-            return this.handleListFlags(args);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.explainIssue) {
-            return this.handleExplainIssue(args);
+        if (handler !== undefined) {
+            return handler(args);
         }
 
         // The three AI-assistant writes share one shape (parse → call → audit →
@@ -6900,6 +6875,31 @@ abstract class ShardDO {
         }
 
         return undefined;
+    }
+
+    /**
+     * `__lunora_admin__:backfillSearch` — index the rows that predate this
+     * shard's `.searchIndex()` declarations, `maxPages` pages at a time.
+     *
+     * Bounded rather than run-to-completion because a DO request has a CPU and
+     * wall-clock budget, and the tables `staged: true` exists for are precisely
+     * the ones a single unbounded walk cannot finish. Progress is durable, so an
+     * operator drives it with repeated calls until `done` — `lunora run
+     * '__lunora_admin__:backfillSearch' --args '{"maxPages":20}'` needs no new
+     * CLI surface. Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private handleBackfillSearch(args: Record<string, unknown>): Response {
+        const raw = args["maxPages"];
+        const parsed = typeof raw === "number" ? raw : Number(raw);
+        // Absent/garbage means "no cap" — a small shard finishes in one call, and
+        // a caller that cares about the budget has to name it.
+        const maxPages = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+
+        const result = this.runShardSearchBackfill(maxPages === undefined ? {} : { maxPages });
+
+        this.recordAudit("backfillSearch", { detail: { done: result.done, pages: result.pages } });
+
+        return adminResponse(result);
     }
 
     /**
@@ -7447,6 +7447,26 @@ abstract class ShardDO {
         }
 
         return adminResponse(result);
+    }
+
+    /** The single-shape admin writes (decode args → Response), keyed by function path. */
+    private simpleAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response> | Response> {
+        return {
+            [ADMIN_FUNCTIONS.backfillSearch]: (args) => this.handleBackfillSearch(args),
+            [ADMIN_FUNCTIONS.clearCapturedMail]: () => this.handleClearCapturedMail(),
+            [ADMIN_FUNCTIONS.clearQueueMessages]: () => this.handleClearQueueMessages(),
+            [ADMIN_FUNCTIONS.createWorkflowInstance]: (args) => this.handleCreateWorkflowInstance(args),
+            [ADMIN_FUNCTIONS.explainIssue]: (args) => this.handleExplainIssue(args),
+            [ADMIN_FUNCTIONS.getWorkflowInstanceStatus]: (args) => this.handleGetWorkflowInstanceStatus(args),
+            [ADMIN_FUNCTIONS.listFlags]: (args) => this.handleListFlags(args),
+            [ADMIN_FUNCTIONS.recordAuthEvent]: (args) => this.handleRecordAuthEvent(args),
+            [ADMIN_FUNCTIONS.recordContainerEvent]: (args) => this.handleRecordContainerEvent(args),
+            [ADMIN_FUNCTIONS.recordMail]: (args) => this.handleRecordMail(args),
+            [ADMIN_FUNCTIONS.recordQueueMessage]: (args) => this.handleRecordQueueMessage(args),
+            [ADMIN_FUNCTIONS.replayQueueMessage]: (args) => this.handleReplayQueueMessage(args),
+            [ADMIN_FUNCTIONS.sendQueueMessage]: (args) => this.handleSendQueueMessage(args),
+            [ADMIN_FUNCTIONS.sendTestMail]: (args) => this.handleSendTestMail(args),
+        };
     }
 
     /** The AI-assistant admin writes, keyed by function path. */

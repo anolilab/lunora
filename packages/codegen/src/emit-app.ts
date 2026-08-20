@@ -464,6 +464,23 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
 
 /** The body of the `createShardDO({ ... })` call — the DO-side capability factories. */
 const buildShardFactoryBody = (options: EmitAppOptions): string => {
+    // A `.global()` table's `defineTrigger` handlers get their `ctx.scheduler`
+    // from the writer's own option — the shard-side factory below does nothing
+    // for them. Without this the store falls back to a stub that throws, so
+    // `ctx.scheduler.runAfter(...)` in a global trigger fails at runtime in an
+    // app that has a scheduler wired. Gated on the declaration exactly like the
+    // shard side, so an app with no scheduler emits nothing.
+    //
+    // The cast is the same widening `shard.ts` already applies: the store's
+    // `SchedulerLike` takes a target as a plain `<file>:<function>` string while
+    // `Scheduler.runAfter` types it as a `FunctionReference | WorkflowReference`
+    // — one object, one call, two compile-time projections of it.
+    const schedulerEntryFor = (optionsType: string): string =>
+        options.hasScheduler
+            ? `
+                              ...(this.schedulerDeclaration ? { scheduler: this.resolveScheduler(env) as unknown as ${optionsType}["scheduler"] } : {}),`
+            : "";
+
     const entries = [
         ...(options.hasGlobal
             ? [
@@ -483,7 +500,7 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                               : undefined;
 
                           return createD1CtxDb({
-                              ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
+                              ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),${schedulerEntryFor("D1CtxDbOptions")}
                               ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
                               auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
                               // Forwarded from the shard's own \`cdc\` config, so ONE
@@ -517,7 +534,7 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                               : undefined;
 
                           return createHyperdriveGlobalCtxDb({
-                              ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
+                              ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),${schedulerEntryFor("SqlCtxDbOptions")}
                               ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
                               auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
                               // See the D1 twin: one \`cdc\` switch, both changelogs.
@@ -535,13 +552,7 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
             ? [
                   `            ...(this.schedulerDeclaration
                 ? {
-                      scheduler: (rawEnv: Record<string, unknown>) => {
-                          const env = rawEnv as Env;
-                          const namespace = this.schedulerDeclaration?.namespace(env);
-                          const origin = this.schedulerDeclaration?.origin?.(env);
-
-                          return namespace && origin ? createScheduler({${options.jurisdiction ? ` jurisdiction: ${JSON.stringify(options.jurisdiction)},` : ""} namespace, originUrl: origin }) : undefined;
-                      },
+                      scheduler: (rawEnv: Record<string, unknown>) => this.resolveScheduler(rawEnv as Env),
                   }
                 : {}),`,
               ]
@@ -778,6 +789,32 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     `            routes: this.routeMap,`,
     `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,
 ];
+
+/**
+ * The scheduler resolver — one private builder method shared by every consumer.
+ *
+ * Not just the shard factory: a `defineTrigger` on a `.global()` table runs
+ * inside the D1/Hyperdrive writer, which takes its own `scheduler` option and
+ * falls back to a throwing stub without one. Resolving in one place is what
+ * keeps `ctx.scheduler.runAfter(...)` working on both sides of the same app.
+ */
+const buildSchedulerHelper = (options: EmitAppOptions): string => {
+    if (!options.hasScheduler) {
+        return "";
+    }
+
+    const jurisdiction = options.jurisdiction ? ` jurisdiction: ${JSON.stringify(options.jurisdiction)},` : "";
+
+    return `
+    /** Resolve the \`SchedulerDO\`-backed scheduler for this env; \`undefined\` until both the namespace and origin are wired. */
+    private resolveScheduler(env: Env): ReturnType<typeof createScheduler> | undefined {
+        const namespace = this.schedulerDeclaration?.namespace(env);
+        const origin = this.schedulerDeclaration?.origin?.(env);
+
+        return namespace && origin ? createScheduler({${jurisdiction} namespace, originUrl: origin }) : undefined;
+    }
+`;
+};
 
 /** The storage resolver + studio-admin deriver (private builder methods, DO + worker sides). */
 const buildStorageHelpers = (hasStorage: boolean): string =>
@@ -1234,7 +1271,7 @@ ${emailAgentsBlock}        if (this.emailHandler) {
 
         return composed;
     }
-${buildStorageHelpers(options.hasStorage)}
+${buildSchedulerHelper(options)}${buildStorageHelpers(options.hasStorage)}
     /** Fan the recorded declarations into the worker-side \`createWorker\` options. */
     private buildWorkerOptions(env: Env, ${getAuthParameter}): WorkerOptions {
         const options: WorkerOptions = {

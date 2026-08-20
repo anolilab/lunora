@@ -37,7 +37,19 @@ export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexF
 export type { AuditEntry } from "./audit-log";
 export type { AppendAuditEntry } from "./audit-log";
 export { appendAuditEntry, AUDIT_LOG_TABLE, ensureAuditTable, readAuditLog } from "./audit-log";
-export type { CdcChange, CdcChangeKey, Clock, CountArgs, CtxDbOptions, IdGenerator, SqlCursor, SqlExec, WriteEvent, WriteHook } from "./ctx-db";
+export type {
+    CdcChange,
+    CdcChangeKey,
+    Clock,
+    CountArgs,
+    CtxDbOptions,
+    IdGenerator,
+    SearchBackfillProgress,
+    SqlCursor,
+    SqlExec,
+    WriteEvent,
+    WriteHook,
+} from "./ctx-db";
 export {
     applyCdcChanges,
     assertValidClientId,

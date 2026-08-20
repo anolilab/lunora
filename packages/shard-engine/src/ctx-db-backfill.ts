@@ -33,6 +33,20 @@ import { isLiveForCompanion } from "./query-args";
 import { matchesRankStaticWhere, rankTableName } from "./rank";
 import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
 
+/** One page's outcome: whether the index is now complete, and how many rows it walked. */
+interface SearchBackfillPass {
+    done: boolean;
+    rows: number;
+}
+
+/** What one {@link backfillSearchIndexes} call achieved, and whether work remains. */
+interface SearchBackfillProgress {
+    /** `false` when the page budget ran out before every index finished — call again to resume. */
+    done: boolean;
+    /** Row-walking pages run by this call (an already-complete index costs none). */
+    pages: number;
+}
+
 /** True when `table` already carries rows — the backfills' idempotence check. */
 const hasRows = (sql: SqlExec, table: string): boolean =>
     runDrizzle<{ count: number }>(sql, dsql`SELECT COUNT(*) AS count FROM ${dsql.identifier(table)}`).one().count > 0;
@@ -158,20 +172,22 @@ const SEARCH_BACKFILL_BATCH_ROWS = 500;
 
 /**
  * Index one page of `tableName` into a search companion, resuming from the
- * recorded cursor. Returns `true` when the table is fully indexed.
+ * recorded cursor. Reports `done` when the table is fully indexed, plus the
+ * number of rows this pass walked — `0` marks the "already complete" no-op, the
+ * one outcome a page-budgeted caller must not charge for.
  *
  * Each document is written DELETE-then-INSERT, so re-running a page (a retry
  * after a crash, two cold starts racing) converges instead of duplicating —
  * which on the FTS5 path would otherwise surface as the *same document twice*
  * in a result set, since that query has no `GROUP BY` to collapse it.
  */
-const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
+const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): SearchBackfillPass => {
     const ftName = ftsTableName(tableName, index.name);
     const { profile } = createSearchAnalyzer(index.language);
     const pass = planSearchBackfillPass(readSearchBackfillState(sql, ftName), profile);
 
     if (pass.finished) {
-        return true;
+        return { done: true, rows: 0 };
     }
 
     if (pass.wipe) {
@@ -229,7 +245,7 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
 
     writeSearchBackfillState(sql, ftName, lastId, done, profile);
 
-    return done;
+    return { done, rows: rows.length };
 };
 
 /**
@@ -260,17 +276,56 @@ const backfillSearchIndexesForTable = (sql: SqlExec, tableName: string, definiti
 };
 
 /**
+ * Walk one search index forward until it finishes or `budget` row-walking pages
+ * are spent.
+ *
+ * Only a pass that actually walked rows spends budget: an index already recorded
+ * complete returns without touching the store, and charging for that would let a
+ * schema whose finished indexes outnumber the budget exhaust it before reaching
+ * the one that still needs work — a caller looping on `done` would then never
+ * finish.
+ */
+const backfillSearchIndexPages = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike, budget: number): SearchBackfillProgress => {
+    let pages = 0;
+
+    for (;;) {
+        const pass = backfillSearchIndexPage(sql, tableName, index);
+
+        if (pass.rows > 0) {
+            pages += 1;
+        }
+
+        if (pass.done) {
+            return { done: true, pages };
+        }
+
+        if (pages >= budget) {
+            return { done: false, pages };
+        }
+    }
+};
+
+/**
  * Run every declared search index — including the `staged: true` ones the
- * migration pass skips — through to completion. The entry point a host calls
- * out-of-band (a one-shot admin RPC, a migration step) after deploying a search
- * index over a table too large to index a page at a time.
+ * migration pass skips — forward, by default to completion. This is the
+ * entry point a host calls out-of-band (the `__lunora_admin__:backfillSearch`
+ * RPC, a migration step) after deploying a search index over a table too large
+ * to index a page at a time.
+ *
+ * `maxPages` caps how many row-walking pages one call runs, which is what makes
+ * it usable from inside a request: a DO has a wall-clock and CPU budget, and the
+ * tables `staged: true` exists for are exactly the ones a run-to-completion loop
+ * cannot finish within it. The returned `done` tells the caller whether to come
+ * back — progress is durable, so the next call resumes where this one stopped.
  *
  * Idempotent and resumable: an index already recorded as complete is skipped,
  * and an interrupted run picks up from its recorded cursor.
  */
-const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike): void => {
+const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxPages?: number } = {}): SearchBackfillProgress => {
     if (!isFtsAvailable(sql)) {
-        return;
+        // No FTS5 engine means no companions to fill; searches already fall back
+        // to a LIKE scan, so there is nothing outstanding to report.
+        return { done: true, pages: 0 };
     }
 
     // The page backfill records its progress in the state table, and this is the
@@ -279,19 +334,28 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     // first" is not a remedy; the sql-store twin provisions for the same reason.
     migrateSearchState(sql);
 
+    const maxPages = options.maxPages ?? Number.POSITIVE_INFINITY;
+
+    let pages = 0;
+
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind === "global" || !definition.searchIndexes) {
             continue;
         }
 
         for (const index of definition.searchIndexes) {
-            let done = false;
+            const progress = backfillSearchIndexPages(sql, tableName, index, maxPages - pages);
 
-            while (!done) {
-                done = backfillSearchIndexPage(sql, tableName, index);
+            pages += progress.pages;
+
+            if (!progress.done) {
+                return { done: false, pages };
             }
         }
     }
+
+    return { done: true, pages };
 };
 
+export type { SearchBackfillProgress };
 export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable };

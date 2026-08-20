@@ -240,6 +240,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `SearchBackfillProgress` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `SessionDO` (class)
 
 ```ts
@@ -312,6 +316,9 @@ abstract class ShardDO {
     protected getCurrentIdentity(): Record<string, unknown> | undefined;
     protected isSystemDispatch(): boolean;
     protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult>;
+    protected runShardSearchBackfill(_options: {
+        maxPages?: number;
+    }): SearchBackfillProgress;
     protected ensureMigrated(): void;
     protected tableRefs(_table: string): Record<string, string> | undefined;
     protected tableIndexes(_table: string): TableIndexInfo[];
@@ -344,6 +351,7 @@ abstract class ShardDO {
     };
     protected currentCdcCursor(): number | undefined;
     protected currentCdcEpoch(): string | undefined;
+    protected sealForkedTimeline(): string;
     protected evaluateResume(sinceSeq: number, readSet: Set<string>, sinceEpoch?: string): {
         cursor: number | undefined;
         epoch: string | undefined;
@@ -573,6 +581,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `assertShapeShardable` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `backfillSearchIndexes` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 

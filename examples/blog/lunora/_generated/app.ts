@@ -213,6 +213,7 @@ class AppBuilder<Env extends object> {
 
                           return createD1CtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
+                              ...(this.schedulerDeclaration ? { scheduler: this.resolveScheduler(env) as unknown as D1CtxDbOptions["scheduler"] } : {}),
                               ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
                               auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
                               // Forwarded from the shard's own `cdc` config, so ONE
@@ -228,13 +229,7 @@ class AppBuilder<Env extends object> {
                 : {}),
             ...(this.schedulerDeclaration
                 ? {
-                      scheduler: (rawEnv: Record<string, unknown>) => {
-                          const env = rawEnv as Env;
-                          const namespace = this.schedulerDeclaration?.namespace(env);
-                          const origin = this.schedulerDeclaration?.origin?.(env);
-
-                          return namespace && origin ? createScheduler({ namespace, originUrl: origin }) : undefined;
-                      },
+                      scheduler: (rawEnv: Record<string, unknown>) => this.resolveScheduler(rawEnv as Env),
                   }
                 : {}),
             ...(this.storageDeclaration ? { storage: (rawEnv: Record<string, unknown>) => this.resolveStorage(rawEnv as Env) } : {}),
@@ -297,6 +292,14 @@ class AppBuilder<Env extends object> {
         }
 
         return composed;
+    }
+
+    /** Resolve the `SchedulerDO`-backed scheduler for this env; `undefined` until both the namespace and origin are wired. */
+    private resolveScheduler(env: Env): ReturnType<typeof createScheduler> | undefined {
+        const namespace = this.schedulerDeclaration?.namespace(env);
+        const origin = this.schedulerDeclaration?.origin?.(env);
+
+        return namespace && origin ? createScheduler({ namespace, originUrl: origin }) : undefined;
     }
 
     /** Resolve the storage capability (single or multi-bucket) for the DO side. */
