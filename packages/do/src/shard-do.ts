@@ -9641,13 +9641,14 @@ abstract class ShardDO {
      *
      * Two in-shard consumers, and they are tracked in different places. Local
      * sockets record `__shape_poke_cursor` per `(connection, subscription)` on
-     * every delivered poke, so SQLite carries their position. **Relayed
-     * subscribers do not**: a relay's cohort frontier and its per-socket proxies
-     * live in memory on this owner (`RelayLink.minShapeCursor`) and write no
-     * row at all. Reading only the durable table would therefore see a fully
-     * relayed shard — the high-fan-out case, i.e. exactly the shard an operator
-     * turns retention on for — as having no subscribers, and delete the rows the
-     * next relayed diff had to read. Both are folded in here.
+     * every delivered poke, so that table carries their position. **Relayed
+     * subscribers are not in it**: a relay's cohort frontier and its per-socket
+     * proxies are the owner's shape registry (`__lunora_relay_shapes`, read back
+     * through `RelayLink.minShapeCursor`). Reading only the local table would
+     * therefore see a fully relayed shard — the high-fan-out case, i.e. exactly
+     * the shard an operator turns retention on for — as having no subscribers,
+     * and delete the rows the next relayed diff had to read. Both are folded in
+     * here.
      */
     private retentionFloor(sql: SqlExec): number {
         const head = this.currentCdcCursor() ?? 0;

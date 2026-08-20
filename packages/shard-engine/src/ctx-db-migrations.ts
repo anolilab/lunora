@@ -31,6 +31,7 @@ import { migrateClientWatermark } from "./ctx-db-client-watermark";
 import { migrateCommitSeq } from "./ctx-db-commit-seq";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
+import { migrateRelayShapes } from "./ctx-db-relay-shapes";
 import { migrateSearchState } from "./ctx-db-search-state";
 import { migrateShapePokeCursor } from "./ctx-db-shape-poke-cursor";
 import { runDrizzle } from "./do-exec";
@@ -265,6 +266,11 @@ export const runShardMigrations = (
         // cannot exist without CDC either — the durable poke-baseline cursor
         // rides the same gate as the log it indexes into.
         migrateShapePokeCursor(sql);
+        // Same gate, same reason, for the RELAYED half of that fan-out: an
+        // owner's cohort/proxy registry. It lives in SQLite because an owner in
+        // relay mode holds no sockets of its own and is evictable between
+        // writes — see `ctx-db-relay-shapes.ts`.
+        migrateRelayShapes(sql);
     }
 
     // Gated on the schema, not on a runtime flag: the `_commitSeq` counter is

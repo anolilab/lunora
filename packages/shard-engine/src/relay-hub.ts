@@ -25,6 +25,14 @@ import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { SqlExec } from "./ctx-db";
+import {
+    deleteAllRelayShapes,
+    deleteRelayShapesForRelay,
+    migrateRelayShapes,
+    readRelayShapes,
+    writeRelayShape,
+    writeRelayShapeCursor,
+} from "./ctx-db-relay-shapes";
 import { envPositiveInt } from "./env-int";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
 import { stableWireKey } from "./reactive-cache";
@@ -53,6 +61,32 @@ const DEFAULT_MAX_RELAYS = 8;
  * validated identity and the multicast identity can never drift apart.
  */
 const RELAY_MULTICAST_IDENTITY: SubscriptionIdentity = {};
+
+/**
+ * One registered relay-uniform shape: the cohort the owner multicasts a single
+ * delta to. `cursor` is the frontier that delta has been computed up to, and
+ * `key` is its row in `__lunora_relay_shapes` — every move of the cursor writes
+ * through to it, so an evicted owner rehydrates the frontier instead of the
+ * literal `0` a fresh `Map` would imply.
+ */
+interface CohortShapeEntry {
+    args: Record<string, unknown>;
+    cursor: number;
+    key: string;
+    name: string;
+}
+
+/**
+ * One registered NON-uniform (identity-scoped) relay shape: a single relayed
+ * socket, served by a poke computed under its OWN forwarded identity and
+ * addressed to its connection. Carries the cohort fields so the shared poke
+ * pipeline can take either.
+ */
+interface ProxyShapeEntry extends CohortShapeEntry {
+    connectionId: string;
+    identity: SubscriptionIdentity;
+    relayIndex: number;
+}
 
 /** Exhaustiveness guard for the {@link OwnerRelayFrame} dispatch — an unhandled member is a compile error here, and an impossible runtime frame throws rather than silently mis-routing. */
 const assertNeverFrame = (frame: never): never => {
@@ -106,6 +140,35 @@ interface RelayHost {
     /** This DO's SQLite executor (for the owner's `__lunora_relays` set table). */
     sql: () => SqlExec;
 }
+
+/**
+ * Whether an owner-multicast poke may be applied to a relay socket sitting at
+ * `memo` for that shape.
+ *
+ * The cursor test is a RANGE, not an equality. A socket at exactly `fromCursor`
+ * is the normal case, but the owner rewinds a shape's frontier whenever a POST
+ * to any relay in the cohort failed, so the next poke legitimately reopens a
+ * range the sockets on the surviving relays have already applied. Admitting
+ * those is what makes that repair land: a shape diff ships each changed key's
+ * CURRENT membership and value, so a reopened range re-applies rows the socket
+ * already holds and adds the ones it missed. An equality test dropped it
+ * instead — and since the frontier never came back, dropped every future poke
+ * too, leaving the socket frozen on stale rows for the rest of its life.
+ *
+ * The two refusals are real, though. BEHIND the poke's base (`memo.cursor <
+ * fromCursor`, or no memo at all) means the socket missed the keys changed in
+ * `(memo.cursor, fromCursor]`, so this patch would leave it wrong in a way it
+ * could never detect. At or past `checkpoint` means it has already applied this
+ * range, and rewinding its memo would only widen the next diff. A memo on a
+ * different `epoch` is a different timeline entirely.
+ */
+const pokeAppliesToMemo = (memo: undefined | { cursor: number; epoch?: string }, poke: RelayShapePoke): boolean => {
+    if (memo === undefined || memo.epoch !== poke.epoch) {
+        return false;
+    }
+
+    return memo.cursor >= poke.fromCursor && memo.cursor < poke.checkpoint;
+};
 
 /** Build a JSON `Response` (the owner's seed reply on the control channel). */
 const jsonRelayResponse = (body: unknown): Response => Response.json(body, { headers: { "content-type": "application/json" } });
@@ -291,13 +354,15 @@ abstract class RelayLink {
      * The lowest op-log cursor any relayed shape still has to be diffed from, or
      * `undefined` when this tier holds none.
      *
-     * A relayed subscriber's resume position lives **only** here, in memory on the
-     * owner — unlike a local socket, it records no `__shape_poke_cursor` row. So a
-     * changelog retention sweep that reads only SQLite sees a relayed cohort as
-     * having no cursor at all and is free to delete the very rows the next
+     * A relayed subscriber's resume position lives here and nowhere else — unlike
+     * a local socket, it records no `__shape_poke_cursor` row. So a changelog
+     * retention sweep that reads only that table sees a relayed cohort as having
+     * no cursor at all and is free to delete the very rows the next
      * {@link RelayHost.buildShapeDiff} has to read. That produces no error: the
      * diff simply finds fewer changed keys than there were, and every relayed
-     * client silently keeps rows that moved.
+     * client silently keeps rows that moved. (The owner's registry is itself
+     * durable — `__lunora_relay_shapes` — so this answer survives the eviction
+     * that used to zero it, which is precisely the moment the floor mattered.)
      *
      * Exposing the frontier is what lets `ShardDO.retentionFloor` pull the floor
      * down to cover them. It is a pure read — deliberately, since a retention
@@ -334,23 +399,16 @@ class OwnerRelay extends RelayLink {
     /** Active relay indices, hydrated once from `__lunora_relays` and cached for the synchronous forward path. */
     private relaySetCache: Set<number> | undefined;
 
-    /** Relay-uniform shapes a relay has subscribers for, keyed by `(name, args)`. `cursor` is the cohort frontier the owner has multicast deltas up to. */
-    private readonly relayShapeRegistry = new Map<string, { args: Record<string, unknown>; cursor: number; name: string }>();
-
-    /** NON-uniform (identity-scoped) relay shapes, one entry per relay socket, keyed `relayIndex:connectionId:subId`. Each is served live by a per-socket proxy poke. */
-    private readonly relayShapeProxies = new Map<
-        string,
-        {
-            args: Record<string, unknown>;
-            connectionId: string;
-            cursor: number;
-            epoch?: string;
-            identity: SubscriptionIdentity;
-            name: string;
-            relayIndex: number;
-            subId: string;
-        }
-    >();
+    /**
+     * The shape registry, hydrated once per wake from `__lunora_relay_shapes` —
+     * see {@link OwnerRelay.relayShapes} for why it is read back from SQLite
+     * rather than started empty. `cohort` holds the relay-uniform shapes keyed
+     * by `(name, args)`, whose one delta is multicast to the whole relay set;
+     * `proxies` holds the NON-uniform ones, one entry per relay socket keyed
+     * `relayIndex:connectionId:subId`, each served by its own identity-scoped
+     * poke.
+     */
+    private registryCache: { cohort: Map<string, CohortShapeEntry>; proxies: Map<string, ProxyShapeEntry> } | undefined;
 
     /** The owner's current promotion state (plan 075 Phase 4), carried across `relayCount()` calls so hysteresis has memory — a shard hovering near the threshold can't flap. */
     private promotionState: PromotionState = "owned";
@@ -374,6 +432,15 @@ class OwnerRelay extends RelayLink {
     }
 
     public override async onFlush(changed: Set<string>, frameCursor: number): Promise<void> {
+        // An owner that cannot address a sibling has no relay to fan out to, and
+        // every send below would resolve to `undefined` and drop. Checking here
+        // keeps the whole tier — including the SQLite reads behind the relay set
+        // and the shape registry — off the flush path of a single-DO shard,
+        // which is the overwhelming majority of them.
+        if (!this.canAddressSiblings()) {
+            return;
+        }
+
         await Promise.all([this.multicastShapePokes(changed, frameCursor), this.proxyShapePokes(changed, frameCursor)]);
     }
 
@@ -426,9 +493,10 @@ class OwnerRelay extends RelayLink {
      * retention sweep must consult it.
      */
     public override minShapeCursor(): number | undefined {
+        const { cohort, proxies } = this.relayShapes();
         let floor: number | undefined;
 
-        for (const entry of [...this.relayShapeRegistry.values(), ...this.relayShapeProxies.values()]) {
+        for (const entry of [...cohort.values(), ...proxies.values()]) {
             floor = floor === undefined ? entry.cursor : Math.min(floor, entry.cursor);
         }
 
@@ -497,7 +565,7 @@ class OwnerRelay extends RelayLink {
      * interleaving guarantees) and return the wire-encoded poke.
      */
     private buildShapePoke(
-        entry: { args: Record<string, unknown>; cursor: number; name: string },
+        entry: CohortShapeEntry,
         identity: SubscriptionIdentity,
         changed: Set<string>,
         frameCursor: number,
@@ -526,6 +594,11 @@ class OwnerRelay extends RelayLink {
         }
 
         staged.cursor = frameCursor;
+        // Write the advance through to `__lunora_relay_shapes` on the same
+        // synchronous step, so an owner evicted before the next flush rehydrates
+        // this frontier rather than re-diffing from the bottom of the log. The
+        // caller rewinds BOTH on a failed send ({@link OwnerRelay.rewindShapeCursor}).
+        writeRelayShapeCursor(this.host.sql(), staged.key, frameCursor);
 
         return {
             // `args` wire-encoded for the same reason as `rowsPatch` below; the
@@ -549,34 +622,76 @@ class OwnerRelay extends RelayLink {
      * frameCursor]` and multicast the `rowsPatch` to every relay. Advances the cohort
      * cursor synchronously (before any await) so a seed interleaving during the
      * multicast registers at `frameCursor` and is skipped by this in-flight poke.
+     *
+     * The cohort cursor is per SHAPE, not per relay, so a delivery that fails to
+     * ONE relay leaves that relay's sockets memoing a cursor no future poke's
+     * `fromCursor` would ever equal again — a permanent, silent freeze on stale
+     * rows. {@link OwnerRelay.multicastToRelays} therefore rewinds the shared
+     * frontier when any leg failed, and the next write to that table re-sends
+     * the whole range to everyone. Both constraints hold: the advance is still
+     * synchronous for the interleaving seed, and the frontier still never
+     * outruns what was actually delivered.
      */
     private async multicastShapePokes(changed: Set<string>, frameCursor: number): Promise<void> {
-        if (this.relayShapeRegistry.size === 0) {
-            return;
-        }
-
         const relays = this.ownerRelaySet();
 
         if (relays.size === 0) {
             return;
         }
 
+        const { cohort } = this.relayShapes();
+
+        if (cohort.size === 0) {
+            return;
+        }
+
         const epoch = this.host.currentCdcEpoch();
         const sends: Promise<void>[] = [];
 
-        for (const entry of this.relayShapeRegistry.values()) {
+        for (const entry of cohort.values()) {
             const poke = this.buildShapePoke(entry, RELAY_MULTICAST_IDENTITY, changed, frameCursor, epoch);
 
             if (!poke) {
                 continue;
             }
 
-            for (const index of relays) {
-                sends.push(this.postRelayMessage(relayName(this.roleId.ownerKey, index), poke));
-            }
+            sends.push(this.multicastToRelays(relays, poke, entry));
         }
 
         await Promise.all(sends);
+    }
+
+    /**
+     * POST one cohort poke to every relay, and rewind the shape's frontier if
+     * ANY leg failed.
+     *
+     * A cross-DO POST is best-effort by design — `requestRelayMessage` swallows
+     * a transient failure — which is fine for a whisper (an ephemeral frame) and
+     * fatal for a poke (a durable position advanced past it). Rewinding turns a
+     * failed leg into a re-send on the next write to that table instead of a
+     * subscriber that never hears anything again. A relay that DID receive the
+     * poke re-applies the reopened range harmlessly; see
+     * {@link OwnerRelay.rewindShapeCursor}.
+     *
+     * The trade is deliberate: a relay that stays unreachable holds this shape's
+     * frontier — and so the op-log retention floor — where it is, instead of
+     * running ahead and silently stranding it. Nothing here evicts a relay for
+     * being unresponsive (nothing ever did — only the relay itself detaches), so
+     * a permanently dead relay makes the log grow and each diff widen. That is
+     * a visible, measurable cost; the alternative was an invisible one.
+     */
+    private async multicastToRelays(relays: Set<number>, poke: RelayShapePoke, entry: CohortShapeEntry): Promise<void> {
+        const legs = await Promise.all(
+            [...relays].map(async (index) => {
+                const response = await this.requestRelayMessage(relayName(this.roleId.ownerKey, index), poke);
+
+                return response?.ok === true;
+            }),
+        );
+
+        if (legs.includes(false)) {
+            this.rewindShapeCursor(entry, poke.fromCursor);
+        }
     }
 
     /**
@@ -584,27 +699,48 @@ class OwnerRelay extends RelayLink {
      * table changed this flush, compute that one subscriber's diff over `(entry.cursor,
      * frameCursor]` UNDER ITS OWN forwarded identity (RLS-correct) and deliver a
      * `targetConnectionId`-addressed poke to just that socket's relay. Each entry
-     * tracks its own cursor — the diffs are identity-specific, no cohort sharing.
+     * tracks its own cursor — the diffs are identity-specific, no cohort sharing —
+     * and, exactly as for the cohort multicast, a POST that never landed rewinds
+     * that cursor so the next write re-sends the range rather than stranding the
+     * socket one delta behind forever.
      */
     private async proxyShapePokes(changed: Set<string>, frameCursor: number): Promise<void> {
-        if (this.relayShapeProxies.size === 0) {
+        if (this.ownerRelaySet().size === 0) {
+            return;
+        }
+
+        const { proxies } = this.relayShapes();
+
+        if (proxies.size === 0) {
             return;
         }
 
         const epoch = this.host.currentCdcEpoch();
         const sends: Promise<void>[] = [];
 
-        for (const entry of this.relayShapeProxies.values()) {
+        for (const entry of proxies.values()) {
             const poke = this.buildShapePoke(entry, entry.identity, changed, frameCursor, epoch);
 
             if (!poke) {
                 continue;
             }
 
-            sends.push(this.postRelayMessage(relayName(this.roleId.ownerKey, entry.relayIndex), { ...poke, targetConnectionId: entry.connectionId }));
+            sends.push(this.proxyToRelay(poke, entry));
         }
 
         await Promise.all(sends);
+    }
+
+    /** POST one per-socket proxy poke to its relay, rewinding the entry's cursor when the POST never landed (same reasoning as {@link OwnerRelay.multicastToRelays}). */
+    private async proxyToRelay(poke: RelayShapePoke, entry: ProxyShapeEntry): Promise<void> {
+        const response = await this.requestRelayMessage(relayName(this.roleId.ownerKey, entry.relayIndex), {
+            ...poke,
+            targetConnectionId: entry.connectionId,
+        });
+
+        if (response?.ok !== true) {
+            this.rewindShapeCursor(entry, poke.fromCursor);
+        }
     }
 
     /**
@@ -661,27 +797,41 @@ class OwnerRelay extends RelayLink {
         // a per-socket proxy instead (MEDIUM-3). Either way the memo baseline is cohortCursor.
         let cohortCursor = cursor;
 
+        const { cohort, proxies } = this.relayShapes();
+
         if (this.isShapeRelayUniform(request.name, request.args)) {
             const routingKey = shapeRoutingKey(request.name, request.args);
-            let entry = this.relayShapeRegistry.get(routingKey);
+            let entry = cohort.get(routingKey);
 
             if (entry === undefined) {
-                entry = { args: request.args, cursor, name: request.name };
-                this.relayShapeRegistry.set(routingKey, entry);
+                entry = { args: request.args, cursor, key: routingKey, name: request.name };
+                cohort.set(routingKey, entry);
+                // Register durably on the SEED path — once per cohort, not per
+                // write — so the registry survives the owner eviction a
+                // socket-less relay-mode owner is always one idle moment away
+                // from. See `ctx-db-relay-shapes.ts`.
+                writeRelayShape(this.host.sql(), entry);
             }
 
             cohortCursor = entry.cursor;
         } else if (request.relayIndex !== undefined && request.connectionId !== undefined) {
-            this.relayShapeProxies.set(`${String(request.relayIndex)}:${request.connectionId}:${request.subId}`, {
+            const key = `${String(request.relayIndex)}:${request.connectionId}:${request.subId}`;
+            const proxy: ProxyShapeEntry = {
                 args: request.args,
                 connectionId: request.connectionId,
                 cursor,
-                epoch,
                 identity,
+                key,
                 name: request.name,
                 relayIndex: request.relayIndex,
-                subId: request.subId,
-            });
+            };
+
+            proxies.set(key, proxy);
+            // The forwarded identity rides along: without it a rehydrated proxy
+            // could not compute the RLS-scoped diff this socket is owed, and
+            // resolving it anonymously would be a cross-tenant leak rather than
+            // a missing poke.
+            writeRelayShape(this.host.sql(), proxy);
         }
 
         const frames = buildPokeFrames([{ rowsPatch, shapeId: request.subId }], {
@@ -695,15 +845,97 @@ class OwnerRelay extends RelayLink {
         return { cursor: cohortCursor, epoch, frames };
     }
 
-    /** Ensure the reserved owner-side relay-set table exists (auto-hidden from the data browser by the `__lunora` prefix). */
-    private ensureRelayTable(): void {
+    /** Ensure the reserved owner-side relay tables exist (both auto-hidden from the data browser by the `__lunora` prefix). Idempotent, and independent of `runShardMigrations` so the control channel never depends on migration ordering. */
+    private ensureRelayTables(): void {
         this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relays (idx INTEGER PRIMARY KEY)");
+        migrateRelayShapes(this.host.sql());
+    }
+
+    /**
+     * The owner's shape registry, hydrated once per wake from
+     * `__lunora_relay_shapes`.
+     *
+     * It is read back from SQLite because an owner in relay mode holds NO
+     * sockets of its own — every subscriber sits on a relay — so nothing keeps
+     * it resident and it is evicted freely between writes. An in-memory-only
+     * registry came back EMPTY from that eviction, which the multicast reads as
+     * "nothing to fan out": every relayed subscriber then goes silent for every
+     * subsequent write, with no error and no retry, until each client happens to
+     * reconnect. Rehydrating restores the cohort frontiers and the per-socket
+     * proxies (identity included) exactly as they stood.
+     *
+     * Costs one `SELECT` per owner wake, and only on a shard that has relays
+     * attached — the flush-path callers check the (already cached) relay set
+     * first.
+     */
+    private relayShapes(): { cohort: Map<string, CohortShapeEntry>; proxies: Map<string, ProxyShapeEntry> } {
+        const cached = this.registryCache;
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        this.ensureRelayTables();
+
+        const hydrated = { cohort: new Map<string, CohortShapeEntry>(), proxies: new Map<string, ProxyShapeEntry>() };
+
+        for (const row of readRelayShapes(this.host.sql())) {
+            if (row.relayIndex === undefined || row.connectionId === undefined) {
+                hydrated.cohort.set(row.key, { args: row.args, cursor: row.cursor, key: row.key, name: row.name });
+            } else {
+                hydrated.proxies.set(row.key, {
+                    args: row.args,
+                    connectionId: row.connectionId,
+                    cursor: row.cursor,
+                    identity: row.identity ?? {},
+                    key: row.key,
+                    name: row.name,
+                    relayIndex: row.relayIndex,
+                });
+            }
+        }
+
+        this.registryCache = hydrated;
+
+        return hydrated;
+    }
+
+    /**
+     * Put an entry's cursor back to `fromCursor` after a delivery that never
+     * landed — in memory and in the table together, the other half of the
+     * synchronous advance in {@link OwnerRelay.buildShapePoke}.
+     *
+     * Re-opening that range is safe because a shape diff is not a log replay:
+     * `buildShapeDiff` ships each changed key's CURRENT membership and CURRENT
+     * value, so a wider `(fromCursor, toCursor]` is the same answer plus
+     * redundant keys. That is what lets ONE relay's failure be repaired without
+     * corrupting the relays that did receive the poke — they simply re-apply
+     * rows they already hold (see the delivery gate in
+     * {@link RelayMember.deliverShapePoke}, which admits a memo at or after
+     * `fromCursor` for exactly this reason).
+     *
+     * `Math.min` semantics — a rewind may only ever pull the frontier DOWN. The
+     * retention floor is derived from it, and a floor that moves up past an
+     * undelivered range is how the log gets trimmed out from under the diff that
+     * still has to read it.
+     */
+    private rewindShapeCursor(entry: CohortShapeEntry, fromCursor: number): void {
+        // Alias so the rewind mutates a local binding, not the parameter
+        // (no-param-reassign) — same pattern as `buildShapePoke`.
+        const staged = entry;
+
+        if (staged.cursor <= fromCursor) {
+            return;
+        }
+
+        staged.cursor = fromCursor;
+        writeRelayShapeCursor(this.host.sql(), staged.key, fromCursor);
     }
 
     /** The owner's active relay indices, hydrated once from `__lunora_relays` and cached for the synchronous forward path. */
     private ownerRelaySet(): Set<number> {
         if (this.relaySetCache === undefined) {
-            this.ensureRelayTable();
+            this.ensureRelayTables();
             const rows = this.host.sql().exec<{ idx: bigint | number }>("SELECT idx FROM __lunora_relays").toArray();
 
             this.relaySetCache = new Set(rows.map((row) => Number(row.idx)));
@@ -714,27 +946,39 @@ class OwnerRelay extends RelayLink {
 
     /** Record a relay as active (idempotent), persisting it so the set survives the owner's hibernation. */
     private addRelayToSet(index: number): void {
-        this.ensureRelayTable();
+        this.ensureRelayTables();
         this.host.sql().exec("INSERT OR IGNORE INTO __lunora_relays (idx) VALUES (?)", index);
         this.ownerRelaySet().add(index);
     }
 
-    /** Drop a drained relay from the set and prune its dead per-socket proxy entries; on full drain, clear the (now dead) registry + uniform cache to bound growth. */
+    /**
+     * Drop a drained relay from the set and prune its dead per-socket proxy
+     * entries; on full drain, clear the (now dead) registry + uniform cache to
+     * bound growth. Every prune goes through to `__lunora_relay_shapes` as well
+     * — this detach is the ONLY reclamation those rows get, and a row that
+     * outlives its subscriber pins the op-log retention floor at its cursor for
+     * as long as it survives.
+     */
     private removeRelayFromSet(index: number): void {
-        this.ensureRelayTable();
+        this.ensureRelayTables();
         this.host.sql().exec("DELETE FROM __lunora_relays WHERE idx = ?", index);
         const set = this.ownerRelaySet();
         set.delete(index);
 
-        for (const [key, entry] of this.relayShapeProxies) {
+        const { cohort, proxies } = this.relayShapes();
+
+        for (const [key, entry] of proxies) {
             if (entry.relayIndex === index) {
-                this.relayShapeProxies.delete(key);
+                proxies.delete(key);
             }
         }
 
+        deleteRelayShapesForRelay(this.host.sql(), index);
+
         if (set.size === 0) {
-            this.relayShapeRegistry.clear();
+            cohort.clear();
             this.shapeUniformCache.clear();
+            deleteAllRelayShapes(this.host.sql());
         }
     }
 
@@ -1027,11 +1271,14 @@ class RelayMember extends RelayLink {
     }
 
     /**
-     * Deliver an owner-multicast shape delta to this relay's cohort sockets. A socket
-     * receives it only while its memo matches the poke's `fromCursor` AND `epoch` (so a
-     * socket that seeded at a different cursor/epoch never double-applies), then
-     * advances to `checkpoint`. A targeted (per-socket proxy) poke goes ONLY to its one
-     * connection; a cohort multicast goes to every matching socket.
+     * Deliver an owner-multicast shape delta to this relay's cohort sockets. A
+     * socket receives it only while its memo sits on the poke's `epoch` and
+     * inside the range the poke covers; it then advances to `checkpoint`. A
+     * targeted (per-socket proxy) poke goes ONLY to its one connection; a cohort
+     * multicast goes to every matching socket.
+     *
+     * {@link pokeAppliesToMemo} carries the cursor/epoch rule and why it is a
+     * range rather than an equality.
      * @returns the number of sockets delivered to
      */
     private deliverShapePoke(poke: RelayShapePoke): number {
@@ -1052,9 +1299,7 @@ class RelayMember extends RelayLink {
             }
 
             for (const [subId, sub] of Object.entries(shapes)) {
-                const memo = memos.get(subId);
-
-                if (memo?.cursor !== poke.fromCursor || memo.epoch !== poke.epoch || shapeRoutingKey(sub.name, sub.args) !== routingKey) {
+                if (shapeRoutingKey(sub.name, sub.args) !== routingKey || !pokeAppliesToMemo(memos.get(subId), poke)) {
                     continue;
                 }
 
