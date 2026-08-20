@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useState } from "react";
 
 import { useAdminQuery } from "../hooks/use-admin-query";
-import type { AiAvailableResult, ChatTurn, SchemaFact } from "../lib/admin";
+import type { AiAvailableResult, AiOptInLevel, ChatTurn, SchemaFact } from "../lib/admin";
 import { ADMIN_FUNCTIONS } from "../lib/admin";
 
 /** What a surface hands the assistant when it opens it. */
@@ -77,7 +77,13 @@ interface AssistantSession {
 interface SessionTurn extends ChatTurn {
     /** True when the turn hit the per-turn tool cap and answered with what it had. */
     readonly partial?: boolean;
-    readonly toolCalls?: ReadonlyArray<{ readonly name?: string; readonly refused?: string; readonly sql?: string }>;
+    readonly toolCalls?: ReadonlyArray<{
+        readonly name?: string;
+        /** Set only when the deployment's data-sharing level is what refused the tool. */
+        readonly needs?: AiOptInLevel;
+        readonly refused?: string;
+        readonly sql?: string;
+    }>;
 }
 
 /** A pending seeded question, keyed so asking the SAME thing twice asks twice. */

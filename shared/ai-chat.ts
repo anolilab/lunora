@@ -49,7 +49,14 @@ export type ChatToolName = "describeTables" | "readAdvisors" | "readLogs" | "run
  */
 export type AiOptInLevel = "disabled" | "schema" | "schema_and_log" | "schema_and_log_and_data";
 
-/** The ladder, lowest first. Index order IS the comparison — see {@link allowsTool}. */
+/**
+ * The ladder, lowest first. Index order IS the comparison — see {@link allowsTool}.
+ *
+ * Exported because the Studio's Settings readout renders the whole ladder to say
+ * where the deployment sits on it. It reads the ladder rather than restating it,
+ * so a tier added here cannot leave the readout describing a ladder that no
+ * longer exists.
+ */
 const OPT_IN_LADDER: ReadonlyArray<AiOptInLevel> = ["disabled", "schema", "schema_and_log", "schema_and_log_and_data"];
 
 /**
@@ -59,6 +66,10 @@ const OPT_IN_LADDER: ReadonlyArray<AiOptInLevel> = ["disabled", "schema", "schem
  * through: `describeTables` returns names, `readLogs` returns log lines the app
  * wrote, `runSql` returns rows the app’s end users wrote. A tool added here
  * without a tier is a compile error, which is the point of the exhaustive record.
+ *
+ * Exported for the same reason as {@link OPT_IN_LADDER}: the Settings readout
+ * lists what each tier unlocks by reading this map, so a tool added here shows up
+ * there without a second edit.
  */
 const TOOL_LEVEL: Readonly<Record<ChatToolName, AiOptInLevel>> = {
     describeTables: "schema",
@@ -141,8 +152,15 @@ export interface ChatOk {
      * `name` is absent on a refusal that named no valid tool — malformed JSON or
      * an unknown tool name request nothing, and reporting them as `runSql` would
      * describe a call that was never made.
+     *
+     * `needs` is present ONLY on a refusal for being above the deployment's
+     * data-sharing level, and carries the tier that would have allowed it. A
+     * structured field rather than the operator parsing {@link ChatOk.toolCalls}'
+     * `refused` prose: that string is written for the MODEL, in English, and the
+     * studio has to tell a level refusal (fixable by editing one wrangler var)
+     * apart from a malformed request (not fixable at all).
      */
-    readonly toolCalls: ReadonlyArray<{ name?: ChatToolName; refused?: string; sql?: string }>;
+    readonly toolCalls: ReadonlyArray<{ name?: ChatToolName; needs?: AiOptInLevel; refused?: string; sql?: string }>;
     /** The assistant's reply. Prose; any SQL in it is offered for insertion, never run. */
     readonly reply: string;
     /** True when the transcript was over budget and older turns were dropped. */
@@ -242,6 +260,8 @@ const toolRequest = (reply: string): string | undefined => {
 interface ToolRefusal {
     /** The tool that was refused, when the request named a real one. Absent for a malformed request. */
     readonly name?: ChatToolName;
+    /** The tier that would have allowed it — set only when the level is what refused it. */
+    readonly needs?: AiOptInLevel;
     readonly refused: string;
 }
 
@@ -285,7 +305,7 @@ const validateTool = (raw: string, level: AiOptInLevel): ChatToolCall | ToolRefu
      * the loop rather than the tool silently not existing.
      */
     if (!allowsTool(level, name)) {
-        return { name, refused: `${name} needs the ${TOOL_LEVEL[name]} data-sharing level and this deployment is set to ${level}` };
+        return { name, needs: TOOL_LEVEL[name], refused: `${name} needs the ${TOOL_LEVEL[name]} data-sharing level and this deployment is set to ${level}` };
     }
 
     if (name === "describeTables" || name === "readAdvisors" || name === "readLogs") {
@@ -458,7 +478,7 @@ const generateChat = async (
     const { truncated, turns } = budgetTranscript(rawArgs.transcript);
     const model = modelFor(rawArgs.model);
     const system = chatSystemPrompt(level);
-    const toolCalls: { name?: ChatToolName; refused?: string; sql?: string }[] = [];
+    const toolCalls: { name?: ChatToolName; needs?: AiOptInLevel; refused?: string; sql?: string }[] = [];
 
     let user = chatUserPrompt(turns, prompt, schema);
 
@@ -509,7 +529,11 @@ const generateChat = async (
         if ("refused" in call) {
             // No `name` unless the request named a real tool: three of the four
             // refusal arms (bad JSON, non-object, unknown tool) named none.
-            toolCalls.push({ ...(call.name === undefined ? {} : { name: call.name }), refused: call.refused });
+            toolCalls.push({
+                ...(call.name === undefined ? {} : { name: call.name }),
+                ...(call.needs === undefined ? {} : { needs: call.needs }),
+                refused: call.refused,
+            });
             user = `${user}\n${observation(`refused — ${call.refused}`)}`;
 
             continue;
@@ -535,4 +559,4 @@ const generateChat = async (
     return degraded("ai-error");
 };
 
-export { asOptInLevel, generateChat, MAX_TOOL_CALLS, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_TURNS };
+export { asOptInLevel, generateChat, MAX_TOOL_CALLS, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_TURNS, OPT_IN_LADDER, TOOL_LEVEL };

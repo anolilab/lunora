@@ -7,7 +7,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
-import type { ChatTurn, GenerateSqlDegradedReason } from "../../lib/admin";
+import type { AiOptInLevel, ChatTurn, GenerateSqlDegradedReason } from "../../lib/admin";
 import { copyToClipboard, fireAndForget } from "../../lib/internal";
 import sqlBlocks from "../../lib/sql-blocks";
 
@@ -43,7 +43,7 @@ const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof u
  * it read or whether anything was refused. A turn that ran three statements and
  * one that ran none looked identical, and a refusal looked like nothing at all.
  */
-const ToolCalls = ({ turn }: { readonly turn: SessionTurn }): ReactElement | null => {
+const ToolCalls = ({ level, turn }: { readonly level: AiOptInLevel | undefined; readonly turn: SessionTurn }): ReactElement | null => {
     const t = useT();
     const calls = turn.toolCalls ?? [];
 
@@ -61,6 +61,20 @@ const ToolCalls = ({ turn }: { readonly turn: SessionTurn }): ReactElement | nul
                     <span className="font-mono">{call.name ?? t("(no such tool)")}</span>
                     {call.sql === undefined ? null : <span className="ms-1 font-mono opacity-80">{call.sql}</span>}
                     {call.refused === undefined ? null : <span className="ms-1 text-destructive">{t("refused")}</span>}
+                    {/* A level refusal is the ONE refusal the operator can act on, and
+                        until now its reason reached only the model — the panel printed
+                        the bare word "refused", so a tool the deployment had simply not
+                        opted into looked identical to a malformed request. `needs` is
+                        structured for exactly this: say which tier it wanted, where the
+                        deployment sits, and which var moves it. */}
+                    {call.needs === undefined ? null : (
+                        <span className="block text-muted-foreground" data-testid="assistant-tool-needs">
+                            {t("Needs the {needs} data-sharing level; this deployment is set to {level}. Change LUNORA_AI_OPT_IN in wrangler.jsonc.", {
+                                level: level ?? t("a lower level"),
+                                needs: call.needs,
+                            })}
+                        </span>
+                    )}
                 </li>
             ))}
             {turn.partial === true && <li data-testid="assistant-turn-partial">{t("Stopped early — this answer is incomplete.")}</li>}
@@ -85,12 +99,15 @@ const ToolCalls = ({ turn }: { readonly turn: SessionTurn }): ReactElement | nul
  */
 const TurnRow = ({
     index,
+    level,
     onBranch,
     onInsert,
     onTruncate,
     turn,
 }: {
     readonly index: number;
+    /** The deployment's data-sharing level, so a level refusal can name where it sits. */
+    readonly level: AiOptInLevel | undefined;
     readonly onBranch: (index: number) => void;
     readonly onInsert: ((sql: string) => void) | undefined;
     readonly onTruncate: (index: number) => void;
@@ -128,7 +145,7 @@ const TurnRow = ({
                     {t("Insert into editor")}
                 </Button>
             ))}
-            {turn.role === "assistant" && <ToolCalls turn={turn} />}
+            {turn.role === "assistant" && <ToolCalls level={level} turn={turn} />}
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                 <button
                     className="underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -459,6 +476,7 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                     <TurnRow
                         index={index}
                         key={`${String(index)}:${turn.role}`}
+                        level={ops.level}
                         onBranch={branchHere}
                         onInsert={assistant.hasEditor ? assistant.requestInsert : undefined}
                         onTruncate={truncateHere}

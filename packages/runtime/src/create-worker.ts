@@ -20,7 +20,8 @@ import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
-import { AI_CHAT_OP, buildAiChat } from "./ai-chat-rpc";
+import type { AiChatRpcDeps } from "./ai-chat-rpc";
+import { AI_AVAILABLE_OP, AI_CHAT_OP, buildAiAvailable, buildAiChat } from "./ai-chat-rpc";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
@@ -2946,7 +2947,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // than its auth-audit sibling: not because its data lives elsewhere, but
     // because a multi-turn exchange must not occupy the DO's single-threaded
     // admin dispatch. See `ai-chat-rpc.ts`.
-    const aiChat = buildAiChat({
+    const aiRpcDeps: AiChatRpcDeps = {
         assertAdmin: assertAdminAuthorized,
         defaultShardKey: () => defaultShard,
 
@@ -2964,7 +2965,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         },
         getBinding: () => options.aiChatBinding,
         optInLevel: () => asOptInLevel(options.aiOptInLevel),
-    });
+    };
+
+    const aiChat = buildAiChat(aiRpcDeps);
+
+    /*
+     * `__lunora_admin__:aiAvailable`, built from the SAME deps object as the chat
+     * op above — which is the whole point of it being worker-served. It used to be
+     * a shard handler narrowing `env.LUNORA_AI_OPT_IN` for itself, so the level the
+     * Studio displayed was a second answer rather than a report of the one the
+     * chat gate enforces.
+     */
+    const aiAvailable = buildAiAvailable(aiRpcDeps);
 
     /**
      * Serve the gated `__lunora_admin__:listPushSubscriptions` admin RPC — the
@@ -3034,8 +3046,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     /**
      * Handle the reserved single-shard RPCs the worker serves itself rather than
-     * forwarding to a shard: the D1-backed auth-audit read and the notify
-     * device-list read (both admin-gated, default-closed). Returns a `Response`
+     * forwarding to a shard: the D1-backed auth-audit read, the notify
+     * device-list read, and the two assistant ops (`aiChat` and the `aiAvailable`
+     * probe that reports the level `aiChat` gates on) — all admin-gated and
+     * default-closed. Returns a `Response`
      * to short-circuit `handleRpc`, or `undefined` to let normal shard dispatch
      * proceed. A fan-out envelope is never worker-served. The fan-out-only
      * relation-prefix guard lives in `assertDispatchableEnvelope`, which runs first.
@@ -3072,6 +3086,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (envelope.functionPath === AI_CHAT_OP) {
             return aiChat(request, envelope.args ?? {});
+        }
+
+        if (envelope.functionPath === AI_AVAILABLE_OP) {
+            return aiAvailable(request, envelope.args ?? {});
         }
 
         return undefined;

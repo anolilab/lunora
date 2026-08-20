@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import type {
     AiAvailableResult,
+    AiOptInLevel,
     AssistantChartConfig,
     ChatResult,
     ChatTurn,
@@ -40,8 +41,15 @@ interface AssistantRpc {
         transcript: ReadonlyArray<ChatTurn>,
         schema: ReadonlyArray<SchemaFact>,
     ) => Promise<
-        undefined | { partial: boolean; reply: string; toolCalls: ReadonlyArray<{ name?: string; refused?: string; sql?: string }>; truncated: boolean }
+        | undefined
+        | {
+              partial: boolean;
+              reply: string;
+              toolCalls: ReadonlyArray<{ name?: string; needs?: AiOptInLevel; refused?: string; sql?: string }>;
+              truncated: boolean;
+          }
     >;
+
     /** Ask for a draft, or a repair when `failed` is supplied. */
     readonly generate: (prompt: string, failed?: { error: string; sql: string }) => Promise<string | undefined>;
 
@@ -50,6 +58,15 @@ interface AssistantRpc {
      * count only — row values are never sent (plan 202 Phase 0).
      */
     readonly inferChart: (result: { columns: string[]; rowCount: number; types?: Record<string, string> }) => Promise<AssistantChartConfig | undefined>;
+
+    /**
+     * The data-sharing level this deployment enforces, once the probe has answered.
+     *
+     * Read-only, and read from the WORKER that gates the tools — the studio has no
+     * way to send one. Surfaced so a refusal can name where the deployment
+     * actually sits rather than only the tier the tool wanted.
+     */
+    readonly level: AiOptInLevel | undefined;
     /** True while THAT task is in flight. */
     readonly pending: (task: AssistantTaskKey) => boolean;
     /** Why THAT task last produced nothing, cleared when it is retried. */
@@ -200,7 +217,7 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
     const pending = (task: AssistantTaskKey): boolean => pendingByTask[task] === true;
     const reason = (task: AssistantTaskKey): GenerateSqlDegradedReason | undefined => reasonByTask[task];
 
-    return { chat, generate, inferChart, pending, reason, suggestFilter, unavailable };
+    return { chat, generate, inferChart, level: availability.data?.level, pending, reason, suggestFilter, unavailable };
 };
 
 export { useAssistantRpc };

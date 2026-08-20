@@ -33,6 +33,7 @@ import type { PushSubscriptionDevice } from "@lunora/notify";
  * at runtime and makes that class of drift impossible — the studio already reads
  * other types from there the same way.
  */
+import type { AiOptInLevel } from "../../../../shared/ai-chat";
 import type { GenerateSqlDegradedReason } from "../../../../shared/ai-prompt";
 
 export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
@@ -180,7 +181,7 @@ export interface BulkDeleteResult {
     hasMore: boolean;
 }
 
-export type { ChatResult, ChatTurn } from "../../../../shared/ai-chat";
+export type { AiOptInLevel, ChatResult, ChatTurn } from "../../../../shared/ai-chat";
 export type { GenerateSqlDegradedReason, SchemaFact } from "../../../../shared/ai-prompt";
 export type { AssistantChartConfig, GenerateChartResult, GenerateSqlResult } from "../../../../shared/sql-assistant";
 
@@ -1418,9 +1419,20 @@ export interface SqlConsoleResult {
  */
 export type GenerateFilterResult = { clauses: FilterClause[]; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
 
-/** Whether the deployment has an `AI` binding — the gate for every assistant affordance. */
+/**
+ * Result of `__lunora_admin__:aiAvailable` — can the assistant run here, and how
+ * much may it read?
+ *
+ * Both fields come from the WORKER, which is where `aiChat` is served and where
+ * the tool gate consults the level. The studio only ever displays `level`; it has
+ * no way to send one, which is what makes the ladder a gate rather than a
+ * preference.
+ */
 export interface AiAvailableResult {
+    /** `false` when there is no `AI` binding, or the level is `disabled`. Gates every assistant affordance. */
     available: boolean;
+    /** The data-sharing level this deployment enforces. Read-only readout. */
+    level: AiOptInLevel;
 }
 
 /**

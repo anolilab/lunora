@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AssistantProvider, useAssistant } from "../../../src/components/assistant-provider";
 import AssistantPanel from "../../../src/features/assistant/assistant-panel";
 import { SqlEditorPanel } from "../../../src/features/sql/sql-editor-panel";
+import type { AiOptInLevel } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
@@ -38,11 +39,11 @@ const renderPanel = (mock: MockClientHooks): ReactElement => (
 );
 
 /** A mock whose `aiChat` answers `reply`, with the AI binding reported present. */
-const chatMock = (reply: string, available = true): MockClientHooks =>
+const chatMock = (reply: string, available = true, level?: AiOptInLevel): MockClientHooks =>
     createMockClient({
         query: (reference): unknown => {
             if (reference === ADMIN_FUNCTIONS.aiAvailable) {
-                return { available };
+                return { available, level: level ?? "schema" };
             }
 
             if (reference === ADMIN_FUNCTIONS.aiChat) {
@@ -207,7 +208,7 @@ describe("assistantPanel", () => {
         const mock = createMockClient({
             query: (reference): unknown => {
                 if (reference === ADMIN_FUNCTIONS.aiAvailable) {
-                    return { available: true };
+                    return { available: true, level: "schema" };
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiChat) {
@@ -309,7 +310,7 @@ describe("assistantPanel", () => {
         const mock = createMockClient({
             query: async (reference): Promise<unknown> => {
                 if (reference === ADMIN_FUNCTIONS.aiAvailable) {
-                    return { available: true };
+                    return { available: true, level: "schema" };
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiChat) {
@@ -422,7 +423,7 @@ describe("assistantPanel", () => {
         const mock = createMockClient({
             query: (reference): unknown => {
                 if (reference === ADMIN_FUNCTIONS.aiAvailable) {
-                    return { available: true };
+                    return { available: true, level: "schema" };
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiChat) {
@@ -454,6 +455,94 @@ describe("assistantPanel", () => {
 
         expect(calls.textContent).toContain("describeTables");
         expect(calls.textContent).toContain("SELECT count(*) FROM messages");
+    });
+
+    it("turns a level refusal into something the operator can act on", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true, level: "schema" };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiChat) {
+                    return {
+                        degraded: false,
+                        partial: false,
+                        reply: "I cannot read rows here.",
+                        toolCalls: [
+                            {
+                                name: "runSql",
+                                needs: "schema_and_log_and_data",
+                                refused: "runSql needs the schema_and_log_and_data data-sharing level and this deployment is set to schema",
+                            },
+                        ],
+                        truncated: false,
+                    };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 0 }];
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("show me the messages");
+
+        // Before this, the reason reached only the MODEL: the panel printed the bare
+        // word "refused", so a tool the deployment had simply not opted into looked
+        // exactly like a malformed request. All three facts have to be here — the
+        // tier it wanted, where the deployment is, and the var that moves it.
+        const needs = await screen.findByTestId("assistant-tool-needs");
+
+        expect(needs.textContent).toContain("schema_and_log_and_data");
+        expect(needs.textContent).toContain("set to schema");
+        expect(needs.textContent).toContain("LUNORA_AI_OPT_IN");
+    });
+
+    it("says only that a malformed request was refused, since no var would fix it", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true, level: "schema" };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiChat) {
+                    return {
+                        degraded: false,
+                        partial: false,
+                        reply: "Sorry.",
+                        // No `needs`: the engine sets it ONLY for a level refusal.
+                        toolCalls: [{ refused: "that tool request was not valid JSON" }],
+                        truncated: false,
+                    };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 0 }];
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("do something");
+
+        const calls = await screen.findByTestId("assistant-tool-calls");
+
+        expect(calls.textContent).toContain("refused");
+        expect(screen.queryByTestId("assistant-tool-needs")).toBeNull();
     });
 
     it("keeps the transcript it forks from and leaves the original alone", async () => {

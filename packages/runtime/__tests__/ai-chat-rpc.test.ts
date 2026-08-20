@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AiRunBinding } from "../../../shared/ai-chat";
 import { MAX_TOOL_CALLS, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_TURNS } from "../../../shared/ai-chat";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import { AI_CHAT_OP } from "../src/ai-chat-rpc";
+import { AI_AVAILABLE_OP, AI_CHAT_OP } from "../src/ai-chat-rpc";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -516,6 +516,11 @@ describe("createWorker — aiChat data-sharing level", () => {
         const calls = (body["toolCalls"] ?? []) as { refused?: string }[];
 
         expect(calls[0]?.refused).toContain("schema_and_log_and_data");
+
+        // And it names the tier STRUCTURALLY, so the studio can tell a level
+        // refusal — the one an operator can act on — from a malformed request,
+        // without parsing prose written for the model.
+        expect((calls[0] as { needs?: string }).needs).toBe("schema_and_log_and_data");
     });
 
     it("allows the same tool once the deployment opts in", async () => {
@@ -677,5 +682,93 @@ describe("createWorker — aiChat data-sharing level", () => {
         // Whatever survived is COMPLETE JSON, and it says what it dropped.
         expect(() => JSON.parse(payload) as unknown).not.toThrow();
         expect(result).toContain("more omitted");
+    });
+});
+
+/**
+ * `__lunora_admin__:aiAvailable`, which the Studio asks once on mount.
+ *
+ * Worker-served, and that is the point: the level it reports has to be the level
+ * the chat gate above enforces, not a second reading of `env` taken somewhere
+ * else. These assertions pin the two together — the same `createWorker` option
+ * decides both.
+ */
+describe("createWorker — aiAvailable admin RPC", () => {
+    const probe = (admin = true): Request =>
+        new Request("https://app.example/_lunora/rpc", {
+            body: JSON.stringify({ args: {}, functionPath: AI_AVAILABLE_OP }),
+            headers: admin ? { authorization: `Bearer ${ADMIN_TOKEN}` } : {},
+            method: "POST",
+        });
+
+    it("rejects a non-admin caller rather than disclosing the deployment's posture", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: slowBinding(0), shardDO: recordingShard([]) });
+        const response = await worker.fetch(probe(false), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("ADMIN_FORBIDDEN");
+    });
+
+    it("reports the default level when the deployment configures none", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: slowBinding(0), shardDO: recordingShard([]) });
+        const body = await decoded(await worker.fetch(probe(), {}, fakeContext));
+
+        expect(body["available"]).toBe(true);
+        expect(body["level"]).toBe("schema");
+    });
+
+    it("reports the level the chat gate actually enforces, including a typo's fallback", async () => {
+        expect.assertions(3);
+
+        const forwarded: string[] = [];
+        // Same worker, two questions: what does the probe SAY, and what does the
+        // gate DO? A typo in the wrangler var fails closed to `schema`, and the
+        // readout must show `schema` rather than the string nobody honours.
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"runSql","sql":"SELECT 1"}\n```', "No."]),
+            aiOptInLevel: "schema_and_everything" as never,
+            shardDO: recordingShard(forwarded),
+        });
+
+        const body = await decoded(await worker.fetch(probe(), {}, fakeContext));
+
+        expect(body["level"]).toBe("schema");
+
+        const chat = await decoded(await worker.fetch(rpc({ prompt: "read it" }), {}, fakeContext));
+
+        expect(forwarded).not.toContain("__lunora_admin__:runSql");
+        expect(((chat["toolCalls"] ?? []) as { needs?: string }[])[0]?.needs).toBe("schema_and_log_and_data");
+    });
+
+    it("reports unavailable, with the level, when the assistant is turned off", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: slowBinding(0), aiOptInLevel: "disabled", shardDO: recordingShard([]) });
+        const body = await decoded(await worker.fetch(probe(), {}, fakeContext));
+
+        // `available: false` drives the studio's sticky latch; `level` is what tells
+        // the operator WHY every assistant surface vanished.
+        expect(body["available"]).toBe(false);
+        expect(body["level"]).toBe("disabled");
+    });
+
+    it("reports unavailable when no AI binding is wired, and never reaches a shard", async () => {
+        expect.assertions(3);
+
+        const forwarded: string[] = [];
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, aiOptInLevel: "schema_and_log", shardDO: recordingShard(forwarded) });
+        const body = await decoded(await worker.fetch(probe(), {}, fakeContext));
+
+        expect(body["available"]).toBe(false);
+        expect(body["level"]).toBe("schema_and_log");
+        expect(forwarded).toStrictEqual([]);
     });
 });

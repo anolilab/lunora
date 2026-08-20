@@ -1,6 +1,9 @@
 /**
- * The worker-served `__lunora_admin__:aiChat` op — the Studio's conversational
- * SQL assistant (plan 364 W1/W2).
+ * The worker-served assistant ops — `__lunora_admin__:aiChat`, the Studio's
+ * conversational SQL assistant (plan 364 W1/W2), and `__lunora_admin__:aiAvailable`,
+ * the probe that tells the Studio whether it can run and at which data-sharing
+ * level. They share one deps object precisely so the level the probe REPORTS is
+ * the level the chat gate READS.
  *
  * **Why it lives at the worker, not in the DO.** Its three one-shot siblings
  * (`aiGenerateSql`, `aiTableFilter`, `aiChartConfig`) are registered on the shard
@@ -26,6 +29,22 @@ import { decodeWire, encodeWire } from "../../../shared/wire-codec";
  * be batched behind unrelated calls.
  */
 const AI_CHAT_OP = "__lunora_admin__:aiChat";
+
+/**
+ * The availability probe the Studio asks once on mount.
+ *
+ * Served HERE rather than on the shard, which is where it used to live, so that
+ * the level it reports is the level that GATES a turn — `deps.optInLevel()`, the
+ * same call {@link buildAiChat} makes on the same deps object. The shard read
+ * `env.LUNORA_AI_OPT_IN` itself, so the readout was a second answer to the
+ * question rather than a report of the first, and the two could only be trusted
+ * to agree for as long as codegen was the only thing wiring the worker.
+ *
+ * The shard still narrows the same var for its own one-shot assistant ops
+ * (`ShardDO.aiBinding`) — a READER of `LUNORA_AI_OPT_IN` through the same
+ * `asOptInLevel`, not a second decision about what the level is.
+ */
+const AI_AVAILABLE_OP = "__lunora_admin__:aiAvailable";
 
 /** Closure-scoped worker helpers the handler borrows. */
 interface AiChatRpcDeps {
@@ -58,6 +77,14 @@ interface AiChatRpcDeps {
 
 /** The worker-served handler for {@link AI_CHAT_OP}. */
 type AiChatRpcHandler = (request: Request, args: Record<string, unknown>) => Promise<Response>;
+
+/** What {@link AI_AVAILABLE_OP} answers. Mirrored by `AiAvailableResult` in `@lunora/studio`. */
+interface AiAvailableResult {
+    /** Whether an assistant turn can run at all — a binding is wired and the level is not `disabled`. */
+    readonly available: boolean;
+    /** The level this worker enforces, so the Studio can show the operator where they are on the ladder. */
+    readonly level: AiOptInLevel;
+}
 
 /** Most grounding facts accepted from a caller. `groundingBlock` slices to 40; this bounds what reaches it. */
 const MAX_SCHEMA_FACTS = 60;
@@ -219,5 +246,29 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
     return handle;
 };
 
-export { AI_CHAT_OP, buildAiChat };
-export type { AiChatRpcDeps, AiChatRpcHandler };
+/**
+ * Build the `__lunora_admin__:aiAvailable` handler.
+ *
+ * Admin-gated first, like its sibling, so an unauthenticated caller cannot read
+ * a deployment's data-sharing posture off an unauthenticated probe.
+ *
+ * `available` folds the two facts the Studio treats identically (no binding, and
+ * `disabled`) into the one boolean its sticky latch consumes; `level` is the
+ * readout, and it is deliberately NOT what any gate reads — the studio is told
+ * the level and can never send one.
+ */
+const buildAiAvailable = (deps: Pick<AiChatRpcDeps, "assertAdmin" | "getBinding" | "optInLevel">): AiChatRpcHandler => {
+    const handle = (request: Request): Promise<Response> => {
+        deps.assertAdmin(request);
+
+        const level = deps.optInLevel();
+        const result: AiAvailableResult = { available: level !== "disabled" && deps.getBinding() !== undefined, level };
+
+        return Promise.resolve(Response.json({ result: encodeWire(result) }, { headers: { "content-type": "application/json" }, status: 200 }));
+    };
+
+    return handle;
+};
+
+export { AI_AVAILABLE_OP, AI_CHAT_OP, buildAiAvailable, buildAiChat };
+export type { AiAvailableResult, AiChatRpcDeps, AiChatRpcHandler };

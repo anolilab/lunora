@@ -7203,7 +7203,6 @@ abstract class ShardDO {
     /** The AI-assistant admin writes, keyed by function path. */
     private aiAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response>> {
         return {
-            [ADMIN_FUNCTIONS.aiAvailable]: () => Promise.resolve(this.handleAiAvailable()),
             [ADMIN_FUNCTIONS.aiChartConfig]: async (args) => this.handleAiChartConfig(args),
             [ADMIN_FUNCTIONS.aiGenerateSql]: async (args) => this.handleGenerateSql(args),
             [ADMIN_FUNCTIONS.aiTableFilter]: async (args) => this.handleAiTableFilter(args),
@@ -7232,38 +7231,22 @@ abstract class ShardDO {
     }
 
     /**
-     * Serve `__lunora_admin__:aiAvailable` — does this deployment have an `AI`
-     * binding at all?
-     *
-     * The studio asks ONCE on mount so it can decide whether to paint the
-     * assistant affordances. Without it the only way to find out was to issue a
-     * real request and read `no-ai-binding` off the failure — which meant an app
-     * with no binding rendered "Draft SQL" and "Suggest chart" buttons that did
-     * nothing until the operator clicked one, and only then made them vanish.
-     *
-     * Deliberately NOT part of `studioFeatures()`: those flags are computed at
-     * codegen time from imports and declared dependencies, while a binding is a
-     * runtime property of `env`. Folding a runtime probe into that codegen-owned
-     * contract would make its drift guard meaningless.
-     *
-     * No model call, no audit entry — it reads one property off `env`.
-     */
-    private handleAiAvailable(): Response {
-        return adminResponse({ available: this.aiBinding() !== undefined });
-    }
-
-    /**
      * The `AI` binding this shard may use, or `undefined`.
      *
      * `undefined` for two different deployments — one with no binding, and one
      * whose operator disabled the assistant through its opt-in var — because every
      * surface treats them identically: degrade, latch, hide the affordance.
      *
-     * Read HERE rather than at each of the five call sites so `disabled` cannot
+     * Read HERE rather than at each of the four call sites so `disabled` cannot
      * mean "the chat assistant is off, but Draft SQL, the filter bar, chart
-     * inference and issue explanation still call the provider". `handleAiAvailable`
-     * goes through it too, which is what makes the studio's latch honest about a
-     * disabled deployment rather than painting buttons that fail on first click.
+     * inference and issue explanation still call the provider".
+     *
+     * A READER of `LUNORA_AI_OPT_IN`, through the shared `asOptInLevel`, never a
+     * second decision about what the level is. The one surface that REPORTS the
+     * level to the operator — `__lunora_admin__:aiAvailable` — is served at the
+     * worker (`@lunora/runtime`'s `ai-chat-rpc.ts`) off the same deps the chat gate
+     * reads, precisely so the readout cannot disagree with the gate. It used to be
+     * served here, narrowing `env` a second time.
      */
     private aiBinding(): unknown {
         const env = this.env as Record<string, unknown> | undefined;
