@@ -167,6 +167,26 @@ interface SqlCtxDbOptions {
      * legacy behaviour.
      */
     cdc?: boolean;
+
+    /**
+     * How long `.global()` changelog entries are kept, in milliseconds. Absent
+     * (the default) means forever — the log grows for the life of the database.
+     *
+     * Opt-in for the same reason the shard-local windows are, and the reason is
+     * not caution: this log's streaming-export consumers hold opaque cursors
+     * issued outside this deployment, and nothing here can see where they sit.
+     * A default window would be a guess whose failure mode is silent data loss
+     * in someone's warehouse. A deployment that wants the log bounded states a
+     * window it knows covers its consumers; `.global()` shape pollers are then
+     * protected exactly, by the floor this read path reports rather than by the
+     * window. See `sweepSqlCdcRetention`.
+     *
+     * Time rather than rows because the log is SHARED: every shard in every
+     * region writes it, so a row count is not a bound any single consumer can
+     * reason about, while "older than N" is exactly what they compare their own
+     * lag against.
+     */
+    cdcRetentionMs?: number;
     clock?: () => number;
 
     /**
@@ -879,6 +899,39 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
  */
 /* The changelog identifiers come from `@lunora/shard-engine` — see the import. */
 
+/** Single-row table holding the `.global()` sweep lease — the fleet's only retention coordination. */
+const CDC_SWEEP_TABLE = "__cdc_sweep";
+
+/** The lease row's fixed key. One log, one sweeper, one row. */
+const CDC_SWEEP_ROW = "global";
+
+/**
+ * How long a winning sweeper holds the lease, and therefore roughly how often
+ * the FLEET sweeps in total — not how often each shard does.
+ *
+ * A shard-local sweep can pick its own interval because it is alone. Here the
+ * interval has to be a property of the log, or a deployment's sweep rate would
+ * scale with its shard count.
+ */
+const CDC_SWEEP_LEASE_MS = 60_000;
+
+/** Rows one `.global()` sweep pass may delete. Same bound, same reason, as the shard-local twin. */
+const CDC_SWEEP_MAX_ROWS = 10_000;
+
+/**
+ * Minimum spacing between LEASE ATTEMPTS on one isolate.
+ *
+ * The lease is what stops the fleet sweeping N times; this is what stops a busy
+ * isolate paying a compare-and-set on every single `.global()` write. It is
+ * module-level, so it is per-isolate and deliberately approximate — many
+ * isolates means many attempts, but each is one small conditional `UPDATE` that
+ * mostly matches nothing, and the lease makes the ones that do match harmless.
+ */
+const CDC_SWEEP_ATTEMPT_MS = 30_000;
+
+/** When this isolate last tried to claim the sweep lease. See {@link CDC_SWEEP_ATTEMPT_MS}. */
+let lastSweepAttemptAt = 0;
+
 /** Create the `__cdc_log` table. Idempotent; only run when CDC is enabled. */
 const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<void> => {
     const { autoincrementPrimaryKey, key, real, text } = dialect.companionTypes;
@@ -913,6 +966,113 @@ const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
         table: CDC_LOG_TABLE,
         unique: false,
     });
+
+    // The sweep lease. One row, and it is the whole of the cross-shard
+    // coordination: see {@link sweepSqlCdcRetention}.
+    await queryRun(
+        exec,
+        dialect,
+        sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(CDC_SWEEP_TABLE)} (${sql.identifier("id")} ${sql.raw(key)} NOT NULL PRIMARY KEY, ${sql.identifier("lease_until")} ${sql.raw(real)} NOT NULL)`,
+    );
+
+    // Seed it expired so the first writer to look can claim it. `DO NOTHING` on
+    // conflict: every shard in the fleet runs this migration, and the row must
+    // survive their races without any of them resetting a live lease.
+    await queryRun(
+        exec,
+        dialect,
+        sql`INSERT INTO ${sql.identifier(CDC_SWEEP_TABLE)} (${sql.identifier("id")}, ${sql.identifier("lease_until")}) VALUES (${CDC_SWEEP_ROW}, ${0}) ${
+            // MySQL has no `DO NOTHING`; the conventional no-op assignment is the
+            // same trick the upsert builder above uses for its dialect split.
+            dialect.name === "mysql"
+                ? sql`ON DUPLICATE KEY UPDATE ${sql.identifier("id")} = ${sql.identifier("id")}`
+                : sql`ON CONFLICT(${sql.identifier("id")}) DO NOTHING`
+        }`,
+    );
+};
+
+/**
+ * Try to become the fleet's sweeper for one window.
+ *
+ * The `.global()` changelog differs from the shard-local one in exactly one way
+ * that matters here: it has no owner. Every shard writes it, from every region,
+ * and none of them is the one that should trim it. Left to themselves they would
+ * all trim it at once — N concurrent unbounded `DELETE`s against one D1 database.
+ *
+ * A lease row settles it without a registry: whoever wins the compare-and-set
+ * sweeps, everyone else returns immediately, and the lease doubles as the
+ * interval (a winner holds it for {@link CDC_SWEEP_LEASE_MS}, so the fleet
+ * sweeps about that often in total rather than once per shard). A sweeper that
+ * dies mid-pass loses nothing: the lease simply expires and the next writer
+ * picks up where the `ts` cutoff says to.
+ */
+const acquireSqlCdcSweepLease = async (exec: SqlCtxExec, dialect: SqlDialect, now: number): Promise<boolean> => {
+    const claim = sql`UPDATE ${sql.identifier(CDC_SWEEP_TABLE)} SET ${sql.identifier("lease_until")} = ${now + CDC_SWEEP_LEASE_MS} WHERE ${sql.identifier("id")} = ${CDC_SWEEP_ROW} AND ${sql.identifier("lease_until")} <= ${now}`;
+
+    // Same compare-and-set idiom as the OCC write path: `RETURNING` where the
+    // engine has it, affected-rows where it does not (MySQL).
+    if (dialect.supportsReturning) {
+        const claimed = await queryAll(exec, dialect, sql`${claim} RETURNING ${sql.identifier("id")}`);
+
+        return claimed.length > 0;
+    }
+
+    const result = await queryRun(exec, dialect, claim);
+
+    return (dialect.affectedRows ? dialect.affectedRows(result ?? { rowsAffected: 0 }) : 0) > 0;
+};
+
+/**
+ * Delete `.global()` changelog entries older than `retentionMs`, at most
+ * {@link CDC_SWEEP_MAX_ROWS} per pass, and only if this writer wins the lease.
+ *
+ * **Time, not rows.** The shard-local twin bounds its log by row count because
+ * one shard owns it and a row count is a memory bound on that one object. This
+ * log is shared, so a row count means nothing to any individual consumer — but
+ * "older than N" is directly what every consumer needs to reason about, and it
+ * is the unit an operator can compare against their own connector's lag.
+ *
+ * **Which consumers this can strand, and what protects each:**
+ *
+ * - `.global()` shape pollers hold in-memory cursors this store cannot see. They
+ *   are protected EXACTLY rather than approximately: {@link readSqlCdcChangedTables}
+ *   reports the retained floor, and a poller below it treats the tick as "no
+ *   visibility" and re-reads every shape. That is the same self-healing path a
+ *   changelog error already takes, so a trimmed poller is slow for one tick, not
+ *   wrong. No cursor registry, no assumption about how far behind a shard can be.
+ * - Streaming-export / warehouse consumers hold opaque cursors issued outside
+ *   this deployment. Nothing here can see them, so nothing here guesses:
+ *   {@link readSqlCdcChanges} refuses a page below the floor rather than serving
+ *   the surviving tail, and retention stays OFF unless an operator states a
+ *   window they know covers their connector.
+ */
+const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, retentionMs: number, now: number): Promise<void> => {
+    if (!(await acquireSqlCdcSweepLease(exec, dialect, now))) {
+        return;
+    }
+
+    const cutoff = now - retentionMs;
+
+    // Bounded per pass for the same reason the shard-local sweep is: the first
+    // sweep after an operator enables retention faces the entire accumulated
+    // log, and an unbounded DELETE that aborts leaves no progress behind.
+    await queryRun(
+        exec,
+        dialect,
+        sql`
+            DELETE FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} IN (
+                        SELECT ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("ts")} <= ${cutoff} ORDER BY ${sql.identifier("seq")} ASC LIMIT ${sql.raw(String(CDC_SWEEP_MAX_ROWS))}
+                    )
+        `,
+    );
+};
+
+/** Oldest `seq` still retained in the `.global()` changelog, or `undefined` when it is empty. */
+const readSqlCdcFloor = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<number | undefined> => {
+    const rows = await queryAll(exec, dialect, sql`SELECT MIN(${sql.identifier("seq")}) AS ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)}`);
+    const floor = Number(rows[0]?.["seq"] ?? Number.NaN);
+
+    return Number.isFinite(floor) ? floor : undefined;
 };
 
 /** Append one committed mutation to the changelog (post-image JSON, or NULL for delete). */
@@ -946,6 +1106,22 @@ const readSqlCdcChanges = async (
 ): Promise<{ changes: CdcChange[]; cursor: number }> => {
     const sinceSeq = options.sinceSeq ?? 0;
     const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
+
+    // Retention-gap guard, mirroring the shard-local `runShardCdcSync`. Without
+    // it a consumer resuming below a swept floor is handed the surviving tail
+    // with an advanced cursor and no indication anything was skipped — a
+    // warehouse table permanently missing the trimmed range, reported nowhere.
+    // `+ 1` because a consumer sitting exactly at `floor - 1` has seen
+    // everything below the floor.
+    const floor = await readSqlCdcFloor(exec, dialect);
+
+    if (floor !== undefined && floor > sinceSeq + 1) {
+        throw new LunoraError(
+            "CDC_LOG_TRIMMED",
+            `global cdc entries at or below seq ${String(floor - 1)} have been trimmed; resume from a snapshot (sinceSeq ${String(sinceSeq)} is below the retained window)`,
+            { status: 409 },
+        );
+    }
 
     const rows = await queryAll(
         exec,
@@ -992,8 +1168,8 @@ const readSqlCdcChangedTables = async (
     exec: SqlCtxExec,
     sinceSeq: number,
     dialect: SqlDialect,
-    options: { cursorOnly?: boolean } = {},
-): Promise<{ cursor: number; tables: string[] }> => {
+    options: { cursorOnly?: boolean; retained?: boolean } = {},
+): Promise<{ cursor: number; floor?: number; tables: string[] }> => {
     if (options.cursorOnly) {
         // The caller is reading everything this pass regardless, so the table
         // list would be discarded — and on the cold-instance case that produces
@@ -1024,12 +1200,19 @@ const readSqlCdcChangedTables = async (
         tables.push(String(row["table"]));
     }
 
-    return { cursor, tables };
-};
+    // The retained floor, so a caller can tell "nothing changed" from "what
+    // changed was swept away". Read AFTER the scan, not before: the floor only
+    // ever rises, so a sweep interleaving between the two makes this report a
+    // gap that has only just opened — one wasted full pass. Reading it first
+    // would let a sweep land after it and hide a gap that is real.
+    //
+    // Only when retention is configured. With no sweep the floor never moves off
+    // the log's first row, so the gap it detects cannot occur — and this is a
+    // read on a two-second poll, which is the wrong place to spend a round trip
+    // proving something that is true by construction.
+    const floor = options.retained === true ? await readSqlCdcFloor(exec, dialect) : undefined;
 
-/** Drop changelog entries at or below a checkpointed `throughSeq` (retention). */
-const trimSqlCdcChanges = async (exec: SqlCtxExec, throughSeq: number, dialect: SqlDialect): Promise<void> => {
-    await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} <= ${throughSeq}`);
+    return { cursor, tables, ...(floor === undefined ? {} : { floor }) };
 };
 
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
@@ -1104,6 +1287,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const cdcEnabled = options.cdc ?? false;
+    // Positive-and-finite only: a zero or negative window would mean "delete
+    // everything ever written", which is never what an operator means by a
+    // retention setting and is not a state this should be able to reach by typo.
+    const cdcRetentionMs =
+        typeof options.cdcRetentionMs === "number" && Number.isFinite(options.cdcRetentionMs) && options.cdcRetentionMs > 0
+            ? options.cdcRetentionMs
+            : undefined;
     // Resolved request auth for `.serverDefault(fn)` column factories; defaults
     // to the anonymous slice when the writer is built without a caller identity.
     // eslint-disable-next-line unicorn/no-null -- the auth slice models the anonymous caller as null identity/userId (mirrors `ServerDefaultContext`)
@@ -1119,8 +1309,33 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * inside the row write's transaction and so is atomic.
      */
     const recordCdc = async (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): Promise<void> => {
-        if (cdcEnabled) {
-            await appendSqlCdcChange(exec, clock(), table, id, op, doc, dialect);
+        if (!cdcEnabled) {
+            return;
+        }
+
+        await appendSqlCdcChange(exec, clock(), table, id, op, doc, dialect);
+
+        if (cdcRetentionMs === undefined) {
+            return;
+        }
+
+        const now = clock();
+
+        // Per-isolate throttle before the fleet-wide lease: the lease is a write,
+        // and attempting it on every changelog append would double this path's
+        // cost. See {@link CDC_SWEEP_ATTEMPT_MS}.
+        if (now - lastSweepAttemptAt < CDC_SWEEP_ATTEMPT_MS) {
+            return;
+        }
+
+        lastSweepAttemptAt = now;
+
+        try {
+            await sweepSqlCdcRetention(exec, dialect, cdcRetentionMs, now);
+        } catch {
+            // Retention is maintenance. A failed sweep must never surface on a
+            // write whose row and changelog entry have already committed — the
+            // log simply stays larger until a later pass claims the lease.
         }
     };
     const scheduler = options.scheduler ?? throwingScheduler;
@@ -2098,7 +2313,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
          * state the caller already handles, and a poll tick is the wrong place
          * to surface a migration problem.
          */
-        async cdcChangedTables(sinceSeq: number, readOptions?: { cursorOnly?: boolean }): Promise<{ cursor: number; tables: string[] } | undefined> {
+        async cdcChangedTables(
+            sinceSeq: number,
+            readOptions?: { cursorOnly?: boolean },
+        ): Promise<{ cursor: number; floor?: number; tables: string[] } | undefined> {
             if (!cdcEnabled) {
                 return undefined;
             }
@@ -2106,7 +2324,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             try {
                 await ensureMigrated();
 
-                return await readSqlCdcChangedTables(exec, sinceSeq, dialect, readOptions);
+                return await readSqlCdcChangedTables(exec, sinceSeq, dialect, { ...readOptions, retained: cdcRetentionMs !== undefined });
             } catch {
                 return undefined;
             }
@@ -3339,11 +3557,12 @@ export {
     createSqlCtxDb,
     readSqlCdcChangedTables,
     readSqlCdcChanges,
+    readSqlCdcFloor,
     runSqlAggregateMigrations,
     runSqlCdcMigration,
     runSqlGlobalTableMigrations,
     runSqlRankMigrations,
-    trimSqlCdcChanges,
+    sweepSqlCdcRetention,
 };
 export { backfillSqlSearchIndexes, runSqlSearchMigrations } from "./ctx-db-search";
 export type { SqlCtxDbOptions };

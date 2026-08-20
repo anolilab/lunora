@@ -20,7 +20,7 @@ import {
     runSqlGlobalTableMigrations,
     runSqlRankMigrations,
     runSqlSearchMigrations,
-    trimSqlCdcChanges,
+    sweepSqlCdcRetention,
 } from "@lunora/sql-store";
 
 import sqliteDialect from "./sqlite-dialect";
@@ -54,8 +54,16 @@ const runD1CdcMigration = (exec: SqlCtxExec): Promise<void> => runSqlCdcMigratio
 const readD1CdcChanges = (exec: SqlCtxExec, options: { limit?: number; sinceSeq?: number } = {}): ReturnType<typeof readSqlCdcChanges> =>
     readSqlCdcChanges(exec, options, sqliteDialect);
 
-/** Drop changelog entries at or below a checkpointed `throughSeq`. */
-const trimD1CdcChanges = (exec: SqlCtxExec, throughSeq: number): Promise<void> => trimSqlCdcChanges(exec, throughSeq, sqliteDialect);
+/**
+ * Delete `.global()` changelog entries older than `retentionMs`, if this writer
+ * wins the fleet's sweep lease. See `sweepSqlCdcRetention`.
+ *
+ * Replaces the seq-based `trimD1CdcChanges`, which took a checkpoint no caller
+ * could compute: the log is shared across every shard and region, so no single
+ * caller knows a `seq` that is safe for all of them. A time window is a bound
+ * they can all reason about, and the lease is what stops them racing.
+ */
+const sweepD1CdcRetention = (exec: SqlCtxExec, retentionMs: number, now: number): Promise<void> => sweepSqlCdcRetention(exec, sqliteDialect, retentionMs, now);
 
 export type { SqlCtxExec as D1Exec, SqlCtxDbOptions, SqlCtxExec } from "@lunora/sql-store";
 export { createSqlCtxDb, decodeGlobalRow } from "@lunora/sql-store";
@@ -68,6 +76,6 @@ export {
     runD1GlobalTableMigrations,
     runD1RankMigrations,
     runD1SearchMigrations,
-    trimD1CdcChanges,
+    sweepD1CdcRetention,
 };
 export type { D1ContextDatabaseOptions as D1CtxDbOptions };

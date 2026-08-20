@@ -19,7 +19,7 @@ export {
     runD1GlobalTableMigrations,
     runD1RankMigrations,
     runD1SearchMigrations,
-    trimD1CdcChanges,
+    sweepD1CdcRetention,
 } from "./d1-ctx-db";
 export type {
     FacetGlobalColumnOptions,

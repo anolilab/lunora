@@ -1,7 +1,7 @@
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createD1CtxDb as createD1ContextDatabase, readD1CdcChanges, trimD1CdcChanges } from "../src/d1-ctx-db";
+import { createD1CtxDb as createD1ContextDatabase, readD1CdcChanges, sweepD1CdcRetention } from "../src/d1-ctx-db";
 import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
 /**
@@ -27,7 +27,10 @@ const todosSchema: SchemaLike = {
 
 let harness: ReturnType<typeof createD1Exec>;
 
-const setupWriter = (cdc: boolean): DatabaseWriterLike => {
+/** Wall clock the writer stamps `ts` from — mutable so a test can age rows past a retention window. */
+let clockNow: number;
+
+const setupWriter = (cdc: boolean, retentionMs?: number): DatabaseWriterLike => {
     harness.ddl(
         `CREATE TABLE "todos" (
             "id" TEXT PRIMARY KEY,
@@ -36,7 +39,13 @@ const setupWriter = (cdc: boolean): DatabaseWriterLike => {
         )`,
     );
 
-    return createD1ContextDatabase({ cdc, clock: () => FIXED_CLOCK, exec: harness.exec, schema: todosSchema });
+    return createD1ContextDatabase({
+        cdc,
+        ...(retentionMs === undefined ? {} : { cdcRetentionMs: retentionMs }),
+        clock: () => clockNow,
+        exec: harness.exec,
+        schema: todosSchema,
+    });
 };
 
 const tableExists = async (name: string): Promise<boolean> => {
@@ -48,6 +57,9 @@ const tableExists = async (name: string): Promise<boolean> => {
 describe("d1 ctx-db change-data-capture", () => {
     beforeEach(() => {
         harness = createD1Exec();
+        // Reset the shared wall clock: the retention tests advance it, and a
+        // leaked value would age the next test's rows past its window.
+        clockNow = FIXED_CLOCK;
     });
 
     afterEach(() => {
@@ -100,10 +112,55 @@ describe("d1 ctx-db change-data-capture", () => {
 
         expect(secondPage.changes.map((change) => change.id)).toStrictEqual(["c"]);
 
-        await trimD1CdcChanges(harness.exec, 2);
+        // `c` was written 10s after `a`/`b`, so a 5s window keeps only it.
+        clockNow = FIXED_CLOCK + 10_000;
+        await writer.insert("todos", { _id: "d", text: "4" }, { allowExplicitId: true });
+        await sweepD1CdcRetention(harness.exec, 5000, clockNow);
 
-        const remaining = await readD1CdcChanges(harness.exec);
+        const remaining = await readD1CdcChanges(harness.exec, { sinceSeq: 3 });
 
-        expect(remaining.changes.map((change) => change.id)).toStrictEqual(["c"]);
+        expect(remaining.changes.map((change) => change.id)).toStrictEqual(["d"]);
+    });
+
+    it("refuses a page that starts below the swept floor", async () => {
+        expect.assertions(1);
+
+        const writer = setupWriter(true);
+
+        await writer.insert("todos", { _id: "a", text: "1" }, { allowExplicitId: true });
+        clockNow = FIXED_CLOCK + 10_000;
+        await writer.insert("todos", { _id: "b", text: "2" }, { allowExplicitId: true });
+        await sweepD1CdcRetention(harness.exec, 5000, clockNow);
+
+        // A warehouse consumer resuming from the beginning cannot be served the
+        // surviving tail with an advanced cursor — that loses the swept range
+        // permanently and reports nothing.
+        await expect(readD1CdcChanges(harness.exec, { sinceSeq: 0 })).rejects.toThrow(/trimmed/u);
+    });
+
+    it("lets only one sweeper hold the lease per window", async () => {
+        expect.assertions(2);
+
+        const writer = setupWriter(true);
+
+        await writer.insert("todos", { _id: "a", text: "1" }, { allowExplicitId: true });
+        clockNow = FIXED_CLOCK + 10_000;
+        await writer.insert("todos", { _id: "b", text: "2" }, { allowExplicitId: true });
+
+        // The lease is the whole of the cross-shard coordination: every shard in
+        // the fleet writes this log, and without it they would all sweep at once.
+        await sweepD1CdcRetention(harness.exec, 5000, clockNow);
+
+        const afterFirst = await readD1CdcChanges(harness.exec, { sinceSeq: 1 });
+
+        expect(afterFirst.changes.map((change) => change.id)).toStrictEqual(["b"]);
+
+        // A second sweeper in the same window finds the lease held and does
+        // nothing — including not deleting `b`, which a 0ms window otherwise would.
+        await sweepD1CdcRetention(harness.exec, 0, clockNow);
+
+        const afterSecond = await readD1CdcChanges(harness.exec, { sinceSeq: 1 });
+
+        expect(afterSecond.changes.map((change) => change.id)).toStrictEqual(["b"]);
     });
 });

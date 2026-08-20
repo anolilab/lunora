@@ -9930,6 +9930,29 @@ abstract class ShardDO {
     }
 
     /**
+     * The changelog settings the generated code hands to the `.global()` writer.
+     *
+     * `cdc` is the app's own opt-in, forwarded from the shard config so the two
+     * logs are governed by ONE switch: a deployment that turns CDC on gets a
+     * changelog on both tiers, and one that leaves it off pays for neither. Until
+     * this was threaded, the global writer was built without it unconditionally —
+     * so the global `__cdc_log` was never written, and the poll's
+     * changed-tables fast path was unreachable in every generated app while
+     * looking, from the shard side, exactly like a backend that had CDC disabled.
+     *
+     * `cdcRetentionMs` is read here rather than in the generated factory so every
+     * deployment knob goes through one strict parser (see
+     * {@link ShardDO.sweepCdcRetention} for why lenient parsing on a delete path
+     * is a footgun). Absent means the global log is never trimmed.
+     */
+    // eslint-disable-next-line @typescript-eslint/member-ordering -- co-located with `readGlobalChangedTables` and the poll tick they both serve, rather than hoisted to the protected block away from its only callers
+    protected globalCdcOptions(cdc: boolean): { cdc: boolean; cdcRetentionMs?: number } {
+        const retentionMs = envOptionalPositiveInt(this.env, "LUNORA_GLOBAL_CDC_RETENTION_MS");
+
+        return { cdc, ...(retentionMs === undefined ? {} : { cdcRetentionMs: retentionMs }) };
+    }
+
+    /**
      * Ask the `.global()` backend which tables it recorded a write to after
      * `sinceSeq`. The base class has no global backend, so it reports no
      * visibility (`undefined`) and every poll tick falls back to re-reading
@@ -9942,7 +9965,7 @@ abstract class ShardDO {
      * `DatabaseWriterLike.cdcChangedTables`.
      */
     // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- base-class override hook (the codegen subclass overrides it and uses `this` to build the global writer), co-located with the poll tick it opens rather than hoisted away from its only caller
-    protected readGlobalChangedTables(_sinceSeq: number, _cursorOnly?: boolean): Promise<{ cursor: number; tables: string[] } | undefined> {
+    protected readGlobalChangedTables(_sinceSeq: number, _cursorOnly?: boolean): Promise<{ cursor: number; floor?: number; tables: string[] } | undefined> {
         return Promise.resolve(undefined);
     }
 
@@ -9994,9 +10017,21 @@ abstract class ShardDO {
                 return new GlobalPollTick();
             }
 
+            // The changelog was trimmed past this instance's cursor, so the rows
+            // that would have named the tables it needs are gone and `tables`
+            // under-reports. That is indistinguishable from "nothing changed"
+            // unless the floor is checked, and acting on it would freeze every
+            // shape whose table moved inside the swept range. Degrade to the
+            // full pass — the same answer a changelog error already produces,
+            // and self-healing rather than merely bounded.
+            //
+            // `+ 1` because a cursor sitting exactly at `floor - 1` has seen
+            // everything below the floor.
+            const trimmedPastUs = changed.floor !== undefined && changed.floor > (this.globalPollCursor ?? 0) + 1;
+
             this.globalPollCursor = changed.cursor;
 
-            return new GlobalPollTick(cursorOnly ? undefined : new Set(changed.tables));
+            return new GlobalPollTick(cursorOnly || trimmedPastUs ? undefined : new Set(changed.tables));
         } catch (error) {
             // No visibility is always a safe answer — it degrades this tick to the
             // full re-read every tick used to do.

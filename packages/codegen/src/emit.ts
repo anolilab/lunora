@@ -4497,14 +4497,14 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
     // field under `noImplicitAny`. The Hyperdrive thunk below stays narrow on
     // purpose — it is handed the same object and simply never reads the extras.
     const d1ConfigField = hasD1Global
-        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;`
         : "";
 
     // Hyperdrive-backed `.global()` tables receive their writer via an optional
     // `hyperdriveGlobal` thunk (mirrors `d1`); the host builds it with the global
     // writer factory from `@lunora/hyperdrive/global` over a Hyperdrive driver.
     const hyperdriveGlobalConfigField = hasHyperdriveGlobal
-        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
         : "";
 
     // External-source ingest (plan 077): the host supplies one resolver that turns a
@@ -4692,7 +4692,7 @@ ${vectorNamespaceField}
     // which does not declare these fields — doesn't trip an excess-property
     // error; the Hyperdrive factory simply never reads the extra properties.
     const globalDatabaseLine = hasGlobalTables
-        ? `            const globalRequest = { bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
+        ? `            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 
     // Local-first sync engine, global tier: when a project has shapes AND
@@ -4711,7 +4711,7 @@ ${vectorNamespaceField}
             // A shape read performs no writes, so the widened request only needs
             // the inbound bookmark (pin the membership drain to the caller's own
             // prior writes) — no \`onBookmark\` here.
-            const globalRequest = { ...identity, bookmark: this.getInboundBookmark() };
+            const globalRequest = { ...identity, ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() };
             const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
             const rows: Array<{ doc: Record<string, unknown>; id: string }> = [];
 
@@ -4740,13 +4740,13 @@ ${vectorNamespaceField}
             return rows;
         }
 
-        protected override async readGlobalChangedTables(sinceSeq: number, cursorOnly?: boolean): Promise<{ cursor: number; tables: string[] } | undefined> {
+        protected override async readGlobalChangedTables(sinceSeq: number, cursorOnly?: boolean): Promise<{ cursor: number; floor?: number; tables: string[] } | undefined> {
             const env = this.env as Record<string, unknown>;
             // Metadata-only: this asks the global changelog which TABLES moved,
             // never what changed in them, so it costs one small read per poll tick
             // for the whole shard — and a tick whose answer omits a shape's table
             // skips that shape's membership drain entirely.
-            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { bookmark: this.getInboundBookmark() }) ?? globalDbStub;
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() }) ?? globalDbStub;
 
             return globalDb.cdcChangedTables?.(sinceSeq, { cursorOnly });
         }

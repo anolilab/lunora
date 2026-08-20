@@ -3943,7 +3943,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // The request type declares the Sessions-API bookmark pair the DO actually
             // passes, so a direct `createShardDO({ d1 })` can read them under types.
             expect(output).toContain(
-                "d1?: (env: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;",
+                "d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;",
             );
             expect(output).toContain("const globalDbStub: DatabaseWriterLike");
             expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;");

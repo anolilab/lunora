@@ -524,7 +524,28 @@ export interface DatabaseWriterLike {
      * be handed is discarded, and computing it means scanning the changelog from
      * `sinceSeq` — which on a cold instance is the whole log.
      */
-    cdcChangedTables?: (sinceSeq: number, options?: { cursorOnly?: boolean }) => Promise<{ cursor: number; tables: string[] } | undefined>;
+    cdcChangedTables?: (
+        sinceSeq: number,
+        options?: { cursorOnly?: boolean },
+    ) => Promise<
+        | {
+              cursor: number;
+
+              /**
+               * Oldest `seq` the changelog still retains, when the store is
+               * configured to trim it. Absent means "nothing is ever trimmed",
+               * which is the default and makes the gap below impossible.
+               *
+               * A caller whose `sinceSeq` is under this floor has had the very
+               * rows it was about to reason about deleted, so `tables` UNDER-
+               * REPORTS: it must treat the answer as no-visibility and re-read
+               * everything, exactly as it does when this method is unavailable.
+               */
+              floor?: number;
+              tables: string[];
+          }
+        | undefined
+    >;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;

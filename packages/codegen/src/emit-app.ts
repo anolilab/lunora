@@ -469,7 +469,7 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
             ? [
                   `            ...(this.globalDeclaration
                 ? {
-                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
+                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
                           const env = rawEnv as Env;
                           const database = this.globalDeclaration?.d1(env);
 
@@ -484,7 +484,13 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
 
                           return createD1CtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
+                              ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
                               auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              // Forwarded from the shard's own \`cdc\` config, so ONE
+                              // switch governs both changelogs. Built without it, the
+                              // global \`__cdc_log\` is never written and the shape
+                              // poll's changed-tables fast path is unreachable.
+                              cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
@@ -497,7 +503,7 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
             ? [
                   `            ...(this.hyperdriveGlobalDeclaration
                 ? {
-                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string | null }) => {
+                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string | null }) => {
                           const env = rawEnv as Env;
                           const exec = this.hyperdriveGlobalDeclaration?.exec(env) as SqlExec | undefined;
 
@@ -512,7 +518,10 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
 
                           return createHyperdriveGlobalCtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
+                              ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
                               auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              // See the D1 twin: one \`cdc\` switch, both changelogs.
+                              cdc: request?.cdc ?? false,
                               engine: this.hyperdriveGlobalDeclaration?.engine as HyperdriveEngine,
                               exec,
                               schema: schema as unknown as SqlCtxDbOptions["schema"],

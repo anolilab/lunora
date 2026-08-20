@@ -727,7 +727,7 @@ export interface ShardDOConfig {
     observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
-    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;
+    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;
 }
 
 const schedulerStub = {
@@ -1386,7 +1386,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // so both write to the same trace.
             const span = this.makeDispatchSpan(traceAnchor, observability);
 
-            const globalRequest = { bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };
+            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };
             const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;
             // `ctx.db`, wrapped in automatic instrumentation: by default this
             // adds aggregate counters (call count, total time, per-operation
