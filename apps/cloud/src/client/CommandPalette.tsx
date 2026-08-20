@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { PaletteCommand } from "./use-command-palette";
 
@@ -20,11 +20,8 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
     const [query, setQuery] = useState("");
     const [selected, setSelected] = useState(0);
 
-    const matches = useMemo(() => {
-        const needle = query.trim().toLowerCase();
-
-        return needle === "" ? commands : commands.filter((command) => `${command.group} ${command.label}`.toLowerCase().includes(needle));
-    }, [commands, query]);
+    const needle = query.trim().toLowerCase();
+    const matches = needle === "" ? commands : commands.filter((command) => `${command.group} ${command.label}`.toLowerCase().includes(needle));
 
     // Derived clamp instead of a reset effect: a shrinking match list can
     // never leave the cursor out of range.
@@ -55,7 +52,8 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
     }, []);
 
     return (
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- jsx-a11y still classes `<dialog>` as non-interactive, which predates the element's native modal semantics; it IS the interactive surface here, and the keyboard path below mirrors the click
+        /* eslint-disable jsx-a11y/no-noninteractive-element-interactions -- jsx-a11y still classes `<dialog>` as non-interactive, which predates the element's native modal semantics; it IS the interactive surface here, and the keyboard path below mirrors the click */
+        // react-doctor-disable-next-line react-doctor/no-noninteractive-element-interactions -- same false positive: a `<dialog>` opened with showModal() owns the focus trap, the top layer and Escape; giving it an interactive role would misdescribe it to screen readers, and every command in the list is already its own <button>
         <dialog
             aria-label="Command palette"
             className="palette"
@@ -145,6 +143,7 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
                 <div className="palette-hint muted">↑↓ navigate · ↵ run · esc close</div>
             </div>
         </dialog>
+        /* eslint-enable jsx-a11y/no-noninteractive-element-interactions */
     );
 };
 

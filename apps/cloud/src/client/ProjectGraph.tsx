@@ -186,7 +186,7 @@ const BindingSheet = ({ binding, onClose }: { binding: Binding | null; onClose: 
                             rel="noreferrer"
                             target="_blank"
                         >
-                            Learn more
+                            {TYPE_LABEL[binding.type] ?? binding.type} docs on Cloudflare
                             <HugeiconsIcon className="size-3.5" icon={ArrowUpRight01Icon} strokeWidth={2} />
                         </a>
                     </SheetFooter>
@@ -205,6 +205,7 @@ const BindingSheet = ({ binding, onClose }: { binding: Binding | null; onClose: 
 export const ProjectGraph = ({ bindings, projectName }: { bindings: Binding[]; projectName: string }): ReactElement => {
     const [selected, setSelected] = useState<Binding | null>(null);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: React Flow re-seeds its internal node store whenever the `nodes` array is a new reference, so a fresh one per render re-lays-out the diagram and drops the selection
     const nodes = useMemo<Node[]>(() => {
         const rows = Math.max(1, Math.ceil(bindings.length / 2));
 
@@ -221,6 +222,7 @@ export const ProjectGraph = ({ bindings, projectName }: { bindings: Binding[]; p
         ];
     }, [bindings, projectName]);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: same React Flow store as `nodes` above
     const edges = useMemo<Edge[]>(
         () =>
             bindings.map((binding, index) => {

@@ -3,7 +3,6 @@ import type { ReturnOf } from "@lunora/client";
 import { usePreloadedQuery } from "@lunora/react";
 import { createFileRoute, Link, Outlet, redirect, useLocation, useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useMemo } from "react";
 
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
@@ -11,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { api } from "../../lunora/_generated/api.js";
 import { DashboardLayout } from "../client/DashboardLayout";
 import { OrgSwitcher } from "../client/OrgSwitcher";
-import { TAB_GROUPS, TABS } from "../client/tabs";
+import { TAB_GROUPS, TABS, TABS_BY_GROUP } from "../client/tabs";
 import { TimeRangeProvider } from "../client/TimeRangeProvider";
 import type { OrgId } from "../client/types";
 import type { PaletteCommand } from "../client/use-command-palette";
@@ -70,6 +69,37 @@ const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
     );
 };
 
+/**
+ * The ⌘K command list for one organization — every tab plus "back to organizations".
+ *
+ * A module function rather than an inline array so the `navigate` calls live outside any
+ * component body. Each one is a `run` callback: it fires when the operator picks that
+ * command out of the palette, never during a render, so the redirect-in-`beforeLoad`
+ * advice for render-time navigation does not apply.
+ */
+const paletteCommandsFor = (navigate: ReturnType<typeof useNavigate>, organizationId: string): PaletteCommand[] => [
+    ...TABS.map((entry) => {
+        return {
+            group: "Go to",
+            id: `tab:${entry.id}`,
+            label: entry.label,
+            run: () => {
+                // react-doctor-disable-next-line react-doctor/tanstack-start-no-navigate-in-render -- a palette `run` callback, invoked on selection; nothing calls it during render
+                void navigate({ params: { organizationId }, to: entry.to });
+            },
+        };
+    }),
+    {
+        group: "Actions",
+        id: "back",
+        label: "Back to organizations",
+        run: () => {
+            // react-doctor-disable-next-line react-doctor/tanstack-start-no-navigate-in-render -- same: selection-time navigation, not render-time
+            void navigate({ to: "/" });
+        },
+    },
+];
+
 const OrganizationLayout = (): ReactElement => {
     const { organizationId } = Route.useParams();
     const { session } = Route.useRouteContext();
@@ -82,29 +112,7 @@ const OrganizationLayout = (): ReactElement => {
     const activeSegment = pathname.replace(TRAILING_SLASH, "").split("/").pop();
     const activeTab = TABS.find((entry) => entry.id === activeSegment);
 
-    const paletteCommands: PaletteCommand[] = useMemo(
-        () => [
-            ...TABS.map((entry) => {
-                return {
-                    group: "Go to",
-                    id: `tab:${entry.id}`,
-                    label: entry.label,
-                    run: () => {
-                        void navigate({ params: { organizationId }, to: entry.to });
-                    },
-                };
-            }),
-            {
-                group: "Actions",
-                id: "back",
-                label: "Back to organizations",
-                run: () => {
-                    void navigate({ to: "/" });
-                },
-            },
-        ],
-        [navigate, organizationId],
-    );
+    const paletteCommands = paletteCommandsFor(navigate, organizationId);
 
     return (
         <DashboardLayout
@@ -116,7 +124,7 @@ const OrganizationLayout = (): ReactElement => {
                     <SidebarGroupLabel className="font-mono text-[10px] tracking-[0.09em] text-muted-foreground uppercase">{group}</SidebarGroupLabel>
                     <SidebarGroupContent>
                         <SidebarMenu>
-                            {TABS.filter((entry) => entry.group === group).map((entry) => {
+                            {(TABS_BY_GROUP[group] ?? []).map((entry) => {
                                 const isActive = activeSegment === entry.id;
 
                                 return (

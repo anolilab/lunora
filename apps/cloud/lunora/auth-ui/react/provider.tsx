@@ -94,6 +94,7 @@ const AuthUIProvider = ({
     const themeKey = JSON.stringify(resolveThemeVariables(theme));
     const configKey = JSON.stringify({ basePath, localization, plugins, redirects, social });
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- this is copy-in code: it lands in a consumer project whose build may not run React Compiler, so the memo has to hold on its own. It also keys on the JSON *values* `configKey`/`themeKey` rather than on object identity, which is the opposite of what the compiler would infer — under compiler memoization the controllers would rebuild on every render.
     const core = useMemo<ControllerContext>(
         () =>
             resolveContext({
@@ -114,6 +115,7 @@ const AuthUIProvider = ({
 
     // `Link` is deliberately outside the `core` memo: swapping it must not
     // recreate the controllers, only re-render the links.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- same copy-in reason as `core` above: a fresh context value re-renders every card, and nothing guarantees the consumer's build memoizes it for us
     const value = useMemo<AuthUIReactContext>(() => {
         return { core, Link };
     }, [core, Link]);
