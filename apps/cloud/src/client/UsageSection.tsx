@@ -7,22 +7,66 @@ import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
 import { includedUsageFor } from "../billing/overage";
+import { estimatedSpendMinor, spendBreakdown } from "../billing/spend";
+import type { UsageTotals } from "../billing/usage";
+import { toPeriodUsage } from "../billing/usage";
 import { formatDate, formatNumber } from "./format";
 import { COLUMN_LABEL } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import { monthStart } from "./usage-period";
 
-const formatBytes = (bytes: number): string => {
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let value = bytes;
-    let unit = 0;
+/** Minor units → a plain dollar string. */
+const formatMinor = (minor: number): string => `$${(minor / 100).toFixed(2)}`;
 
-    while (value >= 1024 && unit < units.length - 1) {
-        value /= 1024;
-        unit += 1;
+/**
+ * Nano-cents → dollars for a single breakdown line. Lines carry exact
+ * nano-cents (the total rounds once, so rounding each line and summing would
+ * disagree with it), and a line worth a fraction of a cent still has to render
+ * as something other than zero.
+ */
+const formatNanoCents = (nanoCents: number): string => {
+    const dollars = nanoCents / 100_000_000_000;
+
+    if (dollars > 0 && dollars < 0.01) {
+        return "<$0.01";
     }
 
-    return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+    return `$${dollars.toFixed(2)}`;
+};
+
+/**
+ * Cost by product for the period. A single spend figure names no product, and
+ * the two quota meters above cover two of the ~35 dimensions the cap actually
+ * prices — so a period whose spend was all Durable Object duration would
+ * otherwise show nothing at all.
+ */
+const CostByProduct = ({ totals }: { totals: UsageTotals }): ReactElement => {
+    const usage = toPeriodUsage(totals);
+    const breakdown = spendBreakdown(usage);
+
+    return (
+        <div className="border-border flex flex-col gap-2 border-t pt-4">
+            <div className="flex items-baseline justify-between gap-4">
+                <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>Estimated cost</span>
+                <span className="font-mono text-sm tabular-nums">{formatMinor(estimatedSpendMinor(usage))}</span>
+            </div>
+            {breakdown.length > 0 ? (
+                <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                    {breakdown.slice(0, 8).map((line) => (
+                        <li className="flex items-baseline justify-between gap-4" key={line.meter}>
+                            <span className="text-muted-foreground font-mono text-[11px]">
+                                {line.product} · {formatNumber(line.quantity)} {line.unit}
+                            </span>
+                            <span className="font-mono text-[11px] tabular-nums">{formatNanoCents(line.nanoCents)}</span>
+                        </li>
+                    ))}
+                </ul>
+            ) : null}
+            <p className="text-muted-foreground m-0 font-mono text-[11px]">
+                Estimated at Cloudflare&apos;s marginal rates — your invoice is the authoritative number.
+            </p>
+        </div>
+    );
 };
 
 type QuotaState = "ok" | "over" | "warn";
@@ -150,6 +194,8 @@ export const UsageSection = ({ organizationId, preloaded }: SectionProps<ReturnO
     const organizations = useQuery(api.organizations.list, {});
     const plan = organizations?.find((entry) => entry._id === organizationId)?.plan ?? "free";
     const included = includedUsageFor(plan);
+    const includedRequests = included.requests ?? 0;
+    const includedCpuMs = included.cpuMs ?? 0;
 
     return (
         <Card>
@@ -165,7 +211,7 @@ export const UsageSection = ({ organizationId, preloaded }: SectionProps<ReturnO
                         <span
                             className={cn(
                                 "font-mono text-5xl leading-none tracking-[-0.02em] tabular-nums",
-                                STATE_TEXT[quotaState(included.requests > 0 ? summary.requests / included.requests : 0)],
+                                STATE_TEXT[quotaState(includedRequests > 0 ? summary.requests / includedRequests : 0)],
                             )}
                         >
                             {formatNumber(summary.requests)}
@@ -174,17 +220,13 @@ export const UsageSection = ({ organizationId, preloaded }: SectionProps<ReturnO
                     </div>
 
                     <div className="flex flex-col gap-5">
-                        <Meter included={included.requests} label="Requests" used={summary.requests} />
-                        <Meter included={included.cpuMs} label="CPU ms" used={summary.cpuMs} />
+                        <Meter included={includedRequests} label="Requests" used={summary.requests} />
+                        <Meter included={includedCpuMs} label="CPU ms" used={summary.cpuMs} />
                     </div>
 
                     {series && series.length > 0 ? <UsageBars series={series} /> : null}
 
-                    {/* Unmetered against a plan quota, so it stays a plain stat row. */}
-                    <div className="border-border flex items-baseline justify-between gap-4 border-t pt-4">
-                        <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>Storage</span>
-                        <span className="font-mono text-sm tabular-nums">{formatBytes(summary.storageBytes)}</span>
-                    </div>
+                    <CostByProduct totals={summary} />
                 </div>
             </CardContent>
         </Card>

@@ -311,7 +311,7 @@ export const platformUsage = sqliteTable("platformUsage", {
     _creationTime: integer("_creationTime").notNull(),
     createdAt: real("createdAt").notNull(),
     deploymentId: text("deploymentId").references((): AnySQLiteColumn => deployments._id),
-    kind: text("kind", { mode: "json" }).$type<"requests" | "cpuMs" | "storageBytes">().notNull(),
+    kind: text("kind", { mode: "json" }).$type<"aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths">().notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     periodStart: real("periodStart").notNull(),
     quantity: real("quantity").notNull(),

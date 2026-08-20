@@ -75,6 +75,27 @@ describe(createHttpAnalyticsReader, () => {
         await expect(reader.readRequestUsage(0)).resolves.toStrictEqual([{ requests: 42, scriptName: "acme-app" }]);
     });
 
+    /**
+     * The regression this pins: Analytics Engine samples at high write rates,
+     * and `SUM(double1)` counts retained rows rather than the requests they
+     * stand in for. Since sampling engages exactly when a tenant's traffic
+     * spikes, an unsampled sum under-counts hardest in the runaway case the
+     * spend cap downstream exists to catch — so the query must aggregate the
+     * sample interval over the per-tenant index.
+     */
+    it("aggregates the sample interval over the per-tenant index, not the raw double", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(Response.json({ data: [] }, { status: 200 }));
+        const reader = createHttpAnalyticsReader({ accountId: "acc", apiToken: "tok", dataset: "usage", fetch: fetchMock });
+
+        await reader.readRequestUsage(1_700_000_000_000);
+
+        const body = (fetchMock.mock.calls[0]?.[1] as undefined | { body?: string })?.body ?? "";
+
+        expect(body).toContain("SUM(_sample_interval)");
+        expect(body).toContain("index1 AS scriptName");
+        expect(body).not.toContain("SUM(double1)");
+    });
+
     it("throws on a non-ok response", async () => {
         const reader = createHttpAnalyticsReader({
             accountId: "acc",
