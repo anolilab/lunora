@@ -45,6 +45,7 @@ export {
     backfillRankIndexes,
     backfillSearchIndexes,
     CDC_LOG_TABLE,
+    cdcCanVouchFor,
     cdcSeqLeavingRows,
     cdcTouchesTables,
     compactCdcDocs,

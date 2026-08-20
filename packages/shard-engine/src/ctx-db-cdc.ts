@@ -178,6 +178,66 @@ const cdcTouchesTables = (sql: SqlExec, sinceSeq: number, tables: ReadonlySet<st
     return rows.length > 0;
 };
 
+/**
+ * Can the changelog speak for EVERY entry in a subscription's read-set?
+ *
+ * This is the question {@link cdcTouchesTables} silently assumes the answer to.
+ * That probe reports "no change" for a dependency the log never records, and a
+ * "no change" the log cannot actually vouch for is indistinguishable on the wire
+ * from a genuine one — the resuming client keeps a stale value forever.
+ *
+ * The log records writes to THIS shard's own SQLite tables and nothing else, so
+ * a great deal of what a query can read is invisible to it. A `.global()` table
+ * lives in D1 and no DO ever appends a CDC entry for it, so a write by ANY shard
+ * leaves this log untouched. The `"*"` wildcard an admin/flags read stamps names
+ * no table at all, and a flag flipped in the provider never touches SQLite.
+ * `ctx.kv`, `ctx.storage`, `ctx.vectors`, `ctx.system`, and a wall-clock
+ * predicate like `_creationTime > now - 1h` leave no row-level trace anywhere in
+ * the log either.
+ *
+ * So the vouchable set is defined POSITIVELY, and read from the storage itself
+ * rather than from a list someone has to remember to extend: a dependency is
+ * vouchable iff a table of that name exists in this DO's SQLite. That is the
+ * set `recordCdc` appends for, plus the shard's own bookkeeping tables, which
+ * no `ctx.db` read can name. Anything else — a `.global()` table, a sentinel, a
+ * dependency stamped by a capability added after this was written — falls to
+ * the default, and the default is "cannot vouch". Getting the classification
+ * wrong then costs a needless re-snapshot instead of silently serving stale
+ * data.
+ *
+ * The live-refresh path is already pessimistic in exactly this way (see
+ * `writeTouchesMemo` in `subscription-range-gate.ts` — "assume touched on any
+ * uncertainty"); this is the resume path agreeing with it.
+ *
+ * An EMPTY read-set is unvouchable for the same reason and not a special case:
+ * a query whose dependencies were never recorded may well read a global table,
+ * so "nothing changed locally" proves nothing about it.
+ *
+ * Reads the whole `sqlite_master` table list rather than probing the read-set
+ * names with an `IN (…)`: a shard holds tens of tables, and binding one
+ * parameter per dependency would walk into workerd's 100-bound-parameter cap on
+ * a wide read-set.
+ */
+const cdcCanVouchFor = (sql: SqlExec, deps: ReadonlySet<string>): boolean => {
+    if (deps.size === 0) {
+        return false;
+    }
+
+    const local = new Set(
+        runDrizzle<{ name: string }>(sql, dsql`SELECT name FROM sqlite_master WHERE type = 'table'`)
+            .toArray()
+            .map((row) => row.name),
+    );
+
+    for (const dep of deps) {
+        if (!local.has(dep)) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
 /** One changed row key in a range: the id, the LATEST op that hit it, and that op's `seq`. No post-image. */
 interface CdcChangeKey {
     id: string;
@@ -495,6 +555,7 @@ export {
     CDC_LOG_TABLE,
     CDC_LOG_TABLE_SEQ_INDEX,
     CDC_META_TABLE,
+    cdcCanVouchFor,
     cdcSeqLeavingRows,
     cdcTouchesTables,
     compactCdcDocs,

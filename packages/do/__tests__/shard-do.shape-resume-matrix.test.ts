@@ -351,4 +351,72 @@ describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
             testHarness.close();
         }
     });
+
+    it("seals the timeline for later shape clients once one proves the log rolled back", async () => {
+        expect.assertions(3);
+
+        const testHarness = createSqliteExec();
+
+        try {
+            runShardMigrations(testHarness.sql, messagesSchema, { cdc: true });
+
+            const writer = makeWriter(testHarness.sql);
+
+            await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m2", authorId: "u1", channelId: "c1", text: "beta" }, { allowExplicitId: true });
+
+            const sockets: FakeSocket[] = [];
+            const state: ShardDOState = {
+                acceptWebSocket(ws: WebSocket) {
+                    sockets.push(ws as unknown as FakeSocket);
+                },
+                getWebSockets(): WebSocket[] {
+                    return sockets as unknown as WebSocket[];
+                },
+                storage: { sql: testHarness.sql as unknown as ShardDOState["storage"]["sql"] },
+            };
+            const shard = new MatrixShapeShard(state, {});
+            const beforeFork = readCdcEpoch(testHarness.sql);
+
+            const subscribe = async (socket: FakeSocket, sinceCheckpoint: number, sinceEpoch: string): Promise<void> => {
+                sockets.push(socket);
+
+                await shard.webSocketMessage(
+                    socket as unknown as WebSocket,
+                    JSON.stringify({
+                        id: "shape-1",
+                        shape: { args: { channelId: "c1" }, name: "messagesByChannel" },
+                        sinceCheckpoint,
+                        sinceEpoch,
+                        type: "shape_subscribe",
+                    }),
+                );
+            };
+
+            // Case 3 of the matrix above establishes that a client AHEAD of the
+            // cursor re-seeds. The fork it names is a property of the SHARD, not
+            // of that one client: a PITR restore reverts `__cdc_meta` along with
+            // the log, so the epoch cannot report it and this checkpoint is the
+            // only surviving evidence. Acting on it has to seal the timeline for
+            // everyone, not just refuse the messenger.
+            const ahead = createFakeSocket();
+
+            await subscribe(ahead, 99, beforeFork);
+
+            expect(firstPokeStartBase(ahead.sent)).toBeUndefined();
+            expect(readCdcEpoch(testHarness.sql)).not.toBe(beforeFork);
+
+            // The client the per-client guard cannot save: its checkpoint sits
+            // BELOW the rewound cursor and inside the retained window, so every
+            // other clause of `canResume` holds. Only the sealed epoch stops it
+            // resuming onto a diff computed over a forked log.
+            const behind = createFakeSocket();
+
+            await subscribe(behind, 1, beforeFork);
+
+            expect(firstPokeStartBase(behind.sent)).toBeUndefined();
+        } finally {
+            testHarness.close();
+        }
+    });
 });

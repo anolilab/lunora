@@ -4386,6 +4386,7 @@ export {
     applyCdcChanges,
     bumpCdcEpoch,
     CDC_LOG_TABLE,
+    cdcCanVouchFor,
     cdcSeqLeavingRows,
     cdcTouchesTables,
     compactCdcDocs,

@@ -141,6 +141,7 @@ import {
     buildShapeDiff,
     bumpCdcEpoch,
     CDC_LOG_TABLE,
+    cdcCanVouchFor,
     cdcSeqLeavingRows,
     cdcTouchesTables,
     clearCapturedMail,
@@ -1548,6 +1549,14 @@ abstract class ShardDO {
      * for why a shared cursor leaves no cheaper recovery.
      */
     private globalResyncRequested = false;
+
+    /**
+     * Whether this wake has already re-minted the epoch to seal a rolled-back
+     * timeline. In-memory on purpose — see {@link ShardDO.sealForkedTimeline} for
+     * why the seal is capped at one per wake, and why losing the flag on eviction
+     * is the correct direction.
+     */
+    private forkSealed = false;
 
     /**
      * Wall-clock millis of the last unconditional `.global()` membership pass.
@@ -3010,18 +3019,91 @@ abstract class ShardDO {
     }
 
     /**
+     * Mint a fresh CDC epoch because a resume claim just proved this shard's
+     * changelog forked under it, and return the new value for the outgoing frame.
+     *
+     * The trigger is a client presenting `sinceEpoch === epoch` with `sinceSeq >
+     * cursor`: it holds a cursor this shard once issued on THIS timeline and can
+     * no longer account for. Only a rollback produces that — in practice a native
+     * PITR restore, which is armed in {@link handlePitrAdminOp}.
+     *
+     * **Why the signal has to come from a client.** A restore reverts the whole
+     * SQLite database, `__cdc_meta` included, so the proactive bump `pitrRestore`
+     * performs is rolled back along with everything else — the epoch cannot
+     * detect the one event it exists for. Nothing durable inside a SQLite-backed
+     * Durable Object escapes that: the KV half of `state.storage` is the same
+     * database, and an alarm is a row in it. The only record of the pre-restore
+     * timeline that the restore cannot reach is the cursor each CLIENT cached, so
+     * that is what this reads. Turning one client's refusal into a shard-wide
+     * epoch bump is what extends the protection to clients that reconnect later,
+     * after post-restore writes have climbed the AUTOINCREMENT back past their
+     * own `sinceSeq` and the `sinceSeq > cursor` guard no longer fires for them.
+     *
+     * **What it detects.** Any rollback under a live subscriber base, promptly: a
+     * restore restarts the object (`ctx.abort()`, or the eviction that lets a
+     * deferred restore apply), which drops every hibernated socket, so the whole
+     * subscriber set reconnects with pre-restore cursors while the restored
+     * cursor is still low. The first of them seals the fork for the rest.
+     *
+     * **What it cannot detect.** A rollback on a shard whose clients ALL stay
+     * offline until the cursor has climbed back past their cursors — nobody is
+     * left to present the proof. A shard with no subscribers at all is the
+     * degenerate case of that, and is also the case where nothing is stale.
+     *
+     * **On trusting `sinceSeq`.** It is client-supplied, so a caller that already
+     * knows this shard's epoch can force a bump. The cost of doing so is bounded
+     * and deferred: an epoch bump pushes nothing and interrupts nothing — live
+     * subscriptions keep receiving deltas — it only means each client takes a
+     * snapshot instead of a resume on its NEXT reconnect. That is strictly less
+     * than the same caller can already spend by subscribing without a `sinceSeq`.
+     * @returns the freshly minted epoch, to stamp on the frame this verdict produces
+     */
+    protected sealForkedTimeline(): string {
+        // At most once per wake, and that bound is a security property rather
+        // than an optimisation.
+        //
+        // The proof this acts on — "a client presents a cursor ahead of ours on
+        // our own epoch" — is CLIENT-SUPPLIED, and the epoch it must match is
+        // stamped on every frame the client has ever received. So any subscriber
+        // can manufacture the proof at will, and without a bound each forged
+        // frame would cost one SQLite write and invalidate the cached resume of
+        // every other subscriber on the shard: a one-frame request amplified into
+        // N full snapshots.
+        //
+        // One seal is all a real restore needs — it re-mints the epoch shard-wide,
+        // so every client that reconnects afterwards is refused by the epoch
+        // comparison above rather than by re-proving the rollback. Latching after
+        // the first therefore costs the genuine case nothing, and caps the forged
+        // case at what an ordinary eviction already costs (a wake with cold
+        // caches). A restore evicts the object, so the next real fork gets a
+        // fresh instance and a fresh latch.
+        if (this.forkSealed) {
+            // Already sealed this wake: hand back the epoch minted then, so the
+            // caller still stamps the post-fork timeline on its refusal.
+            return readCdcEpoch(this.sql as SqlExec);
+        }
+
+        this.forkSealed = true;
+
+        return bumpCdcEpoch(this.sql as SqlExec);
+    }
+
+    /**
      * Decide whether a reconnecting subscription can resume from `sinceSeq`
      * without a full snapshot. Returns the current high-watermark `cursor` plus
      * a `resumable` verdict.
      *
-     * `resumable: true` means `sinceSeq` is within the CDC retention window and
-     * no table in the query's `readSet` changed in `(sinceSeq, cursor]` — the
-     * client's cached value is still current, so the caller emits a lightweight
-     * `resume` frame instead of re-shipping the snapshot.
+     * `resumable: true` means `sinceSeq` is within the CDC retention window,
+     * every entry in the query's `readSet` is one the changelog can speak for,
+     * and none of them changed in `(sinceSeq, cursor]` — the client's cached
+     * value is still current, so the caller emits a lightweight `resume` frame
+     * instead of re-shipping the snapshot.
      *
-     * `resumable: false` means either the log was compacted past `sinceSeq` (a
+     * `resumable: false` means the log was compacted past `sinceSeq` (a
      * retention gap), a read table changed (the client needs the fresh value),
-     * or CDC is off — the caller falls back to the full-snapshot seed.
+     * the read-set contains something the changelog cannot vouch for (see
+     * {@link cdcCanVouchFor}), or CDC is off — the caller falls back to the
+     * full-snapshot seed.
      */
     protected evaluateResume(
         sinceSeq: number,
@@ -3052,14 +3134,31 @@ abstract class ShardDO {
 
         // Rollback guard: a legitimate `sinceSeq` can never exceed the current
         // high-watermark (the cursor is monotonic and survives trims). A client
-        // claiming to have seen MORE than the shard holds means the log rolled
-        // back (e.g. a PITR restore) under a matching epoch — re-snapshot.
+        // claiming to have seen MORE than the shard holds, on THIS epoch, is
+        // proof the log rolled back under it — and is the only such proof that
+        // exists (see {@link sealForkedTimeline}). Refuse this client, and seal
+        // the fork for every other one.
         if (sinceSeq > cursor) {
+            return { cursor, epoch: this.sealForkedTimeline(), resumable: false };
+        }
+
+        // Everything below this line reasons from `__cdc_log`, so first ask
+        // whether the log is entitled to speak for what this query read at all
+        // — a `.global()` table, the `"*"` flags/admin wildcard, or any other
+        // dependency it never records makes "nothing changed" a claim it cannot
+        // support. See {@link cdcCanVouchFor}; an unrecorded (empty) read-set is
+        // an instance of the same rule, not a separate case.
+        //
+        // This gate sits BEFORE the at-the-high-watermark fast path deliberately:
+        // a `.global()` write bumps no cursor on this shard, so `sinceSeq ===
+        // cursor` is exactly the state a client that missed one arrives in.
+        if (!cdcCanVouchFor(sql, readSet)) {
             return { cursor, epoch, resumable: false };
         }
 
         // Client already at the high-watermark: nothing newer exists, so it is
-        // trivially current regardless of the read-set.
+        // trivially current — the read-set is vouchable, so no unlogged source
+        // can have moved under it.
         if (sinceSeq === cursor) {
             return { cursor, epoch, resumable: true };
         }
@@ -3075,13 +3174,6 @@ abstract class ShardDO {
         const floor = minCdcSeq(sql);
 
         if (floor === undefined || floor > sinceSeq + 1) {
-            return { cursor, epoch, resumable: false };
-        }
-
-        // An empty read-set means we never recorded which tables the query
-        // depends on (unknown deps), so we can't prove it was untouched — force
-        // a full snapshot rather than resuming blindly on stale data.
-        if (readSet.size === 0) {
             return { cursor, epoch, resumable: false };
         }
 
@@ -7703,11 +7795,20 @@ abstract class ShardDO {
 
         // Roll the CDC epoch so live subscribers re-snapshot rather than try to
         // resume across the timeline fork a restore introduces. This bump is the
-        // proactive half (it takes effect immediately, before any `restart`);
-        // the native restore itself reverts SQLite — including this epoch row —
-        // so the post-restore safety net is `evaluateResume`'s `sinceSeq >
-        // cursor` rollback guard. Best-effort: `cdcEnabled()` is false on a stub
-        // `sql` handle or a pre-CDC shard, so the bump simply no-ops there.
+        // proactive half only, and it is genuinely half: the native restore
+        // reverts all of SQLite — this epoch row with it — so a deferred restore
+        // (`restart: false`) that applies on some later eviction lands on a shard
+        // whose epoch is back to its pre-bump value. The window this half does
+        // cover is the one between arming and the restart.
+        //
+        // The other half is reactive and lives in
+        // {@link ShardDO.sealForkedTimeline}: the first client to present a
+        // cursor ahead of the rewound log, on the reverted epoch, proves the fork
+        // from outside SQLite and re-mints the epoch for everyone. Read that
+        // comment for what the pair can and cannot detect.
+        //
+        // Best-effort: `cdcEnabled()` is false on a stub `sql` handle or a
+        // pre-CDC shard, so the bump simply no-ops there.
         if (this.cdcEnabled()) {
             bumpCdcEpoch(this.sql as SqlExec);
         }
@@ -9285,12 +9386,24 @@ abstract class ShardDO {
     ): { baseCheckpoint: number | undefined; cursor: number; epoch: string | undefined; rowsPatch: ShapeRowOp[] } {
         const sql = this.sql as SqlExec;
         const cursor = this.currentCdcCursor() ?? 0;
-        const epoch = this.currentCdcEpoch();
+        const currentEpoch = this.currentCdcEpoch();
         const floor = this.cdcEnabled() ? minCdcSeq(sql) : undefined;
+        const onThisTimeline = currentEpoch !== undefined && shape.sinceEpoch === currentEpoch;
+
+        // Same rollback proof the subscription path acts on, and for the same
+        // reason: a checkpoint ahead of our cursor on OUR epoch is the only
+        // evidence of a PITR restore that the restore itself cannot revert. Seal
+        // the fork here too, or a shape client that reconnects while the rewound
+        // cursor is still low would re-seed correctly while every LATER one — by
+        // then back inside the range — resumes across it. See
+        // {@link ShardDO.sealForkedTimeline}.
+        const rolledBack = this.cdcEnabled() && shape.sinceSeq !== undefined && onThisTimeline && shape.sinceSeq > cursor;
+        const epoch = rolledBack ? this.sealForkedTimeline() : currentEpoch;
+
         const canResume =
             this.cdcEnabled() &&
             shape.sinceSeq !== undefined &&
-            shape.sinceEpoch === epoch &&
+            onThisTimeline &&
             shape.sinceSeq <= cursor &&
             (shape.sinceSeq === cursor || (floor !== undefined && floor <= shape.sinceSeq + 1));
 
