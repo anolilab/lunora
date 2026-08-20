@@ -10,7 +10,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatMs, formatNumber, formatTime } from "./format";
-import { COLUMN_LABEL, rowClassName, StatusBadge } from "./section-ui";
+import { COLUMN_LABEL, rowClassName } from "./section-styles";
+import { StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import type { OrgId } from "./types";
 

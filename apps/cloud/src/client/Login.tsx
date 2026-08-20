@@ -1,12 +1,13 @@
 import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useCallback, useState } from "react";
+import { createContext, use, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
 import { authClient } from "../../lunora/auth-ui/client";
 import type { AuthClient } from "../../lunora/auth-ui/core";
-import { AuthUIProvider, SignInCard, SignUpCard } from "../../lunora/auth-ui/react";
-import { COLUMN_LABEL } from "./section-ui";
+import { SignInCard, SignUpCard } from "../../lunora/auth-ui/react/auth-cards";
+import { AuthUIProvider } from "../../lunora/auth-ui/react/provider";
+import { COLUMN_LABEL } from "./section-styles";
 
 /**
  * Sign-in / sign-up for the hosted studio.
@@ -79,9 +80,9 @@ export const Login = ({ onSignedIn }: LoginProps = {}): ReactElement => {
     // Every post-auth navigation the cards attempt funnels into `onSignedIn`: the
     // route owns where to go (it validated the `?redirect=` target) and how to get
     // there (a full load, so the cookie reaches the server render).
-    const handleNavigate = useCallback(() => {
+    const handleNavigate = (): void => {
         onSignedIn?.();
-    }, [onSignedIn]);
+    };
 
     return (
         <main className="bg-background text-foreground grid min-h-svh grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">

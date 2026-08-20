@@ -12,7 +12,8 @@ import type { Id } from "../../lunora/_generated/dataModel.js";
 import { AsyncList } from "./AsyncList";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatDateTime } from "./format";
-import { COLUMN_LABEL, FormError, StatusBadge, Upsell } from "./section-ui";
+import { COLUMN_LABEL } from "./section-styles";
+import { FormError, StatusBadge, Upsell } from "./section-ui";
 import type { SectionProps } from "./tabs";
 
 /** The structured investigation result the runner produces (mirrors the query view). */

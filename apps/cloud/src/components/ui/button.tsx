@@ -51,4 +51,5 @@ function Button({
     return <ButtonPrimitive data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...props} />;
 }
 
+// react-doctor-disable-next-line react-doctor/only-export-components -- shadcn/ui ships the cva variants next to the component under this exact name; splitting them would fork the file from upstream and break `shadcn add`'s diff on the next update. The Fast Refresh cost is a full reload of a leaf primitive, which is not where state lives.
 export { Button, buttonVariants };

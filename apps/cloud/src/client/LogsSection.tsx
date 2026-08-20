@@ -11,7 +11,8 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatTime } from "./format";
-import { COLUMN_LABEL, Field } from "./section-ui";
+import { COLUMN_LABEL } from "./section-styles";
+import { Field } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import type { ProjectId } from "./types";

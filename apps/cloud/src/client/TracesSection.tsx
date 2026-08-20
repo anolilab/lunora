@@ -14,7 +14,8 @@ import type { ObservationSpan } from "../telemetry/trace-tree";
 import { buildTraceTree } from "../telemetry/trace-tree";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatMs, formatTime } from "./format";
-import { COLUMN_LABEL, Field, StatusBadge } from "./section-ui";
+import { COLUMN_LABEL } from "./section-styles";
+import { Field, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import { SpanDetail, TraceWaterfall } from "./TraceDetail";
@@ -232,15 +233,18 @@ const useArchiveBackfill = (context: { deploymentId: string; from: number; organ
     const loadOlderFromArchive = (): void => {
         setLoadingOlder(true);
         void (async () => {
+            // Not a `finally`: neither branch returns early or rethrows, so clearing the
+            // flag afterwards runs on exactly the same paths — and React Compiler cannot
+            // lower a `finally`, which would opt this hook out of memoization entirely.
             try {
                 const rows = await client.action(api.traces.listArchived, { from, organizationId, to });
 
                 setOlderArchive({ key: archiveKey, traces: rows });
             } catch {
                 setOlderArchive({ key: archiveKey, traces: [] });
-            } finally {
-                setLoadingOlder(false);
             }
+
+            setLoadingOlder(false);
         })();
     };
 

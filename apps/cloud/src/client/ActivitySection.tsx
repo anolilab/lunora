@@ -8,7 +8,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import type { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
 import { formatDateTime } from "./format";
-import { COLUMN_LABEL, StatusBadge } from "./section-ui";
+import { COLUMN_LABEL } from "./section-styles";
+import { StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 
 /**

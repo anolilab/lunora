@@ -8,6 +8,8 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
+import { rowClassName } from "./section-styles";
+
 /**
  * Shared presentation primitives for the dashboard section bodies, so every tab
  * renders lists, form fields, status, and errors the same way. Behaviour lives
@@ -16,26 +18,7 @@ import { cn } from "@/lib/utils";
  * and the plan-gate upsell.
  */
 
-/**
- * Base data-row layout — a hairline-separated row. Exported so an interactive
- * whole-row button or link can reuse the exact metrics.
- */
-export const rowClassName = "flex w-full items-center gap-3 border-b border-border px-1 py-3 text-sm last:border-b-0";
-
-/** Interactive variant — a whole-row link/button that highlights on hover. */
-export const interactiveRowClassName = cn(rowClassName, "cursor-pointer text-left text-foreground transition-colors hover:bg-accent");
-
 /** The list wrapper for {@link Row}s — no bullets, no gaps (rows carry their own rule). */
-
-/**
- * The label voice: Geist Mono, ALL CAPS, tight tracking, tertiary size.
- *
- * One constant rather than the same class string repeated per `&lt;TableHead>` — the
- * design system treats labels as a single role, so they should have a single
- * definition. Applies to column headers and any other structural label.
- */
-export const COLUMN_LABEL = "font-mono text-[10px] tracking-[0.09em] uppercase";
-
 export const RowList = ({ children }: { children: ReactNode }): ReactElement => <ul className="m-0 grid list-none gap-0 p-0">{children}</ul>;
 
 /** One non-interactive data row. */

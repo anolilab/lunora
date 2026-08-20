@@ -11,7 +11,7 @@ import { estimatedSpendMinor, spendBreakdown } from "../billing/spend";
 import type { UsageTotals } from "../billing/usage";
 import { toPeriodUsage } from "../billing/usage";
 import { formatDate, formatNumber } from "./format";
-import { COLUMN_LABEL } from "./section-ui";
+import { COLUMN_LABEL } from "./section-styles";
 import type { SectionProps } from "./tabs";
 import { monthStart } from "./usage-period";
 

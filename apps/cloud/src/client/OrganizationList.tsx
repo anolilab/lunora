@@ -11,7 +11,8 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
-import { COLUMN_LABEL, Field, FormError, StatusBadge } from "./section-ui";
+import { COLUMN_LABEL } from "./section-styles";
+import { Field, FormError, StatusBadge } from "./section-ui";
 import type { CellId, OrgId } from "./types";
 
 interface OrganizationListProps {

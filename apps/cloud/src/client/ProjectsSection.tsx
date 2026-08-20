@@ -13,7 +13,8 @@ import { api } from "../../lunora/_generated/api.js";
 import { DeploymentsSection } from "./DeploymentsSection";
 import type { GitProvider } from "./ImportProjectDialog";
 import { ImportProjectDialog } from "./ImportProjectDialog";
-import { Field, FieldForm, FormError, interactiveRowClassName, RowList } from "./section-ui";
+import { interactiveRowClassName } from "./section-styles";
+import { Field, FieldForm, FormError, RowList } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
 
 interface ProjectsSectionProps {
@@ -69,27 +70,40 @@ const gitProviderOf = (repo: string | undefined): "github" | "gitlab" | undefine
     return repo.includes("gitlab") ? "gitlab" : "github";
 };
 
+/** A blank new-project draft — the initial value and what a successful create resets to. */
+const EMPTY_DRAFT = { framework: "", name: "", slug: "" };
+
 export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionProps): ReactElement => {
     const projects = usePreloadedQuery(preloaded);
     const createProject = useMutation(api.projects.create);
 
-    const [name, setName] = useState("");
-    const [slug, setSlug] = useState("");
-    const [framework, setFramework] = useState("");
+    // The three new-project fields are one draft: they are filled together, cleared
+    // together on success, and never meaningfully change apart.
+    const [draft, setDraft] = useState(EMPTY_DRAFT);
     const [error, setError] = useState<null | string>(null);
     const [showBlank, setShowBlank] = useState(false);
     const [activeProject, setActiveProject] = useState<null | ProjectId>(null);
 
-    // Import dialog: `seq` remounts it fresh each open so its step/fields reset;
-    // `provider` preselects (from a provider button) or is null (show the picker).
-    const [importOpen, setImportOpen] = useState(false);
-    const [importProvider, setImportProvider] = useState<GitProvider | null>(null);
-    const [importSeq, setImportSeq] = useState(0);
+    // Import dialog: one value, because the three fields only ever change together —
+    // three setters in a row is three chances to leave them inconsistent. `seq`
+    // remounts the dialog fresh each open so its step/fields reset; `provider`
+    // preselects (from a provider button) or is null (show the picker).
+    const [importDialog, setImportDialog] = useState<{ open: boolean; provider: GitProvider | null; seq: number }>({
+        open: false,
+        provider: null,
+        seq: 0,
+    });
 
     const openImport = (provider: GitProvider | null): void => {
-        setImportProvider(provider);
-        setImportSeq((value) => value + 1);
-        setImportOpen(true);
+        setImportDialog((current) => {
+            return { open: true, provider, seq: current.seq + 1 };
+        });
+    };
+
+    const setImportOpen = (open: boolean): void => {
+        setImportDialog((current) => {
+            return { ...current, open };
+        });
     };
 
     if (activeProject) {
@@ -109,7 +123,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
         );
     }
 
-    const effectiveSlug = slug.trim() === "" ? slugify(name) : slug;
+    const effectiveSlug = draft.slug.trim() === "" ? slugify(draft.name) : draft.slug;
 
     return (
         <div className="flex flex-col gap-6">
@@ -222,14 +236,12 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                                 void (async () => {
                                     try {
                                         const id = await createProject.mutate({
-                                            framework: framework.trim() || undefined,
-                                            name,
+                                            framework: draft.framework.trim() || undefined,
+                                            name: draft.name,
                                             organizationId,
                                             slug: effectiveSlug,
                                         });
-                                        setName("");
-                                        setSlug("");
-                                        setFramework("");
+                                        setDraft(EMPTY_DRAFT);
                                         setShowBlank(false);
                                         setActiveProject(id);
                                     } catch (error_: unknown) {
@@ -242,30 +254,36 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                                 <Input
                                     id="project-name"
                                     onChange={(event) => {
-                                        setName(event.target.value);
+                                        setDraft((current) => {
+                                            return { ...current, name: event.target.value };
+                                        });
                                     }}
                                     required
-                                    value={name}
+                                    value={draft.name}
                                 />
                             </Field>
                             <Field htmlFor="project-slug" label="Slug">
                                 <Input
                                     id="project-slug"
                                     onChange={(event) => {
-                                        setSlug(event.target.value);
+                                        setDraft((current) => {
+                                            return { ...current, slug: event.target.value };
+                                        });
                                     }}
-                                    placeholder={slugify(name) || "my-app"}
-                                    value={slug}
+                                    placeholder={slugify(draft.name) || "my-app"}
+                                    value={draft.slug}
                                 />
                             </Field>
                             <Field htmlFor="project-framework" label="Framework">
                                 <Input
                                     id="project-framework"
                                     onChange={(event) => {
-                                        setFramework(event.target.value);
+                                        setDraft((current) => {
+                                            return { ...current, framework: event.target.value };
+                                        });
                                     }}
                                     placeholder="optional"
-                                    value={framework}
+                                    value={draft.framework}
                                 />
                             </Field>
                             <Button className="justify-self-start" disabled={createProject.pending} type="submit">
@@ -278,15 +296,15 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
             ) : null}
 
             <ImportProjectDialog
-                key={importSeq}
+                key={importDialog.seq}
                 onImported={(id) => {
                     setImportOpen(false);
                     setActiveProject(id);
                 }}
                 onOpenChange={setImportOpen}
-                open={importOpen}
+                open={importDialog.open}
                 organizationId={organizationId}
-                provider={importProvider}
+                provider={importDialog.provider}
             />
         </div>
     );

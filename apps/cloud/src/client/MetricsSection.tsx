@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { api } from "../../lunora/_generated/api.js";
 import { formatValue } from "./metric-format";
 import { Sparkline, TrendBadge } from "./MetricSparkline";
-import { COLUMN_LABEL } from "./section-ui";
+import { COLUMN_LABEL } from "./section-styles";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import type { OrgId } from "./types";
 
