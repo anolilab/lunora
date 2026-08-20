@@ -106,7 +106,7 @@ interface RelayHost {
     computeOpLogShapeSeed: (
         shape: ShapeSubscriptionQuery,
         resolved: ResolvedShape,
-    ) => { baseCheckpoint: number | undefined; cursor: number; epoch: string | undefined; rowsPatch: ShapeRowOp[] };
+    ) => { baseCheckpoint: number | undefined; cursor: number; epoch: string | undefined; reset: boolean; rowsPatch: ShapeRowOp[] };
     /** The current CDC epoch (changelog timeline token); `undefined` when CDC is off. */
     currentCdcEpoch: () => string | undefined;
     /** Deliver an already-serialized whisper frame to the DO's local `topic` members (the base whisper fan-out, used whether or not the relay tier is active). */
@@ -782,7 +782,7 @@ class OwnerRelay extends RelayLink {
             this.addRelayToSet(request.relayIndex);
         }
 
-        const { baseCheckpoint, cursor, epoch, rowsPatch } = this.host.computeOpLogShapeSeed(
+        const { baseCheckpoint, cursor, epoch, reset, rowsPatch } = this.host.computeOpLogShapeSeed(
             { args: request.args, name: request.name, sinceEpoch: request.sinceEpoch, sinceSeq: request.sinceSeq },
             resolved,
         );
@@ -834,7 +834,11 @@ class OwnerRelay extends RelayLink {
             writeRelayShape(this.host.sql(), proxy);
         }
 
-        const frames = buildPokeFrames([{ rowsPatch, shapeId: request.subId }], {
+        // `reset` rides on the part, not the meta: this is the relay's copy of
+        // the local op-log seed, and without the flag a re-seed that could not
+        // resume would be spliced onto whatever rows the client still held —
+        // a full seed emits only inserts, so nothing it kept would ever leave.
+        const frames = buildPokeFrames([{ reset, rowsPatch, shapeId: request.subId }], {
             baseCheckpoint,
             checkpoint: cursor,
             epoch,
@@ -1304,7 +1308,13 @@ class RelayMember extends RelayLink {
                 }
 
                 const frames = buildPokeFrames(
-                    [{ rowsPatch: poke.rowsPatch, shapeId: subId }],
+                    // The loop above admits this poke only when the socket's memo
+                    // sits inside `[fromCursor, checkpoint)`, and that memo IS the
+                    // previous poke's checkpoint — so `fromCursor` is the exact
+                    // base the client holds, with no false-divergence risk. Left
+                    // unstamped, the client's gap check stays disarmed on the one
+                    // path where a cross-DO POST can actually drop a poke.
+                    [{ baseCheckpoint: poke.fromCursor, rowsPatch: poke.rowsPatch, shapeId: subId }],
                     {
                         baseCheckpoint: undefined,
                         checkpoint: poke.checkpoint,

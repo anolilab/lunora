@@ -182,6 +182,13 @@ const pokeOps = (ws: FakeWebSocket): { key: string; op: string; value?: Record<s
 
 const frameTypes = (ws: FakeWebSocket): string[] => ws.sent.map((raw) => (JSON.parse(raw) as { type: string }).type);
 
+/** The `reset` flag on every `pokePart` the socket received, in order. */
+const partResets = (ws: FakeWebSocket): (boolean | undefined)[] =>
+    ws.sent
+        .map((raw) => JSON.parse(raw) as { reset?: boolean; type: string })
+        .filter((frame) => frame.type === "pokePart")
+        .map((frame) => frame.reset);
+
 describe("shardDO global-shape poll tier", () => {
     beforeEach(() => {
         harness = createSqliteExec();
@@ -216,6 +223,36 @@ describe("shardDO global-shape poll tier", () => {
         ]);
         // The poll alarm is armed so the runtime will call `alarm()` to refresh.
         expect(alarmBox.scheduled).not.toBeNull();
+    });
+
+    /**
+     * Defect #1 — a `.global()` shape re-seeds in FULL on every (re)subscribe, at
+     * the same epoch and with no `baseCheckpoint`, so neither client-side guard
+     * fires. The seed is inserts-only, so unless it says `reset` on the wire a
+     * reconnecting tab merges it into what it still holds and keeps rendering
+     * rows that were deleted while it was away — for the life of the tab.
+     */
+    it("flags the seed as a reset but never the poll-tick diff", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        sockets.push(ws);
+
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        await subscribeShape(shard, ws);
+
+        expect(partResets(ws)).toStrictEqual([true]);
+
+        ws.sent.length = 0;
+        shard.rows = [{ doc: { _id: "t1", label: "b" }, id: "t1" }];
+        await shard.alarm();
+
+        // A poll-tick diff IS incremental — flagging it would make the client
+        // throw away rows the diff never mentions.
+        expect(partResets(ws)).toStrictEqual([undefined]);
     });
 
     it("fails an over-cap global shape closed: error frame, no poke, no armed alarm", async () => {

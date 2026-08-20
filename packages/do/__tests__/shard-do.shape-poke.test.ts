@@ -164,6 +164,20 @@ const pokeOps = (ws: FakeWebSocket): { key: string; op: string; value?: Record<s
 
 const frameTypes = (ws: FakeWebSocket): string[] => ws.sent.map((raw) => (JSON.parse(raw) as { type: string }).type);
 
+/** The `baseCheckpoint` on every `pokePart` the socket received, in order. */
+const partBases = (ws: FakeWebSocket): (number | undefined)[] =>
+    ws.sent
+        .map((raw) => JSON.parse(raw) as { baseCheckpoint?: number; type: string })
+        .filter((frame) => frame.type === "pokePart")
+        .map((frame) => frame.baseCheckpoint);
+
+/** The `checkpoint` on every `pokeEnd` the socket received, in order. */
+const endCheckpoints = (ws: FakeWebSocket): (number | undefined)[] =>
+    ws.sent
+        .map((raw) => JSON.parse(raw) as { checkpoint?: number; type: string })
+        .filter((frame) => frame.type === "pokeEnd")
+        .map((frame) => frame.checkpoint);
+
 describe("shardDO shape poke protocol (dispatch path)", () => {
     beforeEach(() => {
         harness = createSqliteExec();
@@ -193,6 +207,44 @@ describe("shardDO shape poke protocol (dispatch path)", () => {
 
         expect(ops).toHaveLength(1);
         expect(ops[0]).toMatchObject({ key: "m1", op: "insert" });
+    });
+
+    /**
+     * Defect #6 — the live poke path shipped `baseCheckpoint: undefined`, so the
+     * client's gap detector was dead code on the ONE path where a gap actually
+     * happens. It has to be the cursor the client is really at, which is the last
+     * poke that CARRIED ROWS for this shape — not the shape's memo cursor, which
+     * also advances on an empty diff and would read as a gap the client never had.
+     */
+    it("stamps each live poke part with the checkpoint of the last poke that carried rows", async () => {
+        expect.assertions(3);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+
+        // First live poke: its base is the seed's checkpoint.
+        await shard.fetch(write("messages:send", { _id: "m1", channelId: "c1", text: "one" }));
+
+        const seedCheckpoint = endCheckpoints(ws)[0];
+
+        expect(partBases(ws)[1]).toBe(seedCheckpoint);
+
+        const afterFirst = endCheckpoints(ws)[1];
+
+        // An out-of-channel write: the shape is diffed, the diff is empty, so no
+        // part is delivered and the client's cursor does NOT move — but the memo
+        // does. Stamping the memo would fire a spurious gap on the next real poke.
+        await shard.fetch(write("messages:send", { _id: "other", channelId: "c2", text: "two" }));
+
+        expect(frameTypes(ws).filter((type) => type === "pokePart")).toHaveLength(2);
+
+        await shard.fetch(write("messages:send", { _id: "m2", channelId: "c1", text: "three" }));
+
+        expect(partBases(ws)[2]).toBe(afterFirst);
     });
 
     it("pokes an insert when a new row joins the shape", async () => {

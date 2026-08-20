@@ -13,8 +13,8 @@
  * 5b. `floor !== undefined && floor <= shape.sinceSeq + 1` — the oldest retained op still covers the client's gap
  *
  * **Observable distinction (wire protocol):**
- * - **Resume** — `pokeStart.baseCheckpoint` is a number (`=== shape.sinceSeq`); `rowsPatch` holds only the diff ops for `(sinceSeq, cursor]`.
- * - **Reseed** — `pokeStart.baseCheckpoint` is `undefined`; `rowsPatch` holds the full current membership as inserts.
+ * - **Resume** — `pokeStart.baseCheckpoint` is a number (`=== shape.sinceSeq`); `rowsPatch` holds only the diff ops for `(sinceSeq, cursor]`; the `pokePart` carries no `reset`.
+ * - **Reseed** — `pokeStart.baseCheckpoint` is `undefined`; `rowsPatch` holds the full current membership as inserts, and the `pokePart` is flagged `reset: true`.
  *
  * Each `it.each` row covers one cell of the matrix. This file pins CURRENT behaviour so plan-072's
  * `buildShapeDiff` optimisation has a safety-net before and after.
@@ -35,6 +35,7 @@ import createSqliteExec from "./_helpers/node-sqlite";
 
 interface ParsedFrame {
     baseCheckpoint?: number;
+    reset?: boolean;
     rowsPatch?: { key: string; op: string; value?: Record<string, unknown> }[];
     type: string;
 }
@@ -46,6 +47,19 @@ const firstPokeStartBase = (sent: string[]): number | undefined => {
 
         if (frame.type === "pokeStart") {
             return frame.baseCheckpoint;
+        }
+    }
+
+    return undefined;
+};
+
+/** Extract `reset` from the first `pokePart` frame a socket received. */
+const firstPokePartReset = (sent: string[]): boolean | undefined => {
+    for (const raw of sent) {
+        const frame = JSON.parse(raw) as ParsedFrame;
+
+        if (frame.type === "pokePart") {
+            return frame.reset;
         }
     }
 
@@ -295,7 +309,7 @@ const matrix: MatrixRow[] = [
 
 describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
     it.each(matrix)("$label", async ({ cdcMigrate, expectedOpsLen, expectResume, setup, sinceEpochFn, sinceSeq }) => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         // Each case gets its own in-memory SQLite database so there is no state bleed.
         const testHarness = createSqliteExec();
@@ -343,6 +357,11 @@ describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
 
             // Primary: resume path stamps baseCheckpoint; reseed leaves it undefined.
             expect(baseCheckpoint !== undefined).toBe(expectResume);
+            // The reseed branch ships the full membership as inserts, which can only
+            // ever ADD rows — so it MUST be flagged `reset` on the wire or a client
+            // splices it onto a stale view and keeps every row that left the shape
+            // while it was disconnected. A resume diff must never carry the flag.
+            expect(firstPokePartReset(ws.sent) === true).toBe(!expectResume);
             // Secondary: diff length (resume) or full-membership count (reseed).
             expect(ops).toHaveLength(expectedOpsLen);
             // Sanity: subscription completed successfully (no error frame, got ack).

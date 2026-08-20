@@ -667,6 +667,20 @@ interface ReactorRunOutcome {
 /** Per-socket, per-shape poke baseline: the `__cdc_log` cursor this shape's view has been poked through. */
 interface ShapeMemo {
     cursor: number;
+
+    /**
+     * The cursor of the last poke that actually carried ROWS for this shape —
+     * i.e. what the client's own cursor for it is, since a client advances only
+     * on a part it receives. Distinct from `cursor`, which also advances on an
+     * empty diff (nothing to deliver, but the op range is covered); stamping
+     * `cursor` as the client's expected base would fire a spurious gap on every
+     * shape that had ever seen an empty flush.
+     *
+     * In-memory only, and `undefined` until this wake has delivered a part: a
+     * hibernation eviction simply leaves the next part's base unstamped, which
+     * disarms the gap check for one poke rather than guessing at it.
+     */
+    delivered?: number;
 }
 
 /**
@@ -9356,14 +9370,17 @@ abstract class ShardDO {
         shape: ShapeSubscriptionQuery,
         resolved: ResolvedShape,
     ): Promise<"ok"> {
-        const { baseCheckpoint, cursor, epoch, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
+        const { baseCheckpoint, cursor, epoch, reset, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
 
         // Await drain before the (potentially large) seed poke so a slow consumer
         // can't grow this socket's outbound buffer without bound.
         await awaitWsDrain(ws);
 
-        if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], cursor, epoch, baseCheckpoint)) {
-            this.recordShapeMemo(ws, connectionId, subId, cursor);
+        // `reset` marks the full-membership branch so the client REPLACES its view
+        // instead of splicing onto it. A seed is inserts-only, so without the flag a
+        // row deleted while the client was away is never removed on reconnect.
+        if (this.sendPoke(ws, [{ baseCheckpoint, reset, rowsPatch, shapeId: subId }], cursor, epoch, baseCheckpoint)) {
+            this.recordShapeMemo(ws, connectionId, subId, cursor, true);
         }
 
         return "ok";
@@ -9378,12 +9395,17 @@ abstract class ShardDO {
      * epoch, its checkpoint doesn't run ahead of ours, and the log still covers it;
      * else a full re-seed. A fully-compacted log only proves "nothing missed" when
      * the client is already at `cursor`.
-     * @returns the cursor/epoch, the resume base (`baseCheckpoint`), and the membership patch
+     *
+     * `reset` is the inverse of the resume decision and MUST ride the wire: the
+     * re-seed branch returns the whole membership as inserts, which can only ever
+     * add rows, so a client that splices it onto a stale view keeps every row that
+     * left the shape while it was disconnected. Callers stamp it on the poke part.
+     * @returns the cursor/epoch, the resume base (`baseCheckpoint`), whether this is a full re-seed, and the membership patch
      */
     private computeOpLogShapeSeed(
         shape: ShapeSubscriptionQuery,
         resolved: ResolvedShape,
-    ): { baseCheckpoint: number | undefined; cursor: number; epoch: string | undefined; rowsPatch: ShapeRowOp[] } {
+    ): { baseCheckpoint: number | undefined; cursor: number; epoch: string | undefined; reset: boolean; rowsPatch: ShapeRowOp[] } {
         const sql = this.sql as SqlExec;
         const cursor = this.currentCdcCursor() ?? 0;
         const currentEpoch = this.currentCdcEpoch();
@@ -9412,7 +9434,7 @@ abstract class ShardDO {
                 ? this.diffShape(sql, resolved, shape.sinceSeq, cursor, createShapeDiffCache())
                 : this.buildShapeSeed(sql, resolved);
 
-        return { baseCheckpoint: canResume ? shape.sinceSeq : undefined, cursor, epoch, rowsPatch };
+        return { baseCheckpoint: canResume ? shape.sinceSeq : undefined, cursor, epoch, reset: !canResume, rowsPatch };
     }
 
     /**
@@ -9473,7 +9495,7 @@ abstract class ShardDO {
                 // Empty-diff shapes advance regardless (nothing to deliver for them),
                 // so the next flush doesn't re-scan the same op range.
                 for (const subId of emptyAdvanced) {
-                    this.recordShapeMemo(ws, connectionId, subId, checkpoint);
+                    this.recordShapeMemo(ws, connectionId, subId, checkpoint, false);
                 }
 
                 // Await drain before the (potentially large) poke so a slow consumer
@@ -9488,7 +9510,7 @@ abstract class ShardDO {
                         delivered += 1;
 
                         for (const subId of partAdvanced) {
-                            this.recordShapeMemo(ws, connectionId, subId, checkpoint);
+                            this.recordShapeMemo(ws, connectionId, subId, checkpoint, true);
                         }
                     }
                 }
@@ -9693,7 +9715,14 @@ abstract class ShardDO {
                 const rowsPatch = this.diffShape(sql, resolved, memoCursor, checkpoint, diffCache);
 
                 if (rowsPatch.length > 0) {
-                    parts.push({ rowsPatch, shapeId: subId });
+                    // Stamp the base the client is ACTUALLY at for this shape — the
+                    // cursor of the last poke that carried rows for it, not
+                    // `memoCursor` (which also advances on an empty diff and would
+                    // read as a gap the client never had). Absent on the first
+                    // delivery of a wake; the check is simply disarmed then.
+                    const baseCheckpoint = this.shapeMemos.get(ws)?.get(subId)?.delivered;
+
+                    parts.push({ baseCheckpoint, rowsPatch, shapeId: subId });
                     partAdvanced.push(subId);
                 } else {
                     emptyAdvanced.push(subId);
@@ -9802,7 +9831,11 @@ abstract class ShardDO {
         // re-seeds rather than skipping the rows this poke carried.
         await awaitWsDrain(ws);
 
-        if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined)) {
+        // `reset` — a global shape re-seeds in full on EVERY (re)subscribe, and the
+        // seed is inserts-only. Without the flag a reconnecting client merges the
+        // fresh membership into whatever it still holds and keeps rendering rows
+        // that were deleted while it was away, for the life of the tab.
+        if (this.sendPoke(ws, [{ reset: true, rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined)) {
             this.recordGlobalSnapshot(ws, subId, snapshot);
             this.saveGlobalSnapshot(connectionId, subId, snapshot);
         }
@@ -10359,8 +10392,14 @@ abstract class ShardDO {
      * attachment (`deserializeAttachment()` is a structured-clone read) —
      * every caller already holds it from resolving the socket's shapes.
      */
-    private recordShapeMemo(ws: ShardSocketLike, connectionId: string, subId: string, cursor: number): void {
-        socketMap(this.shapeMemos, ws).set(subId, { cursor });
+    private recordShapeMemo(ws: ShardSocketLike, connectionId: string, subId: string, cursor: number, carriedRows: boolean): void {
+        const memos = socketMap(this.shapeMemos, ws);
+        // `delivered` only moves when this poke actually put rows on the wire for
+        // the shape — that, not `cursor`, is where the client's own cursor sits.
+        // See {@link ShapeMemo.delivered}.
+        const delivered = carriedRows ? cursor : memos.get(subId)?.delivered;
+
+        memos.set(subId, { cursor, ...(delivered === undefined ? {} : { delivered }) });
         this.saveShapePokeCursor(connectionId, subId, cursor);
     }
 
