@@ -813,6 +813,19 @@ const IDEMPOTENCY_RETENTION_MS = 86_400_000;
  */
 interface GlobalPollTick {
     changedTables?: Set<string>;
+
+    /**
+     * Set when any shape in this tick did NOT settle — it threw, its membership
+     * was over the cap, or its poke was not delivered.
+     *
+     * The cursor moves once per tick for the whole shard, so by the time such a
+     * shape fails, the changelog rows that marked its table changed have already
+     * been consumed. Without this the next tick sees the table as unchanged, skips
+     * it, and the socket keeps a stale membership until the resync interval
+     * elapses. Requesting a resync converts "we lost the notification" into "read
+     * everything once", which is the only recovery available to a shared cursor.
+     */
+    resyncRequested: boolean;
     rows: Map<string, ShapeRow[]>;
     skipped: number;
 }
@@ -1539,6 +1552,13 @@ abstract class ShardDO {
      * would let a tick skip a table that HAD changed.
      */
     private globalPollCursor: number | undefined;
+
+    /**
+     * Set when a shape failed to settle in the last poll tick, forcing the next one
+     * to read every shape unconditionally. See {@link GlobalPollTick.resyncRequested}
+     * for why a shared cursor leaves no cheaper recovery.
+     */
+    private globalResyncRequested = false;
 
     /**
      * Wall-clock millis of the last unconditional `.global()` membership pass.
@@ -9751,7 +9771,12 @@ abstract class ShardDO {
 
         // An over-cap membership: leave the prior snapshot untouched (so the diff
         // recovers if it later shrinks) and skip this tick rather than retaining it.
+        // Like a thrown failure, this leaves the socket un-settled against a cursor
+        // that has already advanced, so the next tick must not skip the table.
         if (!this.withinGlobalShapeBound(rows.length, `shape:poll:${subId}`, resolved.table)) {
+            // eslint-disable-next-line no-param-reassign -- the tick is this poll pass's shared accumulator; see its resync-request field
+            tick.resyncRequested = true;
+
             return;
         }
 
@@ -9776,7 +9801,15 @@ abstract class ShardDO {
         if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined)) {
             this.recordGlobalSnapshot(ws, subId, next);
             this.saveGlobalSnapshot(connectionId, subId, next);
+
+            return;
         }
+
+        // The poke did not land, so the baseline still predates this diff — and the
+        // tick's cursor has moved past the changes it was built from. Ask for an
+        // unconditional pass so the next tick rebuilds it rather than skipping.
+        // eslint-disable-next-line no-param-reassign -- the tick is this poll pass's shared accumulator; see its resync-request field
+        tick.resyncRequested = true;
     }
 
     /**
@@ -9983,8 +10016,12 @@ abstract class ShardDO {
      */
     private async openGlobalPollTick(trace?: TraceRefLike): Promise<GlobalPollTick> {
         const now = Date.now();
-        const dueForResync = now - this.lastGlobalResyncAt >= ShardDO.GLOBAL_SHAPE_RESYNC_MS;
-        const tick: GlobalPollTick = { rows: new Map(), skipped: 0 };
+        // A shape that failed to settle last tick asks for an unconditional pass
+        // regardless of how recently the interval elapsed — see `resyncRequested`.
+        const dueForResync = this.globalResyncRequested || now - this.lastGlobalResyncAt >= ShardDO.GLOBAL_SHAPE_RESYNC_MS;
+
+        this.globalResyncRequested = false;
+        const tick: GlobalPollTick = { resyncRequested: false, rows: new Map(), skipped: 0 };
 
         if (dueForResync) {
             this.lastGlobalResyncAt = now;
@@ -10099,6 +10136,7 @@ abstract class ShardDO {
         }
 
         this.globalPoll = recordShapeProbePass(this.globalPoll, tick.rows.size, tick.skipped);
+        this.globalResyncRequested = tick.resyncRequested;
 
         return remaining;
     }
@@ -10154,6 +10192,11 @@ abstract class ShardDO {
                 // eslint-disable-next-line no-await-in-loop -- per-shape D1 reads serialized within a socket to bound concurrency
                 await this.refreshGlobalShape(ws, subId, resolved, identity, connectionId, tick);
             } catch (error) {
+                // This tick's cursor has already moved past the rows that marked
+                // the table changed, so a later tick would skip this shape rather
+                // than retry it. Ask for one unconditional pass instead.
+                // eslint-disable-next-line no-param-reassign -- the tick is this poll pass's shared accumulator; recording into it is what it is for
+                tick.resyncRequested = true;
                 this.recordShapeError(`shape:poll:${subId}`, error, trace);
             }
         }

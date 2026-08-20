@@ -903,8 +903,19 @@ const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
     // table-scoped changelog read (the `.global()` shape delta path); without it
     // that read scans the whole log in commit order and discards other tables'
     // rows. Mirrors the DO twin's `CDC_LOG_TABLE_SEQ_INDEX`.
+    //
+    // The key prefix is what makes this legal on MySQL. `key` is `VARCHAR(768)`
+    // there precisely because 768 utf8mb4 characters is InnoDB's limit for a
+    // SINGLE-column index (768 × 4 = 3072 bytes) — so adding `seq` to it puts the
+    // composite key over that limit and the migration fails outright with
+    // ER_TOO_LONG_KEY. A prefix bounds `table`'s contribution; it costs nothing in
+    // selectivity because the column holds a table name, not user data. Engines
+    // that index text directly (SQLite, Postgres) return no prefix and index the
+    // whole column.
+    const tablePrefix = dialect.indexKeyPrefix?.("string");
+
     await createIndexIfNotExists(exec, dialect, {
-        columns: sql`${sql.identifier("table")}, ${sql.identifier("seq")}`,
+        columns: sql`${tablePrefix === undefined ? sql`${sql.identifier("table")}` : sql`${sql.identifier("table")}(${sql.raw(String(tablePrefix))})`}, ${sql.identifier("seq")}`,
         name: CDC_LOG_TABLE_SEQ_INDEX,
         table: CDC_LOG_TABLE,
         unique: false,

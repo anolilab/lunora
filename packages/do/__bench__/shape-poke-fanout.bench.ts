@@ -12,15 +12,24 @@ import { ShardDO } from "../src/shard-do";
  * The membership probe behind each poke is keyed by `(table, predicate, ids)`
  * and names no socket, so subscribers of the same shape were issuing byte-
  * identical queries within one flush — a hundred sockets, a hundred copies of
- * one answer. The per-flush cache collapses them, and the two axes here separate
- * the part that collapses from the part that cannot:
+ * one answer. The per-flush cache collapses them.
  *
- * - **shared predicate** — every socket watches the same channel, so one probe
- * serves the whole fan-out. Cost should be close to flat in socket count
- * (what remains is the per-socket send, not the per-socket query).
- * - **distinct predicates** — every socket watches its own channel, so there is
- * genuinely nothing to share. This is the honest floor: the case where the
- * cache cannot help, and the number to compare the shared case against.
+ * The two suites below measure DIFFERENT things and their totals are not
+ * comparable, which is the whole reason they are labelled the way they are:
+ *
+ * - **shared predicate, every socket delivered** — one probe plus N sends. This
+ * is the end-to-end cost of the case the cache exists for, and its curve
+ * against socket count is what shows the probe dropping out of it.
+ * - **distinct predicates, nothing delivered** — the write lands in a channel no
+ * socket subscribes to, so every socket runs its own probe and none receives a
+ * poke. That isolates the per-socket probe: the cache's miss path with the
+ * send cost removed.
+ *
+ * An earlier revision presented the second as "the floor to compare the shared
+ * case against", which it is not: subtracting a delivery-free number from a
+ * delivery-inclusive one attributes the sends to the probe. If you want the
+ * marginal cost of sharing, read the shared suite's own slope across 10 → 500
+ * sockets; if you want the probe, read the second suite directly.
  */
 
 interface FakeWebSocket {
@@ -93,8 +102,13 @@ class FanoutBenchShard extends ShardDO {
 }
 
 /**
- * A shard with `sockets` subscribers. With `sharedChannel`, every socket
- * resolves to the same predicate; without it, each gets its own.
+ * A shard with `sockets` subscribers, all written to through `next()`.
+ *
+ * With `sharedChannel`, every socket resolves to the same predicate AND the write
+ * lands inside it, so all of them are poked. Without it, each socket watches its
+ * own channel while the write still lands in `watched` — so every socket runs a
+ * probe and none of them matches, which is deliberately a probe-only measurement
+ * rather than a like-for-like fan-out.
  */
 const buildShard = (sockets: number, sharedChannel: boolean): { next: () => Request; shard: FanoutBenchShard } => {
     const harness = createSqliteExec();
@@ -135,7 +149,7 @@ const buildShard = (sockets: number, sharedChannel: boolean): { next: () => Requ
     };
 };
 
-describe("shape poke fan-out — one write, N subscribers on the SAME predicate", () => {
+describe("shape poke fan-out — one write, N subscribers on the SAME predicate (one probe, N deliveries)", () => {
     const few = buildShard(10, true);
     const many = buildShard(100, true);
     const crowd = buildShard(500, true);
@@ -153,7 +167,7 @@ describe("shape poke fan-out — one write, N subscribers on the SAME predicate"
     });
 });
 
-describe("shape poke fan-out — one write, N subscribers on DISTINCT predicates (nothing to share)", () => {
+describe("membership probe alone — one write, N subscribers on DISTINCT predicates none of which match it (N probes, no delivery)", () => {
     const few = buildShard(10, false);
     const many = buildShard(100, false);
 

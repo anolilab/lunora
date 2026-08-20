@@ -23,8 +23,24 @@ interface FanoutPanelProps {
 /** Format a coarse millisecond duration for a stat card. */
 const formatMs = (ms: number): string => `${ms.toString()} ms`;
 
-/** True once a result has loaded and the shard has no connections and has run no fan-out passes yet. */
-const isFanoutIdle = (result: FanoutMetricsResult): boolean => result.totalConnections === 0 && result.shapePoke.passes === 0 && result.whisper.passes === 0;
+/**
+ * True once a result has loaded and the shard has no connections and has recorded
+ * no work at all on any counted path.
+ *
+ * Every counter the panel renders has to be represented here. The probe and
+ * global-poll tallies outlive the sockets that produced them (they reset on
+ * hibernation, not on disconnect), so a predicate that ignored them would replace
+ * a shard's whole recorded history with an empty state the moment its last socket
+ * dropped.
+ */
+const isFanoutIdle = (result: FanoutMetricsResult): boolean =>
+    result.totalConnections === 0 &&
+    result.shapePoke.passes === 0 &&
+    result.whisper.passes === 0 &&
+    result.shapeProbe.run === 0 &&
+    result.shapeProbe.served === 0 &&
+    result.globalPoll.run === 0 &&
+    result.globalPoll.served === 0;
 
 /**
  * The running counters for one delivery path as a titled grid of stat cards.

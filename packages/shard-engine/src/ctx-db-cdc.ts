@@ -233,8 +233,11 @@ const trimCdcChanges = (sql: SqlExec, throughSeq: number): void => {
  * delete.
  */
 const compactCdcDocs = (sql: SqlExec, throughSeq: number): void => {
-    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the storage-level "payload dropped"; the key columns stay.
-    runDrizzle(sql, dsql`UPDATE ${dsql.identifier(CDC_LOG_TABLE)} SET doc = ${null} WHERE seq <= ${throughSeq} AND doc IS NOT NULL`);
+    // `SET doc = NULL` as a SQL literal, not a bound `${null}`: the storage-level
+    // "payload dropped" is a property of the statement, not a value the caller
+    // supplies, and binding it invites an implicit JS-to-string conversion on the
+    // way through the driver.
+    runDrizzle(sql, dsql`UPDATE ${dsql.identifier(CDC_LOG_TABLE)} SET doc = NULL WHERE seq <= ${throughSeq} AND doc IS NOT NULL`);
 };
 
 /**
