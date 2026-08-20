@@ -523,7 +523,7 @@ describe("createWorker — aiChat data-sharing level", () => {
         expect((calls[0] as { needs?: string }).needs).toBe("schema_and_log_and_data");
     });
 
-    it("allows the same tool once the deployment opts in", async () => {
+    it("gets the tool as far as the operator once the deployment opts in", async () => {
         expect.hasAssertions();
 
         const forwarded: string[] = [];
@@ -534,9 +534,16 @@ describe("createWorker — aiChat data-sharing level", () => {
             shardDO: recordingShard(forwarded),
         });
 
-        await decoded(await worker.fetch(rpc({ prompt: "show me the messages" }), {}, fakeContext));
+        const body = await decoded(await worker.fetch(rpc({ prompt: "show me the messages" }), {}, fakeContext));
 
-        expect(forwarded).toContain("__lunora_admin__:runSql");
+        /*
+         * The tier is no longer the last gate. It says whether reading rows is
+         * possible AT ALL in this deployment; the operator still answers the
+         * per-statement question, so the tool reaches an approval card rather than
+         * a shard. The approved path is covered in the approval suite below.
+         */
+        expect(body["pendingApproval"]).toBeDefined();
+        expect(forwarded).not.toContain("__lunora_admin__:runSql");
     });
 
     it("falls back to the safe default when the configured level is not a level", async () => {
@@ -770,5 +777,260 @@ describe("createWorker — aiAvailable admin RPC", () => {
         expect(body["available"]).toBe(false);
         expect(body["level"]).toBe("schema_and_log");
         expect(forwarded).toStrictEqual([]);
+    });
+});
+
+describe("createWorker — aiChat operator approval", () => {
+    /** The statement the model asks for in every test below. */
+    const WANTED = "SELECT * FROM messages";
+
+    /** A model that asks to read rows, then answers when the loop comes back to it. */
+    const wantsRows = (): AiRunBinding => scriptedBinding([`\`\`\`tool\n{"name":"runSql","sql":"${WANTED}"}\n\`\`\``, "Two rows."]);
+
+    /** A worker at the top data tier — the only tier where `runSql` is allowed at all. */
+    const topTier = (forwarded: string[], binding: AiRunBinding = wantsRows()) =>
+        createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: binding,
+            aiOptInLevel: "schema_and_log_and_data",
+            shardDO: recordingShard(forwarded),
+        });
+
+    it("stops for the operator instead of reading rows unasked", async () => {
+        expect.hasAssertions();
+
+        const forwarded: string[] = [];
+        const body = await decoded(await topTier(forwarded).fetch(rpc({ prompt: "show me the messages" }), {}, fakeContext));
+
+        // The whole point: at the tier that PERMITS reading rows, the read still
+        // does not happen until a human says so. Before this the level was the only
+        // gate, and it is a deploy-time answer to a per-statement question.
+        expect(forwarded).not.toContain("__lunora_admin__:runSql");
+
+        const pending = body["pendingApproval"] as { name: string; sql: string; ticket: string } | undefined;
+
+        expect(pending?.name).toBe("runSql");
+        expect(pending?.sql).toBe(WANTED);
+        // The panel renders prose plus a card; the ```tool fence is machinery and
+        // must not leak into the conversation.
+        expect(body["reply"] as string).not.toContain("```tool");
+    });
+
+    it("runs the statement once the operator allows it", async () => {
+        expect.hasAssertions();
+
+        const proposal = await decoded(await topTier([]).fetch(rpc({ prompt: "show me the messages" }), {}, fakeContext));
+        const { ticket } = proposal["pendingApproval"] as { ticket: string };
+
+        const forwarded: string[] = [];
+
+        await decoded(await topTier(forwarded).fetch(rpc({ approval: { allow: true, ticket }, prompt: "show me the messages" }), {}, fakeContext));
+
+        expect(forwarded).toContain("__lunora_admin__:runSql");
+    });
+
+    it("refuses an approval the browser forged for a statement it was never offered", async () => {
+        expect.hasAssertions();
+
+        const forwarded: string[] = [];
+
+        /*
+         * The op takes whatever body an admin bearer sends, so "the operator
+         * approved it" arriving as a client-supplied boolean is not a gesture — it
+         * is a field. The ticket is a MAC the server minted over the exact
+         * statement it proposed and verifies against the statement the model asks
+         * for, so a hand-written one unlocks nothing.
+         */
+        const body = await decoded(
+            await topTier(forwarded).fetch(
+                rpc({ approval: { allow: true, ticket: `v1.${String(Date.now() + 60_000)}.bm90YXNpZ25hdHVyZQ` }, prompt: "show me the messages" }),
+                {},
+                fakeContext,
+            ),
+        );
+
+        expect(forwarded).not.toContain("__lunora_admin__:runSql");
+        // Not an error, either: the turn simply proposes again, so the operator
+        // gets the card rather than a dead end.
+        expect(body["pendingApproval"]).toBeDefined();
+    });
+
+    it("does not honour a ticket minted for a DIFFERENT statement", async () => {
+        expect.hasAssertions();
+
+        // A ticket the server really did mint — for the statement the model asked
+        // for in this first turn.
+        const first = await decoded(
+            await topTier([], scriptedBinding(['```tool\n{"name":"runSql","sql":"SELECT 1"}\n```', "One."])).fetch(
+                rpc({ prompt: "one row please" }),
+                {},
+                fakeContext,
+            ),
+        );
+        const { ticket } = first["pendingApproval"] as { ticket: string };
+
+        const forwarded: string[] = [];
+
+        // …replayed against a turn whose model asks for something else entirely.
+        const body = await decoded(await topTier(forwarded).fetch(rpc({ approval: { allow: true, ticket }, prompt: "everything now" }), {}, fakeContext));
+
+        expect(forwarded).not.toContain("__lunora_admin__:runSql");
+        expect(body["pendingApproval"]).toBeDefined();
+    });
+
+    it("treats an expired ticket as no answer at all", async () => {
+        expect.hasAssertions();
+
+        const proposal = await decoded(await topTier([]).fetch(rpc({ prompt: "show me the messages" }), {}, fakeContext));
+        const { ticket } = proposal["pendingApproval"] as { ticket: string };
+        const stale = `v1.${String(Date.now() - 1000)}.${ticket.split(".").at(2) ?? ""}`;
+
+        const forwarded: string[] = [];
+
+        await decoded(await topTier(forwarded).fetch(rpc({ approval: { allow: true, ticket: stale }, prompt: "show me the messages" }), {}, fakeContext));
+
+        expect(forwarded).not.toContain("__lunora_admin__:runSql");
+    });
+
+    it("tells the model it was declined rather than leaving it waiting", async () => {
+        expect.hasAssertions();
+
+        const proposal = await decoded(await topTier([]).fetch(rpc({ prompt: "show me the messages" }), {}, fakeContext));
+        const { ticket } = proposal["pendingApproval"] as { ticket: string };
+
+        const forwarded: string[] = [];
+        const body = await decoded(
+            await topTier(forwarded).fetch(rpc({ approval: { allow: false, ticket }, prompt: "show me the messages" }), {}, fakeContext),
+        );
+
+        expect(forwarded).not.toContain("__lunora_admin__:runSql");
+
+        // A deny is an answer the loop carries on from — the model gets a refusal
+        // and replies from what it has, rather than the turn silently ending.
+        const calls = (body["toolCalls"] ?? []) as { refused?: string }[];
+
+        expect(calls[0]?.refused).toContain("declined");
+        expect(body["reply"]).toBe("Two rows.");
+    });
+
+    it("does not put a gate-failing statement in front of the operator", async () => {
+        expect.hasAssertions();
+
+        const forwarded: string[] = [];
+        const body = await decoded(
+            await topTier(forwarded, scriptedBinding(['```tool\n{"name":"runSql","sql":"DROP TABLE messages"}\n```', "I cannot."])).fetch(
+                rpc({ prompt: "drop it" }),
+                {},
+                fakeContext,
+            ),
+        );
+
+        // The read-only gate runs FIRST. An approval card is a place to weigh a
+        // read, never a place to talk an operator into a write.
+        expect(body["pendingApproval"]).toBeUndefined();
+
+        const calls = (body["toolCalls"] ?? []) as { refused?: string }[];
+
+        expect(calls[0]?.refused).toContain("refused");
+        expect(forwarded).not.toContain("__lunora_admin__:runSql");
+    });
+
+    it("does not stop for approval on a tool that returns no row values", async () => {
+        expect.hasAssertions();
+
+        const forwarded: string[] = [];
+        const body = await decoded(
+            await createWorker({
+                adminToken: ADMIN_TOKEN,
+                aiChatBinding: scriptedBinding(['```tool\n{"name":"readLogs"}\n```', "Two errors."]),
+                aiOptInLevel: "schema_and_log",
+                shardDO: recordingShard(forwarded),
+            }).fetch(rpc({ prompt: "what went wrong?" }), {}, fakeContext),
+        );
+
+        // Friction lands where the disclosure is CHOSEN. `readLogs` reads the same
+        // fixed buffer every time and its tier is already an operator decision, so a
+        // card here would say the same thing every turn and train the habit of
+        // clicking through the one that matters.
+        expect(forwarded).toContain("__lunora_admin__:getLogs");
+        expect(body["pendingApproval"]).toBeUndefined();
+    });
+});
+
+describe("createWorker — aiChat knowledge tool", () => {
+    it("answers from the bundled docs digest without reaching a shard", async () => {
+        expect.hasAssertions();
+
+        let observed = "";
+        const forwarded: string[] = [];
+
+        await createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: {
+                run: vi.fn<AiRun>(async (_model, options) => {
+                    const user = (options as { messages: { content: string; role: string }[] }).messages.find((message) => message.role === "user");
+
+                    if (user?.content.includes("Tool result:") === true) {
+                        observed = user.content;
+
+                        return { response: "Declare it with `searchIndex`." };
+                    }
+
+                    return { response: '```tool\n{"name":"loadKnowledge","topic":"full-text search"}\n```' };
+                }),
+            },
+            shardDO: recordingShard(forwarded),
+        }).fetch(rpc({ prompt: "how do I search text?" }), {}, fakeContext);
+
+        // No admin op behind it, so no forward: the digest is compiled in.
+        expect(forwarded).toHaveLength(0);
+        expect(observed).toContain("concepts/search");
+        // …and it hands the model a URL to cite instead of a name to invent.
+        expect(observed).toContain("https://lunora.sh/docs/");
+    });
+
+    it("offers the knowledge tool at the default level, since docs are not user data", async () => {
+        expect.hasAssertions();
+
+        const binding = scriptedBinding(["Nothing to look up."]);
+
+        await createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: binding, shardDO: recordingShard([]) }).fetch(rpc({ prompt: "hi" }), {}, fakeContext);
+
+        const call = (binding.run as unknown as { mock: { calls: [string, { messages: { content: string; role: string }[] }][] } }).mock.calls[0];
+        const system = call?.[1].messages.find((message) => message.role === "system")?.content ?? "";
+
+        expect(system).toContain("loadKnowledge");
+        // And the instruction that makes it worth having: the model is told to cite
+        // rather than guess, which is the failure the tool exists to close.
+        expect(system).toContain("Never state a Lunora function");
+    });
+
+    it("returns the table of contents rather than nothing when a topic matches no page", async () => {
+        expect.hasAssertions();
+
+        let observed = "";
+
+        await createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: {
+                run: vi.fn<AiRun>(async (_model, options) => {
+                    const user = (options as { messages: { content: string; role: string }[] }).messages.find((message) => message.role === "user");
+
+                    if (user?.content.includes("Tool result:") === true) {
+                        observed = user.content;
+
+                        return { response: "Nothing on that." };
+                    }
+
+                    return { response: '```tool\n{"name":"loadKnowledge","topic":"zzzznotathing"}\n```' };
+                }),
+            },
+            shardDO: recordingShard([]),
+        }).fetch(rpc({ prompt: "what is zzzznotathing?" }), {}, fakeContext);
+
+        // An empty result is a dead end the model can only answer from memory,
+        // which is exactly what this tool exists to stop.
+        expect(observed).toContain("entries");
+        expect(observed).toContain("concepts/indexes");
     });
 });

@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useState } from "react";
 
 import { useAdminQuery } from "../hooks/use-admin-query";
-import type { AiAvailableResult, AiOptInLevel, ChatTurn, SchemaFact } from "../lib/admin";
+import type { AiAvailableResult, AiOptInLevel, ChatPendingApproval, ChatTurn, SchemaFact } from "../lib/admin";
 import { ADMIN_FUNCTIONS } from "../lib/admin";
 
 /** What a surface hands the assistant when it opens it. */
@@ -77,6 +77,15 @@ interface AssistantSession {
 interface SessionTurn extends ChatTurn {
     /** True when the turn hit the per-turn tool cap and answered with what it had. */
     readonly partial?: boolean;
+
+    /**
+     * A read the turn stopped at, waiting for the operator to allow or deny it.
+     *
+     * Local-only and never re-sent, like `toolCalls`: the server re-derives the
+     * request from the model on the follow-up turn and verifies the ticket against
+     * THAT, so replaying this back at it would prove nothing.
+     */
+    readonly pendingApproval?: ChatPendingApproval;
     readonly toolCalls?: ReadonlyArray<{
         readonly name?: string;
         /** Set only when the deployment's data-sharing level is what refused the tool. */

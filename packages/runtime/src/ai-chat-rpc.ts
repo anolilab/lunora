@@ -18,7 +18,16 @@
  * a builder, and a `*_NOT_CONFIGURED` 400 — deliberately, so there is one
  * worker-RPC idiom rather than two.
  */
-import type { AiOptInLevel, AiRunBinding, ChatArgs, ChatResult, ChatToolCall, ChatToolRunner, SchemaFact } from "../../../shared/ai-chat";
+import type {
+    AiOptInLevel,
+    AiRunBinding,
+    ChatArgs,
+    ChatResult,
+    ChatToolRunner,
+    ForwardedToolCall,
+    ForwardedToolName,
+    SchemaFact,
+} from "../../../shared/ai-chat";
 import { generateChat } from "../../../shared/ai-chat";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 
@@ -122,8 +131,14 @@ type ForwardToShard = (
     headers: Record<string, string>,
 ) => Promise<Response>;
 
-/** The admin op behind each tool. A record, so a tool added without an op is a compile error. */
-const TOOL_OPS: Readonly<Record<ChatToolCall["name"], string>> = {
+/**
+ * The admin op behind each forwarded tool. A record, so a tool added without an
+ * op is a compile error.
+ *
+ * Keyed by `ForwardedToolName`, which is `ChatToolName` minus `loadKnowledge` —
+ * that one is answered from a digest inside the engine and has no op to name.
+ */
+const TOOL_OPS: Readonly<Record<ForwardedToolName, string>> = {
     describeTables: "__lunora_admin__:describeTables",
     readAdvisors: "__lunora_admin__:getAdvisories",
     readLogs: "__lunora_admin__:getLogs",
@@ -145,7 +160,7 @@ const TOOL_OPS: Readonly<Record<ChatToolCall["name"], string>> = {
  */
 const chatToolRunner =
     (forward: ForwardToShard, shardKey: string, headers: Record<string, string>, request: Request): ChatToolRunner =>
-    async (call: ChatToolCall): Promise<unknown> => {
+    async (call: ForwardedToolCall): Promise<unknown> => {
         const path = TOOL_OPS[call.name];
         const response = await forward(request, path, call.sql === undefined ? {} : { sql: call.sql }, shardKey, headers);
 
@@ -182,6 +197,13 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
         const binding = deps.getBinding();
         const rawSchema = args["schema"];
         const chatArgs: ChatArgs = {
+            /*
+             * Passed through unnarrowed, like `transcript` below: the engine owns
+             * the approval's shape AND its verification, and the two must not be
+             * able to disagree. Narrowing here would put half a security check in
+             * the transport.
+             */
+            approval: args["approval"],
             ...(typeof args["model"] === "string" ? { model: args["model"] } : {}),
             prompt: args["prompt"],
             // Passed through unnarrowed on purpose: `generateChat` owns the

@@ -3,7 +3,8 @@
  *
  * Several files in this repo are written by a script and committed:
  * `labeler-config.yml`, each package's `__assets__/package-og.svg` + README block,
- * and `apps/docs/src/data/packages.ts`. Nothing re-ran the generators in CI and
+ * `apps/docs/src/data/packages.ts`, and `shared/ai-knowledge-data.ts`. Nothing
+ * re-ran the generators in CI and
  * compared, so a committed output could drift from what the generator produces
  * and no gate noticed.
  *
@@ -34,6 +35,7 @@ const GENERATORS = [
     ["node", ["scripts/generate-labeler-config.js", "--skip-ci"]],
     ["node", ["scripts/generate-package-og-images.js"]],
     ["node", ["apps/docs/scripts/generate-packages.js"]],
+    ["node", ["scripts/build-ai-knowledge.js"]],
 ];
 
 /** `path -> status` for every file git considers dirty (modified, added, untracked, …). */

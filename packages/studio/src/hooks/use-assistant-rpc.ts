@@ -5,6 +5,8 @@ import type {
     AiAvailableResult,
     AiOptInLevel,
     AssistantChartConfig,
+    ChatApproval,
+    ChatPendingApproval,
     ChatResult,
     ChatTurn,
     FilterClause,
@@ -40,10 +42,12 @@ interface AssistantRpc {
         prompt: string,
         transcript: ReadonlyArray<ChatTurn>,
         schema: ReadonlyArray<SchemaFact>,
+        approval?: ChatApproval,
     ) => Promise<
         | undefined
         | {
               partial: boolean;
+              pendingApproval?: ChatPendingApproval;
               reply: string;
               toolCalls: ReadonlyArray<{ name?: string; needs?: AiOptInLevel; refused?: string; sql?: string }>;
               truncated: boolean;
@@ -154,7 +158,7 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
         }
     };
 
-    const chat: AssistantRpc["chat"] = async (prompt, transcript, schema) => {
+    const chat: AssistantRpc["chat"] = async (prompt, transcript, schema, approval) => {
         begin("chat");
 
         try {
@@ -169,11 +173,26 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
              * `schema` likewise: the panel's parent already has it, and without it
              * the model is told to use only listed tables and given none.
              */
-            const result = (await client.query(AI_CHAT, { prompt, schema, shardKey, transcript })) as ChatResult;
+            /*
+             * `approval` is the operator's answer to a previous turn's card. It
+             * carries no statement of its own — only the server's own signed
+             * ticket, which the server verifies against whatever the model asks
+             * for next. So this hook cannot approve anything the server did not
+             * propose, however the call site is written.
+             */
+            const result = (await client.query(AI_CHAT, { approval, prompt, schema, shardKey, transcript })) as ChatResult;
 
             finish("chat", result.degraded ? result.reason : undefined);
 
-            return result.degraded ? undefined : { partial: result.partial, reply: result.reply, toolCalls: result.toolCalls, truncated: result.truncated };
+            return result.degraded
+                ? undefined
+                : {
+                      partial: result.partial,
+                      ...(result.pendingApproval === undefined ? {} : { pendingApproval: result.pendingApproval }),
+                      reply: result.reply,
+                      toolCalls: result.toolCalls,
+                      truncated: result.truncated,
+                  };
         } catch {
             finish("chat", "ai-error");
 

@@ -58,6 +58,46 @@ const chatMock = (reply: string, available = true, level?: AiOptInLevel): MockCl
         },
     });
 
+/**
+ * A mock whose first `aiChat` stops for approval and whose second answers.
+ *
+ * `answers` is the reply the SECOND call returns, so a test can assert on what
+ * the operator finally sees. Every `aiChat` request is recorded by the caller's
+ * own `mock.query`, which is where the approval field is inspected.
+ */
+const approvalMock = (sql: string, answers = "Two rows."): MockClientHooks => {
+    let asked = 0;
+
+    return createMockClient({
+        query: (reference): unknown => {
+            if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                return { available: true };
+            }
+
+            if (reference === ADMIN_FUNCTIONS.aiChat) {
+                asked += 1;
+
+                return asked === 1
+                    ? {
+                          degraded: false,
+                          partial: false,
+                          pendingApproval: { name: "runSql", sql, ticket: "v1.ticket.signature" },
+                          reply: "I need to read the messages table.",
+                          toolCalls: [],
+                          truncated: false,
+                      }
+                    : { degraded: false, partial: false, reply: answers, toolCalls: [], truncated: false };
+            }
+
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: 0 }];
+            }
+
+            return { columns: [], rowCount: 0, rows: [], truncated: false };
+        },
+    });
+};
+
 /** Open the assistant, which is closed until the operator asks for it. */
 const openChat = async (): Promise<HTMLElement> => {
     fireEvent.click(await screen.findByTestId("sql-chat-toggle"));
@@ -116,6 +156,83 @@ describe("assistantPanel", () => {
         });
 
         expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql)).toBe(false);
+    });
+
+    it("shows the statement the turn wants to run, and does not run it", async () => {
+        expect.hasAssertions();
+
+        const mock = approvalMock("SELECT * FROM messages");
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("what did people say?");
+
+        // The operator is shown the exact statement, verbatim — this is the one
+        // piece of model output they are being asked to judge.
+        const card = await screen.findByTestId("assistant-approval");
+
+        expect(within(card).getByTestId("assistant-approval-sql").textContent).toBe("SELECT * FROM messages");
+
+        // Nothing has gone out beyond the single turn that proposed it.
+        expect(mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toHaveLength(1);
+    });
+
+    it("carries the server's own ticket back when the operator allows the read", async () => {
+        expect.hasAssertions();
+
+        const mock = approvalMock("SELECT * FROM messages");
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("what did people say?");
+        fireEvent.click(await screen.findByTestId("assistant-approval-allow"));
+
+        await waitFor(() => {
+            const chats = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat);
+
+            expect(chats).toHaveLength(2);
+
+            /*
+             * The follow-up re-sends the operator's OWN question with the decision
+             * attached — no synthetic "yes, go ahead" turn, and no statement of its
+             * own: the ticket is the server's, and the server verifies it against
+             * whatever the model asks for next.
+             */
+            const second = chats[1]?.[1] as { approval: { allow: boolean; ticket: string }; prompt: string; transcript: unknown[] };
+
+            expect(second.approval).toStrictEqual({ allow: true, ticket: "v1.ticket.signature" });
+            expect(second.prompt).toBe("what did people say?");
+            expect(second.transcript).toStrictEqual([]);
+        });
+
+        // One question, one answer — the card is gone and the transcript did not
+        // grow a second copy of the question.
+        await expect(screen.findByTestId("assistant-turn-assistant")).resolves.toBeDefined();
+        expect(screen.getAllByTestId("assistant-turn-user")).toHaveLength(1);
+        expect(screen.queryByTestId("assistant-approval")).toBeNull();
+    });
+
+    it("tells the server it was denied rather than dropping the turn", async () => {
+        expect.hasAssertions();
+
+        const mock = approvalMock("SELECT * FROM messages", "I cannot say without reading the table.");
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("what did people say?");
+        fireEvent.click(await screen.findByTestId("assistant-approval-deny"));
+
+        await waitFor(() => {
+            const chats = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat);
+            const second = chats[1]?.[1] as { approval: { allow: boolean } };
+
+            // A deny is an answer the model is told about, not a local dismissal —
+            // otherwise the panel just sits on a card the conversation never resolves.
+            expect(second.approval.allow).toBe(false);
+        });
     });
 
     it("offers nothing to insert when the reply carries no fenced SQL", async () => {

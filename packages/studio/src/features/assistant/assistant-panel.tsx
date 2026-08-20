@@ -7,7 +7,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
-import type { AiOptInLevel, ChatTurn, GenerateSqlDegradedReason } from "../../lib/admin";
+import type { AiOptInLevel, ChatApproval, ChatPendingApproval, ChatTurn, GenerateSqlDegradedReason } from "../../lib/admin";
 import { copyToClipboard, fireAndForget } from "../../lib/internal";
 import sqlBlocks from "../../lib/sql-blocks";
 
@@ -34,6 +34,63 @@ const REPLY_COMPONENTS = { img: (): null => null };
 
 const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof useT>): string =>
     reason === "empty-response" ? t("The model returned nothing usable.") : t("The model could not be reached.");
+
+/**
+ * The operator's gate on a read the turn stopped at.
+ *
+ * The engine returns the statement instead of running it, so this is where a row
+ * value is first disclosed to a model — and the whole point is that the operator
+ * sees the exact statement first. It is shown verbatim, unrendered: this is the
+ * one piece of model output the operator is being asked to judge, so it must not
+ * pass through a markdown renderer that could style it into something else.
+ *
+ * Both answers start a follow-up turn. Deny is not a local dismissal — the model
+ * is told it was declined, so it answers from what it already has rather than
+ * silently waiting for a result that will never arrive.
+ */
+const ApprovalCard = ({
+    approval,
+    onDecide,
+}: {
+    readonly approval: ChatPendingApproval;
+    readonly onDecide: (allow: boolean, ticket: string) => void;
+}): ReactElement => {
+    const t = useT();
+
+    return (
+        <div className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/40 p-2" data-testid="assistant-approval">
+            <span className="text-[11px] text-muted-foreground">
+                {t("The assistant wants to read rows before answering. Nothing runs until you allow it.")}
+            </span>
+            <pre className="overflow-x-auto rounded bg-background p-1.5 font-mono text-[11px]" data-testid="assistant-approval-sql">
+                {approval.sql}
+            </pre>
+            <div className="flex gap-2">
+                <Button
+                    data-testid="assistant-approval-allow"
+                    onClick={() => {
+                        onDecide(true, approval.ticket);
+                    }}
+                    size="xs"
+                    type="button"
+                >
+                    {t("Allow")}
+                </Button>
+                <Button
+                    data-testid="assistant-approval-deny"
+                    onClick={() => {
+                        onDecide(false, approval.ticket);
+                    }}
+                    size="xs"
+                    type="button"
+                    variant="secondary"
+                >
+                    {t("Deny")}
+                </Button>
+            </div>
+        </div>
+    );
+};
 
 /**
  * What one turn actually did, listed rather than summarised.
@@ -101,6 +158,7 @@ const TurnRow = ({
     index,
     level,
     onBranch,
+    onDecide,
     onInsert,
     onTruncate,
     turn,
@@ -109,6 +167,8 @@ const TurnRow = ({
     /** The deployment's data-sharing level, so a level refusal can name where it sits. */
     readonly level: AiOptInLevel | undefined;
     readonly onBranch: (index: number) => void;
+    /** Present only on the LAST turn — an approval card further up the transcript is history, not a live decision. */
+    readonly onDecide: ((allow: boolean, ticket: string) => void) | undefined;
     readonly onInsert: ((sql: string) => void) | undefined;
     readonly onTruncate: (index: number) => void;
     readonly turn: SessionTurn;
@@ -145,6 +205,7 @@ const TurnRow = ({
                     {t("Insert into editor")}
                 </Button>
             ))}
+            {turn.pendingApproval !== undefined && onDecide !== undefined && <ApprovalCard approval={turn.pendingApproval} onDecide={onDecide} />}
             {turn.role === "assistant" && <ToolCalls level={level} turn={turn} />}
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                 <button
@@ -293,9 +354,14 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
         }
     };
 
-    const send = (text?: string): void => {
-        const prompt = (text ?? draft).trim();
-
+    /**
+     * Send one turn, appending `prompt` to `sent`.
+     *
+     * `sent` is a parameter rather than "whatever the session holds" because the
+     * approval path re-runs a question that is already IN the transcript — see
+     * {@link decide}.
+     */
+    const sendTurn = (prompt: string, sent: ReadonlyArray<SessionTurn>, approval?: ChatApproval): void => {
         if (prompt === "" || pending || session === undefined) {
             return;
         }
@@ -303,11 +369,9 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
         // The question joins the transcript immediately, so the operator sees what
         // they asked while it is in flight. The turns SENT are the ones from before
         // it, which is what the server would rebuild anyway.
-        const sent = session.turns;
         const asked: SessionTurn[] = [...sent, { role: "user", text: prompt }];
 
         setTurns(session.id, asked);
-        setDraft("");
 
         fireAndForget(
             ops
@@ -320,6 +384,7 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                         return { role: turn.role, text: turn.text };
                     }),
                     session.schema,
+                    approval,
                 )
                 .then((answer) => {
                     // A degraded turn adds nothing to the transcript — the reason is
@@ -331,12 +396,57 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                         // What the turn actually did travels WITH the turn, so an answer
                         // built from three reads never looks like one invented from
                         // nothing — and a later turn's silence does not erase it.
-                        setTurns(session.id, [...asked, { partial: answer.partial, role: "assistant", text: answer.reply, toolCalls: answer.toolCalls }]);
+                        setTurns(session.id, [
+                            ...asked,
+                            {
+                                partial: answer.partial,
+                                ...(answer.pendingApproval === undefined ? {} : { pendingApproval: answer.pendingApproval }),
+                                role: "assistant",
+                                text: answer.reply,
+                                toolCalls: answer.toolCalls,
+                            },
+                        ]);
                     }
 
                     return answer;
                 }),
         );
+    };
+
+    const send = (text?: string): void => {
+        const prompt = (text ?? draft).trim();
+
+        if (prompt === "" || pending || session === undefined) {
+            return;
+        }
+
+        setDraft("");
+        sendTurn(prompt, session.turns);
+    };
+
+    /**
+     * Answer the approval card on the last turn.
+     *
+     * The transcript is REWOUND to just before the answer that carried the card,
+     * and the operator's own question is re-sent with the decision attached. The
+     * alternative — appending a synthetic "yes, go ahead" turn — would put words in
+     * the operator's mouth and leave the panel showing a question they never typed.
+     * This way one question keeps one answer, which is also exactly the state the
+     * server saw the first time, plus the decision.
+     */
+    const decide = (allow: boolean, ticket: string): void => {
+        if (session === undefined || pending) {
+            return;
+        }
+
+        const withoutAnswer = session.turns.slice(0, -1);
+        const question = withoutAnswer.at(-1);
+
+        if (question?.role !== "user") {
+            return;
+        }
+
+        sendTurn(question.text, withoutAnswer.slice(0, -1), { allow, ticket });
     };
 
     /*
@@ -478,6 +588,9 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                         key={`${String(index)}:${turn.role}`}
                         level={ops.level}
                         onBranch={branchHere}
+                        // Only the newest turn's card is live: rewinding to an older
+                        // one would answer a question the conversation has moved past.
+                        onDecide={index === turns.length - 1 ? decide : undefined}
                         onInsert={assistant.hasEditor ? assistant.requestInsert : undefined}
                         onTruncate={truncateHere}
                         turn={turn}

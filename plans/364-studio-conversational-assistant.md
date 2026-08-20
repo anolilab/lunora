@@ -1,7 +1,8 @@
 # Plan 364 — A conversational assistant for the Studio, off the DO admin dispatch
 
 **Baseline:** `3a2e83d89` (2026-08-19)
-**Status:** W1–W4 SHIPPED; W5 BLOCKED — see §8b. W6–W8 SHIPPED — see §10. The
+**Status:** W1–W4 SHIPPED; W5 BLOCKED — see §8b. W6–W8 SHIPPED — see §10. W9–W10
+SHIPPED — see §11. The
 conversational assistant works end to end and is now reachable from the whole
 Studio rather than the SQL console; only token streaming is outstanding, and it
 needs a transport that does not exist yet.
@@ -396,7 +397,69 @@ title })`. The panel moved to `features/assistant/assistant-panel.tsx` and is
   at. It is the default tier, so it is the first tool that improves an
   out-of-the-box deployment's answers.
 
-## 12. Found while executing W6-W9
+## 12. W10–W11 — the operator gate, and something to be right about
+
+Two things §3 left open, closed together because they are the same complaint from
+opposite ends: the turn read things nobody asked it to, and it had nothing true to
+say about the framework it was reading them in.
+
+- **W10 (M) — Approval before a tool reads rows.** §3 recorded W4's boundary honestly
+  and it was still the wrong boundary: `runSql` puts row values chosen by the MODEL
+  in front of an inference provider with no operator gesture anywhere in the loop.
+  Closed by making the turn STOP.
+
+    The op is one request/response and W5 is blocked, so a turn cannot wait
+    server-side for a click. Three shapes were weighed. A second op to poll for a
+    decision is W5's transport problem in a smaller hat. Making the panel pre-approve
+    a statement before sending puts the decision before the model has proposed
+    anything, which is nothing to judge. What shipped is the third: the turn RETURNS
+    `pendingApproval` instead of dispatching, the panel renders the statement with
+    Allow/Deny, and the answer starts a follow-up turn carrying it. `MAX_TOOL_CALLS`
+    is unchanged, so the cost of stopping is one extra round trip, not a new budget.
+
+    **The forgery question, and why the ticket exists.** Everything the browser sends
+    on this op is caller-supplied, including a boolean claiming the operator said
+    yes. So the approval carries no statement of its own — only a ticket, an
+    HMAC the server minted over the exact statement it proposed, verified against the
+    statement the model asks for on the follow-up turn. An approval the browser
+    invents unlocks nothing, and a real ticket replayed against a different statement
+    unlocks nothing either. The signing key is random per isolate, because the only
+    other secret this op has is the admin token and the browser holds that. The
+    ceiling is stated where it lives (`shared/ai-chat.ts`): a recycled isolate
+    invalidates outstanding tickets, and the failure is one-directional — an
+    unrecognised ticket reads as "not approved", so the card comes back and nothing
+    runs unapproved.
+
+    **Order.** `classifyStatement` runs BEFORE anything is shown, so a write is
+    refused in the loop and never becomes a card asking an operator to approve
+    something the gate would refuse anyway. Deny is a real answer, not a dismissal:
+    the model is told it was declined and answers from what it has.
+
+    **Only `runSql`.** `describeTables` and `readAdvisors` return no row values.
+    `readLogs` was the close call and the answer is no: its scope is fixed and its
+    disclosure was already chosen at deploy time by picking `schema_and_log`, so a
+    card there would say the same thing every turn with no parameter to weigh — and a
+    click-through habit is exactly what would get the `runSql` card approved unread.
+
+- **W11 (S) — `loadKnowledge`.** The assistant knew the operator's schema, logs,
+  advisories and rows, and nothing whatsoever about Lunora, so it answered framework
+  questions by inventing APIs — confidently, into a console that then offers to
+  insert the result into an editor.
+
+    The content is DERIVED, not written: `scripts/build-ai-knowledge.js` compiles
+    `apps/docs/src/content/docs` into `shared/ai-knowledge-data.ts`, and
+    `scripts/check-generated-files.mjs` fails the build if the committed digest
+    stops matching the docs. What travels is an index — title, the reviewed
+    frontmatter `description`, the `##` headings (largely API names in these docs),
+    and the page URL — because a tool result is capped at 2,000 characters and every
+    byte ships in every deployed Worker. ~29 KB of data, against the 50 KiB
+    `worker-size.json` allowance.
+
+    Tiered at `schema`, the lowest rung a tool can hold: it discloses nothing about
+    the deployment. A "docs only" rung below it would gate nothing, since `disabled`
+    already ends the turn before any tool is reached.
+
+## 13. Found while executing W6-W11
 
 - **The standalone bundle had been shipping DEVELOPMENT React and could not stop.**
   `build-standalone.mjs` probe-builds under production React and falls back if the
