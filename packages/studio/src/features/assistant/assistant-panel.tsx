@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
+import { Streamdown } from "streamdown";
 
 import type { AssistantSession, AssistantValue } from "../../components/assistant-provider";
 import { Button } from "../../components/ui/button";
@@ -21,7 +22,21 @@ import sqlBlocks from "../../lib/sql-blocks";
 const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof useT>): string =>
     reason === "empty-response" ? t("The model returned nothing usable.") : t("The model could not be reached.");
 
-/** One rendered turn, with an insert button per SQL block the reply carries. */
+/**
+ * One rendered turn, with an insert button per SQL block the reply carries.
+ *
+ * **A reply is markdown; a question is not.** The model writes lists, tables and
+ * fenced code, and rendering that as preformatted text made every answer with
+ * structure hard to read. What the OPERATOR typed is shown exactly as typed —
+ * markdown-rendering their own words would be the surface silently reinterpreting
+ * their input.
+ *
+ * `Streamdown` over a hand-rolled renderer, and over plain `react-markdown`,
+ * because what it renders is model output: it ships `rehype-harden` and
+ * `rehype-sanitize`, so a reply cannot smuggle raw HTML, a `javascript:` link or
+ * a remote image into the console. The SQL-block extraction below still reads the
+ * RAW text — the insert path must not depend on how the reply is displayed.
+ */
 const TurnRow = ({ onInsert, turn }: { readonly onInsert: ((sql: string) => void) | undefined; readonly turn: ChatTurn }): ReactElement => {
     const t = useT();
     const blocks = turn.role === "assistant" && onInsert !== undefined ? sqlBlocks(turn.text) : [];
@@ -29,7 +44,15 @@ const TurnRow = ({ onInsert, turn }: { readonly onInsert: ((sql: string) => void
     return (
         <li className="flex flex-col gap-1 border-b border-border px-3 py-2 last:border-b-0" data-testid={`assistant-turn-${turn.role}`}>
             <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{turn.role === "user" ? t("You") : t("Assistant")}</span>
-            <p className="text-xs whitespace-pre-wrap">{turn.text}</p>
+            {turn.role === "assistant" ? (
+                <div className="prose-sm max-w-none text-xs" data-testid="assistant-turn-body">
+                    <Streamdown>{turn.text}</Streamdown>
+                </div>
+            ) : (
+                <p className="text-xs whitespace-pre-wrap" data-testid="assistant-turn-body">
+                    {turn.text}
+                </p>
+            )}
             {blocks.map((sql, index) => (
                 <Button
                     className="self-start"

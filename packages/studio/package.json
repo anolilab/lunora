@@ -92,6 +92,7 @@
         "html-to-image": "catalog:frontend",
         "motion": "catalog:frontend",
         "recharts": "catalog:frontend",
+        "streamdown": "catalog:ui",
         "tailwind-merge": "catalog:ui"
     },
     "devDependencies": {

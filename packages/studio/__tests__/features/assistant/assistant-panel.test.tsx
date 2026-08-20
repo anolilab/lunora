@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -363,5 +363,56 @@ describe("assistantPanel", () => {
 
         expect(screen.queryByTestId("sql-explain-query")).toBeNull();
         expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toBe(false);
+    });
+
+    it("renders a reply as markdown but shows the operator's own words verbatim", async () => {
+        expect.hasAssertions();
+
+        render(renderPanel(chatMock("Two things:\n\n- **messages** is the big one\n- `users` is small")));
+        await openChat();
+
+        ask("**not bold** — this is what I typed");
+
+        const reply = await screen.findByTestId("assistant-turn-assistant");
+
+        // The model writes lists and emphasis; preformatted text made every answer
+        // with structure hard to read.
+        // Asserted on what the operator SEES rather than on the tags the renderer
+        // happens to emit: the bullets became real list items, and the emphasis and
+        // code markers are gone from the text instead of being shown literally.
+        expect(within(reply).getAllByRole("listitem")).toHaveLength(2);
+        expect(reply.textContent).toContain("messages is the big one");
+        expect(reply.textContent).not.toContain("**");
+        expect(reply.textContent).not.toContain("`");
+
+        // The question is shown exactly as typed — markdown-rendering the operator's
+        // own words would be the surface reinterpreting their input.
+        const asked = screen.getByTestId("assistant-turn-user");
+
+        expect(asked.textContent).toContain("**not bold**");
+    });
+
+    it("does not let a reply smuggle raw HTML into the console", async () => {
+        expect.hasAssertions();
+
+        // What is rendered here is MODEL output. The renderer is hardened, and this
+        // is the assertion that says so rather than trusting the dependency's README.
+        render(renderPanel(chatMock('Here you go: <img src="x" onerror="alert(1)"> and <script>alert(2)</script>')));
+        await openChat();
+
+        ask("show me something");
+
+        const reply = await screen.findByTestId("assistant-turn-assistant");
+
+        // No image element reached the DOM, so neither did its `onerror`.
+        expect(within(reply).queryByRole("img")).toBeNull();
+
+        /*
+         * `<script>` carries no ARIA role, so proving its ABSENCE is the one thing
+         * Testing Library's queries cannot express — and absence is the entire
+         * assertion. Reaching for the node is the point here, not a shortcut.
+         */
+        // eslint-disable-next-line testing-library/no-node-access -- see above: asserting a roleless element is absent
+        expect(reply.querySelector("script")).toBeNull();
     });
 });
