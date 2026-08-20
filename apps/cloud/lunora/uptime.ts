@@ -110,10 +110,14 @@ export const recent = query
 /** Prune probe rows past the retention window so the time series stays bounded. */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const cutoff = context.now - CHECK_RETENTION_MS;
-    // Oldest-first, bounded: the stale rows (if any) sort to the front, so this page
-    // holds them without materializing the whole table.
-    const { page } = await context.db.uptimeChecks.findMany({ limit: PRUNE_SCAN_LIMIT, orderBy: [{ createdAt: "asc" }] });
-    const stale = (page as unknown as UptimeCheckRow[]).filter((row) => row.createdAt < cutoff);
+    // Oldest-first and bounded, with the cutoff as a `where` predicate so the page
+    // holds only rows to delete rather than whatever sorts first.
+    const { page } = await context.db.uptimeChecks.findMany({
+        limit: PRUNE_SCAN_LIMIT,
+        orderBy: [{ createdAt: "asc" }],
+        where: { createdAt: { lt: cutoff } },
+    });
+    const stale = page as unknown as UptimeCheckRow[];
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

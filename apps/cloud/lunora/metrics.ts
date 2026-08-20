@@ -186,6 +186,9 @@ export const series = query
 /** Exact metric points older than this are pruned from D1's hot window (matches span observations). */
 export const METRIC_POINT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** Rows one prune tick deletes. Bounds a single mutation; a backlog drains over ticks. */
+const PRUNE_BATCH = 1000;
+
 /** One stored metric point, for the retention scan. */
 interface MetricRetentionRow {
     _id: Id<"metricPoints">;
@@ -195,15 +198,13 @@ interface MetricRetentionRow {
 /** Delete exact metric points past retention. SYSTEM only (cron dispatch). */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const cutoff = context.now - METRIC_POINT_RETENTION_MS;
-    // `findMany({})` returns ONE page (capped at 1000) and the age filter used to run
-    // in memory afterwards, so once the table exceeded that cap the page filled with
-    // rows the sweep did not want and the genuinely stale ones were never reached —
-    // the prune silently stopped making progress while reporting success. Ordering
-    // ASCENDING by the retention column puts the oldest rows, i.e. exactly the
-    // candidates, at the head of every page. The column is `v.number()` (never NULL),
-    // so no row can sort ahead of them.
-    const { page } = await context.db.metricPoints.findMany({ orderBy: [{ at: "asc" }] });
-    const stale = (page as unknown as MetricRetentionRow[]).filter((row) => row.at < cutoff);
+    // Filter in the QUERY, not after it: the cutoff is a `where` predicate, so every
+    // row on the page is a row to delete and the sweep can never fill its page with
+    // rows it does not want. Oldest-first keeps a backlog draining in cutoff order,
+    // and PRUNE_BATCH bounds the work one cron tick does — a table far past retention
+    // converges over several ticks instead of timing out on one.
+    const { page } = await context.db.metricPoints.findMany({ limit: PRUNE_BATCH, orderBy: [{ at: "asc" }], where: { at: { lt: cutoff } } });
+    const stale = page as unknown as MetricRetentionRow[];
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

@@ -8,6 +8,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { action, internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
+import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -147,23 +148,25 @@ export const processWebhook = action
  */
 export const enforceDunning = internalMutation.mutation(async ({ ctx: context }): Promise<{ graced: number; recovered: number; suspended: number }> => {
     const { now } = context;
-    const { page: subscriptionPage } = await context.db.subscriptions.findMany({});
+    // Both reads drain every page. A single `findMany({})` page stops at 1000 rows, so
+    // any organization past that boundary was never dunned — no grace stamp, no
+    // suspension, and no recovery either — while the sweep still reported success.
+    const subscriptions = await collectAll<SubscriptionRow>((cursor) => context.db.subscriptions.findMany({ cursor }));
     const statesByOrg = new Map<string, string[]>();
 
-    for (const row of subscriptionPage as unknown as SubscriptionRow[]) {
+    for (const row of subscriptions) {
         const states = statesByOrg.get(row.referenceId) ?? [];
 
         states.push(row.state);
         statesByOrg.set(row.referenceId, states);
     }
 
-    const { page: organizationPage } = await context.db.organizations.findMany({});
-    const organizations = organizationPage as unknown as {
+    const organizations = await collectAll<{
         _id: string;
         paymentFailedAt?: number;
         suspendedAt?: number;
         suspendedReason?: string;
-    }[];
+    }>((cursor) => context.db.organizations.findMany({ cursor }));
 
     // Map the evaluated phase to the patch this org needs (or null for no-op);
     // extracted so the loop stays a flat apply.

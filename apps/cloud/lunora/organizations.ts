@@ -206,6 +206,9 @@ export const cancelDeletion = mutation
         await context.db.insert("auditLog", { action: "organization.deletion.cancel", actorUserId: member.userId, createdAt: now, organizationId });
     });
 
+/** Organizations one purge tick erases. Bounds a single mutation; a backlog drains over ticks. */
+const PURGE_BATCH = 100;
+
 /**
  * Purge orgs whose deletion request has aged past the retention window
  * (GAPS.md D3 right-to-erasure). Erases the org's control-plane rows across
@@ -215,22 +218,17 @@ export const cancelDeletion = mutation
  */
 export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): Promise<{ purged: number }> => {
     const cutoff = context.now - DELETION_RETENTION_MS;
-    // DESC, deliberately, and not ASC like the other retention sweeps. `findMany({})`
-    // returns one 1000-row page, and `deletionRequestedAt` is optional — SQLite sorts
-    // NULLs FIRST on ASC, so ascending order would fill the page with the overwhelming
-    // majority of organizations that were never scheduled for deletion and starve the
-    // few that were. DESC puts NULLs last, so every organization pending deletion is
-    // seen before any that is not.
-    //
-    // Residual limit: within that non-NULL block DESC is newest-request-first, so with
-    // more than 1000 organizations pending deletion at once the oldest — the ones
-    // actually past the retention cutoff — would trail. That set is bounded by
-    // customers who asked for deletion in the last 30 days, so it is not the runaway
-    // case the log/metric/span prunes face.
-    const { page } = await context.db.organizations.findMany({ orderBy: [{ deletionRequestedAt: "desc" }] });
-    const due = (page as unknown as (OrganizationRow & { deletionRequestedAt?: number })[]).filter(
-        (organization) => organization.deletionRequestedAt != null && organization.deletionRequestedAt < cutoff,
-    );
+    // The cutoff is a `where` predicate, so the page holds only organizations that are
+    // actually due. That also settles `deletionRequestedAt` being optional: SQL `<`
+    // never matches NULL, so organizations that were never scheduled for deletion are
+    // excluded by the query rather than crowding out the ones that were. Oldest-first
+    // within the due set, bounded per tick.
+    const { page } = await context.db.organizations.findMany({
+        limit: PURGE_BATCH,
+        orderBy: [{ deletionRequestedAt: "asc" }],
+        where: { deletionRequestedAt: { lt: cutoff } },
+    });
+    const due = page as unknown as (OrganizationRow & { deletionRequestedAt?: number })[];
 
     const orgScopedTables = [
         "auditLog",

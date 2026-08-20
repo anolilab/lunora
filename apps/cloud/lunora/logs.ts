@@ -64,6 +64,9 @@ interface TenantLogView {
 /** Logs older than this are pruned (48 h — enough to debug yesterday's incident). */
 export const LOG_RETENTION_MS = 48 * 60 * 60 * 1000;
 
+/** Rows one prune tick deletes. Bounds a single mutation; a backlog drains over ticks. */
+const PRUNE_BATCH = 1000;
+
 /** Batch cap per ingest call — the tail worker flushes well below this. */
 const MAX_BATCH = 500;
 
@@ -312,15 +315,13 @@ export const list = query
 /** Delete log lines past retention (GAPS.md B2). SYSTEM only (cron dispatch). */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const cutoff = context.now - LOG_RETENTION_MS;
-    // `findMany({})` returns ONE page (capped at 1000) and the age filter used to run
-    // in memory afterwards, so once the table exceeded that cap the page filled with
-    // rows the sweep did not want and the genuinely stale ones were never reached —
-    // the prune silently stopped making progress while reporting success. Ordering
-    // ASCENDING by the retention column puts the oldest rows, i.e. exactly the
-    // candidates, at the head of every page. The column is `v.number()` (never NULL),
-    // so no row can sort ahead of them.
-    const { page } = await context.db.tenantLogs.findMany({ orderBy: [{ createdAt: "asc" }] });
-    const stale = (page as unknown as TenantLogRow[]).filter((row) => row.createdAt < cutoff);
+    // Filter in the QUERY, not after it: the cutoff is a `where` predicate, so every
+    // row on the page is a row to delete and the sweep can never fill its page with
+    // rows it does not want. Oldest-first keeps a backlog draining in cutoff order,
+    // and PRUNE_BATCH bounds the work one cron tick does — a table far past retention
+    // converges over several ticks instead of timing out on one.
+    const { page } = await context.db.tenantLogs.findMany({ limit: PRUNE_BATCH, orderBy: [{ createdAt: "asc" }], where: { createdAt: { lt: cutoff } } });
+    const stale = page as unknown as TenantLogRow[];
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

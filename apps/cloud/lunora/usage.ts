@@ -8,6 +8,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
+import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -136,6 +137,9 @@ interface PlatformUsageRow {
     quantity: number;
 }
 
+/** Rows one roll-up tick compacts. Bounds a single mutation; a backlog drains over ticks. */
+const ROLLUP_BATCH = 1000;
+
 /** Epoch ms for the first instant of the current UTC month. */
 const currentPeriodStart = (): number => {
     const now = new Date();
@@ -159,8 +163,21 @@ const currentPeriodStart = (): number => {
  */
 export const rollup = internalMutation.mutation(async ({ ctx: context }): Promise<{ compacted: number }> => {
     const cutoff = currentPeriodStart();
-    const { page } = await context.db.platformUsage.findMany({});
-    const closed = (page as unknown as PlatformUsageRow[]).filter((row) => row.periodStart < cutoff);
+    // Closed periods only, chosen in the QUERY. Filtering after a `findMany({})` read
+    // one 1000-row page of arbitrary rows, so once the table outgrew that cap the
+    // compaction stalled on whatever happened to sort first and never reached the
+    // closed periods it exists to collapse. Oldest period first, bounded per tick.
+    //
+    // A group split across two ticks is fine: compaction is convergent, because each
+    // tick collapses whatever survivors it sees into one row and the next tick
+    // collapses those. The invariant that must hold within a tick — delete the extras
+    // before patching the survivor — is unaffected by where the page boundary falls.
+    const { page } = await context.db.platformUsage.findMany({
+        limit: ROLLUP_BATCH,
+        orderBy: [{ periodStart: "asc" }],
+        where: { periodStart: { lt: cutoff } },
+    });
+    const closed = page as unknown as PlatformUsageRow[];
 
     const groups = new Map<string, PlatformUsageRow[]>();
 
@@ -204,9 +221,11 @@ export const summary = query
     .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<UsageTotals> => {
         await assertMember(context, organizationId);
 
-        const { page } = await context.db.platformUsage.findMany({ where: { organizationId } });
+        // The invoice-facing total, so it drains: the current period is not compacted by
+        // `rollup`, and one page stops at 1000 rows — a busy org would under-report.
+        const rows = await collectAll<PlatformUsageRow>((cursor) => context.db.platformUsage.findMany({ cursor, where: { organizationId, periodStart } }));
 
-        return aggregateUsage(page, periodStart);
+        return aggregateUsage(rows, periodStart);
     });
 
 /**
@@ -219,7 +238,14 @@ export const summary = query
  */
 export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context }): Promise<{ suspended: number; unsuspended: number }> => {
     const periodStart = currentPeriodStart();
-    const { page: usageRows } = await context.db.platformUsage.findMany({});
+    // Both reads drain every page. A single `findMany({})` page stops at 1000 rows, so
+    // any organization past that boundary was never evaluated and its spend cap simply
+    // did not apply — silently, since the sweep still reported success. The usage read
+    // also narrows to the current period in the query, so draining stays proportional
+    // to live spend rather than to all metering history.
+    const usageRows = await collectAll<PlatformUsageRow>((cursor) =>
+        context.db.platformUsage.findMany({ cursor, where: { periodStart: { gte: periodStart } } }),
+    );
     const byOrg = new Map<string, PeriodUsage>();
 
     // Every meter counts toward the cap, not just requests/CPU — a tenant can
@@ -227,8 +253,8 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
     // compute meters at all. Unknown kinds (a row from a newer writer) are
     // skipped rather than throwing: the sweep that protects the platform from a
     // runaway bill must never be the thing that crashes.
-    for (const row of usageRows as unknown as PlatformUsageRow[]) {
-        if (row.periodStart < periodStart || !isUsageMeter(row.kind)) {
+    for (const row of usageRows) {
+        if (!isUsageMeter(row.kind)) {
             continue;
         }
 
@@ -238,14 +264,13 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         byOrg.set(row.organizationId, bucket);
     }
 
-    const { page: organizationPage } = await context.db.organizations.findMany({});
-    const organizations = organizationPage as unknown as {
+    const organizations = await collectAll<{
         _id: string;
         plan: string;
         spendCapMinor?: number;
         suspendedAt?: number;
         suspendedReason?: string;
-    }[];
+    }>((cursor) => context.db.organizations.findMany({ cursor }));
 
     let suspended = 0;
     let unsuspended = 0;
@@ -337,12 +362,12 @@ export const series = query
     .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<{ costMinor: number; cpuMs: number; day: number; requests: number }[]> => {
         await assertMember(context, organizationId);
 
-        const { page } = await context.db.platformUsage.findMany({ where: { organizationId } });
+        const { page } = await context.db.platformUsage.findMany({ where: { organizationId, periodStart } });
         const dayMs = 24 * 60 * 60 * 1000;
         const buckets = new Map<number, PeriodUsage>();
 
         for (const row of page as unknown as PlatformUsageRow[]) {
-            if (row.periodStart !== periodStart || !isUsageMeter(row.kind)) {
+            if (!isUsageMeter(row.kind)) {
                 continue;
             }
 
