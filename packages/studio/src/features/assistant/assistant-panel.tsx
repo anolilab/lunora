@@ -387,7 +387,7 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
     }, [ask, sessionId, takeAsk, pending]);
     /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
 
-    if (ops.unavailable || !assistant.open || session === undefined) {
+    if (ops.unavailable || session === undefined) {
         return null;
     }
 

@@ -24,7 +24,7 @@ const Shell = ({ console_ = true }: { readonly console_?: boolean }): ReactEleme
             {/* `console_` off stands in for navigating to another page: the routed
                 panel unmounts, the provider and the docked assistant do not. */}
             {console_ && <SqlEditorPanel />}
-            {assistant === undefined ? null : <AssistantPanel assistant={assistant} />}
+            {assistant !== undefined && assistant.open && <AssistantPanel assistant={assistant} />}
         </>
     );
 };
