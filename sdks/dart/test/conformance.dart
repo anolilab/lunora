@@ -56,6 +56,7 @@ Future<void> main() async {
   await run(caseShapeSubscribeFrame);
   await run(casePokeSequenceMaterialisesRows);
   await run(casePokePartsDoNotApplyBeforePokeEnd);
+  await run(caseResetPokeReplacesTheView);
   await run(caseWireValuePassesModelJsonThrough);
   await run(caseWatchStreamUnsubscribesOnCancel);
   await run(caseWatchSupportsManyListenersAndReListening);

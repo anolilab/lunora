@@ -154,6 +154,11 @@ type shapeSubscription struct {
 // half-applied.
 type pokeBuffer struct {
 	parts map[string][]map[string]any
+	// resets holds the shapes whose part carried `reset: true` — the shape's
+	// COMPLETE membership rather than a diff off what we hold. Kept per shape
+	// because the flag is per part, and sticky (never cleared) so a server that
+	// splits a seed across several parts still replaces rather than merges.
+	resets map[string]bool
 }
 
 type subscription struct {
@@ -969,7 +974,7 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			c.pokes = map[string]*pokeBuffer{}
 		}
 
-		c.pokes[pokeID] = &pokeBuffer{parts: map[string][]map[string]any{}}
+		c.pokes[pokeID] = &pokeBuffer{parts: map[string][]map[string]any{}, resets: map[string]bool{}}
 		c.mu.Unlock()
 
 		return kind, nil
@@ -1005,6 +1010,14 @@ func (c *Client) bufferPokePart(frame map[string]any) {
 	// atomic batch to join, and guessing would apply a fragment of one.
 	if buffer := c.pokes[pokeID]; buffer != nil {
 		buffer.parts[shapeID] = append(buffer.parts[shapeID], operations...)
+
+		if reset, _ := frame["reset"].(bool); reset {
+			if buffer.resets == nil {
+				buffer.resets = map[string]bool{}
+			}
+
+			buffer.resets[shapeID] = true
+		}
 	}
 }
 
@@ -1034,6 +1047,18 @@ func (c *Client) applyPoke(frame map[string]any) error {
 		shape := c.shapes[shapeID]
 		if shape == nil {
 			continue
+		}
+
+		// A `reset` part carries the shape's COMPLETE membership, so it is
+		// authoritative on its own: drop whatever we hold, then apply it. Splicing
+		// it onto the view instead keeps every row that left the shape while we
+		// were disconnected — a (re)seed is inserts-only, so nothing ever removes
+		// them and they render for the life of the client. The flag is the only
+		// signal: `baseCheckpoint` is absent on most live poke paths, and a
+		// retention re-seed arrives with the epoch unchanged.
+		if buffer.resets[shapeID] {
+			shape.rows = map[string]any{}
+			shape.order = nil
 		}
 
 		for _, operation := range operations {

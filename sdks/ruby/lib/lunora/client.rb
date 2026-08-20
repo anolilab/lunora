@@ -551,7 +551,7 @@ module Lunora
         @subscriptions.delete(frame["id"])
         kind
       when "pokeStart"
-        @pokes[frame["pokeId"]] = {}
+        @pokes[frame["pokeId"]] = { parts: {}, resets: [] }
         kind
       when "pokePart" then buffer_poke_part(frame)
       when "pokeEnd" then apply_poke(frame, deferred)
@@ -632,7 +632,11 @@ module Lunora
       # no batch to join, and guessing would apply a fragment of one.
       if buffer
         shape_id = frame["shapeId"]
-        buffer[shape_id] = (buffer[shape_id] || []) + (frame["rowsPatch"] || [])
+        buffer[:parts][shape_id] = (buffer[:parts][shape_id] || []) + (frame["rowsPatch"] || [])
+        # A shape gets at most one part per poke, but record the flag sticky
+        # (never cleared) so a server that splits a seed across parts still
+        # replaces the view rather than merging into it.
+        buffer[:resets] << shape_id if frame["reset"] == true
       end
       "pokePart"
     end
@@ -641,9 +645,21 @@ module Lunora
       buffer = @pokes.delete(frame["pokeId"])
       return "pokeEnd" if buffer.nil?
 
-      buffer.each do |shape_id, operations|
+      buffer[:parts].each do |shape_id, operations|
         shape = @shapes[shape_id]
         next if shape.nil?
+
+        # A reset part carries the shape's COMPLETE membership, so it REPLACES
+        # the view rather than patching it. Merging one keeps every row that left
+        # the shape while this client was away: a (re)seed is inserts-only, so
+        # nothing already held can ever be removed by it, and the stale row
+        # renders for the life of the client. Nothing else on the wire says so —
+        # a retention re-seed keeps the epoch, and most pokes carry no
+        # +baseCheckpoint+ either.
+        if buffer[:resets].include?(shape_id)
+          shape[:rows].clear
+          shape[:order].clear
+        end
 
         operations.each { |operation| apply_row_op(shape, operation) }
         shape[:checkpoint] = frame["checkpoint"] if frame.key?("checkpoint")

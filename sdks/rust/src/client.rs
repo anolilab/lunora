@@ -298,6 +298,18 @@ enum PokeOp {
     Upsert(String, WireValue),
 }
 
+/// One shape's slice of a buffered poke.
+///
+/// `reset` marks a part carrying the shape's COMPLETE membership rather than a
+/// diff off what we hold. It is per shape because the wire flag is per part, and
+/// sticky (never cleared) so a server that splits a seed across several parts
+/// still replaces rather than merges.
+#[derive(Default)]
+struct ShapePart {
+    operations: Vec<Value>,
+    reset: bool,
+}
+
 /// A Lunora deployment client.
 ///
 /// # Concurrency
@@ -358,7 +370,7 @@ pub struct Client {
     pub(crate) send: Option<FrameSender>,
     pub(crate) subscriptions: HashMap<String, Subscription>,
     shapes: HashMap<String, ShapeSubscription>,
-    pokes: HashMap<String, HashMap<String, Vec<Value>>>,
+    pokes: HashMap<String, HashMap<String, ShapePart>>,
     poke_order: VecDeque<String>,
     next_id: usize,
     next_shape_id: usize,
@@ -829,7 +841,10 @@ impl Client {
         // A part for an unknown poke is dropped: without its pokeStart there is
         // no batch to join, and guessing would apply a fragment of one.
         if let Some(buffer) = self.pokes.get_mut(poke_id) {
-            buffer.entry(shape_id.to_string()).or_default().extend(operations);
+            let part = buffer.entry(shape_id.to_string()).or_default();
+
+            part.operations.extend(operations);
+            part.reset |= frame.get("reset").and_then(Value::as_bool).unwrap_or(false);
         }
     }
 
@@ -859,16 +874,16 @@ impl Client {
             return Ok(());
         };
 
-        let mut decoded: Vec<(String, Vec<PokeOp>)> = Vec::with_capacity(buffer.len());
+        let mut decoded: Vec<(String, bool, Vec<PokeOp>)> = Vec::with_capacity(buffer.len());
 
-        for (shape_id, operations) in buffer {
+        for (shape_id, part) in buffer {
             if !self.shapes.contains_key(shape_id) {
                 continue;
             }
 
-            let mut ops = Vec::with_capacity(operations.len());
+            let mut ops = Vec::with_capacity(part.operations.len());
 
-            for operation in operations {
+            for operation in &part.operations {
                 let Some(key) = operation.get("key").and_then(Value::as_str) else {
                     continue;
                 };
@@ -888,7 +903,7 @@ impl Client {
                 ops.push(PokeOp::Upsert(key.to_string(), decode_wire(value)?));
             }
 
-            decoded.push((shape_id.clone(), ops));
+            decoded.push((shape_id.clone(), part.reset, ops));
         }
 
         // Every row in the batch decoded successfully — commit. Only now is the
@@ -896,10 +911,23 @@ impl Client {
         self.pokes.remove(poke_id);
         self.poke_order.retain(|candidate| candidate != poke_id);
 
-        for (shape_id, ops) in decoded {
+        for (shape_id, reset, ops) in decoded {
             let Some(shape) = self.shapes.get_mut(&shape_id) else {
                 continue;
             };
+
+            // A `reset` part carries the shape's COMPLETE membership, so it is
+            // authoritative on its own: drop whatever we hold, then apply it.
+            // Splicing it onto the view instead keeps every row that left the
+            // shape while we were disconnected — a (re)seed is inserts-only, so
+            // nothing ever removes them and they render for the life of the
+            // client. The flag is the only signal: `baseCheckpoint` is absent on
+            // most live poke paths, and a retention re-seed arrives with the
+            // epoch unchanged.
+            if reset {
+                shape.rows.clear();
+                shape.order.clear();
+            }
 
             for op in ops {
                 match op {

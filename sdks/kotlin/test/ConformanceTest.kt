@@ -411,6 +411,45 @@ private fun pokePartsDoNotApplyBeforePokeEnd() {
 }
 
 /**
+ * A `reset` part carries the shape's COMPLETE membership, so the view has to be
+ * dropped before the ops are applied.
+ *
+ * Not a manifest case — the shared manifest does not name one — but the shared
+ * fixture carries the sequence, so this is the same assertion every port makes.
+ * It starts from the cold-seed state on purpose: a re-seed is inserts-only, so
+ * `m1` leaves the shape with no delete op behind it, and a client that merges
+ * renders it for the rest of its life.
+ */
+private fun resetPokeReplacesShapeMembership() {
+    val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+
+    val delivered = mutableListOf<List<WireValue>>()
+
+    client.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { delivered.add(it) })
+
+    for (frame in shape["pokeSequence"] as List<*>) {
+        client.handleFrame(Json.write(frame))
+    }
+
+    check(
+        canonical(Wire.encode(WireValue.Arr(delivered.last()))) == canonical(shape["expectedRows"]),
+        "the cold seed lands before the re-seed",
+    )
+
+    for (frame in shape["resetPokeSequence"] as List<*>) {
+        client.handleFrame(Json.write(frame))
+    }
+
+    check(
+        canonical(Wire.encode(WireValue.Arr(delivered.last()))) == canonical(shape["resetExpectedRows"]),
+        "a reset poke replaces the shape's membership rather than merging into it",
+    )
+}
+
+/**
  * The topology every real consumer has: a socket read loop on one thread,
  * application code subscribing on another.
  *
@@ -468,6 +507,7 @@ fun main() {
     shapeSubscribeFrame()
     pokeSequenceMaterialisesRows()
     pokePartsDoNotApplyBeforePokeEnd()
+    resetPokeReplacesShapeMembership()
     concurrentSubscribeAndHandleFrame()
 
     // The optimistic-layer and offline-queue cases, in their own file so this one

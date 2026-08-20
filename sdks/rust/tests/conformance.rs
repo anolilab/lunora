@@ -481,6 +481,56 @@ fn poke_parts_do_not_apply_before_poke_end() {
     assert_eq!(*fired.lock().expect("fired"), 0, "the view would be torn if parts applied before pokeEnd");
 }
 
+/// Drives `shape.resetPokeSequence` on top of the cold-subscribe view: a part
+/// flagged `reset: true` carries the shape's whole membership, so `m1` — present
+/// in `expectedRows`, absent from the re-seed, and never deleted by an op — must
+/// be gone. Merging the seed instead keeps it forever, which is what every
+/// disconnect of a `.global()` shape (they full-reseed on every reconnect) used
+/// to leave behind.
+///
+/// A plain `#[test]` rather than a manifest case: `conformance-cases.json` is
+/// required of every port, so a name added there reds the ports that have not
+/// landed this yet.
+#[test]
+fn reset_poke_replaces_the_view() {
+    let document = fixture("ws-frames.json");
+    let sequence = document["shape"]["pokeSequence"].as_array().expect("pokeSequence");
+    let reset_sequence = document["shape"]["resetPokeSequence"].as_array().expect("resetPokeSequence");
+
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
+    let handle = Arc::clone(&delivered);
+
+    client.subscribe_shape(
+        "roomMessages",
+        Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
+        Some(Box::new(move |rows| handle.lock().expect("delivered").push(rows.to_vec()))),
+        None,
+    );
+
+    for frame in sequence.iter().chain(reset_sequence) {
+        client.handle_frame(&frame.to_string()).expect("handle");
+    }
+
+    let delivered = delivered.lock().expect("delivered");
+
+    assert_eq!(delivered.len(), 2, "one delivery per poke");
+
+    // The re-seed applies to the view the first poke left behind, so this only
+    // passes if it CLEARED that view rather than merging onto it.
+    let seeded = WireValue::Array(delivered[0].clone());
+    let after_reset = WireValue::Array(delivered[1].clone());
+
+    assert_eq!(canonical(&encode_wire(&seeded).expect("encode")), canonical(&document["shape"]["expectedRows"]));
+    assert_eq!(
+        canonical(&encode_wire(&after_reset).expect("encode")),
+        canonical(&document["shape"]["resetExpectedRows"])
+    );
+}
+
 /// The topology every real consumer has: a socket read loop on one thread and
 /// application code subscribing on others.
 ///

@@ -38,10 +38,18 @@ class _ShapeSubscription {
   Object? epoch;
 }
 
+/// One poke in flight: the row ops buffered per shape, plus the shapes this poke
+/// marked as a full (re)seed. One buffer rather than two maps kept in step by
+/// hand, so both are dropped together at `pokeEnd`.
+class _Poke {
+  final Map<String, List<Map<String, Object?>>> parts = <String, List<Map<String, Object?>>>{};
+  final Set<String> resets = <String>{};
+}
+
 /// The open shape views and the pokes in flight against them.
 class ShapeRegistry {
   final Map<String, _ShapeSubscription> _shapes = <String, _ShapeSubscription>{};
-  final Map<String, Map<String, List<Map<String, Object?>>>> _pokes = <String, Map<String, List<Map<String, Object?>>>>{};
+  final Map<String, _Poke> _pokes = <String, _Poke>{};
   int _nextId = 0;
 
   /// How many views are open.
@@ -99,7 +107,7 @@ class ShapeRegistry {
     final pokeId = frame['pokeId'];
 
     if (pokeId is String) {
-      _pokes[pokeId] = <String, List<Map<String, Object?>>>{};
+      _pokes[pokeId] = _Poke();
     }
   }
 
@@ -128,7 +136,14 @@ class ShapeRegistry {
       return;
     }
 
-    buffer.putIfAbsent(shapeId, () => <Map<String, Object?>>[]).addAll(patch.whereType<Map<String, Object?>>());
+    buffer.parts.putIfAbsent(shapeId, () => <Map<String, Object?>>[]).addAll(patch.whereType<Map<String, Object?>>());
+
+    // A shape gets at most one part per poke, but record the flag sticky (never
+    // cleared) so a server that split a seed across parts still replaces the view
+    // rather than merging into it.
+    if (frame['reset'] == true) {
+      buffer.resets.add(shapeId);
+    }
   }
 
   /// Apply a buffered poke in one transaction and deliver each affected view.
@@ -150,11 +165,22 @@ class ShapeRegistry {
     // client sees one consistent poke rather than a half-applied one.
     final deliveries = <MapEntry<LunoraRowsCallback, List<Object?>>>[];
 
-    for (final shapeEntry in buffer.entries) {
+    for (final shapeEntry in buffer.parts.entries) {
       final shape = _shapes[shapeEntry.key];
 
       if (shape == null) {
         continue;
+      }
+
+      // A reset part carries the shape's COMPLETE membership, so it REPLACES the
+      // view rather than patching it. Merging one keeps every row that left the
+      // shape while this client was away: a (re)seed is inserts-only, so nothing
+      // already held can ever be removed by it, and the stale row renders for the
+      // life of the client. Nothing else on the wire says so — a retention
+      // re-seed keeps the epoch, and most pokes carry no `baseCheckpoint` either.
+      if (buffer.resets.contains(shapeEntry.key)) {
+        shape.rows.clear();
+        shape.order.clear();
       }
 
       for (final operation in shapeEntry.value) {

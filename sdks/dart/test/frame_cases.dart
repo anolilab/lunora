@@ -133,6 +133,31 @@ void casePokeSequenceMaterialisesRows() {
   equals(canonical(delivered.last), canonical(shape['expectedRows']), 'materialised rows');
 }
 
+/// No `covers` call: protocol/conformance-cases.json lists the cases EVERY
+/// language must have, and it carries no name for this one yet — the fixture
+/// arrived with the TypeScript fix. Give it one once all eight ports assert it.
+void caseResetPokeReplacesTheView() {
+  final shape = fixture('ws-frames.json')['shape'] as Map<String, Object?>;
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  final delivered = <List<Object?>>[];
+
+  client.subscribeShape('roomMessages', args: <String, Object?>{'room': 'general'}, onRows: delivered.add);
+
+  for (final entry in shape['pokeSequence']! as List<Object?>) {
+    client.handleFrame(jsonEncode(entry));
+  }
+
+  equals(canonical(delivered.last), canonical(shape['expectedRows']), 'materialised rows');
+
+  for (final entry in shape['resetPokeSequence']! as List<Object?>) {
+    client.handleFrame(jsonEncode(entry));
+  }
+
+  // m1 left the shape while this client was away, and the re-seed says so by
+  // omission — it carries no delete, only the rows that are still members.
+  equals(canonical(delivered.last), canonical(shape['resetExpectedRows']), 'a reset poke replaces the view');
+}
+
 void casePokePartsDoNotApplyBeforePokeEnd() {
   covers('poke_parts_do_not_apply_before_poke_end');
 

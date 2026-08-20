@@ -389,6 +389,43 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(fired, 0, "the view would be torn if parts applied before pokeEnd")
     }
 
+    /// A `reset` part carries the shape's COMPLETE membership, so the view has to
+    /// be dropped before the ops are applied.
+    ///
+    /// Not a manifest case — the shared manifest does not name one — so it is a
+    /// `test` method rather than a `case` one, but the shared fixture carries the
+    /// sequence and this is the same assertion every port makes. It starts from
+    /// the cold-seed state on purpose: a re-seed is inserts-only, so `m1` leaves
+    /// the shape with no delete op behind it, and a client that merges renders it
+    /// for the rest of its life.
+    func testResetPokeReplacesShapeMembership() throws {
+        let shape = try XCTUnwrap(fixture("ws-frames.json")["shape"] as? [String: Any])
+
+        let client = LunoraClient(url: "https://app.example")
+        client.attachSocket { _ in }
+
+        var delivered: [[Any]] = []
+        client.subscribeShape("roomMessages", args: ["room": "general"], onRows: { delivered.append($0) })
+
+        for entry in try XCTUnwrap(shape["pokeSequence"] as? [Any]) {
+            let raw = try JSONSerialization.data(withJSONObject: entry)
+            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+        }
+
+        XCTAssertEqual(canonical(delivered.last), canonical(shape["expectedRows"]), "the cold seed lands before the re-seed")
+
+        for entry in try XCTUnwrap(shape["resetPokeSequence"] as? [Any]) {
+            let raw = try JSONSerialization.data(withJSONObject: entry)
+            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+        }
+
+        XCTAssertEqual(
+            canonical(delivered.last),
+            canonical(shape["resetExpectedRows"]),
+            "a reset poke replaces the shape's membership rather than merging into it"
+        )
+    }
+
     // MARK: - Generated-model projection
 
     /// `wireValue` must restore the nulls synthesized `Codable` drops.

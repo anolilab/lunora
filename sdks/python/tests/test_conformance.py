@@ -180,6 +180,28 @@ class TestWsFrameConsumer(unittest.TestCase):
         self.assertTrue(rows_seen, "on_rows should fire at pokeEnd")
         self.assertEqual(rows_seen[-1], shape["expectedRows"])
 
+    # No ``covers()`` call: protocol/conformance-cases.json lists the cases EVERY
+    # language must have, and it carries no name for this one yet — the fixture
+    # arrived with the TypeScript fix. Give it one once all eight ports assert it.
+    def test_reset_poke_replaces_the_view(self):
+        shape = load("ws-frames.json")["shape"]
+        client = LunoraClient("https://app.example")
+        client._send = lambda _frame: None
+        rows_seen: list = []
+        client.subscribe_shape("roomMessages", {"room": "general"}, rows_seen.append)
+
+        for frame in shape["pokeSequence"]:
+            client.handle_frame(frame)
+
+        self.assertEqual(rows_seen[-1], shape["expectedRows"])
+
+        for frame in shape["resetPokeSequence"]:
+            client.handle_frame(frame)
+
+        # m1 left the shape while this client was away and the re-seed says so by
+        # omission — it carries no delete, only the rows that are still members.
+        self.assertEqual(rows_seen[-1], shape["resetExpectedRows"])
+
 
 if __name__ == "__main__":
     unittest.main()

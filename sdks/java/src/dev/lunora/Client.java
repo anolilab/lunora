@@ -12,9 +12,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -101,7 +103,7 @@ public final class Client {
     FrameSender sender;
     private final Map<String, Subscription> subscriptions = new LinkedHashMap<>();
     private final Map<String, Shape> shapes = new LinkedHashMap<>();
-    private final Map<String, Map<String, List<Map<String, Object>>>> pokes = new LinkedHashMap<>();
+    private final Map<String, PokeBuffer> pokes = new LinkedHashMap<>();
     private int nextId;
     private int nextShapeId;
 
@@ -143,6 +145,25 @@ public final class Client {
                 state.callbacks.add(onData);
             }
         }
+    }
+
+    /**
+     * One in-flight poke: the row ops buffered per shape, plus the shapes whose part carried {@code
+     * reset: true}.
+     *
+     * <p>The flag is tracked per SHAPE, not per poke: one poke can re-seed one shape while
+     * delivering an ordinary diff to another on the same socket.
+     */
+    private static final class PokeBuffer {
+        final Map<String, List<Map<String, Object>>> parts = new LinkedHashMap<>();
+
+        /**
+         * Shapes whose {@code rowsPatch} is the shape's COMPLETE membership rather than a diff, so
+         * the view has to be dropped before it is applied. A seed carries inserts only, so merging
+         * one leaves every row that left the shape while the socket was down on screen for the life
+         * of the client.
+         */
+        final Set<String> resets = new LinkedHashSet<>();
     }
 
     private static final class Shape {
@@ -926,7 +947,7 @@ public final class Client {
             }
             case "pokeStart" -> {
                 synchronized (lock) {
-                    pokes.put(String.valueOf(frame.get("pokeId")), new LinkedHashMap<>());
+                    pokes.put(String.valueOf(frame.get("pokeId")), new PokeBuffer());
                 }
             }
             case "pokePart" -> bufferPokePart(frame);
@@ -967,8 +988,7 @@ public final class Client {
         }
 
         synchronized (lock) {
-            Map<String, List<Map<String, Object>>> buffer =
-                    pokes.get(String.valueOf(frame.get("pokeId")));
+            PokeBuffer buffer = pokes.get(String.valueOf(frame.get("pokeId")));
 
             // A part for an unknown poke is dropped: without its pokeStart there
             // is no batch to join, and guessing would apply a fragment of one.
@@ -976,8 +996,17 @@ public final class Client {
                 return;
             }
 
-            buffer.computeIfAbsent(String.valueOf(frame.get("shapeId")), key -> new ArrayList<>())
-                    .addAll(operations);
+            String shapeId = String.valueOf(frame.get("shapeId"));
+
+            buffer.parts.computeIfAbsent(shapeId, key -> new ArrayList<>()).addAll(operations);
+
+            // Recorded sticky (never cleared) so a server that splits one seed across
+            // several parts still replaces rather than merges. `reset` is the ONLY
+            // signal: a missing `baseCheckpoint` does not imply a seed, and a
+            // retention re-seed arrives with the epoch unchanged.
+            if (Boolean.TRUE.equals(frame.get("reset"))) {
+                buffer.resets.add(shapeId);
+            }
         }
     }
 
@@ -995,18 +1024,27 @@ public final class Client {
         // released, with the row snapshot taken while still holding it — so a
         // callback sees one consistent poke even if the next one lands mid-delivery.
         synchronized (lock) {
-            Map<String, List<Map<String, Object>>> buffer =
-                    pokes.remove(String.valueOf(frame.get("pokeId")));
+            PokeBuffer buffer = pokes.remove(String.valueOf(frame.get("pokeId")));
 
             if (buffer == null) {
                 return;
             }
 
-            for (Map.Entry<String, List<Map<String, Object>>> entry : buffer.entrySet()) {
+            for (Map.Entry<String, List<Map<String, Object>>> entry : buffer.parts.entrySet()) {
                 Shape shape = shapes.get(entry.getKey());
 
                 if (shape == null) {
                     continue;
+                }
+
+                // A reset part is the shape's complete membership, so it is authoritative
+                // on its own: drop what we hold before applying it. `.global()` shapes
+                // re-seed in full on EVERY reconnect and an op-log shape past changelog
+                // retention does too, so without this a row deleted while the socket was
+                // down is never removed.
+                if (buffer.resets.contains(entry.getKey())) {
+                    shape.rows.clear();
+                    shape.order.clear();
                 }
 
                 for (Map<String, Object> operation : entry.getValue()) {

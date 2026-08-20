@@ -646,6 +646,7 @@ class LunoraClient:
                 "baseCheckpoint": frame.get("baseCheckpoint"),
                 "epoch": frame.get("epoch"),
                 "parts": {},
+                "resets": set(),
             }
             return {"kind": "pokeStart", "pokeId": frame["pokeId"]}
 
@@ -653,6 +654,11 @@ class LunoraClient:
             buf = self._poke_buffers.get(frame["pokeId"])
             if buf is not None:
                 buf["parts"].setdefault(frame["shapeId"], []).extend(frame.get("rowsPatch", []))
+                # A shape gets at most one part per poke, but record the flag
+                # sticky (never cleared) so a server that splits a seed across
+                # parts still replaces the view rather than merging into it.
+                if frame.get("reset") is True:
+                    buf["resets"].add(frame["shapeId"])
             return {"kind": "pokePart", "pokeId": frame["pokeId"], "shapeId": frame.get("shapeId")}
 
         if kind == "pokeEnd":
@@ -744,6 +750,16 @@ class LunoraClient:
                 shape = self._shapes.get(shape_id)
                 if shape is None:
                     continue
+                # A reset part carries the shape's COMPLETE membership, so it
+                # replaces the view instead of patching it. Merging it would keep
+                # every row that left the shape while this client was away: a
+                # (re)seed is inserts-only, so nothing already held can ever be
+                # removed by one, and the stale row renders for the life of the
+                # client. Not inferable from anything else on the wire — a
+                # retention re-seed keeps the epoch, and most live pokes carry no
+                # baseCheckpoint either.
+                if shape_id in buf["resets"]:
+                    shape.rows.clear()
                 for op in ops:
                     if op["op"] == "delete":
                         shape.rows.pop(op["key"], None)

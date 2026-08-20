@@ -224,6 +224,28 @@ class TestWsFrames < Minitest::Test
     assert_equal canonical(shape["expectedRows"]), canonical(delivered.last)
   end
 
+  # No +ConformanceManifest.covers+ call: protocol/conformance-cases.json lists
+  # the cases EVERY language must have, and it carries no name for this one yet —
+  # the fixture arrived with the TypeScript fix. Give it one once all eight ports
+  # assert it.
+  def test_reset_poke_replaces_the_view
+    shape = fixture("ws-frames.json")["shape"]
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    delivered = []
+    client.subscribe_shape("roomMessages", { "room" => "general" }, ->(rows) { delivered << rows })
+
+    shape["pokeSequence"].each { |frame| client.handle_frame(JSON.generate(frame)) }
+
+    assert_equal canonical(shape["expectedRows"]), canonical(delivered.last)
+
+    shape["resetPokeSequence"].each { |frame| client.handle_frame(JSON.generate(frame)) }
+
+    # m1 left the shape while this client was away, and the re-seed says so by
+    # omission — it carries no delete, only the rows that are still members.
+    assert_equal canonical(shape["resetExpectedRows"]), canonical(delivered.last)
+  end
+
   def test_poke_parts_do_not_apply_before_poke_end
     ConformanceManifest.covers("poke_parts_do_not_apply_before_poke_end")
 

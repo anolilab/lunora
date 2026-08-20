@@ -69,7 +69,7 @@ public final class LunoraClient {
     var send: LunoraFrameSender?
     var subscriptions: [String: Subscription] = [:]
     private var shapes: [String: ShapeSubscription] = [:]
-    private var pokes: [String: [String: [[String: Any]]]] = [:]
+    private var pokes: [String: PokeBuffer] = [:]
     private var nextID = 0
     private var nextShapeID = 0
 
@@ -128,6 +128,21 @@ public final class LunoraClient {
 
             if let onData { state.callbacks.append(onData) }
         }
+    }
+
+    /// One in-flight poke: the row ops buffered per shape, plus the shapes whose
+    /// part carried `reset: true`.
+    ///
+    /// The flag is tracked per SHAPE, not per poke: one poke can re-seed one shape
+    /// while delivering an ordinary diff to another on the same socket.
+    private struct PokeBuffer {
+        var parts: [String: [[String: Any]]] = [:]
+
+        /// Shapes whose `rowsPatch` is the shape's COMPLETE membership rather than a
+        /// diff, so the view has to be dropped before it is applied. A seed carries
+        /// inserts only, so merging one leaves every row that left the shape while
+        /// the socket was down on screen for the life of the client.
+        var resets: Set<String> = []
     }
 
     private final class ShapeSubscription {
@@ -776,7 +791,7 @@ public final class LunoraClient {
             return kind
         case "pokeStart":
             withLock {
-                if let pokeID = frame["pokeId"] as? String { pokes[pokeID] = [:] }
+                if let pokeID = frame["pokeId"] as? String { pokes[pokeID] = PokeBuffer() }
             }
 
             return kind
@@ -808,7 +823,13 @@ public final class LunoraClient {
             else { return }
 
             let operations = (frame["rowsPatch"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
-            pokes[pokeID]?[shapeID, default: []].append(contentsOf: operations)
+            pokes[pokeID]?.parts[shapeID, default: []].append(contentsOf: operations)
+
+            // Recorded sticky (never cleared) so a server that splits one seed across
+            // several parts still replaces rather than merges. `reset` is the ONLY
+            // signal: a missing `baseCheckpoint` does not imply a seed, and a
+            // retention re-seed arrives with the epoch unchanged.
+            if frame["reset"] as? Bool == true { pokes[pokeID]?.resets.insert(shapeID) }
         }
     }
 
@@ -821,8 +842,18 @@ public final class LunoraClient {
 
             var deliveries: [(([Any]) -> Void, [Any])] = []
 
-            for (shapeID, operations) in buffer {
+            for (shapeID, operations) in buffer.parts {
                 guard let shape = shapes[shapeID] else { continue }
+
+                // A reset part is the shape's complete membership, so it is
+                // authoritative on its own: drop what we hold before applying it.
+                // `.global()` shapes re-seed in full on EVERY reconnect and an op-log
+                // shape past changelog retention does too, so without this a row
+                // deleted while the socket was down is never removed.
+                if buffer.resets.contains(shapeID) {
+                    shape.rows.removeAll()
+                    shape.order.removeAll()
+                }
 
                 for operation in operations {
                     guard let key = operation["key"] as? String else { continue }

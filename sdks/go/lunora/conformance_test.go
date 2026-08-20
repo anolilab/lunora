@@ -600,3 +600,65 @@ func TestPokePartsDoNotApplyBeforePokeEnd(t *testing.T) {
 		t.Errorf("onRows fired %d times before pokeEnd, want 0 — the view would be torn", fired)
 	}
 }
+
+// TestResetPokeReplacesTheView drives ws-frames.json shape.resetPokeSequence on
+// top of the cold-subscribe view: a part flagged `reset: true` carries the
+// shape's whole membership, so m1 — present in expectedRows, absent from the
+// re-seed, and never deleted by an op — must be gone. Merging the seed instead
+// keeps it forever, which is what every disconnect of a `.global()` shape (they
+// full-reseed on every reconnect) used to leave behind.
+//
+// Not a manifest case: protocol/conformance-cases.json is required of every
+// port, and adding a name there reds the ports that have not landed this yet.
+func TestResetPokeReplacesTheView(t *testing.T) {
+	fixture := loadFixture(t, "ws-frames.json")
+
+	shape, ok := fixture["shape"].(map[string]any)
+	if !ok {
+		t.Fatal("fixture has no shape group")
+	}
+
+	sequence, ok := shape["pokeSequence"].([]any)
+	if !ok || len(sequence) == 0 {
+		t.Fatal("fixture has no pokeSequence")
+	}
+
+	resetSequence, ok := shape["resetPokeSequence"].([]any)
+	if !ok || len(resetSequence) == 0 {
+		t.Fatal("fixture has no resetPokeSequence")
+	}
+
+	client := NewClient("https://app.example", nil)
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	var delivered [][]any
+
+	client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func(rows []any) {
+		delivered = append(delivered, rows)
+	}, nil)
+
+	for _, entry := range append(append([]any{}, sequence...), resetSequence...) {
+		raw, marshalErr := json.Marshal(entry)
+		if marshalErr != nil {
+			t.Fatalf("marshal: %v", marshalErr)
+		}
+
+		if _, err := client.HandleFrame(raw); err != nil {
+			t.Fatalf("handle: %v", err)
+		}
+	}
+
+	if len(delivered) != 2 {
+		t.Fatalf("onRows fired %d times, want 2 — one per poke", len(delivered))
+	}
+
+	// The seed applies to the view the first poke left behind, so this only
+	// passes if the reset CLEARED it rather than merging onto it.
+	if got, want := canonical(t, delivered[0]), canonical(t, shape["expectedRows"]); got != want {
+		t.Errorf("rows after the cold poke mismatch\n got: %s\nwant: %s", got, want)
+	}
+
+	if got, want := canonical(t, delivered[1]), canonical(t, shape["resetExpectedRows"]); got != want {
+		t.Errorf("rows after the reset poke mismatch\n got: %s\nwant: %s", got, want)
+	}
+}

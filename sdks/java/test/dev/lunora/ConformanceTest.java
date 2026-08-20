@@ -52,6 +52,7 @@ public final class ConformanceTest {
         shapeSubscribeFrame();
         pokeSequenceMaterialisesRows();
         pokePartsDoNotApplyBeforePokeEnd();
+        resetPokeReplacesShapeMembership();
         concurrentSubscribeAndHandleFrame();
 
         // The optimistic-layer and offline-queue cases, in their own file so this one
@@ -599,6 +600,47 @@ public final class ConformanceTest {
         }
 
         check(fired[0] == 0, "the view would be torn if parts applied before pokeEnd");
+    }
+
+    /**
+     * A {@code reset} part carries the shape's COMPLETE membership, so the view has to be dropped
+     * before the ops are applied.
+     *
+     * <p>Not a manifest case — the shared manifest does not name one — but the shared fixture
+     * carries the sequence, so this is the same assertion every port makes. It starts from the
+     * cold-seed state on purpose: a re-seed is inserts-only, so {@code m1} leaves the shape with no
+     * delete op behind it, and a client that merges renders it for the rest of its life.
+     */
+    @SuppressWarnings("unchecked")
+    private static void resetPokeReplacesShapeMembership() throws IOException {
+        Map<String, Object> shape = (Map<String, Object>) fixture("ws-frames.json").get("shape");
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+
+        List<List<Object>> delivered = new ArrayList<>();
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("room", "general");
+        client.subscribeShape("roomMessages", args, delivered::add, null);
+
+        for (Object frame : (List<Object>) shape.get("pokeSequence")) {
+            client.handleFrame(Json.write(frame));
+        }
+
+        check(
+                canonical(delivered.get(delivered.size() - 1))
+                        .equals(canonical(shape.get("expectedRows"))),
+                "the cold seed lands before the re-seed");
+
+        for (Object frame : (List<Object>) shape.get("resetPokeSequence")) {
+            client.handleFrame(Json.write(frame));
+        }
+
+        check(
+                canonical(delivered.get(delivered.size() - 1))
+                        .equals(canonical(shape.get("resetExpectedRows"))),
+                "a reset poke replaces the shape's membership rather than merging into it");
     }
 
     /**
