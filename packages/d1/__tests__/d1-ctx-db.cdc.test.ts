@@ -76,6 +76,21 @@ describe("d1 ctx-db change-data-capture", () => {
         await expect(tableExists("__cdc_log")).resolves.toBe(false);
     });
 
+    // The premise the codegen-emitted `syncGlobals` guard rests on. The admin CDC
+    // sync endpoint runs against whatever global database the app configured, and
+    // the changelog is only created when the writer runs with CDC enabled — so on
+    // every non-CDC app there is no `__cdc_log` at all. Reading it straight would
+    // turn "nothing has changed yet" into a 500, which is why the emitted helper
+    // probes `sqlite_master` first (mirroring the shard-local `runShardCdcSync`).
+    it("rejects rather than reporting an empty page when the changelog table was never created", async () => {
+        expect.assertions(2);
+
+        setupWriter(false);
+
+        await expect(tableExists("__cdc_log")).resolves.toBe(false);
+        await expect(readD1CdcChanges(harness.exec)).rejects.toThrow(/__cdc_log/);
+    });
+
     it("records insert / update / delete in monotonic seq order with post-images", async () => {
         expect.assertions(5);
 

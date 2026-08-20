@@ -206,7 +206,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(hasGlobal
             ? [
                   `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-                  `import { createD1CtxDb, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
+                  `import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
               ]
             : []),
         ...(hasHyperdriveGlobal
@@ -597,6 +597,17 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
                 // imports, so there is nothing project-specific to configure.
                 options.resolveTableSharding = buildTableShardingResolver();
                 options.importGlobals = buildGlobalImporter(database);
+                // The read/replay half of the same admin plane. Each one is the
+                // only reason its endpoint can see the global storage plane at
+                // all, and every one of them fails SILENTLY when unset — export
+                // and \`lunora backup create\` answer 200 having written only
+                // shard-local rows (an export→import round trip then restores
+                // cleanly minus every global row), CDC sync answers with only
+                // shard changes, and point-in-time apply reports
+                // \`globalApplied: 0\`. Nothing here is project-specific either.
+                options.exportGlobals = buildGlobalExporter(database);
+                options.syncGlobals = buildGlobalCdcSync(database);
+                options.applyGlobals = buildGlobalCdcApplier(database);
             }
         }`,
           ]
@@ -974,6 +985,70 @@ const buildGlobalImporter =
             rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
             startLine: request.startLine,
         });
+    };
+
+/**
+ * \`exportGlobals\` for the admin export endpoint (and the scheduled R2 backup,
+ * which drains the same stream): the read twin of {@link buildGlobalImporter},
+ * over the same D1 handle. \`@lunora/d1\`'s \`exportGlobalRows\` keyset-paginates
+ * each table and provisions the schema's global tables first, so a table that
+ * was never written exports as empty instead of throwing \`no such table\`.
+ *
+ * \`tables\` is forwarded as-is: the runtime passes an empty array for "every
+ * table" (its \`tables === undefined\` case), which is exactly what
+ * \`selectGlobalTables\` reads an empty allowlist as.
+ */
+const buildGlobalExporter =
+    (database: D1DatabaseLike) =>
+    (request: { tables: ReadonlyArray<string> }) =>
+        exportGlobalRows(buildExec(database), schema as unknown as D1CtxDbOptions["schema"], { tables: request.tables });
+
+/**
+ * \`syncGlobals\` for the admin CDC sync + warehouse-connector endpoints: pages
+ * the global \`__cdc_log\` past \`sinceSeq\`, the global-plane twin of the shard's
+ * \`runShardCdcSync\`.
+ *
+ * Probes \`sqlite_master\` first, exactly as the shard twin does. The changelog
+ * table is only created when the global writer runs with CDC enabled, so on
+ * every other app a straight read would throw \`no such table: __cdc_log\` and
+ * turn "nothing has changed yet" into a 500. Absent log ⇒ an empty page that
+ * leaves the caller's cursor where it was.
+ */
+const buildGlobalCdcSync =
+    (database: D1DatabaseLike) =>
+    async (request: { limit?: number; sinceSeq: number }): Promise<{ changes: ReadonlyArray<Record<string, unknown>>; cursor: number }> => {
+        const exec = buildExec(database);
+        const present = await exec.all(\`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?\`, ["__cdc_log"]);
+
+        if (present.length === 0) {
+            return { changes: [], cursor: request.sinceSeq };
+        }
+
+        const page = await readD1CdcChanges(exec, { limit: request.limit, sinceSeq: request.sinceSeq });
+
+        // \`as unknown as\`, because \`CdcChange\` is an interface and interfaces carry
+        // no implicit index signature — the shapes are otherwise identical.
+        return { changes: page.changes as unknown as ReadonlyArray<Record<string, unknown>>, cursor: page.cursor };
+    };
+
+/**
+ * \`applyGlobals\` for the admin point-in-time-recovery apply endpoint: replays a
+ * batch of global CDC changes through the same D1 writer \`.global()\` writes go
+ * through, and reports how many were replayed.
+ *
+ * \`applyCdcChanges\` is order-sensitive and idempotent per row (insert, falling
+ * back to replace on conflict), so the batch is handed over untouched — the
+ * caller already emits it in commit order. The changes arrive as plain parsed
+ * JSON off the wire, hence the cast to the replayer's own change shape.
+ */
+const buildGlobalCdcApplier =
+    (database: D1DatabaseLike) =>
+    async (request: { changes: ReadonlyArray<Record<string, unknown>> }): Promise<number> => {
+        const writer = createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] });
+
+        await applyCdcChanges(writer, request.changes as unknown as Parameters<typeof applyCdcChanges>[1]);
+
+        return request.changes.length;
     };
 `
         : "";

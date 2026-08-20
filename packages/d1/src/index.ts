@@ -36,3 +36,4 @@ export { MigrationRunner } from "./migration-runner";
 export type { D1RetryOptions } from "./retry";
 export { D1TimeoutError, isTransientD1Error, retryingExec, withD1Retry } from "./retry";
 export { default as sqliteDialect } from "./sqlite-dialect";
+export { applyCdcChanges } from "@lunora/shard-engine";
