@@ -472,6 +472,18 @@ behaviours that are now stated rather than left implicit.
   than the transient set the un-memoized path allocated. Now keyed
   `(predicateKey, rangeKey)`.
 
+- **The new index built inside the cold-start migration, on the log this plan
+  says grows unbounded.** `IF NOT EXISTS` makes it idempotent; it does not make
+  it cheap. On an existing deployment upgrading INTO the index, the first cold
+  start builds it over everything the log accumulated while it had no retention,
+  synchronously on the request path — and a failure there took the whole
+  migration with it, so every subsequent request restarted the build and the
+  shard was bricked rather than slow. The checklist's "no migration impact" was
+  reasoning about idempotence, not cost. The index build now fails alone: reads
+  fall back to the `seq` scan they used before it existed, the retention sweep
+  bounds the log over the following minutes, and the next cold start retries
+  against a smaller table.
+
 ### Stated, not changed
 
 - **`.global()` deltas remain racy on sequence-allocating dialects.** Postgres

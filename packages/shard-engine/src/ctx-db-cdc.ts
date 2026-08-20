@@ -65,10 +65,27 @@ const migrateCdcLog = (sql: SqlExec): void => {
         )`,
     );
 
-    runDrizzle(
-        sql,
-        dsql`CREATE INDEX IF NOT EXISTS ${dsql.identifier(CDC_LOG_TABLE_SEQ_INDEX)} ON ${dsql.identifier(CDC_LOG_TABLE)} (${dsql.identifier("table")}, seq)`,
-    );
+    // Isolated from the table's own migration, because this statement is the one
+    // that can be EXPENSIVE rather than instant. `IF NOT EXISTS` makes it
+    // idempotent; it does not make it cheap. On an existing deployment upgrading
+    // into this index, the first cold start builds it over however many rows the
+    // log accumulated while it had no retention — and that build runs
+    // synchronously on the request path. If it exceeds the isolate's budget and
+    // takes the whole migration down with it, EVERY subsequent request restarts
+    // from scratch and the shard is bricked rather than slow.
+    //
+    // Letting it fail alone converts that into the recoverable shape: the log
+    // still works (reads fall back to the `seq` scan they used before this index
+    // existed), the retention sweep bounds the log over the following minutes,
+    // and the next cold start retries against a smaller table until it succeeds.
+    try {
+        runDrizzle(
+            sql,
+            dsql`CREATE INDEX IF NOT EXISTS ${dsql.identifier(CDC_LOG_TABLE_SEQ_INDEX)} ON ${dsql.identifier(CDC_LOG_TABLE)} (${dsql.identifier("table")}, seq)`,
+        );
+    } catch {
+        /* see above: a degraded read path beats an unbootable shard, and the next cold start retries */
+    }
 };
 
 /**
