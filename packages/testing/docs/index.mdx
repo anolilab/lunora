@@ -371,10 +371,12 @@ test("password reset email carries a working link", async () => {
 ## Evals — scoring model output
 
 `evaluate` runs a dataset through a producer and scores each output. The
-built-in scorers are heuristic (`containsScorer`, `regexScorer`,
-`exactMatchScorer`, `keywordScorer`) plus `llmScorer`, an LLM-as-judge whose
-`judge` is **injected** — a `(prompt) => Promise<string>` you wire to your own
-model — so this package stays model-agnostic and the judge is mockable.
+built-in scorers are heuristic (`containsScorer`, `absentScorer`,
+`regexScorer`, `exactMatchScorer`, `keywordScorer`) plus `llmScorer`, an
+LLM-as-judge whose `judge` is **injected** — a `(prompt) => Promise<string>`
+you wire to your own model — so this package stays model-agnostic and the
+judge is mockable. `absentScorer` is the one that can express a refusal: "the
+write was never dispatched", "the tool above this tier was never offered".
 
 ```ts
 import { evaluate, keywordScorer } from "@lunora/testing";

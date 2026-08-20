@@ -19,7 +19,7 @@ pnpm workspaces are `apps/*`, `packages/*`, `examples/*`, `tests/*`. The rest of
 | `examples/*`     | Runnable example apps (`todo-app`, `blog`, `expo`, `payment-demo`, …).                                                                        |
 | `templates/*`    | Whole-project starters fetched by `lunora init` (`next`, `nuxt`, `expo`, `standalone`, …).                                                    |
 | `registry/*`     | Copy-in registry items installed with `lunora registry add` (`auth`, `auth-ui-*`, `ai`, …).                                                   |
-| `tests/*`        | Cross-cutting suites: `e2e` (`@lunora/e2e`, Playwright) and `vis-templates`.                                                                  |
+| `tests/*`        | Cross-cutting suites: `e2e` (`@lunora/e2e`, Playwright), `vis-templates`, and `ai-evals` (the AI assistant's behavioural eval set).           |
 | `scripts/*`      | Repo checks + release helpers (`check-*.js` run from `postinstall`, `api-snapshot.js`).                                                       |
 | `api-snapshots/` | Committed public-API snapshots, one `<pkg>.api.md` per package — gated by `pnpm run api:check`.                                               |
 | `shared/`        | Bundler-inlined helpers, **not** a package. See [Top-level `shared/`](#top-level-shared--bundler-inlined-source-not-a-package).               |

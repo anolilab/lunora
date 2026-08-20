@@ -115,6 +115,29 @@ const containsScorer = (needle: string, options: { caseSensitive?: boolean } = {
     };
 };
 
+/**
+ * Score 1 when the output does NOT contain `needle` — the negative half of
+ * {@link containsScorer}.
+ *
+ * Every other scorer here asserts something is present, which cannot express
+ * the expectations that matter most for a refusal or a leak: "never dispatched
+ * the write", "never offered the tool this tier forbids", "the injected fence
+ * marker did not survive". Spelling those as a negative-lookahead
+ * {@link regexScorer} works but reads as a puzzle, and gets the escaping wrong
+ * the first time someone copies it.
+ */
+const absentScorer = (needle: string, options: { caseSensitive?: boolean } = {}): Scorer => {
+    return {
+        name: `absent:${needle}`,
+        score: ({ output }): number => {
+            const haystack = options.caseSensitive ? output : output.toLowerCase();
+            const target = options.caseSensitive ? needle : needle.toLowerCase();
+
+            return haystack.includes(target) ? 0 : 1;
+        },
+    };
+};
+
 /** Score 1 when `pattern` matches the output. */
 const regexScorer = (pattern: RegExp, name = "regex"): Scorer => {
     return { name, score: ({ output }): number => (pattern.test(output) ? 1 : 0) };
@@ -237,4 +260,4 @@ const evaluate = async (
 };
 
 export type { EvalCase, EvalItemResult, EvalResult, ProducedOutput, Scorer, ScoreResult, ScorerSample };
-export { containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, parseJudgeScore, regexScorer, scoreSample };
+export { absentScorer, containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, parseJudgeScore, regexScorer, scoreSample };
