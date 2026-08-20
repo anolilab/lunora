@@ -300,9 +300,20 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
 
             openAssistant: (seed?: AssistantSeed): void => {
                 setState((current) => {
-                    // A seeded question always gets its own session — see the docblock on
-                    // `openAssistant`. So does the very first open, which has none to reuse.
-                    if (seed?.ask !== undefined || current.activeId === undefined) {
+                    const active = current.activeId === undefined ? undefined : sessionById(current.sessions, current.activeId);
+
+                    /*
+                     * A seeded question always gets its own session — see the docblock
+                     * on `openAssistant`. So does the very first open, which has none
+                     * to reuse.
+                     *
+                     * And so does a seed naming a DIFFERENT shard: a conversation is
+                     * about one shard, its transcript is grounded in that shard's
+                     * schema, and its tools read it. Reusing the session across a
+                     * shard change silently mixed the two — earlier answers describing
+                     * one database, later tool reads hitting another.
+                     */
+                    if (seed?.ask !== undefined || active === undefined || (seed?.shardKey !== undefined && seed.shardKey !== active.shardKey)) {
                         return start(current, seed);
                     }
 

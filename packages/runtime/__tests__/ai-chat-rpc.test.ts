@@ -85,6 +85,41 @@ const slowBinding = (delayMs: number, reply = "Try `SELECT 1`."): AiRunBinding =
     };
 };
 
+/** A model double replying `replies` in order, sticking on the last one. */
+const scriptedBinding = (replies: ReadonlyArray<string>): AiRunBinding => {
+    let call = 0;
+
+    return {
+        run: vi.fn<AiRun>(async () => {
+            const reply = replies[Math.min(call, replies.length - 1)] ?? "";
+
+            call += 1;
+
+            return { response: reply };
+        }),
+    };
+};
+
+/** A shard double recording every forwarded op. */
+const recordingShard = (forwarded: string[]): ShardNamespaceLike => {
+    return {
+        get: () => {
+            return {
+                fetch: async (request: Request) => {
+                    const body: { functionPath?: string } = await request.json();
+
+                    forwarded.push(body.functionPath ?? "");
+
+                    return Response.json({ result: null }, { status: 200 });
+                },
+            };
+        },
+        idFromName: (name) => {
+            return { __name: name };
+        },
+    };
+};
+
 const rpc = (args: Record<string, unknown>, admin = true): Request =>
     new Request("https://app.example/_lunora/rpc", {
         body: JSON.stringify({ args, functionPath: AI_CHAT_OP }),
@@ -112,6 +147,49 @@ describe("createWorker — aiChat admin RPC", () => {
         const body: { error: { code: string } } = await response.json();
 
         expect(body.error.code).toBe("ADMIN_FORBIDDEN");
+    });
+
+    it("lets an Access-authorized admin through, with no static bearer", async () => {
+        expect.hasAssertions();
+
+        /*
+         * `applyAdminGate` skips `/_lunora/rpc` so the gate never runs on the data
+         * hot path — but every worker-served admin op is reached over exactly that
+         * path, so no grant was ever recorded for them and an operator whose only
+         * credential is Access got ADMIN_FORBIDDEN however well their gate was
+         * configured.
+         */
+        const worker = createWorker({
+            adminGate: (request) => request.headers.get("cf-access-jwt-assertion") === "good",
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(["Hello."]),
+            shardDO: recordingShard([]),
+        });
+
+        const viaAccess = new Request("https://app.example/_lunora/rpc", {
+            body: JSON.stringify({ args: { prompt: "hi" }, functionPath: AI_CHAT_OP }),
+            headers: { "cf-access-jwt-assertion": "good" },
+            method: "POST",
+        });
+
+        const body = await decoded(await worker.fetch(viaAccess, {}, fakeContext));
+
+        expect(body["reply"]).toBe("Hello.");
+    });
+
+    it("still refuses a caller whose Access gate says no", async () => {
+        expect.hasAssertions();
+
+        const worker = createWorker({
+            adminGate: () => false,
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(["never asked"]),
+            shardDO: recordingShard([]),
+        });
+
+        const response = await worker.fetch(rpc({ prompt: "hi" }, false), {}, fakeContext);
+
+        expect(response.status).toBe(403);
     });
 
     it("degrades with no-ai-binding rather than erroring when none is wired", async () => {
@@ -416,41 +494,6 @@ describe("createWorker — aiChat admin RPC", () => {
     });
 });
 
-/** A model double replying `replies` in order, sticking on the last one. */
-const scriptedBinding = (replies: ReadonlyArray<string>): AiRunBinding => {
-    let call = 0;
-
-    return {
-        run: vi.fn<AiRun>(async () => {
-            const reply = replies[Math.min(call, replies.length - 1)] ?? "";
-
-            call += 1;
-
-            return { response: reply };
-        }),
-    };
-};
-
-/** A shard double recording every forwarded op. */
-const recordingShard = (forwarded: string[]): ShardNamespaceLike => {
-    return {
-        get: () => {
-            return {
-                fetch: async (request: Request) => {
-                    const body: { functionPath?: string } = await request.json();
-
-                    forwarded.push(body.functionPath ?? "");
-
-                    return Response.json({ result: null }, { status: 200 });
-                },
-            };
-        },
-        idFromName: (name) => {
-            return { __name: name };
-        },
-    };
-};
-
 describe("createWorker — aiChat data-sharing level", () => {
     it("refuses a tool above the configured level, and never forwards it", async () => {
         expect.hasAssertions();
@@ -529,7 +572,7 @@ describe("createWorker — aiChat data-sharing level", () => {
     it("dispatches readAdvisors at the default level, since a finding is not data", async () => {
         expect.hasAssertions();
 
-        const forwarded = [];
+        const forwarded: string[] = [];
 
         // The DEFAULT level. An advisory names a table and a rule; it carries no
         // rows and no log lines, so gating it above `schema` would withhold the one

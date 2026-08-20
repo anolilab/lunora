@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useAssistant } from "../../components/assistant-provider";
 import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
@@ -115,17 +115,22 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
      */
     const t = useT();
     const assistantShell = useAssistant();
+    /** The statement behind the plan currently shown, or `undefined` before any Explain run. */
+    const [explained, setExplained] = useState<string | undefined>(undefined);
 
     const { probe, schema } = useSqlSchema(shardKey);
 
     // Set the active tab's draft and keep the linked saved query in sync (auto-save).
-    const setDraft = (value: string): void => {
-        patchActiveTab({ sql: value });
+    const setDraft = useCallback(
+        (value: string): void => {
+            patchActiveTab({ sql: value });
 
-        if (activeId !== null) {
-            updateQuerySql(activeId, value);
-        }
-    };
+            if (activeId !== null) {
+                updateQuerySql(activeId, value);
+            }
+        },
+        [activeId, patchActiveTab, updateQuerySql],
+    );
 
     /*
      * Tell the assistant this page can accept an insert, and withdraw on the way
@@ -167,10 +172,11 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         takeInsert(insertRequest.id);
         setDraft(insertRequest.sql);
-        // `setDraft` is re-created every render and is not a meaningful dependency —
-        // the request's identity is what decides whether to insert.
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
-    }, [insertRequest, takeInsert]);
+        // `setDraft` is a real dependency and is listed. It is re-created every
+        // render, so this effect re-runs often — but `takeInsert` clears the
+        // request by id, so every run after the first is a no-op, and no
+        // suppression is needed to make that true.
+    }, [insertRequest, takeInsert, setDraft]);
 
     const diagnostics = useSqlDiagnostics(draft, schema, shardKey);
     const rpc = useAssistantRpc(shardKey);
@@ -217,6 +223,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
      * still run, so a script says what happened to every part of itself.
      */
     const run = async (mode: ResultTab): Promise<void> => {
+        // The statement an Explain run is ABOUT, captured when it runs. `draft`
+        // moves on the moment the operator types, and the plan on screen keeps
+        // describing what actually ran — so "Read this plan" must send this, not
+        // whatever is in the editor now.
+        if (mode === "explain") {
+            setExplained(draft.trim());
+        }
+
         if (draft.trim() === "") {
             return;
         }
@@ -367,7 +381,10 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         }
 
         assistantShell?.openAssistant({
-            ask: `This statement failed:\n${failedRun.sql}\n\nThe database said: ${failedRun.error}\n\nWhy, and what should it be?`,
+            ask: t("This statement failed:\n{sql}\n\nThe database said: {error}\n\nWhy, and what should it be?", {
+                error: failedRun.error,
+                sql: failedRun.sql,
+            }),
             schema: groundingFacts(schema),
             shardKey,
             title: t("Debug query"),
@@ -389,7 +406,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         }
 
         assistantShell?.openAssistant({
-            ask: `Explain what this query does, step by step:\n${statement}`,
+            ask: t("Explain what this query does, step by step:\n{statement}", { statement }),
             schema: groundingFacts(schema),
             shardKey,
             title: t("Explain query"),
@@ -405,14 +422,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
      * this carries no end-user rows regardless of the deployment's opt-in level.
      */
     const explainPlan = (): void => {
-        if (result === null || result.rows.length === 0) {
+        if (result === null || result.rows.length === 0 || explained === undefined) {
             return;
         }
 
         const plan = result.rows.map((row) => result.columns.map((column) => formatCell(row[column])).join(" | ")).join("\n");
 
         assistantShell?.openAssistant({
-            ask: `SQLite planned this query:\n${draft.trim()}\n\nas:\n${plan}\n\nWhat is it doing, and is anything here slow?`,
+            ask: t("SQLite planned this query:\n{statement}\n\nas:\n{plan}\n\nWhat is it doing, and is anything here slow?", { plan, statement: explained }),
             schema: groundingFacts(schema),
             shardKey,
             title: t("Read plan"),

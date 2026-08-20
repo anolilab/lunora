@@ -209,7 +209,13 @@ export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }
                                                                  * guess at what the studio already knows.
                                                                  */
                                                                 assistant.openAssistant({
-                                                                    ask: `The Lunora advisor reported: ${row.issueType}${row.entity === undefined ? "" : ` on ${row.entity}`}.\n\n${row.description}\n\nWhat does this mean for my app, and how should I fix it?`,
+                                                                    ask: t(
+                                                                        "The Lunora advisor reported: {finding}.\n\n{description}\n\nWhat does this mean for my app, and how should I fix it?",
+                                                                        {
+                                                                            description: row.description,
+                                                                            finding: `${row.issueType}${row.entity === undefined ? "" : ` on ${row.entity}`}`,
+                                                                        },
+                                                                    ),
                                                                     suggestions: [t("How do I verify this is fixed?")],
                                                                     title: row.issueType,
                                                                 });

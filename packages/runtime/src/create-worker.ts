@@ -1571,6 +1571,9 @@ const MIGRATE_PATH = "/_lunora/migrate";
 const STATUS_PATH = "/_lunora/status";
 
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
+/** The reserved prefix every worker- and shard-served admin op shares. */
+const ADMIN_FUNCTION_PREFIX = "__lunora_admin__";
+
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 
 /**
@@ -3041,6 +3044,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         if (envelope.fanOut) {
             return undefined;
         }
+
+        /*
+         * Give an Access-authorized admin a grant for THIS request before any
+         * worker-served admin op checks for one.
+         *
+         * `applyAdminGate` deliberately skips `/_lunora/rpc` so the gate never runs
+         * on the data hot path — but every op below is admin-gated and reached over
+         * exactly that path, so no grant was ever recorded for them. An operator
+         * whose only credential is Access (no static bearer) got `ADMIN_FORBIDDEN`
+         * from all three, however well their gate was configured.
+         *
+         * Keyed on the ENVELOPE, not the path: the hot path is ordinary function
+         * calls, and they do not start with the admin prefix, so they still never
+         * pay for the gate.
+         */
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `applyAdminGate` is defined further down this closure and only ever called per request; the same exception this file already takes for `forwardRpcToShard`
+        await (envelope.functionPath.startsWith(ADMIN_FUNCTION_PREFIX) ? applyAdminGate(request, ADMIN_PATH_PREFIX) : Promise.resolve());
 
         if (envelope.functionPath === GET_AUTH_AUDIT_LOG_OP) {
             return getAuthAuditLog(request, envelope.args ?? {});

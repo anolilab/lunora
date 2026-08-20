@@ -19,6 +19,19 @@ import sqlBlocks from "../../lib/sql-blocks";
  * translate, so every id stays statically known — the same reason
  * `dashboards-panel`'s `kindLabel` is written this way.
  */
+
+/**
+ * Element overrides for a rendered reply.
+ *
+ * Images are DROPPED, not merely sanitized. `rehype-harden` blocks a
+ * `javascript:` link but allows every image protocol and prefix, and an image URL
+ * in model output is a beacon: it fires on render, it reports that the operator
+ * read the reply, and its query string carries whatever the model put there —
+ * which, since a turn can read rows, is whatever it just saw. The assistant has
+ * no reason to show a remote image, so there is nothing to weigh against that.
+ */
+const REPLY_COMPONENTS = { img: (): null => null };
+
 const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof useT>): string =>
     reason === "empty-response" ? t("The model returned nothing usable.") : t("The model could not be reached.");
 
@@ -91,7 +104,7 @@ const TurnRow = ({
             <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{turn.role === "user" ? t("You") : t("Assistant")}</span>
             {turn.role === "assistant" ? (
                 <div className="prose-sm max-w-none text-xs" data-testid="assistant-turn-body">
-                    <Streamdown>{turn.text}</Streamdown>
+                    <Streamdown components={REPLY_COMPONENTS}>{turn.text}</Streamdown>
                 </div>
             ) : (
                 <p className="text-xs whitespace-pre-wrap" data-testid="assistant-turn-body">
@@ -235,6 +248,10 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
 
     const [draft, setDraft] = useState("");
     const [truncated, setTruncated] = useState(false);
+    // Which session `truncated` describes. It is a fact about one answered turn,
+    // and without this it followed the operator into a session that never
+    // truncated anything.
+    const [truncatedFor, setTruncatedFor] = useState<string | undefined>(undefined);
 
     // The draft seed already applied, so a re-render does not re-prefill over
     // whatever the operator has since typed.
@@ -293,6 +310,7 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                     // never looks like a reply.
                     if (answer !== undefined) {
                         setTruncated(answer.truncated);
+                        setTruncatedFor(session.id);
                         // What the turn actually did travels WITH the turn, so an answer
                         // built from three reads never looks like one invented from
                         // nothing — and a later turn's silence does not erase it.
@@ -449,7 +467,7 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                 ))}
             </ul>
 
-            {truncated && (
+            {truncated && truncatedFor === sessionId && (
                 <p className="px-3 py-1 text-[11px] text-muted-foreground" data-testid="assistant-truncated">
                     {t("Older turns were dropped to fit the context budget.")}
                 </p>

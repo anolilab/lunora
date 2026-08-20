@@ -78,12 +78,16 @@
             },
         ],
     },
-    // Workers AI, backing the studio's assistant surfaces: the SQL prompt bar,
-    // the filter/chart inference, and the chat panel at `/__lunora`.
+    // NO Workers AI binding here, deliberately.
     //
-    // There is no local emulation — Wrangler proxies this binding to Cloudflare —
-    // so the assistant needs an authenticated account even in dev. Everything else
-    // in the playground runs fully offline; without an account the assistant
-    // surfaces simply hide themselves rather than failing on click.
-    "ai": { "binding": "AI" },
+    // Workers AI has no local emulation, so declaring it puts the Vite plugin into
+    // a REMOTE PROXY session — which needs a `CLOUDFLARE_API_TOKEN` and fails to
+    // start the dev server without one. That does not degrade to "the assistant
+    // hides itself": it stops the playground booting at all, and took the whole
+    // E2E suite with it in CI, where no token exists.
+    //
+    // The assistant's no-binding path is the designed and tested one: `aiAvailable`
+    // answers false and every affordance disappears. To exercise the assistant
+    // locally, add `"ai": { "binding": "AI" }` here with an authenticated account —
+    // it is one line, and it is the person who has an account who should add it.
 }

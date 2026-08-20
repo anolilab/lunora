@@ -60,7 +60,7 @@ const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement
         const detail = hint === undefined ? "" : `\n\nThe studio suggested: ${flattenHint(hint)}`;
 
         assistant?.openAssistant({
-            ask: `The studio reported this error:\n${errorMessage(error)}${detail}\n\nWhat causes it, and how do I fix it?`,
+            ask: t("The studio reported this error:\n{message}{detail}\n\nWhat causes it, and how do I fix it?", { detail, message: errorMessage(error) }),
             title: t("Debug error"),
         });
     };

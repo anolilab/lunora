@@ -30,4 +30,20 @@ describe("sqlBlocks", () => {
 
         expect(sqlBlocks("```sql\n   \n```")).toStrictEqual([]);
     });
+
+    it("ignores a fence whose language is not exactly sql", () => {
+        expect.assertions(2);
+
+        // Splitting on the ` ```sql ` substring accepted these and offered their
+        // contents for insertion into the SQL editor.
+        expect(sqlBlocks("```sqlite\nSELECT 1\n```")).toStrictEqual([]);
+        expect(sqlBlocks("```sqlx\nSELECT 2\n```")).toStrictEqual([]);
+    });
+
+    it("ignores the marker inside prose or inside another block", () => {
+        expect.assertions(2);
+
+        expect(sqlBlocks("write it as ```sql and then run it")).toStrictEqual([]);
+        expect(sqlBlocks("```text\nhere is a ```sql block\n```")).toStrictEqual([]);
+    });
 });
