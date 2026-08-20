@@ -63,22 +63,31 @@ function SidebarProvider({
     // We use openProp and setOpenProp for control from outside the component.
     const [_open, _setOpen] = React.useState(defaultOpen);
     const open = openProp ?? _open;
-    const setOpen = (value: boolean | ((value: boolean) => boolean)) => {
-        const openState = typeof value === "function" ? value(open) : value;
-        if (setOpenProp) {
-            setOpenProp(openState);
-        } else {
-            _setOpen(openState);
-        }
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: `toggleSidebar` below is built from this and is the keydown effect's dependency, so a fresh one per render tears down and re-adds the window listener every render
+    const setOpen = React.useCallback(
+        (value: boolean | ((value: boolean) => boolean)) => {
+            const openState = typeof value === "function" ? value(open) : value;
+            if (setOpenProp) {
+                setOpenProp(openState);
+            } else {
+                _setOpen(openState);
+            }
 
-        // This sets the cookie to keep the sidebar state.
-        document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
-    };
+            // This sets the cookie to keep the sidebar state.
+            document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
+        },
+        // `_open` and `openProp` rather than the derived `open`: the callback reads the
+        // state through that derivation, so listing only the derived value is what lets a
+        // toggle run against a stale one. Identity then changes once per toggle — not per
+        // render, which is the cost that matters to the keydown effect below.
+        [_open, openProp, setOpenProp],
+    );
 
     // Helper to toggle the sidebar.
-    const toggleSidebar = () => {
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: this IS the keydown effect's dependency (see below)
+    const toggleSidebar = React.useCallback(() => {
         return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open);
-    };
+    }, [isMobile, setOpen]);
 
     // Adds a keyboard shortcut to toggle the sidebar.
     React.useEffect(() => {
