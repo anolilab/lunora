@@ -1,5 +1,14 @@
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
-import { backfillSqlSearchIndexes, runSqlAggregateMigrations, runSqlGlobalTableMigrations, runSqlRankMigrations } from "@lunora/sql-store";
+import {
+    backfillSqlSearchIndexes,
+    readSqlCdcChangedTables,
+    readSqlCdcChanges,
+    runSqlAggregateMigrations,
+    runSqlCdcMigration,
+    runSqlGlobalTableMigrations,
+    runSqlRankMigrations,
+    sweepSqlCdcRetention,
+} from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createHyperdriveGlobalCtxDb } from "../src/global";
@@ -180,6 +189,69 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             await expect(
                 writer.insert("todos", { _id: "dup", archived: false, priority: "y", projectId: "p", seq: 2 }, { allowExplicitId: true }),
             ).rejects.toThrow(/unique constraint/u);
+        });
+    });
+
+    describe("`.global()` changelog retention sweep", () => {
+        /** A CDC-enabled writer over a migrated changelog, with a clock the test drives. */
+        const setupCdc = async (now: () => number): Promise<DatabaseWriterLike> => {
+            await runSqlGlobalTableMigrations(harness.exec, todosSchema, postgresDialect);
+            await runSqlCdcMigration(harness.exec, postgresDialect);
+
+            return createHyperdriveGlobalCtxDb({ cdc: true, clock: now, engine: "postgres", exec: harness.exec, schema: todosSchema });
+        };
+
+        it("sweeps by age and reports the retained floor", async () => {
+            expect.assertions(3);
+
+            let clock = FIXED_CLOCK;
+            const writer = await setupCdc(() => clock);
+
+            await writer.insert("todos", { _id: "t1", archived: false, priority: "hi", projectId: "p1", seq: 1 }, { allowExplicitId: true });
+            clock = FIXED_CLOCK + 10_000;
+            await writer.insert("todos", { _id: "t2", archived: false, priority: "hi", projectId: "p1", seq: 2 }, { allowExplicitId: true });
+
+            await sweepSqlCdcRetention(harness.exec, postgresDialect, 5000, clock);
+
+            // The older row is past the window; the newer one is inside it.
+            const remaining = await readSqlCdcChanges(harness.exec, { sinceSeq: 1 }, postgresDialect);
+
+            expect(remaining.changes.map((change) => change.id)).toEqual(["t2"]);
+
+            // The floor is what a `.global()` shape poller reads to tell "nothing
+            // changed" from "what changed was swept away" — so it has to survive
+            // the dialect, not just SQLite.
+            const probe = await readSqlCdcChangedTables(harness.exec, 0, postgresDialect, { retained: true });
+
+            expect(probe.floor).toBe(2);
+
+            // And a consumer below the floor is refused rather than handed the tail.
+            await expect(readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, postgresDialect)).rejects.toThrow(/trimmed/u);
+        });
+
+        it("hands the lease to exactly one sweeper per window", async () => {
+            expect.assertions(1);
+
+            let clock = FIXED_CLOCK;
+            const writer = await setupCdc(() => clock);
+
+            await writer.insert("todos", { _id: "t1", archived: false, priority: "hi", projectId: "p1", seq: 1 }, { allowExplicitId: true });
+            clock = FIXED_CLOCK + 10_000;
+            await writer.insert("todos", { _id: "t2", archived: false, priority: "hi", projectId: "p1", seq: 2 }, { allowExplicitId: true });
+
+            // The lease is the whole of the cross-shard coordination — every shard
+            // in every region writes this log, so without it they would all sweep
+            // at once. On Postgres the claim rides `RETURNING`; the MySQL twin
+            // takes the affected-rows branch instead, which is why both engines
+            // carry this test.
+            await sweepSqlCdcRetention(harness.exec, postgresDialect, 5000, clock);
+            // A second sweeper inside the same window finds the lease held, so a
+            // 0ms window that would otherwise delete everything does nothing.
+            await sweepSqlCdcRetention(harness.exec, postgresDialect, 0, clock);
+
+            const remaining = await readSqlCdcChanges(harness.exec, { sinceSeq: 1 }, postgresDialect);
+
+            expect(remaining.changes.map((change) => change.id)).toEqual(["t2"]);
         });
     });
 

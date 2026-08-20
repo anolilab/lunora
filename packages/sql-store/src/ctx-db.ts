@@ -1056,12 +1056,24 @@ const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, reten
     // Bounded per pass for the same reason the shard-local sweep is: the first
     // sweep after an operator enables retention faces the entire accumulated
     // log, and an unbounded DELETE that aborts leaves no progress behind.
+    //
+    // The bounded select is wrapped in a derived table, which looks redundant
+    // and is not: MySQL rejects a `LIMIT` inside an `IN (subquery)` outright
+    // ("This version of MySQL doesn't yet support 'LIMIT & IN/ALL/ANY/SOME
+    // subquery'"), so the direct form throws on every Hyperdrive-MySQL
+    // deployment while working fine on SQLite and Postgres. Materialising the
+    // subquery through a derived table is the one form all three accept —
+    // MySQL's own `DELETE … ORDER BY … LIMIT` would need a dialect split,
+    // since Postgres has no such syntax. Postgres requires the alias, so it is
+    // not optional either.
     await queryRun(
         exec,
         dialect,
         sql`
             DELETE FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} IN (
-                        SELECT ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("ts")} <= ${cutoff} ORDER BY ${sql.identifier("seq")} ASC LIMIT ${sql.raw(String(CDC_SWEEP_MAX_ROWS))}
+                        SELECT ${sql.identifier("seq")} FROM (
+                            SELECT ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("ts")} <= ${cutoff} ORDER BY ${sql.identifier("seq")} ASC LIMIT ${sql.raw(String(CDC_SWEEP_MAX_ROWS))}
+                        ) AS ${sql.identifier("expired")}
                     )
         `,
     );
