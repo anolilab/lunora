@@ -1,16 +1,9 @@
-import type { DatabaseWriterLike } from "@lunora/shard-engine";
-import {
-    createShapeDiffCache,
-    createShardCtxDb as createShardContextDatabase,
-    readCdcCursor,
-    runShardMigrations,
-    selectShapeMembers,
-} from "@lunora/shard-engine";
+import type { DatabaseWriterLike, ResolvedShape, SchemaLike } from "@lunora/shard-engine";
+import { buildShapeDiff, createShapeDiffCache, readCdcCursor, selectShapeMembers } from "@lunora/shard-engine";
 import { bench, describe } from "vitest";
 
-import createSqliteExec from "../__tests__/_helpers/node-sqlite";
-import type { ShardDOState } from "../src/shard-do";
-import { ShardDO } from "../src/shard-do";
+import type { BenchSql } from "./shared";
+import { makeCdcShardFixture } from "./shared";
 
 /**
  * The shape catch-up diff: given a client's checkpoint and the current head,
@@ -46,131 +39,53 @@ const benchSchema = {
             shape: { authorId: { kind: "string" }, channelId: { kind: "string" }, text: { kind: "string" } },
         },
     },
-} as unknown as Parameters<typeof runShardMigrations>[1];
+} as unknown as SchemaLike;
 
-/** Exposes the private diff over a resolved shape, plus the raw member probe for the seed comparison. */
-class DiffBenchShard extends ShardDO {
-    public readonly exec: Parameters<typeof createShardContextDatabase>[0]["sql"];
+const WATCHED: ResolvedShape = { effectiveWhere: { channelId: "watched" }, table: "messages" };
 
-    public constructor(state: ShardDOState, sql: Parameters<typeof createShardContextDatabase>[0]["sql"]) {
-        super(state, {});
-        this.exec = sql;
-    }
+/** One catch-up diff over the whole retained range — the shipped function, called directly. */
+const diff = (sql: BenchSql): number => buildShapeDiff(sql, WATCHED, 0, readCdcCursor(sql), createShapeDiffCache()).length;
 
-    // eslint-disable-next-line class-methods-use-this -- bench stub; the diff never dispatches an RPC
-    public override handleRpc(): Promise<unknown> {
-        return Promise.resolve(null);
-    }
+/** Pad documents so hydrating one is measurably more expensive than listing its key — the premise of hydrating late. */
+const body = (index: number): string => `t${String(index)}`.padEnd(512, "x");
 
-    /** One catch-up diff of `channelId`'s shape over the whole retained range. */
-    public diff(channelId: string): number {
-        const resolved = { effectiveWhere: { channelId }, table: "messages" };
-
-        // `buildShapeDiff` is private; the bench drives it through the same
-        // protected seam the poke path and its tests use, so what is measured is
-        // the shipped code path rather than a re-implementation of it.
-        return (
-            this as unknown as {
-                buildShapeDiff: (sql: unknown, resolved: unknown, sinceSeq: number, upTo: number, cache?: ReturnType<typeof createShapeDiffCache>) => unknown[];
-            }
-        ).buildShapeDiff(this.exec, resolved, 0, readCdcCursor(this.exec), createShapeDiffCache()).length;
-    }
-}
+const insert = async (writer: DatabaseWriterLike, index: number, channelId: string): Promise<void> => {
+    await writer.insert("messages", { _id: `m${String(index)}`, authorId: "u1", channelId, text: body(index) }, { allowExplicitId: true });
+};
 
 /**
  * A shard whose changelog holds `changes` ops spread over `distinctRows` rows —
  * so a large range can carry a small key set, which is the case the collapse
- * exists for. Documents are padded so hydrating one is measurably more expensive
- * than listing its key.
+ * exists for.
  */
-const buildRepeatedWriteShard = async (changes: number, distinctRows: number): Promise<DiffBenchShard> => {
-    const harness = createSqliteExec();
-
-    runShardMigrations(harness.sql, benchSchema, { cdc: true });
-
-    const writer: DatabaseWriterLike = createShardContextDatabase({
-        broadcast: () => undefined,
-        cdc: true,
-        clock: () => 1_700_000_000_000,
-        schema: benchSchema,
-        sql: harness.sql,
-    });
+const buildRepeatedWriteShard = async (changes: number, distinctRows: number): Promise<BenchSql> => {
+    const { sql, writer } = makeCdcShardFixture(benchSchema);
 
     for (let index = 0; index < distinctRows; index += 1) {
         // eslint-disable-next-line no-await-in-loop -- the row set has to exist before it can be re-written
-        await writer.insert(
-            "messages",
-            { _id: `m${String(index)}`, authorId: "u1", channelId: "watched", text: `t${String(index)}`.padEnd(512, "x") },
-            { allowExplicitId: true },
-        );
+        await insert(writer, index, "watched");
     }
 
     for (let index = distinctRows; index < changes; index += 1) {
         // eslint-disable-next-line no-await-in-loop -- sequential re-writes lengthen the RANGE without widening the key set
-        await writer.patch(`m${String(index % distinctRows)}`, { text: `t${String(index)}`.padEnd(512, "x") });
+        await writer.patch(`m${String(index % distinctRows)}`, { text: body(index) });
     }
 
-    const state: ShardDOState = {
-        acceptWebSocket() {
-            /* no sockets: the diff is measured directly */
-        },
-        getWebSockets() {
-            return [];
-        },
-        id: { name: "bench-shard" },
-        storage: { sql: harness.sql },
-    } as unknown as ShardDOState;
-
-    return new DiffBenchShard(state, harness.sql);
+    return sql;
 };
 
-/**
- * A shard whose `messages` table holds `changes` rows, `inShapePercent` of them
- * in the watched channel. Documents are padded so hydrating one is measurably
- * more expensive than listing its key — which is the whole premise of hydrating
- * late.
- */
-const buildShard = async (changes: number, inShapePercent: number): Promise<DiffBenchShard> => {
-    const harness = createSqliteExec();
-
-    runShardMigrations(harness.sql, benchSchema, { cdc: true });
-
-    const writer: DatabaseWriterLike = createShardContextDatabase({
-        broadcast: () => undefined,
-        cdc: true,
-        clock: () => 1_700_000_000_000,
-        schema: benchSchema,
-        sql: harness.sql,
-    });
+/** A shard whose `messages` table holds `changes` rows, `inShapePercent` of them in the watched channel. */
+const buildShard = async (changes: number, inShapePercent: number): Promise<BenchSql> => {
+    const { sql, writer } = makeCdcShardFixture(benchSchema);
 
     for (let index = 0; index < changes; index += 1) {
         const inShape = index % 100 < inShapePercent;
 
         // eslint-disable-next-line no-await-in-loop -- sequential writes build one contiguous changelog range
-        await writer.insert(
-            "messages",
-            {
-                _id: `m${String(index)}`,
-                authorId: "u1",
-                channelId: inShape ? "watched" : `other-${String(index % 7)}`,
-                text: `t${String(index)}`.padEnd(512, "x"),
-            },
-            { allowExplicitId: true },
-        );
+        await insert(writer, index, inShape ? "watched" : `other-${String(index % 7)}`);
     }
 
-    const state: ShardDOState = {
-        acceptWebSocket() {
-            /* no sockets: the diff is measured directly */
-        },
-        getWebSockets() {
-            return [];
-        },
-        id: { name: "bench-shard" },
-        storage: { sql: harness.sql },
-    } as unknown as ShardDOState;
-
-    return new DiffBenchShard(state, harness.sql);
+    return sql;
 };
 
 describe("shape catch-up diff — cost vs range size (1% of the range is in the shape)", async () => {
@@ -179,15 +94,15 @@ describe("shape catch-up diff — cost vs range size (1% of the range is in the 
     const large = await buildShard(20_000, 1);
 
     bench("1 000 changes behind", () => {
-        small.diff("watched");
+        diff(small);
     });
 
     bench("5 000 changes behind", () => {
-        medium.diff("watched");
+        diff(medium);
     });
 
     bench("20 000 changes behind", () => {
-        large.diff("watched");
+        diff(large);
     });
 });
 
@@ -197,15 +112,15 @@ describe("shape catch-up diff — cost vs selectivity (5 000 changes behind)", a
     const everything = await buildShard(5000, 100);
 
     bench("1% of the range is in the shape", () => {
-        selective.diff("watched");
+        diff(selective);
     });
 
     bench("50% of the range is in the shape", () => {
-        half.diff("watched");
+        diff(half);
     });
 
     bench("100% of the range is in the shape", () => {
-        everything.diff("watched");
+        diff(everything);
     });
 });
 
@@ -217,19 +132,19 @@ describe("shape catch-up diff — cost vs range size with a CONSTANT key set (20
     // range holds — which is what the collapse is for, and what the drain this
     // replaced paid for in full (every op, every post-image).
     bench("1 000 ops over 200 rows", () => {
-        shortRange.diff("watched");
+        diff(shortRange);
     });
 
     bench("20 000 ops over 200 rows", () => {
-        longRange.diff("watched");
+        diff(longRange);
     });
 });
 
 describe("membership probe — the fused filter+hydrate read", async () => {
-    const shard = await buildShard(5000, 1);
+    const sql = await buildShard(5000, 1);
     const ids = Array.from({ length: 500 }, (_, index) => `m${String(index)}`);
 
     bench("probe 500 ids against a channel predicate", () => {
-        selectShapeMembers(shard.exec, "messages", { channelId: "watched" }, ids);
+        selectShapeMembers(sql, "messages", { channelId: "watched" }, ids);
     });
 });

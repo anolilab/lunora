@@ -203,10 +203,24 @@ const readCdcChangeKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: 
 /**
  * Drop changelog entries at or below a checkpointed `throughSeq` — retention
  * after a consumer has durably advanced past them, so the log can't grow
- * unbounded.
+ * unbounded. Deletes at most `maxRows` per call, oldest first.
+ *
+ * The bound is not a nicety. A retention sweep runs on a write path, and its
+ * first run after an operator enables retention faces the whole accumulated log
+ * — the exact situation the knob was turned on for. An unbounded `DELETE` over
+ * millions of rows there is not merely slow: if it exceeds the DO's per-request
+ * limits it aborts having changed nothing, and the next sweep issues the
+ * identical unbounded statement. That loop never makes progress and never
+ * reports why. Bounding each pass makes a large backlog take many sweeps instead
+ * of never finishing.
  */
-const trimCdcChanges = (sql: SqlExec, throughSeq: number): void => {
-    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq <= ${throughSeq}`);
+const trimCdcChanges = (sql: SqlExec, throughSeq: number, maxRows: number): void => {
+    runDrizzle(
+        sql,
+        dsql`DELETE FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq IN (
+            SELECT seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq <= ${throughSeq} ORDER BY seq ASC LIMIT ${maxRows}
+        )`,
+    );
 };
 
 /**
@@ -232,42 +246,23 @@ const trimCdcChanges = (sql: SqlExec, throughSeq: number): void => {
  * re-syncs from a snapshot instead of silently recording a compacted row as a
  * delete.
  */
-const compactCdcDocs = (sql: SqlExec, throughSeq: number): void => {
+const compactCdcDocs = (sql: SqlExec, throughSeq: number, maxRows: number): void => {
     // `SET doc = NULL` as a SQL literal, not a bound `${null}`: the storage-level
     // "payload dropped" is a property of the statement, not a value the caller
     // supplies, and binding it invites an implicit JS-to-string conversion on the
     // way through the driver.
-    runDrizzle(sql, dsql`UPDATE ${dsql.identifier(CDC_LOG_TABLE)} SET doc = NULL WHERE seq <= ${throughSeq} AND doc IS NOT NULL`);
-};
-
-/**
- * Oldest `seq` whose post-image is still retained, or `undefined` when no row in
- * the log carries one. Distinct from {@link minCdcSeq} (the oldest retained
- * KEY): after {@link compactCdcDocs} the two diverge, and a consumer that needs
- * post-images — streaming export, replay-PITR — must gate on this one while the
- * shape path gates on `minCdcSeq`.
- *
- * A `delete` op legitimately stores a NULL post-image, so this deliberately
- * measures "a row that still has a doc" rather than "a row that should have
- * one": a range whose only entries are deletes reports the first doc-bearing row
- * after it, which is the conservative direction (it can only make a payload
- * consumer re-seed, never read a payload that was compacted away).
- */
-const minCdcDocSeq = (sql: SqlExec): number | undefined => {
-    const rows = runDrizzle<{ seq: null | number }>(sql, dsql`SELECT MIN(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE doc IS NOT NULL`).toArray();
-
-    return rows[0]?.seq ?? undefined;
-};
-
-/**
- * Number of rows currently in the changelog — what a retention sweep measures a
- * row-count cap against. Cheap on SQLite (`COUNT(*)` over the `seq` primary
- * key), and read once per sweep rather than per write.
- */
-const countCdcChanges = (sql: SqlExec): number => {
-    const rows = runDrizzle<{ count: null | number }>(sql, dsql`SELECT COUNT(*) AS count FROM ${dsql.identifier(CDC_LOG_TABLE)}`).toArray();
-
-    return rows[0]?.count ?? 0;
+    //
+    // Bounded per call like {@link trimCdcChanges}, and for the same reason. The
+    // `doc IS NOT NULL` filter sits INSIDE the bounded prefix rather than beside
+    // it, so a batch is `maxRows` rows that actually need compacting — outside,
+    // a prefix of already-compacted rows would consume the whole batch and the
+    // sweep would stall short of the rows carrying the bytes.
+    runDrizzle(
+        sql,
+        dsql`UPDATE ${dsql.identifier(CDC_LOG_TABLE)} SET doc = NULL WHERE seq IN (
+            SELECT seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq <= ${throughSeq} AND doc IS NOT NULL ORDER BY seq ASC LIMIT ${maxRows}
+        )`,
+    );
 };
 
 /**
@@ -335,6 +330,42 @@ const minCdcSeq = (sql: SqlExec): number | undefined => {
     const rows = runDrizzle<{ seq: null | number }>(sql, dsql`SELECT MIN(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)}`).toArray();
 
     return rows[0]?.seq ?? undefined;
+};
+
+/**
+ * The oldest `seq` a PAYLOAD consumer — streaming export, replay-PITR, a region
+ * read replica — can still be replayed from. Distinct from {@link minCdcSeq},
+ * which is the oldest retained KEY and is what the shape path gates on: after
+ * {@link compactCdcDocs} the two diverge, and the difference is a range whose
+ * keys survive but whose documents do not.
+ *
+ * Measured as "past the newest row that SHOULD carry a post-image and doesn't",
+ * which is the same test `ShardDO.runShardCdcSync` applies per page — stated
+ * once, so the read path's refusal and the floor a consumer is told to bootstrap
+ * from can never disagree. The inverse framing ("oldest row that still has a
+ * doc") looks equivalent and is not: a `delete` stores a NULL post-image by
+ * design, so a perfectly replayable log whose retained prefix happens to open
+ * with deletes would report a floor above rows it can serve, and force needless
+ * bootstraps.
+ *
+ * Compaction only ever clears a prefix, so one `MAX` answers it. Folds in
+ * {@link minCdcSeq} as well: a trimmed row is no more replayable than a
+ * compacted one, and every caller wants the higher of the two.
+ */
+const minCdcReplayableSeq = (sql: SqlExec): number | undefined => {
+    const rows = runDrizzle<{ seq: null | number }>(
+        sql,
+        dsql`SELECT MAX(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE op <> 'delete' AND doc IS NULL`,
+    ).toArray();
+
+    const compactedThrough = rows[0]?.seq ?? undefined;
+    const trimFloor = minCdcSeq(sql);
+
+    if (compactedThrough === undefined) {
+        return trimFloor;
+    }
+
+    return Math.max(compactedThrough + 1, trimFloor ?? 0);
 };
 
 /**
@@ -450,10 +481,9 @@ export {
     cdcSeqLeavingRows,
     cdcTouchesTables,
     compactCdcDocs,
-    countCdcChanges,
     migrateCdcLog,
     migrateCdcMeta,
-    minCdcDocSeq,
+    minCdcReplayableSeq,
     minCdcSeq,
     readCdcChangeKeys,
     readCdcChanges,

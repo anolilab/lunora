@@ -48,9 +48,8 @@ export {
     cdcSeqLeavingRows,
     cdcTouchesTables,
     compactCdcDocs,
-    countCdcChanges,
     createShardCtxDb,
-    minCdcDocSeq,
+    minCdcReplayableSeq,
     normalizeIdStructurally,
     NotUniqueError,
     readCdcChangeKeys,
@@ -146,6 +145,7 @@ export {
 } from "./durable-stream";
 export type { DurableAttachDecision, DurableStreamAttach, DurableStreamSink } from "./durable-stream-runner";
 export { decideDurableAttach, DurableStreamRunner, MAX_DURABLE_STREAM_BYTES, MAX_DURABLE_STREAM_CHUNKS } from "./durable-stream-runner";
+export { envOptionalPositiveInt, envPositiveInt } from "./env-int";
 export type { ExternalSourceDiffResult } from "./external-source-diff";
 export { diffExternalSource } from "./external-source-diff";
 export { liftSourceId, normalizeSourceDocument, normalizeSourceValue } from "./external-source-lift";
@@ -155,6 +155,7 @@ export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefr
 export { isSoftDeleted, isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "./external-source-pull";
 export type { GeoBoundingBox, GeoPoint } from "./geo";
 export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
+export { default as GlobalPollTick } from "./global-poll-tick";
 export type {
     AdvisoriesResult,
     AdvisorProcedure,
@@ -356,8 +357,9 @@ export type {
 } from "./schema-types";
 export { serializeSqlValue } from "./serialize-sql";
 export { buildSettings, isDevEnvironment } from "./settings";
-export type { ShapeDiffCache } from "./shape-diff-cache";
-export { createShapeDiffCache, globalShapeReadKey, shapeProbeKey, shapeRangeKey } from "./shape-diff-cache";
+export type { ReadShapeCdcKeys } from "./shape-diff";
+export { buildShapeDiff } from "./shape-diff";
+export { createShapeDiffCache, globalShapeReadKey, ShapeDiffCache } from "./shape-diff-cache";
 export type { PokeFrameMeta, ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 export { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns } from "./shape-global-diff";
 export type { ShardRunnerOptions } from "./shard-runner";

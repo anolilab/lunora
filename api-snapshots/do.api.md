@@ -419,7 +419,7 @@ abstract class ShardDO {
     protected recordSpan(span: SpanEvent, sink?: TelemetrySink, sampledSnapshot?: boolean): void;
     protected isIdentityIndependent(functionPath: string): boolean;
     protected readShapeCdcKeys(sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[];
-    protected readGlobalChangedTables(_sinceSeq: number): Promise<{
+    protected readGlobalChangedTables(_sinceSeq: number, _cursorOnly?: boolean): Promise<{
         cursor: number;
         tables: string[];
     } | undefined>;

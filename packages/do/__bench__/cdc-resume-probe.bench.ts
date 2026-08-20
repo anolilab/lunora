@@ -1,9 +1,8 @@
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
+import type { SchemaLike } from "@lunora/shard-engine";
 import { bench, describe } from "vitest";
 
-import createSqliteExec from "../__tests__/_helpers/node-sqlite";
-import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
+import { makeCdcShardFixture } from "./shared";
 
 /**
  * `evaluateResume` decides whether a reconnecting subscription can keep its
@@ -38,7 +37,7 @@ const benchSchema = {
         },
         users: { indexes: [], shape: { name: { kind: "string" } } },
     },
-} as unknown as Parameters<typeof runShardMigrations>[1];
+} as unknown as SchemaLike;
 
 /** Exposes the protected resume probe. */
 class ResumeBenchShard extends ShardDO {
@@ -58,17 +57,7 @@ class ResumeBenchShard extends ShardDO {
 
 /** Build a shard over a changelog holding `changes` writes to `messages`. */
 const buildShard = async (changes: number): Promise<ResumeBenchShard> => {
-    const harness = createSqliteExec();
-
-    runShardMigrations(harness.sql, benchSchema, { cdc: true });
-
-    const writer = createShardContextDatabase({
-        broadcast: () => undefined,
-        cdc: true,
-        clock: () => 1_700_000_000_000,
-        schema: benchSchema,
-        sql: harness.sql,
-    });
+    const { state, writer } = makeCdcShardFixture(benchSchema);
 
     for (let index = 0; index < changes; index += 1) {
         // eslint-disable-next-line no-await-in-loop -- sequential writes are the fixture: they build one contiguous changelog range
@@ -78,17 +67,6 @@ const buildShard = async (changes: number): Promise<ResumeBenchShard> => {
             { allowExplicitId: true },
         );
     }
-
-    const state: ShardDOState = {
-        acceptWebSocket() {
-            /* no sockets in this bench */
-        },
-        getWebSockets() {
-            return [];
-        },
-        id: { name: "bench-shard" },
-        storage: { sql: harness.sql },
-    } as unknown as ShardDOState;
 
     return new ResumeBenchShard(state, {});
 };

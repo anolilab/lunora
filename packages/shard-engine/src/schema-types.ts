@@ -516,8 +516,15 @@ export interface DatabaseWriterLike {
      * Optional because it is only meaningful on a store with CDC enabled: a
      * caller that gets `undefined` has no visibility and must fall back to
      * re-reading, which is what every caller did before this method existed.
+     *
+     * `cursorOnly` asks for the head WITHOUT the table list, for a caller that
+     * has already decided to read everything this pass — a cold instance with no
+     * cursor to compare against, or a scheduled resync. Such a caller still needs
+     * a cursor to adopt so the NEXT pass can narrow, but the table list it would
+     * be handed is discarded, and computing it means scanning the changelog from
+     * `sinceSeq` — which on a cold instance is the whole log.
      */
-    cdcChangedTables?: (sinceSeq: number) => Promise<{ cursor: number; tables: string[] } | undefined>;
+    cdcChangedTables?: (sinceSeq: number, options?: { cursorOnly?: boolean }) => Promise<{ cursor: number; tables: string[] } | undefined>;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;

@@ -128,7 +128,7 @@ describe("ctx-db change-data-capture", () => {
         await writer.insert("messages", { _id: "a", authorId: "u1", channelId: "c1", text: "1" }, { allowExplicitId: true });
         await writer.insert("messages", { _id: "b", authorId: "u1", channelId: "c1", text: "2" }, { allowExplicitId: true });
 
-        trimCdcChanges(harness.sql, 1);
+        trimCdcChanges(harness.sql, 1, 100);
 
         const remaining = readCdcChanges(harness.sql);
 

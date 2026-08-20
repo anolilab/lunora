@@ -29,6 +29,7 @@ import type {
     AggregateOptions,
     AggregateResult,
     AggregateTally,
+    CdcChange,
     ColumnMetaLike,
     CrossShardReadArgs,
     DatabaseWriterLike,
@@ -59,6 +60,8 @@ import {
     assertFlatPredicate,
     assertValidClientId,
     buildSeekWhere,
+    CDC_LOG_TABLE,
+    CDC_LOG_TABLE_SEQ_INDEX,
     coerceAggregateNumber,
     compileWhereSql,
     ConflictError,
@@ -867,24 +870,14 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
     }
 };
 
-/** Reserved append-only changelog table backing CDC streaming export for global tables (CDC consumers only — D1 point-in-time recovery is the platform's Time Travel, not a changelog replay). */
-const CDC_LOG_TABLE = "__cdc_log";
-
-/** Composite index backing table-filtered changelog reads (`("table", seq)`). Mirrors the DO twin. */
-const CDC_LOG_TABLE_SEQ_INDEX = "__cdc_log_table_seq";
-
-/** One change-data-capture entry: a committed mutation, in monotonic `seq` order. Mirrors the DO twin. */
-interface CdcChange {
-    /** Post-image document for insert/update; absent for delete (the `id` identifies the removed row). */
-    doc?: Record<string, unknown>;
-    id: string;
-    op: "delete" | "insert" | "update";
-    /** Monotonic per-database cursor — strictly increasing, never reused. */
-    seq: number;
-    table: string;
-    /** Wall-clock millis when the change committed (the ctx-db `clock`). */
-    ts: number;
-}
+/**
+ * The two changelog identifiers, imported from `@lunora/shard-engine` rather than
+ * re-declared. The `.global()` log and the DO log are the same table under two
+ * dialects, and a name that differed between them would break every consumer
+ * that reads both — so the shared thing is shared, and only the DIALECT
+ * differences (the MySQL key prefix below, the `SELECT` forms) live here.
+ */
+/* The changelog identifiers come from `@lunora/shard-engine` — see the import. */
 
 /** Create the `__cdc_log` table. Idempotent; only run when CDC is enabled. */
 const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<void> => {
@@ -972,35 +965,66 @@ const readSqlCdcChanges = async (
 
 /**
  * Which tables the changelog recorded a write to after `sinceSeq`, plus the
- * log's current head. Metadata only — it reads no `doc`, so its cost is the
- * distinct-table scan over an index range rather than the size of the documents
- * in it.
+ * cursor to resume from. Metadata only — it reads no `doc`, so its cost is a
+ * grouped scan over an index range rather than the size of the documents in it.
  *
  * The `.global()` shape poll asks this once per tick for the whole shard, and a
  * shape whose table is absent from the answer skips its membership read
- * entirely. `cursor` is `MAX(seq)` over the WHOLE log rather than the filtered
- * range, so a caller that advances to it cannot re-see the changes it just
- * skipped over on the next tick.
+ * entirely.
  *
- * The head is read FIRST and the table scan is then bounded by it. The two
- * statements are separate round-trips, so a write can commit between them — and
- * in the other order that write would be missing from `tables` while sitting at
- * or below the `cursor` the caller adopts, which silently loses it for good. Read
- * the head first and the same write simply lands past the cursor, so the next
- * tick reports it.
+ * **One statement, and the cursor comes out of the same rows as the tables.**
+ * Reading the head separately — in either order — opens a window where a write
+ * commits between the two round trips and ends up absent from `tables` while
+ * sitting at or below the adopted `cursor`, which loses it for good. Deriving
+ * the cursor as the max `seq` actually returned closes that window by
+ * construction: the caller can never advance past a row this scan did not see.
+ *
+ * **What it does NOT close**, and the poll's resync interval is what covers it:
+ * Postgres and MySQL allocate `seq` from a sequence BEFORE commit, so a
+ * transaction holding a lower `seq` can commit after one holding a higher one.
+ * No single read can see the uncommitted row, so a change can land below a
+ * cursor already adopted. That change is invisible to the changelog probe until
+ * the next unconditional pass — bounded by `GLOBAL_SHAPE_RESYNC_MS`, which is
+ * the same bound already accepted for an out-of-band writer. D1 has no such
+ * window (single writer, and `withSession` gives both reads one snapshot).
  */
-const readSqlCdcChangedTables = async (exec: SqlCtxExec, sinceSeq: number, dialect: SqlDialect): Promise<{ cursor: number; tables: string[] }> => {
-    const head = await queryAll(exec, dialect, sql`SELECT MAX(seq) AS seq FROM ${sql.identifier(CDC_LOG_TABLE)}`);
-    const rawCursor = Number(head[0]?.["seq"] ?? 0);
-    const cursor = Number.isFinite(rawCursor) ? rawCursor : 0;
+const readSqlCdcChangedTables = async (
+    exec: SqlCtxExec,
+    sinceSeq: number,
+    dialect: SqlDialect,
+    options: { cursorOnly?: boolean } = {},
+): Promise<{ cursor: number; tables: string[] }> => {
+    if (options.cursorOnly) {
+        // The caller is reading everything this pass regardless, so the table
+        // list would be discarded — and on the cold-instance case that produces
+        // it, computing it means grouping the entire changelog. `MAX(seq)` over
+        // the primary key answers what is actually wanted.
+        const head = await queryAll(exec, dialect, sql`SELECT MAX(seq) AS seq FROM ${sql.identifier(CDC_LOG_TABLE)}`);
+        const rawCursor = Number(head[0]?.["seq"] ?? sinceSeq);
+
+        return { cursor: Number.isFinite(rawCursor) ? rawCursor : sinceSeq, tables: [] };
+    }
 
     const rows = await queryAll(
         exec,
         dialect,
-        sql`SELECT DISTINCT ${sql.identifier("table")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq} AND seq <= ${cursor}`,
+        sql`SELECT ${sql.identifier("table")} AS ${sql.identifier("table")}, MAX(seq) AS seq FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq} GROUP BY ${sql.identifier("table")}`,
     );
 
-    return { cursor, tables: rows.map((row) => String(row["table"])) };
+    let cursor = sinceSeq;
+    const tables: string[] = [];
+
+    for (const row of rows) {
+        const seq = Number(row["seq"]);
+
+        if (Number.isFinite(seq) && seq > cursor) {
+            cursor = seq;
+        }
+
+        tables.push(String(row["table"]));
+    }
+
+    return { cursor, tables };
 };
 
 /** Drop changelog entries at or below a checkpointed `throughSeq` (retention). */
@@ -2074,7 +2098,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
          * state the caller already handles, and a poll tick is the wrong place
          * to surface a migration problem.
          */
-        async cdcChangedTables(sinceSeq: number): Promise<{ cursor: number; tables: string[] } | undefined> {
+        async cdcChangedTables(sinceSeq: number, readOptions?: { cursorOnly?: boolean }): Promise<{ cursor: number; tables: string[] } | undefined> {
             if (!cdcEnabled) {
                 return undefined;
             }
@@ -2082,7 +2106,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             try {
                 await ensureMigrated();
 
-                return await readSqlCdcChangedTables(exec, sinceSeq, dialect);
+                return await readSqlCdcChangedTables(exec, sinceSeq, dialect, readOptions);
             } catch {
                 return undefined;
             }

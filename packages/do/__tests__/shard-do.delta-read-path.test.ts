@@ -3,7 +3,7 @@ import {
     CDC_LOG_TABLE_SEQ_INDEX,
     compactCdcDocs,
     createShardCtxDb as createShardContextDatabase,
-    minCdcDocSeq,
+    minCdcReplayableSeq,
     minCdcSeq,
     readCdcChangeKeys,
     readCdcCursor,
@@ -87,6 +87,11 @@ class ProbeCountingShard extends ShardDO {
         await this.getWriter().insert("messages", { _id: id, authorId: "u1", channelId, text: id }, { allowExplicitId: true });
     }
 
+    /** The same, on the second (quiet) table — so a test can drive one table's head past another's subscribers. */
+    public async seedRoom(id: string, roomId: string): Promise<void> {
+        await this.getWriter().insert("roomMembers", { _id: id, roomId, userId: "u1" }, { allowExplicitId: true });
+    }
+
     /** The changelog page a streaming-export / read-replica consumer pulls, exposed so a test can assert what it refuses. */
     public syncCdc(sinceSeq: number): { changes: CdcChange[]; cursor: number } {
         return this.runShardCdcSync({ sinceSeq });
@@ -99,6 +104,10 @@ class ProbeCountingShard extends ShardDO {
 
     // eslint-disable-next-line class-methods-use-this -- test stub override: resolves by `name`/`args` alone, no instance state.
     protected override resolveShape(name: string, args: Record<string, unknown>): { effectiveWhere?: Record<string, unknown>; table: string } | undefined {
+        if (name === "roomMembersByRoom") {
+            return { effectiveWhere: { roomId: args["roomId"] }, table: "roomMembers" };
+        }
+
         if (name !== "messagesByChannel") {
             return undefined;
         }
@@ -121,14 +130,18 @@ class ProbeCountingShard extends ShardDO {
 
 let harness: ReturnType<typeof createSqliteExec>;
 
-const makeState = (sockets: FakeWebSocket[]): ShardDOState => {
+const makeState = (sockets: FakeWebSocket[], name?: string): ShardDOState => {
     return {
-        acceptWebSocket(ws) {
-            sockets.push(ws as unknown as FakeWebSocket);
+        acceptWebSocket(ws: unknown) {
+            sockets.push(ws as FakeWebSocket);
         },
         getWebSockets() {
             return sockets as unknown as WebSocket[];
         },
+        // A name is what gives the DO a relay role at all — `createRelayLink`
+        // returns `undefined` for an unnamed one, so a test asserting anything
+        // about the relay tier has to supply it.
+        ...(name === undefined ? {} : { id: { name } }),
         storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
     };
 };
@@ -232,11 +245,17 @@ describe("delta-sync read path", () => {
 
             const metrics = shard.probeMetrics();
 
-            // Five sockets, one query. The probe's inputs are the table, the
-            // predicate and the id set — none of which name a socket — so the
-            // other four were byte-identical duplicates.
-            expect(metrics.run).toBe(1);
-            expect(metrics.served).toBe(4);
+            // Five sockets, two queries: one changed-key scan and one membership
+            // probe. Neither read's inputs name a socket — the scan is
+            // `(table, range)`, the probe is `(predicate, that same range)` — so
+            // the other eight reads the per-socket loop would have issued were
+            // byte-identical duplicates.
+            //
+            // Both halves are counted, deliberately. Counting only the probe
+            // reported a sharing rate over half the work and made the scan's
+            // collapse invisible.
+            expect(metrics.run).toBe(2);
+            expect(metrics.served).toBe(8);
 
             // And every socket still got its row: sharing the read must not
             // share it with FEWER recipients.
@@ -261,9 +280,12 @@ describe("delta-sync read path", () => {
 
             const metrics = shard.probeMetrics();
 
-            // Two distinct predicates ⇒ two distinct questions ⇒ two queries.
-            expect(metrics.run).toBe(2);
-            expect(metrics.served).toBe(0);
+            // Two distinct predicates ⇒ two distinct membership questions ⇒ two
+            // probes. The changed-key scan is predicate-independent, so it still
+            // runs once and is served to the second socket — which is the point
+            // of keying the two halves separately.
+            expect(metrics.run).toBe(3);
+            expect(metrics.served).toBe(1);
         });
     });
 
@@ -287,8 +309,9 @@ describe("delta-sync read path", () => {
             harness.sql.exec(`DELETE FROM __cdc_log WHERE seq = 1`);
             await shard.seed("m1", "c1");
 
-            // The doc floor is genuinely above the consumer's cursor…
-            expect(minCdcDocSeq(harness.sql) ?? 0).toBeGreaterThan(2);
+            // Nothing was compacted, so the replay floor is still the oldest
+            // retained row — a delete-opened prefix is fully serveable.
+            expect(minCdcReplayableSeq(harness.sql)).toBe(2);
 
             // …and the page is still served, because no row in it LOST a payload.
             expect(shard.syncCdc(1).changes.map((change) => change.op)).toStrictEqual(["delete", "insert"]);
@@ -302,7 +325,7 @@ describe("delta-sync read path", () => {
             await shard.seed("m0", "c1");
             await shard.seed("m1", "c1");
 
-            compactCdcDocs(harness.sql, 1);
+            compactCdcDocs(harness.sql, 1, 100);
 
             // The compacted row is an `insert` with no post-image — the one thing
             // a change feed must never be handed silently.
@@ -346,7 +369,7 @@ describe("delta-sync read path", () => {
             // invisible from here, so retention is something a deployment opts
             // into rather than something inferred.
             expect(minCdcSeq(harness.sql)).toBe(1);
-            expect(minCdcDocSeq(harness.sql)).toBe(1);
+            expect(minCdcReplayableSeq(harness.sql)).toBe(1);
         });
 
         it("compacts payloads while keeping every key resumable", async () => {
@@ -359,7 +382,7 @@ describe("delta-sync read path", () => {
             // their values from the table, instead of re-downloading the shape.
             expect(minCdcSeq(harness.sql)).toBe(1);
 
-            const docFloor = minCdcDocSeq(harness.sql);
+            const docFloor = minCdcReplayableSeq(harness.sql);
 
             expect(docFloor).toBeGreaterThan(1);
             expect(readCdcChangeKeys(harness.sql, "messages", 0, readCdcCursor(harness.sql)).length).toBeGreaterThan(5);
@@ -400,6 +423,117 @@ describe("delta-sync read path", () => {
             // subscription silently drops rows it was owed.
             expect(floor).toBeGreaterThan(0);
             expect(minCdcSeq(harness.sql) ?? 0).toBeLessThanOrEqual(floor + 1);
+        });
+
+        it("compacts inside the window it deletes when both knobs are set", async () => {
+            expect.assertions(3);
+
+            // The two-tier design's whole point, and the only 2x2 cell the knobs
+            // reach that the single-knob tests do not: a log whose tail is gone,
+            // whose middle has keys but no payloads, and whose head is intact.
+            await sweepWith({ LUNORA_CDC_LOG_RETENTION: "12", LUNORA_CDC_PAYLOAD_RETENTION: "4" }, 20);
+
+            const trimFloor = minCdcSeq(harness.sql) ?? 0;
+            const replayFloor = minCdcReplayableSeq(harness.sql) ?? 0;
+
+            // Rows were deleted…
+            expect(trimFloor).toBeGreaterThan(1);
+            // …and inside what survived, the older payloads were dropped, so the
+            // replay floor sits strictly above the key floor.
+            expect(replayFloor).toBeGreaterThan(trimFloor);
+            // The keys in between are still there: that is what lets a client
+            // below the payload floor get an exact delta instead of a re-seed.
+            expect(readCdcChangeKeys(harness.sql, "messages", trimFloor - 1, readCdcCursor(harness.sql)).length).toBeGreaterThan(4);
+        });
+
+        it("clamps a payload window wider than the row window instead of compacting nothing", async () => {
+            expect.assertions(1);
+
+            // Inverted knobs: payloads are asked to be kept LONGER than the rows
+            // that carry them, which unclamped is a no-op with no warning (rows
+            // leave before they can reach the payload cutoff).
+            await sweepWith({ LUNORA_CDC_LOG_RETENTION: "5", LUNORA_CDC_PAYLOAD_RETENTION: "50" }, 20);
+
+            const trimFloor = minCdcSeq(harness.sql) ?? 0;
+
+            // Clamped to the row window, so the surviving rows keep their
+            // payloads — the stated intent ("retain payloads generously") is
+            // honoured as far as the row window allows.
+            expect(minCdcReplayableSeq(harness.sql)).toBe(trimFloor);
+        });
+
+        it("treats a malformed retention value as unset rather than reinterpreting it", async () => {
+            expect.assertions(2);
+
+            // `Number.parseInt` reads this as 10 and deletes the changelog. The
+            // whole-string parse reads it as malformed, i.e. as off — the only
+            // safe direction for a knob whose effect is a DELETE.
+            await sweepWith({ LUNORA_CDC_LOG_RETENTION: "10k" }, 20);
+
+            expect(minCdcSeq(harness.sql)).toBe(1);
+            expect(minCdcReplayableSeq(harness.sql)).toBe(1);
+        });
+
+        it("never sweeps past a RELAYED subscriber's in-memory cursor on a quiet table", async () => {
+            expect.assertions(2);
+
+            const sockets: FakeWebSocket[] = [];
+            const shard = new ProbeCountingShard(makeState(sockets, "room-1"), { LUNORA_CDC_LOG_RETENTION: "1" });
+
+            // A relayed subscriber records NO `__shape_poke_cursor` row — its
+            // resume position lives only in the owner's in-memory cohort
+            // registry. A floor computed from SQLite alone therefore sees a fully
+            // relayed shard as having no subscribers at all.
+            //
+            // The exposure needs a QUIET table, because a flush advances the
+            // cohort frontier only for shapes whose table changed. A busy sibling
+            // table drives the log's head far past a quiet shape's frontier, and
+            // a sweep that trims to the head then deletes exactly the rows that
+            // shape's next diff has to read. Nothing errors — the relayed clients
+            // just silently keep rows that moved.
+            await shard.seedRoom("r-seed", "room-a");
+            await shard.fetch(
+                new Request("https://shard.internal/_lunora/relay", {
+                    body: JSON.stringify({
+                        args: { roomId: "room-a" },
+                        connectionId: "relay-conn",
+                        name: "roomMembersByRoom",
+                        relayIndex: 0,
+                        subId: "sub-1",
+                        type: "relay_shape_subscribe",
+                    }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+
+            const relayFloor = readCdcCursor(harness.sql);
+
+            for (let index = 0; index < 20; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- the busy sibling table has to drive the head past the quiet shape's frontier
+                await shard.seed(`m${String(index)}`, "c1");
+            }
+
+            await shard.fetch(write("messages:send", { _id: "trigger", channelId: "c1" }));
+
+            // No durable cursor row exists — the point of the case.
+            expect(readShapeCursor()).toBe(0);
+            // …and the sweep still stopped at the relayed frontier.
+            expect(minCdcSeq(harness.sql) ?? 0).toBeLessThanOrEqual(relayFloor + 1);
+        });
+
+        it("refuses a changelog page that starts below the trimmed floor", async () => {
+            expect.assertions(2);
+
+            const shard = await sweepWith({ LUNORA_CDC_LOG_RETENTION: "5" }, 20);
+            const floor = minCdcSeq(harness.sql) ?? 0;
+
+            expect(floor).toBeGreaterThan(1);
+
+            // A warehouse connector resuming from below the floor must be told,
+            // not handed the surviving tail with an advanced cursor — that loses
+            // the trimmed range permanently and reports nothing.
+            expect(() => shard.syncCdc(0)).toThrow(/trimmed/u);
         });
     });
 });

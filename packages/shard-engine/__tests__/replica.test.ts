@@ -28,6 +28,8 @@ interface Owner {
     /** `undefined` models an empty log; a number models a log compacted up to it. */
     floor: number | undefined;
     pulls: number;
+    /** Models `runShardCdcSync` refusing a compacted page: the owner throws instead of returning one. */
+    readThrows?: boolean;
     /** The owner half of the control channel, reached with the follower's real body and headers. */
     serve: (body: string, headers: HeadersInit | undefined) => Promise<Response>;
     snapshot: ExportRow[];
@@ -57,6 +59,10 @@ const createOwner = (): Owner => {
                 ownerFloor: () => owner.floor,
                 readChanges: (sinceSeq: number, limit: number) => {
                     owner.pulls += 1;
+
+                    if (owner.readThrows) {
+                        throw new Error("cdc payloads compacted");
+                    }
 
                     const page = owner.changes.filter((change) => change.seq > sinceSeq).slice(0, limit);
 
@@ -258,6 +264,32 @@ describe("read replicas", () => {
 
         await expect(replica?.ensureFresh(9)).resolves.toBe("unavailable");
         expect(applied).toStrictEqual([]);
+    });
+
+    it("bootstraps instead of retrying when the owner's payloads were compacted past it", async () => {
+        expect.assertions(3);
+
+        const replica = createReplicaLink(host);
+
+        await replica?.ensureFresh();
+
+        // Payload compaction keeps the KEYS, so the owner's `readChanges` would
+        // refuse the page outright rather than return one. A refusal reaching the
+        // follower as a bare non-2xx is indistinguishable from an unreachable
+        // owner, so it would retry the identical doomed round trip forever and
+        // never bootstrap. The floor is checked before the page is read, so the
+        // follower is told where it stands.
+        owner.changes = [change(9, "i")];
+        owner.floor = 9;
+        owner.readThrows = true;
+
+        await expect(replica?.ensureFresh(9)).resolves.toBe("unavailable");
+
+        // Latched divergent — which is what routes the next read to a bootstrap
+        // rather than to another pull.
+        expect(replica?.isDivergent()).toBe(true);
+        // And the doomed page was never read.
+        expect(owner.pulls).toBe(1);
     });
 
     it("reports unavailable when the log was compacted away entirely", async () => {

@@ -25,7 +25,7 @@ import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { SqlExec } from "./ctx-db";
-import envPositiveInt from "./env-int";
+import { envPositiveInt } from "./env-int";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
 import { stableWireKey } from "./reactive-cache";
 import type { OwnerRelayFrame, PromotionState, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
@@ -287,6 +287,24 @@ abstract class RelayLink {
     /** Whether a reactive shape may be relay-multicast (the RLS-uniform gate); `false` on a relay (the gate is an owner concern). */
     public abstract isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
 
+    /**
+     * The lowest op-log cursor any relayed shape still has to be diffed from, or
+     * `undefined` when this tier holds none.
+     *
+     * A relayed subscriber's resume position lives **only** here, in memory on the
+     * owner — unlike a local socket, it records no `__shape_poke_cursor` row. So a
+     * changelog retention sweep that reads only SQLite sees a relayed cohort as
+     * having no cursor at all and is free to delete the very rows the next
+     * {@link RelayHost.buildShapeDiff} has to read. That produces no error: the
+     * diff simply finds fewer changed keys than there were, and every relayed
+     * client silently keeps rows that moved.
+     *
+     * Exposing the frontier is what lets `ShardDO.retentionFloor` pull the floor
+     * down to cover them. It is a pure read — deliberately, since a retention
+     * sweep must not advance a promotion latch or any other state.
+     */
+    public abstract minShapeCursor(): number | undefined;
+
     /** Control-channel hook: an owner adds a relay to its set; a relay no-ops. */
     protected abstract onAttach(index: number): void;
 
@@ -400,6 +418,21 @@ class OwnerRelay extends RelayLink {
         const fan = envPositiveInt(this.host.env(), "LUNORA_RELAY_FAN", DEFAULT_RELAY_FAN);
 
         return Math.min(this.maxRelays(), Math.max(1, fan));
+    }
+
+    /**
+     * The owner's relayed-shape frontier: the minimum over the cohort registry and
+     * the per-socket proxies. See {@link RelayLink.minShapeCursor} for why a
+     * retention sweep must consult it.
+     */
+    public override minShapeCursor(): number | undefined {
+        let floor: number | undefined;
+
+        for (const entry of [...this.relayShapeRegistry.values(), ...this.relayShapeProxies.values()]) {
+            floor = floor === undefined ? entry.cursor : Math.min(floor, entry.cursor);
+        }
+
+        return floor;
     }
 
     /**
@@ -950,6 +983,11 @@ class RelayMember extends RelayLink {
     // eslint-disable-next-line class-methods-use-this -- role hook: the RLS-uniform gate is an owner concern
     public override isShapeRelayUniform(): boolean {
         return false;
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- role hook: a relay holds no op-log, so it runs no retention sweep and has no frontier to protect
+    public override minShapeCursor(): number | undefined {
+        return undefined;
     }
 
     // eslint-disable-next-line class-methods-use-this -- role hook: only an owner tracks a relay set

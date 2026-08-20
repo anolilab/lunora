@@ -319,12 +319,20 @@ export const ERROR_CATALOG = {
     UNKNOWN_COLUMN: { status: 404, title: "Unknown column" },
 
     /**
-     * `@lunora/do`'s ShardDO — WebSocket-frame codes and SQLite-in-DO invariants.
+     * `@lunora/do`'s ShardDO — WebSocket-frame codes, changelog-retention refusals
+     * and SQLite-in-DO invariants.
+     *
      * `NESTED_TRANSACTION` and `SQL_UNAVAILABLE` are "should never happen" state
      * invariants (mirrors `RUN_DEPTH_EXCEEDED`'s posture above): today's message
      * is static and safe, but flagged internal so a future edit that adds
-     * diagnostic detail can't accidentally start leaking it.
+     * diagnostic detail can't accidentally start leaking it. The two `CDC_*`
+     * codes are the opposite — ordinary, expected, operator-configured outcomes
+     * — and both are `409` because the cursor the caller holds is real but no
+     * longer serveable, so the recovery is a snapshot rather than a retry.
      */
+    /** A resume below the deleted changelog prefix: the entries are gone outright, for every consumer. */
+    CDC_LOG_TRIMMED: { status: 409, title: "CDC log trimmed" },
+    /** A resume below the compacted prefix: the keys survive but their post-images do not, so only a payload consumer (streaming export, replay-PITR, a read replica) is refused. */
     CDC_PAYLOAD_COMPACTED: { status: 409, title: "CDC payloads compacted" },
     EXPIRED: { status: 404, title: "Session expired" },
     NESTED_TRANSACTION: { internal: true, status: 500, title: "Nested transaction" },

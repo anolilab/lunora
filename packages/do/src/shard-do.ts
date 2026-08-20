@@ -138,6 +138,7 @@ import {
     awaitWsDrain,
     buildPokeFrames,
     buildSettings,
+    buildShapeDiff,
     bumpCdcEpoch,
     CDC_LOG_TABLE,
     cdcSeqLeavingRows,
@@ -146,7 +147,6 @@ import {
     clearQueueMessages,
     compactCdcDocs,
     ConflictError,
-    countCdcChanges,
     createDependencyTracker,
     createFanoutCounters,
     createReadFootprint,
@@ -163,10 +163,12 @@ import {
     diffGlobalMembership,
     DurableStreamRunner,
     ensureAuditTable,
+    envOptionalPositiveInt,
     facetColumn,
     findStorageReferences,
     FLAGS_FUNCTION_PREFIX,
     gateReplicaDispatch,
+    GlobalPollTick,
     globalShapeReadKey,
     handleReplicaControl,
     isDevEnvironment,
@@ -177,6 +179,7 @@ import {
     MAX_PAGE_SIZE,
     mergeChangedKeys,
     migrateClientWatermark,
+    minCdcReplayableSeq,
     minCdcSeq,
     minShapePokeCursor,
     parseExportShardArgs,
@@ -213,10 +216,7 @@ import {
     SCAN_DEP,
     selectExpiredIds,
     selectMatchingIds,
-    selectShapeMembers,
     selectShapeRows,
-    shapeProbeKey,
-    shapeRangeKey,
     ShardRunner,
     stableStringify,
     stableWireKey,
@@ -802,41 +802,25 @@ const ROOT_DO_SIZE_WARN_BYTES = 1_073_741_824;
 const IDEMPOTENCY_RETENTION_MS = 86_400_000;
 
 /**
- * One `.global()` shape poll tick's shared state.
- *
- * `changedTables` is the changelog's answer for this tick, and its ABSENCE is
- * meaningful: `undefined` means "no visibility, read everything", while an empty
- * set means "nothing changed, skip everything". `rows` is the membership read
- * cache keyed by resolved predicate, so N sockets on one shape drain the global
- * backend once. `skipped` counts the (socket, shape) pairs that needed no read
- * at all, which is what makes the saving visible rather than merely claimed.
- */
-interface GlobalPollTick {
-    changedTables?: Set<string>;
-
-    /**
-     * Set when any shape in this tick did NOT settle — it threw, its membership
-     * was over the cap, or its poke was not delivered.
-     *
-     * The cursor moves once per tick for the whole shard, so by the time such a
-     * shape fails, the changelog rows that marked its table changed have already
-     * been consumed. Without this the next tick sees the table as unchanged, skips
-     * it, and the socket keeps a stale membership until the resync interval
-     * elapses. Requesting a resync converts "we lost the notification" into "read
-     * everything once", which is the only recovery available to a shared cursor.
-     */
-    resyncRequested: boolean;
-    rows: Map<string, ShapeRow[]>;
-    skipped: number;
-}
-
-/**
  * Minimum spacing between `__cdc_log` retention sweeps on one warm instance.
  * Retention is a size bound, not a deadline: sweeping once a minute keeps the
  * log within a rounding error of the configured window while keeping the cost
  * off all but one of a burst's flushes.
  */
 const CDC_SWEEP_INTERVAL_MS = 60_000;
+
+/**
+ * Rows one retention sweep may delete or compact, per level.
+ *
+ * The steady state never reaches this: a shard writing under `CDC_SWEEP_MAX_ROWS`
+ * changes a minute stays exactly at its configured window. It bounds the OTHER
+ * case — the first sweep after an operator enables retention on a log that has
+ * been growing unbounded — where a single statement over the whole backlog risks
+ * exceeding the DO's per-request limits, aborting with nothing changed, and being
+ * retried identically forever. Bounded, that backlog drains over successive
+ * sweeps instead of never draining at all.
+ */
+const CDC_SWEEP_MAX_ROWS = 50_000;
 
 /**
  * Minimum spacing between throttled, in-line GC sweeps of the dedup table —
@@ -1146,13 +1130,18 @@ abstract class ShardDO {
     protected readonly reactiveCache: ReactiveCache | undefined;
 
     /**
-     * Running membership-probe tallies for the shape-poke path, surfaced next to
-     * {@link ShardDO.fanout} on `getFanoutMetrics`. `run` counts the probes this
+     * Running read tallies for the shape-poke path, surfaced next to
+     * {@link ShardDO.fanout} on `getFanoutMetrics`. `run` counts the reads this
      * instance issued to SQLite; `served` counts the ones the per-flush
      * {@link ShapeDiffCache} answered because another socket had already asked the
-     * identical `(table, effectiveWhere, ids)` question. Without the split the
-     * sharing is invisible — a flush that collapsed a hundred probes into one
-     * looks exactly like a flush that only ever had one shape.
+     * identical question. BOTH halves of the diff are counted — the changed-key
+     * scan keyed by `(table, op range)` and the membership probe keyed by
+     * `(effectiveWhere, that same range)` — so the reported sharing rate covers
+     * the work the cache actually does rather than half of it.
+     *
+     * Without the split the sharing is invisible: a flush that collapsed a
+     * hundred reads into one looks exactly like a flush that only ever had one
+     * shape.
      */
     protected shapeProbe: ShapeProbeCounters = createShapeProbeCounters();
 
@@ -1780,7 +1769,7 @@ abstract class ShardDO {
         // collaborator (owner vs relay) is fixed once from the DO name (plan 075).
         const host: RelayHost = {
             ...sibling,
-            buildShapeDiff: (resolved, fromCursor, toCursor) => this.buildShapeDiff(this.sql as SqlExec, resolved, fromCursor, toCursor),
+            buildShapeDiff: (resolved, fromCursor, toCursor) => this.diffRelayedShape(resolved, fromCursor, toCursor),
             computeOpLogShapeSeed: (shape, resolved) => this.computeOpLogShapeSeed(shape, resolved),
             currentCdcEpoch: () => this.currentCdcEpoch(),
             deliverWhisperLocal: (topic, frame, exclude) => this.deliverWhisperLocal(topic, frame, exclude),
@@ -1814,7 +1803,12 @@ abstract class ShardDO {
             exportRows: async () => this.runShardExport({}),
             ownerCursor: () => this.currentCdcCursor(),
             ownerEpoch: () => this.currentCdcEpoch(),
-            ownerFloor: () => (this.cdcEnabled() ? minCdcSeq(this.sql as SqlExec) : undefined),
+            // The PAYLOAD floor, not the key floor. A replica replays post-images,
+            // and payload compaction keeps keys while dropping documents — so
+            // `minCdcSeq` would advertise a position from which replay is
+            // impossible, and the follower would sit below the real floor forever
+            // without ever being told to bootstrap.
+            ownerFloor: () => (this.cdcEnabled() ? minCdcReplayableSeq(this.sql as SqlExec) : undefined),
             readChanges: (sinceSeq, limit) => this.runShardCdcSync({ limit, sinceSeq }),
             // `COUNT(*)` per user table — cheap next to building the snapshot,
             // which is the whole point: the bootstrap cap has to be decided
@@ -2942,6 +2936,25 @@ abstract class ShardDO {
 
         if (!present) {
             return { changes: [], cursor: args.sinceSeq };
+        }
+
+        // Retention-gap guard, and it comes first because it is the more
+        // destructive of the two levels. `trimCdcChanges` DELETES rows, so a
+        // consumer resuming below the retained floor would be handed the surviving
+        // tail with an advanced cursor and no indication that anything was
+        // skipped — a warehouse table permanently missing the trimmed range, and
+        // nothing anywhere reporting it. The resume and shape-seed paths already
+        // gate on this floor (they re-seed instead); this path, the one warehouse
+        // connectors and `cdcSync` use, did not. `+ 1` because a consumer sitting
+        // exactly at `floor - 1` has seen everything below the floor.
+        const floor = minCdcSeq(sql);
+
+        if (floor !== undefined && floor > args.sinceSeq + 1) {
+            throw new LunoraError(
+                "CDC_LOG_TRIMMED",
+                `cdc entries at or below seq ${String(floor - 1)} have been trimmed; resume from a snapshot (sinceSeq ${String(args.sinceSeq)} is below the retained window)`,
+                { status: 409 },
+            );
         }
 
         const page = readCdcChanges(sql, { limit: args.limit, sinceSeq: args.sinceSeq });
@@ -9282,7 +9295,9 @@ abstract class ShardDO {
             (shape.sinceSeq === cursor || (floor !== undefined && floor <= shape.sinceSeq + 1));
 
         const rowsPatch =
-            canResume && shape.sinceSeq !== undefined ? this.buildShapeDiff(sql, resolved, shape.sinceSeq, cursor) : this.buildShapeSeed(sql, resolved);
+            canResume && shape.sinceSeq !== undefined
+                ? this.diffShape(sql, resolved, shape.sinceSeq, cursor, createShapeDiffCache())
+                : this.buildShapeSeed(sql, resolved);
 
         return { baseCheckpoint: canResume ? shape.sinceSeq : undefined, cursor, epoch, rowsPatch };
     }
@@ -9402,13 +9417,21 @@ abstract class ShardDO {
      * post-images of older entries while keeping their `(seq, table, id, op)`
      * keys. Post-images are essentially all of the log's bytes, and since the
      * shape diff reads its values from the table rather than the log
-     * ({@link selectShapeMembers}), dropping them costs a live subscriber
+     * (`selectShapeMembers`), dropping them costs a live subscriber
      * nothing — a client past the payload floor still gets an exact key-level
      * delta instead of a full re-seed.
      *
      * **Row deletion** (`LUNORA_CDC_LOG_RETENTION`, in rows) drops the entries
      * outright. This is the level that ends resumability for anyone below it:
      * `minCdcSeq` then reports a floor above their cursor and they re-seed.
+     *
+     * Both levels are enforced on the READ paths, not merely intended by the
+     * sweep — `evaluateResume` and `computeOpLogShapeSeed` gate on `minCdcSeq`,
+     * and {@link ShardDO.runShardCdcSync} refuses a page below either floor
+     * (`CDC_LOG_TRIMMED` / `CDC_PAYLOAD_COMPACTED`). That matters because the
+     * failure this sweep can cause is silent by nature: a consumer handed the
+     * surviving tail with an advanced cursor has no way to notice a range went
+     * missing, so every path that can serve one has to refuse instead.
      *
      * **Both are opt-in, and that is a deliberate answer rather than caution.**
      * The log's in-shard consumers record durable cursors this sweep can read
@@ -9437,33 +9460,43 @@ abstract class ShardDO {
 
         this.lastCdcSweepAt = now;
 
-        const environment = (this.env ?? {}) as { LUNORA_CDC_LOG_RETENTION?: string; LUNORA_CDC_PAYLOAD_RETENTION?: string };
-        const keepRows = parsePositiveInt(environment.LUNORA_CDC_LOG_RETENTION);
-        const keepPayloads = parsePositiveInt(environment.LUNORA_CDC_PAYLOAD_RETENTION);
+        // Strictly parsed. These knobs DELETE data, and the lenient
+        // `Number.parseInt` reading (which stops at the first character it cannot
+        // eslint-disable-next-line no-secrets/no-secrets -- an example env assignment, not a credential
+        // use) turns `LUNORA_CDC_LOG_RETENTION=10k` into "keep 10 rows" — an
+        // operator's typo silently destroying the changelog rather than being
+        // ignored. `envOptionalPositiveInt` requires the whole string to be an
+        // integer and treats anything else as unset, i.e. as off.
+        const environment = this.env;
+        const keepRows = envOptionalPositiveInt(environment, "LUNORA_CDC_LOG_RETENTION");
+        const keepPayloads = envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION");
 
         if (keepRows === undefined && keepPayloads === undefined) {
             return;
         }
 
+        // Compacting a window WIDER than the one being deleted is a no-op with a
+        // misleading configuration: rows leave the log before they can reach the
+        // payload cutoff. Clamp rather than ignore, so the stated payload window
+        // is honoured as far as the row window allows, and say so once.
+        const payloadWindow = keepPayloads === undefined ? undefined : Math.min(keepPayloads, keepRows ?? Number.POSITIVE_INFINITY);
+
         const sql = this.sql as SqlExec;
 
         try {
-            const rows = countCdcChanges(sql);
-
-            // Nothing can be past either window while the log is smaller than
-            // both, and this is the steady state on a quiet shard — so bail
-            // before computing a floor that would only be discarded.
-            if (rows <= Math.min(keepRows ?? Number.POSITIVE_INFINITY, keepPayloads ?? Number.POSITIVE_INFINITY)) {
-                return;
-            }
-
             const floor = this.retentionFloor(sql);
 
-            if (keepPayloads !== undefined) {
-                const cutoff = cdcSeqLeavingRows(sql, keepPayloads);
+            if (payloadWindow !== undefined) {
+                // `cdcSeqLeavingRows` IS the "is anything past the window?"
+                // probe — an indexed `LIMIT 1 OFFSET keep - 1` that returns
+                // `undefined` when the log is shorter than the window. The
+                // `COUNT(*)` pre-check this replaces was a full b-tree walk on
+                // the write path every 60s, on exactly the multi-million-row
+                // logs this sweep exists to bound.
+                const cutoff = cdcSeqLeavingRows(sql, payloadWindow);
 
                 if (cutoff !== undefined && cutoff > 0) {
-                    compactCdcDocs(sql, Math.min(cutoff, floor));
+                    compactCdcDocs(sql, Math.min(cutoff, floor), CDC_SWEEP_MAX_ROWS);
                 }
             }
 
@@ -9471,7 +9504,7 @@ abstract class ShardDO {
                 const cutoff = cdcSeqLeavingRows(sql, keepRows);
 
                 if (cutoff !== undefined && cutoff > 0) {
-                    trimCdcChanges(sql, Math.min(cutoff, floor));
+                    trimCdcChanges(sql, Math.min(cutoff, floor), CDC_SWEEP_MAX_ROWS);
                 }
             }
         } catch (error) {
@@ -9491,16 +9524,23 @@ abstract class ShardDO {
      * a consumer whose cursor cannot be read contributes nothing rather than a
      * guess — a floor that is too low leaves rows around for one more sweep, while
      * a floor that is too high deletes a range a live subscription still has to be
-     * told about. Shape subscribers record `__shape_poke_cursor` per
-     * `(connection, subscription)` on every delivered poke — and a relay member's
-     * shapes are poked through this owner's log, so their cursors land in exactly
-     * the same rows and the same minimum covers them.
+     * told about.
+     *
+     * Two in-shard consumers, and they are tracked in different places. Local
+     * sockets record `__shape_poke_cursor` per `(connection, subscription)` on
+     * every delivered poke, so SQLite carries their position. **Relayed
+     * subscribers do not**: a relay's cohort frontier and its per-socket proxies
+     * live in memory on this owner (`RelayLink.minShapeCursor`) and write no
+     * row at all. Reading only the durable table would therefore see a fully
+     * relayed shard — the high-fan-out case, i.e. exactly the shard an operator
+     * turns retention on for — as having no subscribers, and delete the rows the
+     * next relayed diff had to read. Both are folded in here.
      */
     private retentionFloor(sql: SqlExec): number {
         const head = this.currentCdcCursor() ?? 0;
-        const shapeFloor = minShapePokeCursor(sql);
+        const floors = [minShapePokeCursor(sql), this.relay?.minShapeCursor()].filter((cursor): cursor is number => cursor !== undefined);
 
-        return Math.max(0, shapeFloor === undefined ? head : Math.min(head, shapeFloor));
+        return Math.max(0, floors.length === 0 ? head : Math.min(head, ...floors));
     }
 
     /**
@@ -9536,7 +9576,7 @@ abstract class ShardDO {
                 }
 
                 const memoCursor = this.readShapeMemoCursor(ws, connectionId, subId, shape.sinceSeq);
-                const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint, diffCache);
+                const rowsPatch = this.diffShape(sql, resolved, memoCursor, checkpoint, diffCache);
 
                 if (rowsPatch.length > 0) {
                     parts.push({ rowsPatch, shapeId: subId });
@@ -9559,39 +9599,10 @@ abstract class ShardDO {
     }
 
     /**
-     * The distinct row keys `table` saw change in `(sinceSeq, upTo]`, each with
-     * the latest op that hit it. Metadata only — no post-image is read, let alone
-     * decoded. Within one flush every shape over the SAME `(table, sinceSeq,
-     * upTo)` asks for the identical key set, so the answer is memoized in the
-     * caller-supplied per-flush {@link ShapeDiffCache}: N shapes on a table share
-     * ONE changelog read instead of re-scanning per shape/socket.
-     *
-     * This replaced a paged drain that selected `doc` on every row and collapsed
-     * the ops in JS. That drain decoded every changed document in the range to
-     * keep only the ones the shape's predicate later admitted — for a client
-     * catching up over a long range, most of the work and all of the peak memory
-     * went into documents it was never allowed to ship.
-     */
-    private readShapeChangeKeys(sql: SqlExec, table: string, sinceSeq: number, upTo: number, cache?: ShapeDiffCache): CdcChangeKey[] {
-        const key = shapeRangeKey(table, sinceSeq, upTo);
-        const cached = cache?.keys.get(key);
-
-        if (cached !== undefined) {
-            return cached;
-        }
-
-        const keys = this.readShapeCdcKeys(sql, table, sinceSeq, upTo);
-
-        cache?.keys.set(key, keys);
-
-        return keys;
-    }
-
-    /**
      * Read the changed row keys for a shape diff. A thin protected seam over
-     * {@link readCdcChangeKeys}: it isolates the single changelog read that
-     * {@link ShardDO.readShapeChangeKeys} memoizes per flush, and gives tests a
-     * point to count the reads that memo collapses.
+     * {@link readCdcChangeKeys}: it isolates the single changelog read the
+     * per-flush cache memoizes, and gives tests a point to count the reads that
+     * memo collapses.
      */
     // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- thin pass-through seam over the module-level reader; a protected method so the per-flush cache + tests share one read point, co-located with the poke path it serves rather than hoisted away from its only caller
     protected readShapeCdcKeys(sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[] {
@@ -9599,99 +9610,34 @@ abstract class ShardDO {
     }
 
     /**
-     * Of `ids`, the rows that satisfy `resolved.effectiveWhere`, with their
-     * current documents — one probe, memoized per flush by the RESOLVED PREDICATE
-     * rather than by the socket that asked.
+     * One relayed shape's diff, on its own cache.
      *
-     * A probe's identity is `(table, effectiveWhere, ids)`, and nothing in it
-     * names a socket: two sockets whose `resolveShape` produced a byte-identical
-     * predicate — every subscriber of a shape whose `where` does not vary by
-     * identity, which is the common case for public and per-channel shapes — ran
-     * two byte-identical `SELECT`s per flush, and a hundred such sockets ran a
-     * hundred. Keying the memo by the predicate collapses them to one.
-     *
-     * A predicate that cannot be stably keyed (a `where` carrying a value the
-     * encoder refuses) degrades to an un-memoized probe rather than throwing: the
-     * result is today's per-socket cost for that one shape, never a wrong answer
-     * or a dropped poke.
+     * The relay tier computes one delta per cohort or proxy rather than per
+     * socket, so there is nothing to share WITHIN a call — the cache exists
+     * because the pipeline requires one. Its counters are still folded back into
+     * {@link ShardDO.shapeProbe}, because they are reads this instance issued:
+     * discarding them would under-report exactly the shards the fan-out panel
+     * exists for, since a shard is relayed precisely when its fan-out is large.
      */
-    // eslint-disable-next-line class-methods-use-this -- reads through the passed `sql` handle, like its `buildShapeSeed` sibling; kept an instance method so the diff's two stages sit together
-    private probeShapeMembers(sql: SqlExec, resolved: ResolvedShape, ids: ReadonlyArray<string>, cache?: ShapeDiffCache): Map<string, Record<string, unknown>> {
-        const key = shapeProbeKey(resolved, ids);
+    private diffRelayedShape(resolved: ResolvedShape, fromCursor: number, toCursor: number): ShapeRowOp[] {
+        const cache = createShapeDiffCache();
+        const ops = this.diffShape(this.sql as SqlExec, resolved, fromCursor, toCursor, cache);
 
-        if (key !== undefined && cache) {
-            const cached = cache.members.get(key);
+        this.shapeProbe = recordShapeProbePass(this.shapeProbe, cache.probesRun, cache.probesServed);
 
-            if (cached !== undefined) {
-                // eslint-disable-next-line no-param-reassign -- the cache IS the accumulator this pass records into; that is what the caller passes it for
-                cache.probesServed += 1;
-
-                return cached;
-            }
-        }
-
-        const members = selectShapeMembers(sql, resolved.table, resolved.effectiveWhere, ids);
-
-        if (cache) {
-            // eslint-disable-next-line no-param-reassign -- see above: recording into the per-flush cache is its purpose
-            cache.probesRun += 1;
-
-            if (key !== undefined) {
-                cache.members.set(key, members);
-            }
-        }
-
-        return members;
+        return ops;
     }
 
     /**
-     * Build the row-ops for a shape over the op range `(sinceSeq, upTo]` — the
-     * two-stage pipeline: a metadata scan of the changed keys
-     * ({@link ShardDO.readShapeChangeKeys}), then ONE membership probe
-     * ({@link selectShapeMembers}) that both filters those keys by the shape's
-     * predicate and returns the surviving documents to ship.
+     * This shard's shape diff: {@link buildShapeDiff} with the changelog read
+     * routed through {@link ShardDO.readShapeCdcKeys}, so the DO's one seam over
+     * that read stays the DO's.
      *
-     * A key the probe returned is a member, so its current document is upserted
-     * (projected to the shape's columns). A key it did not return is either a row
-     * that left the set or a row that is gone: emit `delete(key)` — except for a
-     * key whose latest op is an `insert` that never matched the predicate, which
-     * was never replicated to anyone, so emitting a delete for it would spam
-     * every subscriber on the table with a no-op key.
+     * The pipeline itself is host-neutral and lives in `@lunora/shard-engine` —
+     * it reads through the `sql` handle and touches no instance state.
      */
-    private buildShapeDiff(sql: SqlExec, resolved: ResolvedShape, sinceSeq: number, upTo: number, cache?: ShapeDiffCache): ShapeRowOp[] {
-        const changed = this.readShapeChangeKeys(sql, resolved.table, sinceSeq, upTo, cache);
-
-        if (changed.length === 0) {
-            return [];
-        }
-
-        const ids = changed.map((change) => change.id);
-        const members = this.probeShapeMembers(sql, resolved, ids, cache);
-        const ops: ShapeRowOp[] = [];
-
-        for (const change of changed) {
-            const memberDocument = members.get(change.id);
-
-            if (memberDocument !== undefined) {
-                // Still a member ⇒ the row exists and this is the value the
-                // predicate admits. `op` rides along as the client-facing kind;
-                // a `delete` op can never be in the live membership set, so it
-                // can never reach here with a document.
-                ops.push({ key: change.id, op: change.op, table: resolved.table, value: projectColumns(memberDocument, resolved.columns) });
-
-                continue;
-            }
-
-            // Not a member now. An `insert` that never matched the predicate was
-            // never replicated to anyone, so emit nothing. An `update` that left
-            // the set, or a `delete`, DOES need a delete: we conservatively tell
-            // the client to drop the key (a no-op if it never held it).
-            if (change.op !== "insert") {
-                ops.push({ key: change.id, op: "delete", table: resolved.table });
-            }
-        }
-
-        return ops;
+    private diffShape(sql: SqlExec, resolved: ResolvedShape, sinceSeq: number, upTo: number, cache: ShapeDiffCache): ShapeRowOp[] {
+        return buildShapeDiff(sql, resolved, sinceSeq, upTo, cache, (handle, table, from, to) => this.readShapeCdcKeys(handle, table, from, to));
     }
 
     /** Build the full insert-poke of a shape's current membership — the first-seed/full-reseed rowset. */
@@ -9774,8 +9720,7 @@ abstract class ShardDO {
         // Like a thrown failure, this leaves the socket un-settled against a cursor
         // that has already advanced, so the next tick must not skip the table.
         if (!this.withinGlobalShapeBound(rows.length, `shape:poll:${subId}`, resolved.table)) {
-            // eslint-disable-next-line no-param-reassign -- the tick is this poll pass's shared accumulator; see its resync-request field
-            tick.resyncRequested = true;
+            tick.requestResync();
 
             return;
         }
@@ -9808,8 +9753,7 @@ abstract class ShardDO {
         // The poke did not land, so the baseline still predates this diff — and the
         // tick's cursor has moved past the changes it was built from. Ask for an
         // unconditional pass so the next tick rebuilds it rather than skipping.
-        // eslint-disable-next-line no-param-reassign -- the tick is this poll pass's shared accumulator; see its resync-request field
-        tick.resyncRequested = true;
+        tick.requestResync();
     }
 
     /**
@@ -9992,9 +9936,13 @@ abstract class ShardDO {
      * membership; the codegen-generated subclass overrides this to forward the
      * question to the global store's changelog. Emitted only for a project that
      * has both shapes and `.global()` tables.
+     *
+     * `cursorOnly` says the caller has already committed to reading everything
+     * this pass and wants only the cursor — see the contract on
+     * `DatabaseWriterLike.cdcChangedTables`.
      */
     // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- base-class override hook (the codegen subclass overrides it and uses `this` to build the global writer), co-located with the poll tick it opens rather than hoisted away from its only caller
-    protected readGlobalChangedTables(_sinceSeq: number): Promise<{ cursor: number; tables: string[] } | undefined> {
+    protected readGlobalChangedTables(_sinceSeq: number, _cursorOnly?: boolean): Promise<{ cursor: number; tables: string[] } | undefined> {
         return Promise.resolve(undefined);
     }
 
@@ -10013,6 +9961,13 @@ abstract class ShardDO {
      * so the fast path is a bounded skip — at worst {@link ShardDO.GLOBAL_SHAPE_RESYNC_MS}
      * of staleness for a change we could not see, against the full membership
      * re-read of every shape on every socket every two seconds that it replaces.
+     *
+     * That same bound now covers a second case worth naming: a shape whose
+     * membership moves WITHOUT a write — a predicate over wall-clock, like
+     * `_creationTime > now - 1h`. It used to converge on the poll interval
+     * because every tick re-read it; it now converges on the resync interval,
+     * because no changelog row marks its table as having moved. Bounded and
+     * intended, but a different guarantee than the one this path used to give.
      */
     private async openGlobalPollTick(trace?: TraceRefLike): Promise<GlobalPollTick> {
         const now = Date.now();
@@ -10021,33 +9976,34 @@ abstract class ShardDO {
         const dueForResync = this.globalResyncRequested || now - this.lastGlobalResyncAt >= ShardDO.GLOBAL_SHAPE_RESYNC_MS;
 
         this.globalResyncRequested = false;
-        const tick: GlobalPollTick = { resyncRequested: false, rows: new Map(), skipped: 0 };
 
         if (dueForResync) {
             this.lastGlobalResyncAt = now;
         }
 
+        // A cold instance has no cursor to compare against and a resync pass
+        // deliberately ignores one, so in both cases the changelog cannot narrow
+        // this tick — and asking it would bill a `.global()` round trip for an
+        // answer that is discarded. Adopt the cursor without the table list.
+        const cursorOnly = this.globalPollCursor === undefined || dueForResync;
+
         try {
-            const changed = await this.readGlobalChangedTables(this.globalPollCursor ?? 0);
+            const changed = await this.readGlobalChangedTables(this.globalPollCursor ?? 0, cursorOnly);
 
             if (changed === undefined) {
-                return tick;
-            }
-
-            // A first tick has nothing to compare against: adopt the cursor now so
-            // the NEXT tick can skip, and read in full this once.
-            if (this.globalPollCursor !== undefined && !dueForResync) {
-                tick.changedTables = new Set(changed.tables);
+                return new GlobalPollTick();
             }
 
             this.globalPollCursor = changed.cursor;
+
+            return new GlobalPollTick(cursorOnly ? undefined : new Set(changed.tables));
         } catch (error) {
             // No visibility is always a safe answer — it degrades this tick to the
             // full re-read every tick used to do.
             this.recordShapeError("shape:poll:cdc", error, trace);
-        }
 
-        return tick;
+            return new GlobalPollTick();
+        }
     }
 
     /**
@@ -10071,23 +10027,7 @@ abstract class ShardDO {
      * an un-shared read.
      */
     private async readGlobalShapeRowsCached(resolved: ResolvedShape, identity: SubscriptionIdentity, tick: GlobalPollTick): Promise<ShapeRow[]> {
-        const key = globalShapeReadKey(resolved, identity);
-
-        if (key !== undefined) {
-            const cached = tick.rows.get(key);
-
-            if (cached !== undefined) {
-                return cached;
-            }
-        }
-
-        const rows = await this.readGlobalShapeRows(resolved, identity);
-
-        if (key !== undefined) {
-            tick.rows.set(key, rows);
-        }
-
-        return rows;
+        return tick.rows(globalShapeReadKey(resolved, identity), async () => this.readGlobalShapeRows(resolved, identity));
     }
 
     /**
@@ -10135,7 +10075,7 @@ abstract class ShardDO {
             remaining += await this.pollSocketGlobalShapes(ws, attachment.shapes ?? {}, identity, attachment.connectionId ?? "", tick, trace);
         }
 
-        this.globalPoll = recordShapeProbePass(this.globalPoll, tick.rows.size, tick.skipped);
+        this.globalPoll = recordShapeProbePass(this.globalPoll, tick.readCount, tick.skipped);
         this.globalResyncRequested = tick.resyncRequested;
 
         return remaining;
@@ -10181,10 +10121,7 @@ abstract class ShardDO {
             // diff would be empty. Skipping is the whole point: the steady state
             // of a `.global()` shape is "unchanged", and it used to cost a full
             // membership drain per socket to establish that.
-            if (tick.changedTables !== undefined && !tick.changedTables.has(resolved.table)) {
-                // eslint-disable-next-line no-param-reassign -- the tick is this poll pass's shared accumulator; recording into it is what it is for
-                tick.skipped += 1;
-
+            if (!tick.shouldRead(resolved.table)) {
                 continue;
             }
 
@@ -10195,8 +10132,7 @@ abstract class ShardDO {
                 // This tick's cursor has already moved past the rows that marked
                 // the table changed, so a later tick would skip this shape rather
                 // than retry it. Ask for one unconditional pass instead.
-                // eslint-disable-next-line no-param-reassign -- the tick is this poll pass's shared accumulator; recording into it is what it is for
-                tick.resyncRequested = true;
+                tick.requestResync();
                 this.recordShapeError(`shape:poll:${subId}`, error, trace);
             }
         }

@@ -492,6 +492,10 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Unknown column";
     };
+    readonly CDC_LOG_TRIMMED: {
+        readonly status: 409;
+        readonly title: "CDC log trimmed";
+    };
     readonly CDC_PAYLOAD_COMPACTED: {
         readonly status: 409;
         readonly title: "CDC payloads compacted";

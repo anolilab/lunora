@@ -410,19 +410,140 @@ where one applies.
 - A `compactCdcDocs` comment claimed a PITR gate in the sweep that does not
   exist; the real protection is the read-path refusal. Corrected.
 
+## 10a. Second review pass: what a full audit of the branch found
+
+A second, adversarial pass over the finished branch found eight further issues.
+Six were real defects and are fixed here with regression tests; two are bounded
+behaviours that are now stated rather than left implicit.
+
+### Fixed
+
+- **The retention floor was blind to every relayed subscriber, and said the
+  opposite in its own docstring.** `retentionFloor` read only
+  `__shape_poke_cursor`, which is written exclusively by the LOCAL-socket poke
+  path. A relayed subscriber's resume position lives in memory on the owner (the
+  cohort registry and the per-socket proxies in `relay-hub.ts`) and writes no row
+  at all — so a fully relayed shard, which is the high-fan-out case an operator
+  turns retention on FOR, looked like a shard with no subscribers. The sweep was
+  then free to delete the rows the next relayed diff had to read. Nothing errors:
+  the diff just finds fewer changed keys than there were, and every relayed
+  client silently keeps rows that moved. `RelayLink.minShapeCursor()` now exposes
+  the frontier and `retentionFloor` folds it in. The regression test uses a QUIET
+  table, because a flush advances a cohort's frontier only for shapes whose table
+  changed — a busy sibling table is what drives the head past a quiet shape.
+- **Payload compaction permanently stalled the read-replica tier.** A replica's
+  `ownerFloor` returned `minCdcSeq` (the KEY floor), which compaction never
+  moves. So a replica below the payload cutoff got a thrown `CDC_PAYLOAD_COMPACTED`
+  from `readChanges`, which reaches it as a bare non-2xx — indistinguishable from
+  an unreachable owner. It never latched divergent, never bootstrapped, and
+  re-issued the same doomed cross-region round trip on every read, forever.
+  `ownerFloor` now reports the payload floor, and `servePull` checks it BEFORE
+  reading the page so the follower is handed the floor instead of a refusal.
+- **`runShardCdcSync` failed OPEN on row deletion.** The compaction guard was
+  rigorous; there was no trim guard at all. A warehouse connector resuming below
+  a trimmed floor was handed the surviving tail with an advanced cursor and no
+  indication anything was skipped — permanent, silent, unreported data loss on
+  the more destructive of the two knobs. New `CDC_LOG_TRIMMED` (409) refuses it.
+  The asymmetry was exactly inverted: the harmless level failed loud, the
+  destructive one failed silent.
+- **The retention knobs bypassed the repo's own env parser.** They used
+  `parsePositiveInt` from `admin-rpc-args.ts` — a bare `Number.parseInt` — so
+  `LUNORA_CDC_LOG_RETENTION=10k` read as "keep 10 rows" and deleted the
+  changelog. `env-int.ts` exists to prevent precisely this and argues the case in
+  its own JSDoc. Both knobs now go through a new `envOptionalPositiveInt`, which
+  requires the whole string to be an integer and treats anything else as unset,
+  i.e. as OFF — the only safe direction for a knob whose effect is a `DELETE`.
+- **The sweep could never make partial progress.** It ran a single unbounded
+  `DELETE`/`UPDATE` over the whole prefix, synchronously, on a write path. The
+  first sweep after an operator enables retention on an already-unbounded log is
+  exactly the case that exceeds the DO's limits — and the `catch` swallowed it
+  having already stamped `lastCdcSweepAt`, so it retried the identical unbounded
+  statement every 60 s forever, with zero progress and no report. Both statements
+  are now bounded to `CDC_SWEEP_MAX_ROWS` per pass. The `COUNT(*)` pre-check went
+  with it: `cdcSeqLeavingRows` already answers "is anything past the window?" as
+  an indexed seek, where `COUNT(*)` was a full b-tree walk every 60 s on the
+  write path — on the multi-million-row logs this sweep exists to bound.
+- **`shapeProbeKey` embedded every changed id, which the range key already
+  determines.** The id set is `readCdcChangeKeys(table, sinceSeq, upTo)` mapped
+  to ids, so `shapeRangeKey` identifies it exactly. Spelling the ids out built a
+  multi-megabyte string per (shape, socket) on a long catch-up and RETAINED it as
+  a `Map` key for the whole flush — on the per-identity predicates where this
+  cache shares nothing, unbounded growth in a 128 MB isolate, and strictly worse
+  than the transient set the un-memoized path allocated. Now keyed
+  `(predicateKey, rangeKey)`.
+
+### Stated, not changed
+
+- **`.global()` deltas remain racy on sequence-allocating dialects.** Postgres
+  and MySQL allocate `seq` before commit, so a transaction holding a lower `seq`
+  can commit after one holding a higher one, and no single read can see it. The
+  probe is now ONE statement whose cursor is the max `seq` it actually returned —
+  which closes the two-round-trip window entirely — but the sequence-gap window
+  is not closable by reading. It is bounded by `GLOBAL_SHAPE_RESYNC_MS`, the same
+  bound already accepted for an out-of-band writer, and the docstring now says
+  so instead of claiming the ordering fixed it. D1 is unaffected (single writer,
+  and `withSession` puts both reads in one snapshot).
+- **A time-varying `.global()` predicate now converges on the resync interval
+  rather than the poll interval.** A shape whose membership moves without a write
+  (`_creationTime > now - 1h`) used to be re-read every 2 s; it is now skipped
+  while its table is unchanged, so it converges within 30 s instead. Bounded and
+  intended, but it was not written down anywhere.
+
+### Deliberately not addressed
+
+- **A leaked `__shape_poke_cursor` row pins the floor indefinitely.** A
+  connection that dies without `deleteShapePokeCursorsForConnection` leaves a row
+  whose `MIN(cursor)` holds the floor at its position, so retention reclaims
+  nothing and never says why. The direction is fail-SAFE (it retains data), and
+  every staleness heuristic that would reclaim it trades a silent no-op for a
+  silent deletion of rows a live-but-idle subscriber is owed. Left as is.
+- **The `.global()` `__cdc_log` still has no retention.** `trimSqlCdcChanges`
+  exists and has no caller; the shard-local twin gained a full sweep in this
+  branch and the SQL twin gained only a read. The gap predates this work but this
+  branch makes the log hotter (polled every 2 s), so it is worth naming: a
+  `.global()` log is written from every shard and every region, and bounding it
+  needs a floor computed across all of them — a genuinely different problem from
+  the in-shard floor, and out of scope here.
+
 ## 11. Verification
 
 `lint:types` clean repo-wide; `lint:eslint` clean on every touched package;
-`lint:package-json` clean; `dist:check` clean against a production build;
-`api:check` clean (the review's fixes changed no public surface; the earlier
-`api:update` covered W1–W6, and the only removals in that diff are the two
-deliberate replacements — `selectShapeMemberIds` → `selectShapeMembers`,
-`readShapeCdcPage` → `readShapeCdcKeys` — which is the `alpha` convention).
+`lint:package-json` and `lint:registry:sync` clean; `dist:check` clean against a
+production build; `api:check` clean after `api:update` on a fresh production
+build.
 
-Per-package suites: `shard-engine` 1152, `do` 566, `sql-store` 108, `studio`
-1075, `codegen` 1290, `errors` 577, `d1` 271, `hyperdrive` 63 — all green. Benches
-run clean: `cdc-resume-probe`, `shape-diff-catchup`, `shape-poke-fanout`.
+The surface change is a net simplification. Removed: `countCdcChanges` (the
+write-path `COUNT(*)`, now unused), `minCdcDocSeq` (dead, replaced by
+`minCdcReplayableSeq`, which measures the floor its consumers actually need),
+and `shapeProbeKey` / `shapeRangeKey` (now private to the cache that owns them).
+Added: `buildShapeDiff` + `ReadShapeCdcKeys`, `GlobalPollTick`,
+`envOptionalPositiveInt` / `envPositiveInt`, and `CDC_LOG_TRIMMED`. Signature
+changes: `trimCdcChanges` / `compactCdcDocs` take a per-pass row bound;
+`cdcChangedTables` / `readSqlCdcChangedTables` / `readGlobalChangedTables` take
+`cursorOnly`; `ShapeDiffCache` is a class with two methods instead of a record
+with four public mutable fields. Removals follow the pre-release `alpha`
+convention: every call site migrated in the same change.
 
-One pre-existing failure is unrelated and reproduces on a clean tree:
-`@lunora/config` → `lint-ignores.test.ts` → "reports a writer failure instead of
-throwing it at the caller".
+`pnpm run test` green across all 64 projects. Per-package: `shard-engine` 1153,
+`do` 573, `sql-store` 112, `studio` 1075. Benches run clean:
+`cdc-resume-probe`, `shape-diff-catchup`, `shape-poke-fanout`.
+
+### Where the code now lives
+
+The two-stage pipeline moved OUT of `shard-do.ts` and into
+`@lunora/shard-engine`, which is where the repo's host-neutral/Cloudflare-host
+seam puts it: `buildShapeDiff` reads through the `sql` handle and touched no
+instance state, and three of the four methods that implemented it carried a
+`class-methods-use-this` suppression saying exactly that. The consequences of
+having it on the wrong side were concrete — the per-flush cache's internals had
+to become cross-package public API for a foreign package to reach them, and
+benchmarking a pure function needed a `ShardDO` subclass, a fake
+`ShardDOState`, an `handleRpc` stub and a double cast through `unknown`. The DO
+keeps a four-line `diffShape` that routes the changelog read through its own
+`readShapeCdcKeys` seam. `GlobalPollTick` moved for the same reason. Net effect
+on `shard-do.ts`: it shrinks rather than grows.
+
+The bench fixtures collapsed with it. `__bench__/shared.ts` gained
+`makeCdcShardFixture`, replacing five copies of the same
+`as unknown as ShardDOState` block, three near-identical `ShardDO` subclasses,
+and three copies of the schema cast.

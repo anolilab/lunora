@@ -1,10 +1,9 @@
-import type { DatabaseWriterLike, SocketAttachment } from "@lunora/shard-engine";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
+import type { DatabaseWriterLike, SchemaLike, SocketAttachment } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase } from "@lunora/shard-engine";
 import { bench, describe } from "vitest";
 
-import createSqliteExec from "../__tests__/_helpers/node-sqlite";
-import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
+import { makeCdcShardFixture } from "./shared";
 
 /**
  * One write's shape-poke fan-out across N subscribed sockets.
@@ -61,7 +60,7 @@ const benchSchema = {
             shape: { authorId: { kind: "string" }, channelId: { kind: "string" }, text: { kind: "string" } },
         },
     },
-} as unknown as Parameters<typeof runShardMigrations>[1];
+} as unknown as SchemaLike;
 
 /** A shard whose only shape is `messagesByChannel(channelId)`, driven one write at a time. */
 class FanoutBenchShard extends ShardDO {
@@ -111,23 +110,8 @@ class FanoutBenchShard extends ShardDO {
  * rather than a like-for-like fan-out.
  */
 const buildShard = (sockets: number, sharedChannel: boolean): { next: () => Request; shard: FanoutBenchShard } => {
-    const harness = createSqliteExec();
-
-    runShardMigrations(harness.sql, benchSchema, { cdc: true });
-
     const list: FakeWebSocket[] = [];
-    const state: ShardDOState = {
-        acceptWebSocket(ws: unknown) {
-            list.push(ws as FakeWebSocket);
-        },
-        getWebSockets() {
-            return list as unknown as WebSocket[];
-        },
-        id: { name: "bench-shard" },
-        // No `waitUntil`: the flush (and with it the whole poke fan-out) is
-        // awaited inline, so one `fetch` measures one complete pass.
-        storage: { sql: harness.sql },
-    } as unknown as ShardDOState;
+    const { state } = makeCdcShardFixture(benchSchema, list);
 
     for (let index = 0; index < sockets; index += 1) {
         list.push(createFakeWebSocket(`conn-${String(index)}`, sharedChannel ? "watched" : `channel-${String(index)}`));

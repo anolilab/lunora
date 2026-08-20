@@ -27,20 +27,21 @@ const formatMs = (ms: number): string => `${ms.toString()} ms`;
  * True once a result has loaded and the shard has no connections and has recorded
  * no work at all on any counted path.
  *
- * Every counter the panel renders has to be represented here. The probe and
- * global-poll tallies outlive the sockets that produced them (they reset on
- * hibernation, not on disconnect), so a predicate that ignored them would replace
- * a shard's whole recorded history with an empty state the moment its last socket
- * dropped.
+ * Scanned over each counter object rather than spelled out conjunct by
+ * conjunct, because the conjunction grew by two every time a counter was added
+ * and a forgotten one is silent: the probe and global-poll tallies outlive the
+ * sockets that produced them (they reset on hibernation, not on disconnect), so
+ * a predicate that ignored a counter would replace a shard's whole recorded
+ * history with an empty state the moment its last socket dropped. A scan cannot
+ * fall out of date with the object it scans.
  */
-const isFanoutIdle = (result: FanoutMetricsResult): boolean =>
-    result.totalConnections === 0 &&
-    result.shapePoke.passes === 0 &&
-    result.whisper.passes === 0 &&
-    result.shapeProbe.run === 0 &&
-    result.shapeProbe.served === 0 &&
-    result.globalPoll.run === 0 &&
-    result.globalPoll.served === 0;
+const isFanoutIdle = (result: FanoutMetricsResult): boolean => {
+    const anyRecorded = [result.shapePoke, result.whisper, result.shapeProbe, result.globalPoll].some((counters) =>
+        Object.values<unknown>({ ...counters }).some((value) => typeof value === "number" && value > 0),
+    );
+
+    return result.totalConnections === 0 && !anyRecorded;
+};
 
 /**
  * The running counters for one delivery path as a titled grid of stat cards.
@@ -75,9 +76,11 @@ const PathCounters = ({
 );
 
 /**
- * Membership-probe sharing for the shape-poke path: how many probes the shard
- * issued to SQLite versus how many the per-flush cache answered because another
- * socket had already asked the identical `(table, predicate, ids)` question.
+ * Read sharing on the shape-poke path: how many reads the shard issued to SQLite
+ * versus how many the per-flush cache answered because another socket had
+ * already asked the identical question. Both halves of the diff are counted —
+ * the changed-key scan, keyed by `(table, op range)`, and the membership probe,
+ * keyed by `(predicate, that same range)`.
  *
  * The two numbers are only meaningful together. `served` near zero is not a
  * problem to fix — it means this app's shape predicates genuinely vary per

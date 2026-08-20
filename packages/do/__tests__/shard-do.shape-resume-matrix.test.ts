@@ -218,7 +218,7 @@ const matrix: MatrixRow[] = [
             await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
             await writer.insert("messages", { _id: "m2", authorId: "u1", channelId: "c1", text: "beta" }, { allowExplicitId: true });
             // Delete CDC rows ≤ 1; cursor stays at 2 (AUTOINCREMENT); floor becomes 2.
-            trimCdcChanges(harness.sql, 1);
+            trimCdcChanges(harness.sql, 1, 100);
         },
         sinceSeq: 0, // floor(2) > sinceSeq+1(1) → gap
         sinceEpochFn: (sql) => readCdcEpoch(sql),
@@ -233,7 +233,7 @@ const matrix: MatrixRow[] = [
 
             // seq=1 (m1). Trim all CDC rows; floor becomes undefined; cursor stays at 1.
             await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
-            trimCdcChanges(harness.sql, 1);
+            trimCdcChanges(harness.sql, 1, 100);
         },
         sinceSeq: 1, // === cursor=1 → sinceSeq === cursor branch fires
         sinceEpochFn: (sql) => readCdcEpoch(sql),
@@ -249,7 +249,7 @@ const matrix: MatrixRow[] = [
             // seq=1 (m1), seq=2 (m2). Trim all; floor=undefined; cursor=2.
             await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
             await writer.insert("messages", { _id: "m2", authorId: "u1", channelId: "c1", text: "beta" }, { allowExplicitId: true });
-            trimCdcChanges(harness.sql, 2);
+            trimCdcChanges(harness.sql, 2, 100);
         },
         sinceSeq: 1, // < cursor=2; floor=undefined → can't prove (1, 2] was gap-free
         sinceEpochFn: (sql) => readCdcEpoch(sql),
