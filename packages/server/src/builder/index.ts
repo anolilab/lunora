@@ -1,5 +1,6 @@
 import type { Validator } from "@lunora/values";
 
+import applyOutput from "../apply-output";
 import { validateArgs } from "../functions";
 import { readMaskTag } from "../mask/policy-tag";
 import type { RlsTag } from "../rls/policy-tag";
@@ -73,9 +74,9 @@ const runMiddleware = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>,
  * Adapt a user handler (`{ args, ctx }`) to the registered dispatch contract
  * (`(context, args)`). Args are revalidated here so a builder-produced function
  * is interchangeable with one from `query()` / `mutation()` / `action()`. When
- * `.output()` declared a validator, the handler's result is parsed through it
- * so a contract violation surfaces as a `ValidationError` at the source rather
- * than as malformed data downstream.
+ * `.output()` declared a validator, the handler's result is parsed through
+ * {@link applyOutput} so a contract violation surfaces as an internal error at
+ * the source rather than as malformed data downstream.
  */
 const makeHandler =
     <Args extends ArgsValidator, R>(
@@ -90,7 +91,7 @@ const makeHandler =
         const resolvedContext = await runMiddleware(middlewares, withMeta(context, meta));
         const result = await userHandler({ args: parsed, ctx: resolvedContext });
 
-        return (output ? output.parse(result) : result) as Awaited<R>;
+        return (output ? applyOutput(output, result) : result) as Awaited<R>;
     };
 
 /**

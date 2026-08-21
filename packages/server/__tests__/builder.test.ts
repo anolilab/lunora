@@ -311,12 +311,16 @@ describe("builder output", () => {
         await expect(fn.handler({}, {})).resolves.toEqual({ count: 1 });
     });
 
-    it("rejects when the handler result violates .output()", async () => {
-        expect.assertions(1);
+    it("re-tags an .output() mismatch as an internal error, not a client 400", async () => {
+        expect.assertions(2);
 
-        const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: "nope" }) as unknown as { count: number });
+        const fn = c.query.output(v.object({ n: v.number() })).query(() => ({ n: "not-a-number" }) as unknown as { n: number });
 
-        await expect(fn.handler({}, {})).rejects.toBeInstanceOf(ValidationError);
+        // A contract violation is a server bug: the raw ValidationError (a
+        // 400 whose message embeds the offending server-side value) must not
+        // escape; `toErrorBody` redacts internal codes at the wire.
+        await expect(fn.handler({}, {})).rejects.toBeInstanceOf(LunoraError);
+        await expect(fn.handler({}, {})).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
     });
 
     it(".output() composes with .input() and middleware regardless of chain order", async () => {
