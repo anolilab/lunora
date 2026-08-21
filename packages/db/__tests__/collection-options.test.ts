@@ -18,8 +18,10 @@ interface ShapeSubscribeCall {
 /** A mock `LunoraClient` recording every `subscribeShape` / `subscribe`. */
 const makeClient = () => {
     const shapeSubscribes: ShapeSubscribeCall[] = [];
+    let identity: string | null = null;
     const client = {
         confirmedMutationWatermark: vi.fn<(shardKey?: string) => number>(() => 0),
+        currentIdentity: vi.fn<() => string | null>(() => identity),
         subscribe: vi.fn<(...arguments_: unknown[]) => () => void>(),
         subscribeShape: vi.fn<
             (
@@ -49,7 +51,13 @@ const makeClient = () => {
         ),
     };
 
-    return { client: client as never, shapeSubscribes };
+    return {
+        client: client as never,
+        setIdentity: (next: string | null) => {
+            identity = next;
+        },
+        shapeSubscribes,
+    };
 };
 
 /** Let a microtask (collection sync) flush. */
@@ -191,6 +199,50 @@ describe(releaseShardCheckpoints, () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+/**
+ * The server keys its mutation watermark per identity, so a sign-out/sign-in
+ * must not let the previous user's gate answer the new user's first ack.
+ */
+describe("getShardCheckpoints (identity scope)", () => {
+    it("shares the registry across calls under the same identity", () => {
+        const { client, setIdentity } = makeClient();
+
+        setIdentity("user-a");
+
+        expect(getShardCheckpoints(client, "shard-1")).toBe(getShardCheckpoints(client, "shard-1"));
+    });
+
+    it("mints a fresh registry on an identity switch and settles the old one's waiters", async () => {
+        const { client, setIdentity } = makeClient();
+
+        setIdentity("user-a");
+
+        const forA = getShardCheckpoints(client, "shard-1");
+
+        forA.resolve({ checkpoint: 47, mutationId: 47 });
+
+        const parked = forA.awaitMutationId(48);
+
+        setIdentity("user-b");
+
+        const forB = getShardCheckpoints(client, "shard-1");
+
+        expect(forB).not.toBe(forA);
+
+        // The old identity's parked waiters settle (the writes were already durable) — nothing hangs.
+        await expect(parked).resolves.toBeUndefined();
+
+        // The new identity's first ack (seq 1) must NOT be answered by the old gate's 47.
+        const firstAck = forB.awaitMutationId(1);
+
+        await expect(Promise.race([firstAck.then(() => "released"), flush().then(() => "pending")])).resolves.toBe("pending");
+
+        forB.resolve({ mutationId: 1 });
+
+        await expect(firstAck).resolves.toBeUndefined();
     });
 });
 

@@ -90,6 +90,18 @@ const defaultOnFallback = (event: CheckpointFallbackEvent): void => {
 const registriesByClient = new WeakMap<LunoraClient, Map<string, CheckpointRegistry>>();
 
 /**
+ * The identity each client's registries were minted under. The server keys its
+ * mutation watermark per identity (and `bindMutators` resets `clientSeq` on an
+ * identity change to match), so a registry whose gates advanced under user A
+ * would answer user B's `awaitMutationId(1)` immediately — dropping the overlay
+ * before B's authoritative row synced. {@link getShardCheckpoints} checks this
+ * lazily on every call and sweeps stale registries via
+ * {@link releaseShardCheckpoints}, mirroring `resetCounterForIdentity` in
+ * `define-mutators.ts` (there is no identity-change event to subscribe to).
+ */
+const identityByClient = new WeakMap<LunoraClient, string | null>();
+
+/**
  * Registries that have a sync source wired to them. Read by
  * {@link hasCheckpointsAttached}.
  *
@@ -315,50 +327,6 @@ export const createCheckpointRegistry = (options: CheckpointRegistryOptions = {}
 };
 
 /**
- * The shared checkpoint registry for `client` + `shardKey` — created on first use.
- * This is the registry {@link lunoraCollectionOptions} and
- * {@link import("./define-mutators").bindMutators} default to, which is what makes
- * a multi-collection shard work without the caller relaying pokes between
- * registries by hand.
- *
- * `options` applies **only when the registry is created**. Because the point is that
- * every collection and mutator on a shard shares one gate, a later call cannot
- * retune an existing registry — it returns the existing one and `options` is ignored.
- * To control `fallbackMs` / `onFallback`, build the registry yourself with
- * {@link createCheckpointRegistry} and pass it explicitly to every
- * `lunoraCollectionOptions` and `bindMutators` call for that shard.
- */
-export const getShardCheckpoints = (client: LunoraClient, shardKey?: string, options?: CheckpointRegistryOptions): CheckpointRegistry => {
-    let byShard = registriesByClient.get(client);
-
-    if (!byShard) {
-        byShard = new Map<string, CheckpointRegistry>();
-        registriesByClient.set(client, byShard);
-    }
-
-    const key = shardKey ?? "";
-    const existing = byShard.get(key);
-
-    if (existing) {
-        return existing;
-    }
-
-    const registry = createCheckpointRegistry(options);
-
-    byShard.set(key, registry);
-
-    return registry;
-};
-
-/** Mark `registry` as fed by a live sync source. */
-export const markCheckpointsAttached = (registry: CheckpointRegistry): void => {
-    attachedRegistries.add(registry);
-};
-
-/** Whether any sync source will advance `registry`'s watermarks. */
-export const hasCheckpointsAttached = (registry: CheckpointRegistry): boolean => attachedRegistries.has(registry);
-
-/**
  * Release every pending overlay gate for `client` and drop its shard registries.
  *
  * The hot-reload / teardown escape hatch. When a module that owns collections and
@@ -395,6 +363,61 @@ export const releaseShardCheckpoints = (client: LunoraClient): void => {
 
     registriesByClient.delete(client);
 };
+
+/**
+ * The shared checkpoint registry for `client` + `shardKey` — created on first use.
+ * This is the registry {@link lunoraCollectionOptions} and
+ * {@link import("./define-mutators").bindMutators} default to, which is what makes
+ * a multi-collection shard work without the caller relaying pokes between
+ * registries by hand.
+ *
+ * `options` applies **only when the registry is created**. Because the point is that
+ * every collection and mutator on a shard shares one gate, a later call cannot
+ * retune an existing registry — it returns the existing one and `options` is ignored.
+ * To control `fallbackMs` / `onFallback`, build the registry yourself with
+ * {@link createCheckpointRegistry} and pass it explicitly to every
+ * `lunoraCollectionOptions` and `bindMutators` call for that shard.
+ */
+export const getShardCheckpoints = (client: LunoraClient, shardKey?: string, options?: CheckpointRegistryOptions): CheckpointRegistry => {
+    const identity = client.currentIdentity();
+
+    if (registriesByClient.has(client) && identityByClient.get(client) !== identity) {
+        // The registries belong to the previous identity: settle their waiters and
+        // disarm their timers (the old writes were already durable server-side),
+        // then start fresh so the new identity's watermark space starts empty.
+        releaseShardCheckpoints(client);
+    }
+
+    identityByClient.set(client, identity);
+
+    let byShard = registriesByClient.get(client);
+
+    if (!byShard) {
+        byShard = new Map<string, CheckpointRegistry>();
+        registriesByClient.set(client, byShard);
+    }
+
+    const key = shardKey ?? "";
+    const existing = byShard.get(key);
+
+    if (existing) {
+        return existing;
+    }
+
+    const registry = createCheckpointRegistry(options);
+
+    byShard.set(key, registry);
+
+    return registry;
+};
+
+/** Mark `registry` as fed by a live sync source. */
+export const markCheckpointsAttached = (registry: CheckpointRegistry): void => {
+    attachedRegistries.add(registry);
+};
+
+/** Whether any sync source will advance `registry`'s watermarks. */
+export const hasCheckpointsAttached = (registry: CheckpointRegistry): boolean => attachedRegistries.has(registry);
 
 /** Every live registry for `client`, keyed by shard (`""` = unsharded) — for a debug surface. */
 export const shardCheckpointStats = (client: LunoraClient): Record<string, CheckpointRegistryStats> => {
