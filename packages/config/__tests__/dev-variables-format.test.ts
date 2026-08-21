@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEV_VARS_KEY_PATTERN, parseDevVariableEntries, parseDevVariableLine } from "../src/dev-variables-format";
+import { DEV_VARS_KEY_PATTERN, parseDevVariableEntries, parseDevVariableLine, removeDevVariableLine, upsertDevVariableLine } from "../src/dev-variables-format";
 
 // Write-side key validation only (`env set`/`unset`/`generate`, the upsert's
 // line targeting) — deliberately stricter than what the dotenv reader accepts.
@@ -128,11 +128,12 @@ describe("parseDevVariableEntries", () => {
         expect(parseDevVariableEntries("K=1\nK=2")).toStrictEqual([{ key: "K", value: "2" }]);
     });
 
-    // wrangler parses `.dev.vars` with dotenv (16.6.1), so the reader must
-    // accept exactly what the worker sees. Each row asserts the parse dotenv
-    // itself produces for a line shape the old strict split diverged on. If
-    // wrangler ever bumps its dotenv major, extend this table first — it is
-    // the tripwire for parser drift.
+    // wrangler parses `.dev.vars` with dotenv, so the reader must accept
+    // exactly what the worker sees. We now call dotenv directly, but wrangler
+    // bundles its OWN copy (4.120.1 ships 16.3.1 against our 16.6.1), so the
+    // two can still drift apart on a future release. Each row asserts the
+    // parse for a line shape the old strict split got wrong; if either side
+    // bumps its dotenv, extend this table first — it is the tripwire.
     describe("dotenv parity", () => {
         it.each([
             { expected: [{ key: "FOO", value: "x" }], line: "export FOO=x" },
@@ -151,5 +152,93 @@ describe("parseDevVariableEntries", () => {
 
             expect(parseDevVariableEntries(line)).toStrictEqual(expected);
         });
+    });
+});
+
+// The line-oriented writers must be able to edit every line shape the reader
+// can see. They used to target lines with their own `^[ \t]*KEY[ \t]*=` regex,
+// so a widened reader left `env unset` reporting success on an
+// `export KEY=…` line it had not touched — the key still loaded in dev.
+describe("removeDevVariableLine", () => {
+    it.each([
+        { content: "export AUTH_SECRET=xyz\n", label: "export-prefixed" },
+        { content: "AUTH_SECRET: xyz\n", label: "colon-separated" },
+        { content: 'export AUTH_SECRET="xyz" # note\n', label: "export-prefixed, quoted, commented" },
+        { content: "AUTH_SECRET=xyz\n", label: "plain" },
+    ])("removes a $label line so the reader no longer sees the key", ({ content }) => {
+        expect.assertions(2);
+
+        const remaining = removeDevVariableLine(content, "AUTH_SECRET");
+
+        expect(remaining).toBe("");
+        expect(parseDevVariableEntries(remaining)).toStrictEqual([]);
+    });
+
+    it("removes a dotted key (valid to dotenv, so it must be removable)", () => {
+        expect.assertions(1);
+
+        expect(removeDevVariableLine("MY.KEY=1\nOTHER=2\n", "MY.KEY")).toBe("OTHER=2\n");
+    });
+
+    it("preserves comments, other entries, and CRLF terminators", () => {
+        expect.assertions(1);
+
+        expect(removeDevVariableLine("# keep\r\nKEEP=1\r\nexport GONE=2\r\nALSO=3\r\n", "GONE")).toBe("# keep\r\nKEEP=1\r\nALSO=3\r\n");
+    });
+
+    it("removes every duplicate line for the key", () => {
+        expect.assertions(1);
+
+        expect(removeDevVariableLine("A=1\nexport A=2\nB=3\n", "A")).toBe("B=3\n");
+    });
+
+    it("leaves content untouched when the key is genuinely absent", () => {
+        expect.assertions(1);
+
+        expect(removeDevVariableLine("A=1\n# A=commented\n", "MISSING")).toBe("A=1\n# A=commented\n");
+    });
+
+    it("does not remove a lookalike key sharing the prefix", () => {
+        expect.assertions(1);
+
+        expect(removeDevVariableLine("FOO=1\nFOO_BAR=2\n", "FOO")).toBe("FOO_BAR=2\n");
+    });
+});
+
+describe("upsertDevVariableLine", () => {
+    it("edits an export-prefixed line in place rather than appending a duplicate", () => {
+        expect.assertions(2);
+
+        const updated = upsertDevVariableLine("# doc\nexport AUTH_SECRET=old\nB=2\n", "AUTH_SECRET", "new");
+
+        expect(updated).toBe('# doc\nAUTH_SECRET="new"\nB=2\n');
+        expect(parseDevVariableEntries(updated)).toStrictEqual([
+            { key: "AUTH_SECRET", value: "new" },
+            { key: "B", value: "2" },
+        ]);
+    });
+
+    it("collapses duplicate lines for the key down to one", () => {
+        expect.assertions(1);
+
+        expect(upsertDevVariableLine("A=1\nexport A=2\n", "A", "new")).toBe('A="new"\n');
+    });
+
+    it("appends when the key has no line yet", () => {
+        expect.assertions(1);
+
+        expect(upsertDevVariableLine("B=2\n", "A", "new")).toBe('B=2\nA="new"\n');
+    });
+
+    it("appends a trailing newline when the file does not end with one", () => {
+        expect.assertions(1);
+
+        expect(upsertDevVariableLine("B=2", "A", "new")).toBe('B=2\nA="new"\n');
+    });
+
+    it("writes into empty content", () => {
+        expect.assertions(1);
+
+        expect(upsertDevVariableLine("", "A", "new")).toBe('A="new"\n');
     });
 });

@@ -253,9 +253,13 @@ catalogs:
   node:
     # Exact-pinned (no caret): this is the parser `wrangler dev` runs over
     # `.dev.vars`, and `@lunora/config` reads that file with the same library so
-    # the CLI/studio can't disagree with the worker about what a line means. A
-    # dotenv release that changes the grammar is a behaviour change for us, so
-    # it gets vetted (the parity fixtures in
+    # the CLI/studio can't disagree with the worker about what a line means.
+    # wrangler bundles its own copy rather than resolving ours (4.120.1 ships
+    # 16.3.1), so the two versions are independent — they agree today because
+    # `parse()` is byte-identical from 16.3.1 through 17.x, which is exactly
+    # the thing that could silently stop being true. A dotenv release that
+    # changes the grammar is a behaviour change for us, so it gets vetted (the
+    # parity fixtures in
     # `packages/config/__tests__/dev-variables-format.test.ts` are the tripwire)
     # rather than floated in on a range.
     dotenv: 16.6.1
