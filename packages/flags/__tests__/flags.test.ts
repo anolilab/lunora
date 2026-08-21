@@ -47,16 +47,13 @@ const makeProvider = (values: Record<string, JsonValue>, options: { initFails?: 
 };
 
 /**
- * Stable identity keys for the client memo. The definition's own `provider` is
- * never invoked — `createFlags` binds through `options.provider`; the
- * definition object is purely the memo key (as in the generated worker, where
- * codegen passes the `lunora/flags.ts` default export).
+ * Stable identity keys for the client memo, standing in for the generated
+ * worker's `lunora/flags.ts` default export and its Worker `env`. Tests below
+ * drive values through the `options.provider` override (codegen's
+ * `config.flags` seam); the keyed-memo suite exercises the definition's own
+ * provider instead.
  */
-const definition = defineFlags({
-    provider: () => {
-        throw new Error("unreachable — options.provider is what binds");
-    },
-});
+const definition = defineFlags({ provider: () => makeProvider({}) });
 const env: Record<string, unknown> = {};
 
 describe("createFlags", () => {
@@ -328,69 +325,92 @@ describe("keyed client memo", () => {
 
         const provider = makeProvider({ "dark-mode": true });
         const factory = vi.fn<() => Provider>(() => provider);
+        const definitionA = defineFlags({ provider: factory });
 
-        await createFlags(definition, env, { provider: factory }).boolean("dark-mode", false);
-        await createFlags(definition, env, { provider: factory }).boolean("dark-mode", false);
+        await createFlags(definitionA, env).boolean("dark-mode", false);
+        await createFlags(definitionA, env).boolean("dark-mode", false);
 
         expect(factory).toHaveBeenCalledTimes(1);
     });
 
-    it("gives a second definition its own bind instead of reusing the first's", async () => {
-        expect.assertions(2);
+    it("keeps each definition on its own provider — a later bind never hijacks an earlier client", async () => {
+        expect.assertions(3);
 
-        vi.spyOn(console, "warn").mockImplementation(() => {});
+        // The regression this keying exists for: under one shared OpenFeature
+        // domain, definition B's `setProviderAndWait` would replace A's provider
+        // in the global registry and A's cached client would silently start
+        // evaluating B's values.
+        const providerA = makeProvider({ "dark-mode": true });
+        const providerB = makeProvider({ "dark-mode": false });
+        const definitionA = defineFlags({ provider: () => providerA });
+        const definitionB = defineFlags({ provider: () => providerB });
 
-        const factoryA = vi.fn<() => Provider>(() => makeProvider({ "dark-mode": true }));
-        const factoryB = vi.fn<() => Provider>(() => makeProvider({ "dark-mode": false }));
-        const definitionB = defineFlags({
-            provider: () => {
-                throw new Error("unreachable — options.provider is what binds");
-            },
-        });
+        const flagsA = createFlags(definitionA, env);
 
-        await createFlags(definition, env, { provider: factoryA }).boolean("dark-mode", false);
-        await createFlags(definitionB, env, { provider: factoryB }).boolean("dark-mode", false);
-
-        expect(factoryA).toHaveBeenCalledTimes(1);
-        expect(factoryB).toHaveBeenCalledTimes(1);
+        await expect(flagsA.boolean("dark-mode", false)).resolves.toBe(true);
+        await expect(createFlags(definitionB, env).boolean("dark-mode", true)).resolves.toBe(false);
+        // A re-read AFTER B bound still resolves through A's provider.
+        await expect(createFlags(definitionA, env).boolean("dark-mode", false)).resolves.toBe(true);
     });
 
-    it("gives a second env its own bind under the same definition", async () => {
+    it("keeps each env on its own provider under one definition", async () => {
+        expect.assertions(2);
+
+        const definitionEnvAware = defineFlags({
+            provider: (candidate) => makeProvider({ "dark-mode": candidate.DARK === "on" }),
+        });
+
+        await expect(createFlags(definitionEnvAware, { DARK: "on" }).boolean("dark-mode", false)).resolves.toBe(true);
+        await expect(createFlags(definitionEnvAware, { DARK: "off" }).boolean("dark-mode", true)).resolves.toBe(false);
+    });
+
+    it("uses the options provider override when one is supplied (codegen's config.flags seam)", async () => {
+        expect.assertions(2);
+
+        const fromDefinition = vi.fn<() => Provider>(() => makeProvider({ "dark-mode": false }));
+        const definitionOverridden = defineFlags({ provider: fromDefinition });
+
+        const flags = createFlags(definitionOverridden, env, { provider: () => makeProvider({ "dark-mode": true }) });
+
+        await expect(flags.boolean("dark-mode", false)).resolves.toBe(true);
+        expect(fromDefinition).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the definition's provider when the override returns undefined", async () => {
         expect.assertions(1);
 
-        const factory = vi.fn<() => Provider>(() => makeProvider({ "dark-mode": true }));
+        const definitionFallback = defineFlags({ provider: () => makeProvider({ "dark-mode": true }) });
+        const flags = createFlags(definitionFallback, env, { provider: () => undefined });
 
-        await createFlags(definition, { A: 1 }, { provider: factory }).boolean("dark-mode", false);
-        await createFlags(definition, { B: 2 }, { provider: factory }).boolean("dark-mode", false);
-
-        expect(factory).toHaveBeenCalledTimes(2);
+        await expect(flags.boolean("dark-mode", false)).resolves.toBe(true);
     });
 
-    it("warns when a second distinct definition binds in the same isolate (registry collision)", async () => {
+    it("applies the definition's hooks and logger to the bound client", async () => {
         expect.assertions(2);
 
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-        const definitionB = defineFlags({
-            provider: () => {
-                throw new Error("unreachable — options.provider is what binds");
-            },
+        const before = vi.fn<() => undefined>(() => undefined);
+        const logger = { debug: vi.fn<() => undefined>(), error: vi.fn<() => undefined>(), info: vi.fn<() => undefined>(), warn: vi.fn<() => undefined>() };
+        const definitionHooked = defineFlags({
+            hooks: [{ before }],
+            logger,
+            provider: () => makeProvider({ "dark-mode": true }),
         });
 
-        await createFlags(definition, env, { provider: () => makeProvider({}) }).boolean("dark-mode", false);
-        await createFlags(definitionB, env, { provider: () => makeProvider({}) }).boolean("dark-mode", false);
+        await createFlags(definitionHooked, env).boolean("dark-mode", false);
 
-        expect(warn).toHaveBeenCalledTimes(1);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("second flags definition"));
+        expect(before).toHaveBeenCalledTimes(1);
+        expect(logger.error).not.toHaveBeenCalled();
     });
 
     it("rebinds after resetFlags clears the cache", async () => {
         expect.assertions(1);
 
         const factory = vi.fn<() => Provider>(() => makeProvider({ "dark-mode": true }));
+        const definitionReset = defineFlags({ provider: factory });
 
-        await createFlags(definition, env, { provider: factory }).boolean("dark-mode", false);
+        await createFlags(definitionReset, env).boolean("dark-mode", false);
         await resetFlags();
-        await createFlags(definition, env, { provider: factory }).boolean("dark-mode", false);
+        await createFlags(definitionReset, env).boolean("dark-mode", false);
 
         expect(factory).toHaveBeenCalledTimes(2);
     });

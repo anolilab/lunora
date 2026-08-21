@@ -10,7 +10,7 @@ import { memoryProvider } from "../src/providers/memory";
 const flagsFor = (map: Record<string, MemoryFlagValue>) => {
     const factory = memoryProvider(map);
 
-    return createFlags(defineFlags({ provider: factory }), {}, { provider: () => factory({}) });
+    return createFlags(defineFlags({ provider: factory }), {});
 };
 
 describe("memoryProvider", () => {

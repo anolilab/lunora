@@ -174,7 +174,7 @@ describe("envProvider", () => {
             // Codegen wraps a FlagsProviderFactory as `() => factory(env)`; mirror that.
             const factory = envProvider();
             const env = { FLAG_DARK_MODE: "true", FLAG_PAGE_SIZE: "25" };
-            const flags = createFlags(defineFlags({ provider: factory }), env, { provider: () => factory(env) });
+            const flags = createFlags(defineFlags({ provider: factory }), env);
 
             await expect(flags.boolean("dark-mode", false)).resolves.toBe(true);
             await expect(flags.number("page-size", 10)).resolves.toBe(25);

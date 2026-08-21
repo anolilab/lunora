@@ -13,9 +13,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ```ts
 interface CreateFlagsOptions {
-    hooks?: Hook[];
-    logger?: Logger;
-    provider: () => Provider;
+    provider?: () => Provider | undefined;
     targetingKey?: (() => string | undefined) | string;
 }
 ```
@@ -98,7 +96,7 @@ Re-exported from `@openfeature/server-sdk` — signature tracked at its source.
 ### `createFlags` (const)
 
 ```ts
-const createFlags: (definition: FlagsDefinition, env: Record<string, unknown>, options: CreateFlagsOptions) => LunoraFlags;
+const createFlags: (definition: FlagsDefinition, env: Record<string, unknown>, options?: CreateFlagsOptions) => LunoraFlags;
 ```
 
 ### `defineFlags` (const)
