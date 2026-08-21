@@ -310,7 +310,18 @@ const readAuthAuditLog = async (executor: SqlExecutor, options: ReadAuthAuditOpt
         const detail = text(row["detail"]);
 
         if (detail !== undefined) {
-            base.detail = JSON.parse(detail) as Record<string, unknown>;
+            try {
+                const parsed: unknown = JSON.parse(detail);
+
+                // Keep only a plain object — `JSON.parse("42")` succeeds but is
+                // not a `Record`; anything else leaves `detail` absent.
+                if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+                    base.detail = parsed as Record<string, unknown>;
+                }
+            } catch {
+                // A hand-written or truncated cell must not take down the whole
+                // read; the entry stays, minus its detail payload.
+            }
         }
 
         return base;

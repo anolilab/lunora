@@ -198,6 +198,24 @@ describe("auth audit trail", () => {
 
             expect(row).not.toHaveProperty("targetEmail");
         });
+
+        it("degrades a malformed or non-object detail cell to an entry without detail, not an empty page", async () => {
+            expect.assertions(4);
+
+            await appendAuthAuditEntry(executor, { detail: { ok: true }, event: "sign-in", outcome: "success", ts: 1 });
+
+            // The table is a plain SQL table an operator can also write to — a
+            // hand-written or truncated cell must not 500 the whole read.
+            await executor.run(`INSERT INTO "__lunora_auth_audit__" (ts, event, outcome, detail) VALUES (?, ?, ?, ?)`, [2, "sign-in", "success", "{not json"]);
+            await executor.run(`INSERT INTO "__lunora_auth_audit__" (ts, event, outcome, detail) VALUES (?, ?, ?, ?)`, [3, "sign-in", "success", "42"]);
+
+            const rows = await readAuthAuditLog(executor);
+
+            expect(rows).toHaveLength(3);
+            expect(rows[0]).not.toHaveProperty("detail");
+            expect(rows[1]).not.toHaveProperty("detail");
+            expect(rows[2]?.detail).toStrictEqual({ ok: true });
+        });
     });
 
     describe("buildAuditEntry — classification & extraction", () => {
