@@ -42,6 +42,16 @@ interface AsyncStoragePersistenceOptions {
 }
 ```
 
+### `AsyncStorageQueryCacheOptions` (interface)
+
+```ts
+interface AsyncStorageQueryCacheOptions {
+    key?: string;
+    maxEntries?: number;
+    storage: AsyncStorageLike;
+}
+```
+
 ### `AuthCapabilities` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -1475,6 +1485,12 @@ const applyDelta: (current: unknown, delta: MutationDelta) => Record<string, unk
 
 ```ts
 const createAsyncStoragePersistence: (options: AsyncStoragePersistenceOptions) => PersistenceAdapter;
+```
+
+### `createAsyncStorageQueryCache` (const)
+
+```ts
+const createAsyncStorageQueryCache: (options: AsyncStorageQueryCacheOptions) => QueryCacheAdapter;
 ```
 
 ### `createCallRunner` (const)
