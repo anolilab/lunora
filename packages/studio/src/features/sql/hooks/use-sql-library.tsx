@@ -34,6 +34,8 @@ interface SqlLibrary {
     readonly recordHistory: (sql: string) => void;
     /** True when the history is persisted across sessions rather than kept to this tab. */
     readonly rememberHistory: boolean;
+    /** Persist a saved query's name and its one-line description. */
+    readonly renameQuery: (id: string, name: string, description: string) => void;
     readonly search: string;
     readonly selectQuery: (id: string) => void;
     /** Flip whether the run history survives closing the tab. */
@@ -169,6 +171,18 @@ const useSqlLibrary = ({
         setSearch(event.target.value);
     };
 
+    /**
+     * Rename a saved query and set its description.
+     *
+     * A blank description clears the field rather than storing an empty string,
+     * so a query the operator never described reads the same as one they cleared.
+     */
+    const renameQuery = (id: string, name: string, description: string): void => {
+        setQueries((current) =>
+            current.map((query) => (query.id === id ? { id: query.id, name, sql: query.sql, ...(description === "" ? {} : { description }) } : query)),
+        );
+    };
+
     const updateQuerySql = (id: string, sql: string): void => {
         setQueries((current) => current.map((query) => (query.id === id ? { ...query, sql } : query)));
     };
@@ -185,6 +199,7 @@ const useSqlLibrary = ({
         queries,
         recordHistory,
         rememberHistory,
+        renameQuery,
         search,
         selectQuery,
         setRememberHistory,

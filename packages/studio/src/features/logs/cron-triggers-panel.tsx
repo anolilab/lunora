@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
+import CronScheduleAssistant from "./cron-schedule-assistant";
 
 interface CronTriggersPanelProps {
     /**
@@ -108,6 +109,14 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
 
     return (
         <div className="flex flex-col gap-3" data-testid="lunora-cron-triggers">
+            {/*
+             * Above the (read-only) list: writing the expression is the one part
+             * of adding a trigger the studio can help with, and it is the part
+             * operators get wrong. It produces something to copy, never anything
+             * applied — see `CronScheduleAssistant`.
+             */}
+            <CronScheduleAssistant />
+
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="cron-error" role="alert">
                     {error}

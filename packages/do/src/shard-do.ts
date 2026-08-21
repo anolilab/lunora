@@ -233,7 +233,7 @@ import type { MetricEvent } from "../../../shared/metric-event";
 import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
-import { generateChart, generateFilter, generateSql } from "../../../shared/sql-assistant";
+import { generateChart, generateCron, generateFilter, generateQueryName, generateSql } from "../../../shared/sql-assistant";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type {
@@ -7204,9 +7204,48 @@ abstract class ShardDO {
     private aiAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response>> {
         return {
             [ADMIN_FUNCTIONS.aiChartConfig]: async (args) => this.handleAiChartConfig(args),
+            [ADMIN_FUNCTIONS.aiCronExpression]: async (args) => this.handleAiCronExpression(args),
             [ADMIN_FUNCTIONS.aiGenerateSql]: async (args) => this.handleGenerateSql(args),
+            [ADMIN_FUNCTIONS.aiNameQuery]: async (args) => this.handleAiNameQuery(args),
             [ADMIN_FUNCTIONS.aiTableFilter]: async (args) => this.handleAiTableFilter(args),
         };
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiNameQuery` — a title and one-line description for
+     * a saved SQL query, drafted from the statement itself.
+     *
+     * A DEFAULT the operator edits and accepts; the studio's query library is
+     * browser-local, so nothing here writes anything. Grounded in the statement
+     * alone — it already names every table and column it touches.
+     */
+    private async handleAiNameQuery(args: Record<string, unknown>): Promise<Response> {
+        const result = await generateQueryName(this.aiBinding(), args);
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiNameQuery", { detail: { reason: result.reason } });
+        }
+
+        return adminResponse(result);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiCronExpression` — a Cloudflare Cron Trigger
+     * expression from a described schedule.
+     *
+     * The engine validates the answer against the deployable 5-field grammar
+     * before returning it, so an expression `wrangler deploy` would reject never
+     * reaches the operator. Read-only in every sense: cron triggers are compiled
+     * into the worker, and the studio only offers the expression to copy.
+     */
+    private async handleAiCronExpression(args: Record<string, unknown>): Promise<Response> {
+        const result = await generateCron(this.aiBinding(), args);
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiCronExpression", { detail: { reason: result.reason } });
+        }
+
+        return adminResponse(result);
     }
 
     /**

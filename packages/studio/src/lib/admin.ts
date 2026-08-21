@@ -49,7 +49,9 @@ export const ADMIN_FUNCTIONS = {
     aiAvailable: "__lunora_admin__:aiAvailable",
     aiChartConfig: "__lunora_admin__:aiChartConfig",
     aiChat: "__lunora_admin__:aiChat",
+    aiCronExpression: "__lunora_admin__:aiCronExpression",
     aiGenerateSql: "__lunora_admin__:aiGenerateSql",
+    aiNameQuery: "__lunora_admin__:aiNameQuery",
     aiTableFilter: "__lunora_admin__:aiTableFilter",
     assignIssue: "__lunora_admin__:assignIssue",
     backRelationCounts: "__lunora_admin__:backRelationCounts",
@@ -183,7 +185,13 @@ export interface BulkDeleteResult {
 
 export type { AiOptInLevel, ChatApproval, ChatPendingApproval, ChatResult, ChatTurn } from "../../../../shared/ai-chat";
 export type { GenerateSqlDegradedReason, SchemaFact } from "../../../../shared/ai-prompt";
-export type { AssistantChartConfig, GenerateChartResult, GenerateSqlResult } from "../../../../shared/sql-assistant";
+export type {
+    AssistantChartConfig,
+    GenerateChartResult,
+    GenerateCronResult,
+    GenerateQueryNameResult,
+    GenerateSqlResult,
+} from "../../../../shared/sql-assistant";
 
 /** Result of `__lunora_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
 export interface CapturedMailResult {

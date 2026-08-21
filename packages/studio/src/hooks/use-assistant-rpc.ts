@@ -11,7 +11,9 @@ import type {
     ChatTurn,
     FilterClause,
     GenerateChartResult,
+    GenerateCronResult,
     GenerateFilterResult,
+    GenerateQueryNameResult,
     GenerateSqlDegradedReason,
     GenerateSqlResult,
     SchemaFact,
@@ -27,9 +29,11 @@ const AI_GENERATE_SQL = adminRef(ADMIN_FUNCTIONS.aiGenerateSql);
 const AI_TABLE_FILTER = adminRef(ADMIN_FUNCTIONS.aiTableFilter);
 const AI_CHART_CONFIG = adminRef(ADMIN_FUNCTIONS.aiChartConfig);
 const AI_CHAT = adminRef(ADMIN_FUNCTIONS.aiChat);
+const AI_NAME_QUERY = adminRef(ADMIN_FUNCTIONS.aiNameQuery);
+const AI_CRON_EXPRESSION = adminRef(ADMIN_FUNCTIONS.aiCronExpression);
 
-/** The three independent operations. Status is keyed by these so it never bleeds across them. */
-type AssistantTaskKey = "chart" | "chat" | "filter" | "sql";
+/** The independent operations. Status is keyed by these so it never bleeds across them. */
+type AssistantTaskKey = "chart" | "chat" | "cron" | "filter" | "name" | "sql";
 
 /** What a surface needs to render one assistant affordance. */
 interface AssistantRpc {
@@ -71,10 +75,25 @@ interface AssistantRpc {
      * actually sits rather than only the tier the tool wanted.
      */
     readonly level: AiOptInLevel | undefined;
+
+    /**
+     * Draft a title and one-line description for a saved query, from the
+     * statement alone. A DEFAULT for the operator to edit — the caller applies
+     * nothing on its own.
+     */
+    readonly nameQuery: (sql: string) => Promise<undefined | { description: string; title: string }>;
+
     /** True while THAT task is in flight. */
     readonly pending: (task: AssistantTaskKey) => boolean;
     /** Why THAT task last produced nothing, cleared when it is retried. */
     readonly reason: (task: AssistantTaskKey) => GenerateSqlDegradedReason | undefined;
+
+    /**
+     * Translate a described schedule into a Cloudflare Cron Trigger expression.
+     * Already validated against the deployable 5-field grammar server-side, so an
+     * expression `wrangler deploy` would reject degrades instead of arriving.
+     */
+    readonly suggestCron: (prompt: string) => Promise<string | undefined>;
     /** Translate a request into structured filter clauses for `table`. */
     readonly suggestFilter: (prompt: string, table: string) => Promise<FilterClause[] | undefined>;
     /** True once the app has reported the assistant cannot run here — hide every affordance. */
@@ -233,10 +252,42 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
         }
     };
 
+    const nameQuery: AssistantRpc["nameQuery"] = async (sql) => {
+        begin("name");
+
+        try {
+            const { result } = (await client.query(AI_NAME_QUERY, { sql }, callOptions(shardKey))) as { result: GenerateQueryNameResult };
+
+            finish("name", result.degraded ? result.reason : undefined);
+
+            return result.degraded ? undefined : { description: result.description, title: result.title };
+        } catch {
+            finish("name", "ai-error");
+
+            return undefined;
+        }
+    };
+
+    const suggestCron = async (prompt: string): Promise<string | undefined> => {
+        begin("cron");
+
+        try {
+            const { result } = (await client.query(AI_CRON_EXPRESSION, { prompt }, callOptions(shardKey))) as { result: GenerateCronResult };
+
+            finish("cron", result.degraded ? result.reason : undefined);
+
+            return result.degraded ? undefined : result.cron;
+        } catch {
+            finish("cron", "ai-error");
+
+            return undefined;
+        }
+    };
+
     const pending = (task: AssistantTaskKey): boolean => pendingByTask[task] === true;
     const reason = (task: AssistantTaskKey): GenerateSqlDegradedReason | undefined => reasonByTask[task];
 
-    return { chat, generate, inferChart, level: availability.data?.level, pending, reason, suggestFilter, unavailable };
+    return { chat, generate, inferChart, level: availability.data?.level, nameQuery, pending, reason, suggestCron, suggestFilter, unavailable };
 };
 
 export { useAssistantRpc };
