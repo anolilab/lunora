@@ -1,6 +1,7 @@
 <!-- Every invitation waiting for the signed-in user, decidable in place. -->
 <script lang="ts">
     import { createUserInvitationsController } from "../core/invitations";
+    import { rowActionLabel } from "../core/labels";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
@@ -22,6 +23,7 @@
                     <span class="lunora-auth-list__label">{invitation.organizationName ?? invitation.email}</span>
                     <span class="lunora-auth-list__actions">
                         <button
+                            aria-label={rowActionLabel(t.invitationAccept, invitation.organizationName ?? invitation.email)}
                             class="lunora-auth-button"
                             disabled={$res.busy}
                             onclick={() => {
@@ -32,6 +34,7 @@
                             {t.invitationAccept}
                         </button>
                         <button
+                            aria-label={rowActionLabel(t.invitationReject, invitation.organizationName ?? invitation.email)}
                             class="lunora-auth-button lunora-auth-button--secondary"
                             disabled={$res.busy}
                             onclick={() => {

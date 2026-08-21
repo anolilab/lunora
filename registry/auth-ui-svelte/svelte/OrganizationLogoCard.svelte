@@ -33,7 +33,7 @@
             <div class="lunora-auth-avatar-row__actions">
                 <input
                     accept={ACCEPT_ATTRIBUTE}
-                    aria-label={t.avatarUpload}
+                    aria-hidden="true"
                     bind:this={picker}
                     class="lunora-auth-visually-hidden"
                     onchange={(event) => {
@@ -48,6 +48,7 @@
                             void actions.upload(file);
                         }
                     }}
+                    tabindex={-1}
                     type="file"
                 />
                 <button

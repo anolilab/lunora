@@ -11,6 +11,7 @@ import { queryParameter } from "../core/browser-location";
 import type { ResourceState } from "../core/create-resource-controller";
 import type { AcceptInvitationActions, AcceptInvitationState, UserInvitationsActions } from "../core/invitations";
 import { createAcceptInvitationController, createUserInvitationsController } from "../core/invitations";
+import { rowActionLabel } from "../core/labels";
 import type { AuthInvitationDetail, FormActions, FormState } from "../core/types";
 import type { ResendVerificationField, VerifyEmailActions, VerifyEmailState } from "../core/verify-email";
 import { createResendVerificationController, createVerifyEmailController } from "../core/verify-email";
@@ -190,13 +191,20 @@ class AcceptInvitationCardComponent implements OnInit {
                         <li class="lunora-auth-list__item">
                             <span class="lunora-auth-list__label">{{ invitation.organizationName ?? invitation.email }}</span>
                             <span class="lunora-auth-list__actions">
-                                <button class="lunora-auth-button" type="button" [disabled]="state().busy" (click)="accept(invitation.id ?? '')">
+                                <button
+                                    class="lunora-auth-button"
+                                    type="button"
+                                    [disabled]="state().busy"
+                                    [attr.aria-label]="rowActionLabel(t.invitationAccept, invitation.organizationName ?? invitation.email)"
+                                    (click)="accept(invitation.id ?? '')"
+                                >
                                     {{ t.invitationAccept }}
                                 </button>
                                 <button
                                     class="lunora-auth-button lunora-auth-button--secondary"
                                     type="button"
                                     [disabled]="state().busy"
+                                    [attr.aria-label]="rowActionLabel(t.invitationReject, invitation.organizationName ?? invitation.email)"
                                     (click)="reject(invitation.id ?? '')"
                                 >
                                     {{ t.invitationReject }}
@@ -213,6 +221,8 @@ class AcceptInvitationCardComponent implements OnInit {
     `,
 })
 class UserInvitationsCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly rowActionLabel = rowActionLabel;
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createUserInvitationsController, { context: this.context });

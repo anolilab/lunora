@@ -61,7 +61,7 @@ describe("vue ErrorToaster", () => {
 
 describe("vue extras", () => {
     it("renders the captcha host, prompts One Tap once, and tears the widget down on unmount", async () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         const teardown = vi.fn();
         const renderSpy = vi.spyOn(captchaModule, "renderCaptcha").mockReturnValue(teardown);
@@ -90,7 +90,14 @@ describe("vue extras", () => {
         expect(container.querySelector(".lunora-auth-captcha")).not.toBeNull();
         expect(renderSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ provider: "hcaptcha", siteKey: "abc" }));
         expect(promptSpy).toHaveBeenCalledTimes(1);
-        expect(screen.getByLabelText("Upload photo")).toBeDefined();
+
+        // The visible button is the only control: the file input behind it is
+        // out of the tab order and out of the accessibility tree, so it is not
+        // a second, invisibly-focused stop on the way past.
+        const picker = container.querySelector<HTMLInputElement>('input[type="file"]');
+
+        expect(picker?.getAttribute("tabindex")).toBe("-1");
+        expect(picker?.getAttribute("aria-hidden")).toBe("true");
         expect(screen.getByRole("button", { name: "Upload photo" })).toBeDefined();
 
         unmount();

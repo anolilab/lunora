@@ -46,7 +46,15 @@ const onRemove = (): void => {
         <div class="lunora-auth-avatar-row">
             <UserAvatar :size="64" :user="{ image: state.imageUrl }" />
             <div class="lunora-auth-avatar-row__actions">
-                <input ref="picker" class="lunora-auth-visually-hidden" type="file" :accept="ACCEPT_ATTRIBUTE" @change="onPick" />
+                <input
+                    ref="picker"
+                    class="lunora-auth-visually-hidden"
+                    type="file"
+                    tabindex="-1"
+                    aria-hidden="true"
+                    :accept="ACCEPT_ATTRIBUTE"
+                    @change="onPick"
+                />
                 <button class="lunora-auth-button" type="button" :disabled="state.status === 'submitting'" @click="onBrowse">{{ t.avatarUpload }}</button>
                 <button
                     v-if="state.imageUrl !== undefined && state.imageUrl !== ''"

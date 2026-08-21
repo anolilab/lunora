@@ -2,7 +2,7 @@ import type { JSX } from "solid-js";
 import { createSignal, createUniqueId, For, Show } from "solid-js";
 
 import { isFlowEnabled } from "../core/flow-gate";
-import { ROLE_OPTIONS, slugify } from "../core/labels";
+import { ROLE_OPTIONS, rowActionLabel, slugify } from "../core/labels";
 import { createMembersController } from "../core/members";
 import { createOrganizationsController } from "../core/organization-list";
 import { createOrganizationSettingsController } from "../core/organization-settings";
@@ -55,6 +55,7 @@ const OrganizationsCard = (): JSX.Element => {
                                                 {(id) => (
                                                     <>
                                                         <button
+                                                            aria-label={rowActionLabel(t.switchOrganization, organization.name ?? organization.slug)}
                                                             class="lunora-auth-link"
                                                             disabled={state.busy}
                                                             onClick={() => {
@@ -65,6 +66,7 @@ const OrganizationsCard = (): JSX.Element => {
                                                             {t.switchOrganization}
                                                         </button>
                                                         <button
+                                                            aria-label={rowActionLabel(t.remove, organization.name ?? organization.slug)}
                                                             class="lunora-auth-link"
                                                             disabled={state.busy}
                                                             onClick={() => {
@@ -86,7 +88,9 @@ const OrganizationsCard = (): JSX.Element => {
                 }
                 when={state.loading}
             >
-                <p class="lunora-auth-card__description">…</p>
+                <p class="lunora-auth-card__description" role="status">
+                    {t.loading}
+                </p>
             </Show>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(create)}>
                 <div class="lunora-auth-field">
@@ -163,6 +167,7 @@ const MembersCard = (): JSX.Element => {
                                         {/* `Show` hands the narrowed value to the callback — no cast needed. */}
                                         {(id) => (
                                             <button
+                                                aria-label={rowActionLabel(t.remove, member.user?.email ?? member.user?.name ?? member.userId)}
                                                 class="lunora-auth-link"
                                                 disabled={state.busy}
                                                 onClick={() => {
@@ -181,7 +186,9 @@ const MembersCard = (): JSX.Element => {
                 }
                 when={state.loading}
             >
-                <p class="lunora-auth-card__description">…</p>
+                <p class="lunora-auth-card__description" role="status">
+                    {t.loading}
+                </p>
             </Show>
 
             <Show when={state.invitations.length > 0}>
@@ -197,6 +204,7 @@ const MembersCard = (): JSX.Element => {
                                     {/* `Show` hands the narrowed value to the callback — no cast needed. */}
                                     {(id) => (
                                         <button
+                                            aria-label={rowActionLabel(t.cancel, invitation.email)}
                                             class="lunora-auth-link"
                                             disabled={state.busy}
                                             onClick={() => {
@@ -270,7 +278,14 @@ const OrganizationSettingsCard = (props: OrganizationSettingsCardProps = {}): JS
 
     return (
         <AuthCard headingLevel={2} title={t.organizationSettings}>
-            <Show fallback={<p class="lunora-auth-card__description">…</p>} when={!state.loading}>
+            <Show
+                fallback={
+                    <p class="lunora-auth-card__description" role="status">
+                        {t.loading}
+                    </p>
+                }
+                when={!state.loading}
+            >
                 <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                     <FormBanner error={state.formError} success={state.successMessage} />
                     <FormField actions={actions} field="name" label={t.organizationName} name="organizationName" state={state} />

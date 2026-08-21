@@ -5,7 +5,7 @@
 
 <script lang="ts">
     import { isFlowEnabled } from "../core/flow-gate";
-    import { slugify } from "../core/labels";
+    import { rowActionLabel, slugify } from "../core/labels";
     import { createOrganizationsController } from "../core/organization-list";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
@@ -38,7 +38,7 @@
     <AuthCard headingLevel={2} title={t.organizations}>
         <FormBanner error={$res.error} />
         {#if $res.loading}
-            <p class="lunora-auth-card__description">…</p>
+            <p class="lunora-auth-card__description" role="status">{t.loading}</p>
         {:else if $res.items.length === 0}
             <p class="lunora-auth-card__description">{t.noOrganizations}</p>
         {:else}
@@ -50,6 +50,7 @@
                         <span class="lunora-auth-list__actions">
                             {#if id !== undefined}
                                 <button
+                                    aria-label={rowActionLabel(t.switchOrganization, organization.name ?? organization.slug)}
                                     class="lunora-auth-link"
                                     disabled={$res.busy}
                                     onclick={() => {
@@ -60,6 +61,7 @@
                                     {t.switchOrganization}
                                 </button>
                                 <button
+                                    aria-label={rowActionLabel(t.remove, organization.name ?? organization.slug)}
                                     class="lunora-auth-link"
                                     disabled={$res.busy}
                                     onclick={() => {

@@ -12,7 +12,7 @@ import type { AvatarUploadActions, AvatarUploadState } from "../core/avatar";
 import { ACCEPT_ATTRIBUTE, createAvatarUploadController } from "../core/avatar";
 import type { ResourceState } from "../core/create-resource-controller";
 import { isFlowEnabled } from "../core/flow-gate";
-import { providerLabel } from "../core/labels";
+import { providerLabel, rowActionLabel } from "../core/labels";
 import type { ThemeMode, ThemeModeActions, ThemeModeState } from "../core/theme-mode";
 import { createThemeModeController, THEME_MODES } from "../core/theme-mode";
 import type { AuthAccount, FormActions, FormState } from "../core/types";
@@ -65,6 +65,7 @@ import { UserAvatarComponent } from "./user-button";
                                     class="lunora-auth-button lunora-auth-button--danger"
                                     type="button"
                                     [disabled]="state().busy || state().items.length <= 1"
+                                    [attr.aria-label]="rowActionLabel(t.remove, providerLabel(account.providerId ?? ''))"
                                     (click)="unlink(account)"
                                 >
                                     {{ t.remove }}
@@ -90,6 +91,8 @@ import { UserAvatarComponent } from "./user-button";
     `,
 })
 class LinkedAccountsCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly rowActionLabel = rowActionLabel;
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createAccountsController, { context: this.context });
@@ -132,7 +135,15 @@ class LinkedAccountsCardComponent {
                 <div class="lunora-auth-avatar-row">
                     <lunora-user-avatar [size]="64" [user]="{ image: state().imageUrl }" />
                     <div class="lunora-auth-avatar-row__actions">
-                        <input class="lunora-auth-visually-hidden" type="file" #picker [attr.accept]="accept" (change)="pick($event)" />
+                        <input
+                            class="lunora-auth-visually-hidden"
+                            type="file"
+                            tabindex="-1"
+                            aria-hidden="true"
+                            #picker
+                            [attr.accept]="accept"
+                            (change)="pick($event)"
+                        />
                         <button class="lunora-auth-button" type="button" [disabled]="state().status === 'submitting'" (click)="picker.click()">
                             {{ t.avatarUpload }}
                         </button>
@@ -230,6 +241,11 @@ class SetUsernameCardComponent {
 /**
  * Light / dark / system. Not a better-auth feature at all — it lives here
  * because account settings is where people look for it.
+ *
+ * Toggle buttons rather than `role="radio"`: a radio group owes the user
+ * arrow-key navigation and a single roving tab stop, and declaring the role
+ * without implementing that is worse than not claiming it. `aria-pressed` on
+ * three ordinary buttons is honest about what the keyboard actually does.
  */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
@@ -238,15 +254,9 @@ class SetUsernameCardComponent {
     standalone: true,
     template: `
         <lunora-auth-card [title]="t.appearance">
-            <div class="lunora-auth-segmented" role="radiogroup">
+            <div class="lunora-auth-segmented" role="group" [attr.aria-label]="t.appearance">
                 @for (mode of modes; track mode) {
-                    <button
-                        class="lunora-auth-segmented__option"
-                        type="button"
-                        role="radio"
-                        [attr.aria-checked]="state().mode === mode"
-                        (click)="actions.setMode(mode)"
-                    >
+                    <button class="lunora-auth-segmented__option" type="button" [attr.aria-pressed]="state().mode === mode" (click)="actions.setMode(mode)">
                         {{ label(mode) }}
                     </button>
                 }

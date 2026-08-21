@@ -3,6 +3,7 @@ import { For, Show } from "solid-js";
 
 import { queryParameter } from "../core/browser-location";
 import { createAcceptInvitationController, createUserInvitationsController } from "../core/invitations";
+import { rowActionLabel } from "../core/labels";
 import { createResendVerificationController, createVerifyEmailController } from "../core/verify-email";
 import { FormField, onSubmit } from "./form";
 import { AuthCard, FormBanner, Skeleton, SubmitButton } from "./primitives";
@@ -125,6 +126,7 @@ const UserInvitationsCard = (): JSX.Element => {
                                 <span class="lunora-auth-list__label">{invitation.organizationName ?? invitation.email}</span>
                                 <span class="lunora-auth-list__actions">
                                     <button
+                                        aria-label={rowActionLabel(t.invitationAccept, invitation.organizationName ?? invitation.email)}
                                         class="lunora-auth-button"
                                         disabled={state.busy}
                                         onClick={() => {
@@ -135,6 +137,7 @@ const UserInvitationsCard = (): JSX.Element => {
                                         {t.invitationAccept}
                                     </button>
                                     <button
+                                        aria-label={rowActionLabel(t.invitationReject, invitation.organizationName ?? invitation.email)}
                                         class="lunora-auth-button lunora-auth-button--secondary"
                                         disabled={state.busy}
                                         onClick={() => {

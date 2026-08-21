@@ -9,7 +9,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, Injector, input, 
 
 import type { ResourceState } from "../core/create-resource-controller";
 import { isFlowEnabled } from "../core/flow-gate";
-import { ROLE_OPTIONS, slugify } from "../core/labels";
+import { ROLE_OPTIONS, rowActionLabel, slugify } from "../core/labels";
 import type { MembersActions, MembersState } from "../core/members";
 import { createMembersController } from "../core/members";
 import type { OrganizationsActions } from "../core/organization-list";
@@ -40,7 +40,7 @@ const nextId = (prefix: string): string => {
             <lunora-auth-card [title]="t.organizations" [headingLevel]="2">
                 <lunora-auth-banner [error]="state().error" />
                 @if (state().loading) {
-                    <p class="lunora-auth-card__description">…</p>
+                    <p class="lunora-auth-card__description" role="status">{{ t.loading }}</p>
                 } @else if (state().items.length === 0) {
                     <p class="lunora-auth-card__description">{{ t.noOrganizations }}</p>
                 } @else {
@@ -50,10 +50,22 @@ const nextId = (prefix: string): string => {
                                 <span class="lunora-auth-list__label">{{ organization.name ?? organization.slug }}</span>
                                 <span class="lunora-auth-list__actions">
                                     @if (organization.id !== undefined) {
-                                        <button class="lunora-auth-link" type="button" [disabled]="state().busy" (click)="actions.setActive(organization.id!)">
+                                        <button
+                                            class="lunora-auth-link"
+                                            type="button"
+                                            [disabled]="state().busy"
+                                            [attr.aria-label]="rowActionLabel(t.switchOrganization, organization.name ?? organization.slug)"
+                                            (click)="actions.setActive(organization.id!)"
+                                        >
                                             {{ t.switchOrganization }}
                                         </button>
-                                        <button class="lunora-auth-link" type="button" [disabled]="state().busy" (click)="actions.remove(organization.id!)">
+                                        <button
+                                            class="lunora-auth-link"
+                                            type="button"
+                                            [disabled]="state().busy"
+                                            [attr.aria-label]="rowActionLabel(t.remove, organization.name ?? organization.slug)"
+                                            (click)="actions.remove(organization.id!)"
+                                        >
                                             {{ t.remove }}
                                         </button>
                                     }
@@ -84,6 +96,8 @@ const nextId = (prefix: string): string => {
     `,
 })
 class OrganizationsCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly rowActionLabel = rowActionLabel;
     // Per-instance ids: two cards on one page must not collide.
     protected readonly uid = nextId("lunora-auth-");
     private readonly context = injectAuthUIContext();
@@ -124,7 +138,7 @@ class OrganizationsCardComponent {
                 <lunora-auth-banner [error]="state().error" />
 
                 @if (state().loading) {
-                    <p class="lunora-auth-card__description">…</p>
+                    <p class="lunora-auth-card__description" role="status">{{ t.loading }}</p>
                 } @else {
                     <ul class="lunora-auth-list">
                         @for (member of state().members; track member.id ?? member.userId ?? member.user?.email) {
@@ -133,7 +147,13 @@ class OrganizationsCardComponent {
                                     {{ member.user?.email ?? member.user?.name ?? member.userId }} · {{ member.role }}
                                 </span>
                                 @if (member.id !== undefined) {
-                                    <button class="lunora-auth-link" type="button" [disabled]="state().busy" (click)="actions.removeMember(member.id!)">
+                                    <button
+                                        class="lunora-auth-link"
+                                        type="button"
+                                        [disabled]="state().busy"
+                                        [attr.aria-label]="rowActionLabel(t.remove, member.user?.email ?? member.user?.name ?? member.userId)"
+                                        (click)="actions.removeMember(member.id!)"
+                                    >
                                         {{ t.remove }}
                                     </button>
                                 }
@@ -149,7 +169,13 @@ class OrganizationsCardComponent {
                             <li class="lunora-auth-list__item">
                                 <span class="lunora-auth-list__label">{{ invitation.email }} · {{ invitation.role }}</span>
                                 @if (invitation.id !== undefined) {
-                                    <button class="lunora-auth-link" type="button" [disabled]="state().busy" (click)="actions.cancelInvitation(invitation.id!)">
+                                    <button
+                                        class="lunora-auth-link"
+                                        type="button"
+                                        [disabled]="state().busy"
+                                        [attr.aria-label]="rowActionLabel(t.cancel, invitation.email)"
+                                        (click)="actions.cancelInvitation(invitation.id!)"
+                                    >
                                         {{ t.cancel }}
                                     </button>
                                 }
@@ -189,6 +215,8 @@ class OrganizationsCardComponent {
     `,
 })
 class MembersCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly rowActionLabel = rowActionLabel;
     // Per-instance ids: two cards on one page must not collide.
     protected readonly uid = nextId("lunora-auth-");
     private readonly context = injectAuthUIContext();
@@ -224,7 +252,7 @@ class MembersCardComponent {
         @if (enabled()) {
             <lunora-auth-card [title]="t.organizationSettings" [headingLevel]="2">
                 @if (state().loading) {
-                    <p class="lunora-auth-card__description">…</p>
+                    <p class="lunora-auth-card__description" role="status">{{ t.loading }}</p>
                 } @else {
                     <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
                         <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />

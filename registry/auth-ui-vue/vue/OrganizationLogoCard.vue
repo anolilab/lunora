@@ -56,7 +56,15 @@ const onRemove = (): void => {
             <img v-if="state.logoUrl !== undefined && state.logoUrl !== ''" class="lunora-auth-avatar" alt="" :src="state.logoUrl" />
             <span v-else class="lunora-auth-avatar lunora-auth-avatar--initials" aria-hidden="true" />
             <div class="lunora-auth-avatar-row__actions">
-                <input ref="picker" class="lunora-auth-visually-hidden" type="file" :accept="ACCEPT_ATTRIBUTE" :aria-label="t.avatarUpload" @change="onPick" />
+                <input
+                    ref="picker"
+                    class="lunora-auth-visually-hidden"
+                    type="file"
+                    tabindex="-1"
+                    aria-hidden="true"
+                    :accept="ACCEPT_ATTRIBUTE"
+                    @change="onPick"
+                />
                 <button class="lunora-auth-button" type="button" :disabled="state.status === 'submitting'" @click="onBrowse">{{ t.avatarUpload }}</button>
                 <button
                     v-if="state.logoUrl !== undefined && state.logoUrl !== ''"

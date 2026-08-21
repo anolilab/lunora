@@ -4,7 +4,7 @@ import { For, Show } from "solid-js";
 import { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "../core/accounts";
 import { ACCEPT_ATTRIBUTE, createAvatarUploadController } from "../core/avatar";
 import { isFlowEnabled } from "../core/flow-gate";
-import { providerLabel } from "../core/labels";
+import { providerLabel, rowActionLabel } from "../core/labels";
 import type { ThemeMode } from "../core/theme-mode";
 import { createThemeModeController, THEME_MODES } from "../core/theme-mode";
 import { createSetUsernameController } from "../core/username";
@@ -46,6 +46,7 @@ const LinkedAccountsCard = (): JSX.Element => {
                                  */}
                                 <Show when={!NON_SOCIAL_PROVIDERS.has(account.providerId ?? "")}>
                                     <button
+                                        aria-label={rowActionLabel(t.remove, providerLabel(account.providerId ?? ""))}
                                         class="lunora-auth-button lunora-auth-button--danger"
                                         disabled={state.busy || state.items.length <= 1}
                                         onClick={() => {
@@ -127,12 +128,13 @@ const AvatarCard = (): JSX.Element => {
                 <div class="lunora-auth-avatar-row__actions">
                     <input
                         accept={ACCEPT_ATTRIBUTE}
-                        aria-label={t.avatarUpload}
+                        aria-hidden="true"
                         class="lunora-auth-visually-hidden"
                         onChange={onPick}
                         ref={(element) => {
                             input = element;
                         }}
+                        tabindex={-1}
                         type="file"
                     />
                     <button
@@ -204,6 +206,11 @@ const SetUsernameCard = (): JSX.Element => {
 /**
  * Light / dark / system. Not a better-auth feature at all — it lives here
  * because account settings is where people look for it.
+ *
+ * Toggle buttons rather than `role="radio"`: a radio group owes the user
+ * arrow-key navigation and a single roving tab stop, and declaring the role
+ * without implementing that is worse than not claiming it. `aria-pressed` on
+ * three ordinary buttons is honest about what the keyboard actually does.
  */
 const AppearanceCard = (): JSX.Element => {
     const { localization: t } = useAuthUI();
@@ -213,16 +220,15 @@ const AppearanceCard = (): JSX.Element => {
 
     return (
         <AuthCard title={t.appearance}>
-            <div class="lunora-auth-segmented" role="radiogroup">
+            <div aria-label={t.appearance} class="lunora-auth-segmented" role="group">
                 <For each={THEME_MODES}>
                     {(mode) => (
                         <button
-                            aria-checked={state.mode === mode ? "true" : "false"}
+                            aria-pressed={state.mode === mode ? "true" : "false"}
                             class="lunora-auth-segmented__option"
                             onClick={() => {
                                 actions.setMode(mode);
                             }}
-                            role="radio"
                             type="button"
                         >
                             {label[mode]}

@@ -64,6 +64,7 @@ import { injectAuthUIContext } from "./provider";
                             [label]="t.codeLabel"
                             name="code"
                             autoComplete="one-time-code"
+                            inputMode="numeric"
                             (changed)="actions.setCode($event)"
                         />
                         <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.twoFactor }}</lunora-auth-submit-button>

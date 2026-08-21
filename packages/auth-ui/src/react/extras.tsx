@@ -8,6 +8,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { ACCEPT_ATTRIBUTE } from "../core/avatar";
 import type { CaptchaProvider } from "../core/captcha";
 import { renderCaptcha } from "../core/captcha";
+import { DEFAULT_LOCALIZATION } from "../core/localization";
 import { promptOneTap } from "../core/one-tap";
 import { createOrganizationLogoController } from "../core/organization-logo";
 import { dismissToast, getToasts, subscribeToasts } from "../core/toast";
@@ -28,7 +29,16 @@ import { useController } from "./use-controller";
  * null : …}` did) means that very first toast lands before assistive tech is
  * watching the region, so it goes unannounced.
  */
-const ErrorToaster = (): ReactElement => {
+interface ErrorToasterProps {
+    /**
+     * The dismiss button's accessible name. A prop rather than a read of the
+     * provider's `localization`, because the toaster is mounted in the app
+     * shell and must keep working outside `<AuthUIProvider>`.
+     */
+    dismissLabel?: string;
+}
+
+const ErrorToaster = ({ dismissLabel = DEFAULT_LOCALIZATION.dismiss }: ErrorToasterProps = {}): ReactElement => {
     const toasts = useSyncExternalStore(subscribeToasts, getToasts, getToasts);
 
     return (
@@ -39,7 +49,7 @@ const ErrorToaster = (): ReactElement => {
                 <div className="lunora-auth-toast" key={toast.id} role="status">
                     <span className="lunora-auth-toast__message">{toast.message}</span>
                     <button
-                        aria-label="Dismiss"
+                        aria-label={dismissLabel}
                         className="lunora-auth-toast__dismiss"
                         onClick={() => {
                             dismissToast(toast.id);
@@ -154,10 +164,11 @@ const OrganizationLogoCard = ({ organizationId }: OrganizationLogoCardProps = {}
                 <div className="lunora-auth-avatar-row__actions">
                     <input
                         accept={ACCEPT_ATTRIBUTE}
-                        aria-label={t.avatarUpload}
+                        aria-hidden="true"
                         className="lunora-auth-visually-hidden"
                         onChange={onPick}
                         ref={inputRef}
+                        tabIndex={-1}
                         type="file"
                     />
                     <button
@@ -188,5 +199,5 @@ const OrganizationLogoCard = ({ organizationId }: OrganizationLogoCardProps = {}
     );
 };
 
-export type { CaptchaProps, OrganizationLogoCardProps };
+export type { CaptchaProps, ErrorToasterProps, OrganizationLogoCardProps };
 export { Captcha, ErrorToaster, OneTap, OrganizationLogoCard };

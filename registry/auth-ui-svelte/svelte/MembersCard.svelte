@@ -5,7 +5,7 @@
 
 <script lang="ts">
     import { isFlowEnabled } from "../core/flow-gate";
-    import { ROLE_OPTIONS } from "../core/labels";
+    import { ROLE_OPTIONS, rowActionLabel } from "../core/labels";
     import { createMembersController } from "../core/members";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
@@ -38,7 +38,7 @@
         <FormBanner error={$res.error} />
 
         {#if $res.loading}
-            <p class="lunora-auth-card__description">…</p>
+            <p class="lunora-auth-card__description" role="status">{t.loading}</p>
         {:else}
             <ul class="lunora-auth-list">
                 {#each $res.members as member (member.id ?? member.userId ?? member.user?.email)}
@@ -49,6 +49,7 @@
                         </span>
                         {#if memberId !== undefined}
                             <button
+                                aria-label={rowActionLabel(t.remove, member.user?.email ?? member.user?.name ?? member.userId)}
                                 class="lunora-auth-link"
                                 disabled={$res.busy}
                                 onclick={() => {
@@ -75,6 +76,7 @@
                         </span>
                         {#if invitationId !== undefined}
                             <button
+                                aria-label={rowActionLabel(t.cancel, invitation.email)}
                                 class="lunora-auth-link"
                                 disabled={$res.busy}
                                 onclick={() => {

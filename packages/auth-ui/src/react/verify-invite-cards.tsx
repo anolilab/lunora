@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 
 import { queryParameter } from "../core/browser-location";
 import { createAcceptInvitationController, createUserInvitationsController } from "../core/invitations";
+import { rowActionLabel } from "../core/labels";
 import { createResendVerificationController, createVerifyEmailController } from "../core/verify-email";
 import { FormField } from "./form";
 import { onSubmit } from "./on-submit";
@@ -131,6 +132,7 @@ const UserInvitationsCard = (): ReactElement => {
                             <span className="lunora-auth-list__label">{invitation.organizationName ?? invitation.email}</span>
                             <span className="lunora-auth-list__actions">
                                 <button
+                                    aria-label={rowActionLabel(t.invitationAccept, invitation.organizationName ?? invitation.email)}
                                     className="lunora-auth-button"
                                     disabled={state.busy}
                                     onClick={() => {
@@ -141,6 +143,7 @@ const UserInvitationsCard = (): ReactElement => {
                                     {t.invitationAccept}
                                 </button>
                                 <button
+                                    aria-label={rowActionLabel(t.invitationReject, invitation.organizationName ?? invitation.email)}
                                     className="lunora-auth-button lunora-auth-button--secondary"
                                     disabled={state.busy}
                                     onClick={() => {

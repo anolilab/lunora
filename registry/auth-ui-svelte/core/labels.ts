@@ -80,4 +80,19 @@ const providerLabel = (provider: string): string => {
         .join(" ");
 };
 
-export { passkeyLabel, PROVIDER_LABELS, providerLabel, ROLE_OPTIONS, sessionLabel, slugify };
+/**
+ * The accessible name for a per-row action button: what it does, plus which row
+ * it does it to.
+ *
+ * A list of ten "Remove" buttons has ten identical accessible names. Sighted
+ * users disambiguate them from the row they sit in, but a screen reader in focus
+ * mode announces the button alone — so "Remove" is all anyone tabbing through
+ * hears, on a control that deletes something. The row's own label is what tells
+ * them apart, and this is where it gets attached.
+ *
+ * Falls back to the bare action when a row has nothing to identify it by, which
+ * is no worse than the name it would otherwise have had.
+ */
+const rowActionLabel = (action: string, subject: string | undefined): string => (subject === undefined || subject === "" ? action : `${action}: ${subject}`);
+
+export { passkeyLabel, PROVIDER_LABELS, providerLabel, ROLE_OPTIONS, rowActionLabel, sessionLabel, slugify };

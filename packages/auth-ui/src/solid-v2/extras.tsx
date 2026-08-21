@@ -6,6 +6,7 @@ import { createEffect, createSignal, For, onCleanup, onSettled, Show } from "sol
 import { ACCEPT_ATTRIBUTE } from "../core/avatar";
 import type { CaptchaProvider } from "../core/captcha";
 import { renderCaptcha } from "../core/captcha";
+import { DEFAULT_LOCALIZATION } from "../core/localization";
 import { promptOneTap } from "../core/one-tap";
 import { createOrganizationLogoController } from "../core/organization-logo";
 import type { Toast } from "../core/toast";
@@ -20,8 +21,23 @@ import { createController } from "./use-controller";
  *
  * Errors that *do* belong to a card still render on that card's banner and never
  * reach here, so nothing is announced twice.
+ *
+ * The `aria-live` region mounts unconditionally — including with no toasts yet.
+ * A live region only announces changes made AFTER it exists in the accessibility
+ * tree; gating the whole wrapper on `toasts().length > 0` means the very first
+ * toast lands before assistive tech is watching the region, so it goes
+ * unannounced.
  */
-const ErrorToaster = (): JSX.Element => {
+interface ErrorToasterProps {
+    /**
+     * The dismiss button's accessible name. A prop rather than a read of the
+     * provider's `localization`, because the toaster is mounted in the app
+     * shell and must keep working outside `<AuthUIProvider>`.
+     */
+    dismissLabel?: string;
+}
+
+const ErrorToaster = (props: ErrorToasterProps = {}): JSX.Element => {
     // The store is module-level (see `core/toast.ts`), so this mirrors it into a
     // signal rather than going through `createController` — there is no
     // per-provider controller to build.
@@ -36,27 +52,25 @@ const ErrorToaster = (): JSX.Element => {
     return (
         // `polite`, not `assertive`: these are failures the user can retry, not
         // something that should interrupt a screen reader mid-sentence.
-        <Show when={toasts().length > 0}>
-            <div aria-live="polite" class="lunora-auth-toaster">
-                <For each={toasts()}>
-                    {(toast) => (
-                        <div class="lunora-auth-toast" role="status">
-                            <span class="lunora-auth-toast__message">{toast.message}</span>
-                            <button
-                                aria-label="Dismiss"
-                                class="lunora-auth-toast__dismiss"
-                                onClick={() => {
-                                    dismissToast(toast.id);
-                                }}
-                                type="button"
-                            >
-                                ×
-                            </button>
-                        </div>
-                    )}
-                </For>
-            </div>
-        </Show>
+        <div aria-live="polite" class="lunora-auth-toaster">
+            <For each={toasts()}>
+                {(toast) => (
+                    <div class="lunora-auth-toast" role="status">
+                        <span class="lunora-auth-toast__message">{toast.message}</span>
+                        <button
+                            aria-label={props.dismissLabel ?? DEFAULT_LOCALIZATION.dismiss}
+                            class="lunora-auth-toast__dismiss"
+                            onClick={() => {
+                                dismissToast(toast.id);
+                            }}
+                            type="button"
+                        >
+                            ×
+                        </button>
+                    </div>
+                )}
+            </For>
+        </div>
     );
 };
 
@@ -192,12 +206,13 @@ const OrganizationLogoCard = (props: OrganizationLogoCardProps = {}): JSX.Elemen
                 <div class="lunora-auth-avatar-row__actions">
                     <input
                         accept={ACCEPT_ATTRIBUTE}
-                        aria-label={t.avatarUpload}
+                        aria-hidden="true"
                         class="lunora-auth-visually-hidden"
                         onChange={onPick}
                         ref={(element) => {
                             input = element;
                         }}
+                        tabindex={-1}
                         type="file"
                     />
                     <button
@@ -228,5 +243,5 @@ const OrganizationLogoCard = (props: OrganizationLogoCardProps = {}): JSX.Elemen
     );
 };
 
-export type { CaptchaProps, OrganizationLogoCardProps };
+export type { CaptchaProps, ErrorToasterProps, OrganizationLogoCardProps };
 export { Captcha, ErrorToaster, OneTap, OrganizationLogoCard };
