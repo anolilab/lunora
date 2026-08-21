@@ -7,6 +7,7 @@
  * (heavy) toolchain into its bundle — we register exactly the family
  * {@link X402ChargeConfig.network} resolves to.
  */
+import { LunoraError } from "@lunora/errors";
 import type { x402ResourceServer } from "@x402/core/server";
 
 import type { X402ChargeConfig } from "../config";
@@ -25,13 +26,31 @@ export const buildResourceServer = async (config: X402ChargeConfig): Promise<x40
     const network = toCaip2(config.network);
 
     if (isEvmNetwork(config.network)) {
-        const { registerExactEvmScheme } = await import("@x402/evm/exact/server");
+        let evmModule: typeof import("@x402/evm/exact/server");
 
-        registerExactEvmScheme(server, { networks: [network] });
+        try {
+            evmModule = await import("@x402/evm/exact/server");
+        } catch {
+            throw new LunoraError(
+                "ENV_INVALID",
+                "x402 charge: EVM networks need the optional @x402/evm + viem peers — install them, or configure an SVM network.",
+            );
+        }
+
+        evmModule.registerExactEvmScheme(server, { networks: [network] });
     } else {
-        const { registerExactSvmScheme } = await import("@x402/svm/exact/server");
+        let svmModule: typeof import("@x402/svm/exact/server");
 
-        registerExactSvmScheme(server, { networks: [network] });
+        try {
+            svmModule = await import("@x402/svm/exact/server");
+        } catch {
+            throw new LunoraError(
+                "ENV_INVALID",
+                "x402 charge: SVM networks need the optional @x402/svm + @solana/kit peers — install them, or configure an EVM network.",
+            );
+        }
+
+        svmModule.registerExactSvmScheme(server, { networks: [network] });
     }
 
     return server;

@@ -67,36 +67,52 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.22",
-        "@solana/kit": "catalog:web3",
         "@x402/core": "catalog:web3",
-        "@x402/evm": "catalog:web3",
-        "@x402/fetch": "catalog:web3",
-        "@x402/svm": "catalog:web3",
-        "viem": "catalog:web3"
+        "@x402/fetch": "catalog:web3"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@coinbase/cdp-sdk": "catalog:web3",
         "@coinbase/x402": "catalog:web3",
+        "@solana/kit": "catalog:web3",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "@x402/evm": "catalog:web3",
+        "@x402/svm": "catalog:web3",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
+        "viem": "catalog:web3",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
         "@coinbase/cdp-sdk": ">=1.0.0",
-        "@coinbase/x402": ">=2.0.0"
+        "@coinbase/x402": ">=2.0.0",
+        "@solana/kit": ">=7.0.0",
+        "@x402/evm": ">=2.0.0",
+        "@x402/svm": ">=2.0.0",
+        "viem": ">=2.0.0"
     },
     "peerDependenciesMeta": {
         "@coinbase/cdp-sdk": {
             "optional": true
         },
         "@coinbase/x402": {
+            "optional": true
+        },
+        "@solana/kit": {
+            "optional": true
+        },
+        "@x402/evm": {
+            "optional": true
+        },
+        "@x402/svm": {
+            "optional": true
+        },
+        "viem": {
             "optional": true
         }
     },

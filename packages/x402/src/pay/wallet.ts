@@ -119,9 +119,15 @@ export const resolveEvmAccount = async (privateKey: string): Promise<PrivateKeyA
         throw new LunoraError("ENV_INVALID", "x402 pay: the EVM wallet key must be a 32-byte hex private key (64 hex chars, optional 0x prefix).");
     }
 
-    const { privateKeyToAccount } = await import("viem/accounts");
+    let viemAccounts: typeof import("viem/accounts");
 
-    return privateKeyToAccount(key as `0x${string}`);
+    try {
+        viemAccounts = await import("viem/accounts");
+    } catch {
+        throw new LunoraError("ENV_INVALID", 'x402 pay: raw-key EVM custody needs the optional viem peer — install it, or use "cdp"/"signer" custody instead.');
+    }
+
+    return viemAccounts.privateKeyToAccount(key as `0x${string}`);
 };
 
 /**
@@ -134,7 +140,19 @@ export const resolveEvmAccount = async (privateKey: string): Promise<PrivateKeyA
  */
 export const resolveSvmSigner = async (secret: string): Promise<ClientSvmSigner> => {
     const trimmed = secret.trim();
-    const { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes, getBase58Encoder } = await import("@solana/kit");
+
+    let solanaKit: typeof import("@solana/kit");
+
+    try {
+        solanaKit = await import("@solana/kit");
+    } catch {
+        throw new LunoraError(
+            "ENV_INVALID",
+            'x402 pay: raw-key Solana custody needs the optional @solana/kit peer — install it, or pass a pre-built signer via "signer" custody instead.',
+        );
+    }
+
+    const { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes, getBase58Encoder } = solanaKit;
 
     let bytes: Uint8Array;
 
@@ -215,12 +233,30 @@ export const registerWallet = async (client: x402Client, config: X402PayConfig, 
     // Phase 2 — scheme: register the family's exact scheme with the resolved
     // signer. Written once per family; the family guard above keeps the cast safe.
     if (evm) {
-        const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+        let evmModule: typeof import("@x402/evm/exact/client");
 
-        registerExactEvmScheme(client, { networks: [network], signer: account as ClientEvmSigner });
+        try {
+            evmModule = await import("@x402/evm/exact/client");
+        } catch {
+            throw new LunoraError(
+                "ENV_INVALID",
+                "x402 pay: EVM networks need the optional @x402/evm + viem peers — install them, or configure an SVM network.",
+            );
+        }
+
+        evmModule.registerExactEvmScheme(client, { networks: [network], signer: account as ClientEvmSigner });
     } else {
-        const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
+        let svmModule: typeof import("@x402/svm/exact/client");
 
-        registerExactSvmScheme(client, { networks: [network], signer: account as ClientSvmSigner });
+        try {
+            svmModule = await import("@x402/svm/exact/client");
+        } catch {
+            throw new LunoraError(
+                "ENV_INVALID",
+                "x402 pay: SVM networks need the optional @x402/svm + @solana/kit peers — install them, or configure an EVM network.",
+            );
+        }
+
+        svmModule.registerExactSvmScheme(client, { networks: [network], signer: account as ClientSvmSigner });
     }
 };
