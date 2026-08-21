@@ -1,5 +1,5 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
-import { get } from "svelte/store";
+import { get, writable } from "svelte/store";
 import { describe, expect, it, vi } from "vitest";
 
 import { subscription } from "../src/subscription";
@@ -145,5 +145,49 @@ describe("subscription store", () => {
         expect(get(error)).toBeUndefined();
 
         stopError();
+    });
+});
+
+describe("subscription store with reactive args", () => {
+    it("re-subscribes with the new args when the args store emits", () => {
+        const { client, subscribeSpy, unsubscribeSpy } = createFakeClient();
+        const argsStore = writable<unknown>({ channelId: "c1" });
+        const { data } = subscription(client, fnRef, argsStore);
+
+        const stop = data.subscribe(() => {});
+
+        expect(subscribeSpy).toHaveBeenCalledTimes(1);
+        expect(subscribeSpy.mock.calls[0]?.[1]).toStrictEqual({ channelId: "c1" });
+
+        argsStore.set({ channelId: "c2" });
+
+        // The previous subscription is torn down before the new one opens.
+        expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
+        expect(subscribeSpy).toHaveBeenCalledTimes(2);
+        expect(subscribeSpy.mock.calls[1]?.[1]).toStrictEqual({ channelId: "c2" });
+
+        stop();
+
+        expect(unsubscribeSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("tears down and clears data on a 'skip' emission", () => {
+        const { client, emit, subscribeSpy, unsubscribeSpy } = createFakeClient();
+        const argsStore = writable<unknown>({ channelId: "c1" });
+        const { data } = subscription(client, fnRef, argsStore);
+
+        const stop = data.subscribe(() => {});
+
+        emit({ unread: 3 });
+
+        expect(get(data)).toStrictEqual({ unread: 3 });
+
+        argsStore.set("skip");
+
+        expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
+        expect(subscribeSpy).toHaveBeenCalledTimes(1);
+        expect(get(data)).toBeUndefined();
+
+        stop();
     });
 });

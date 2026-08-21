@@ -1,5 +1,5 @@
 import type { FunctionReference, LunoraClient, SubscriptionErrorCallback } from "@lunora/client";
-import { get } from "svelte/store";
+import { get, writable } from "svelte/store";
 import { describe, expect, it, vi } from "vitest";
 
 import { query } from "../src/query";
@@ -103,6 +103,50 @@ describe("query store", () => {
 
         expect(onError).toHaveBeenCalledTimes(1);
         expect(onError.mock.calls[0]?.[0]).toMatchObject({ message: "subscription failed" });
+
+        stop();
+    });
+});
+
+describe("query store with reactive args", () => {
+    it("re-subscribes with the new args when the args store emits", () => {
+        const { client, subscribe, unsubscribe } = createFakeClient();
+        const argsStore = writable<unknown>({ room: "general" });
+        const store = query(client, fnRef, argsStore);
+
+        const stop = store.subscribe(() => {});
+
+        expect(subscribe).toHaveBeenCalledTimes(1);
+        expect(subscribe.mock.calls[0]?.[1]).toStrictEqual({ room: "general" });
+
+        argsStore.set({ room: "random" });
+
+        // The previous subscription is torn down before the new one opens.
+        expect(unsubscribe).toHaveBeenCalledTimes(1);
+        expect(subscribe).toHaveBeenCalledTimes(2);
+        expect(subscribe.mock.calls[1]?.[1]).toStrictEqual({ room: "random" });
+
+        stop();
+
+        expect(unsubscribe).toHaveBeenCalledTimes(2);
+    });
+
+    it("tears down without re-opening and resets to undefined on a 'skip' emission", () => {
+        const { client, emit, subscribe, unsubscribe } = createFakeClient();
+        const argsStore = writable<unknown>({ room: "general" });
+        const store = query(client, fnRef, argsStore);
+
+        const stop = store.subscribe(() => {});
+
+        emit([{ id: 1 }]);
+
+        expect(get(store)).toStrictEqual([{ id: 1 }]);
+
+        argsStore.set("skip");
+
+        expect(unsubscribe).toHaveBeenCalledTimes(1);
+        expect(subscribe).toHaveBeenCalledTimes(1);
+        expect(get(store)).toBeUndefined();
 
         stop();
     });
