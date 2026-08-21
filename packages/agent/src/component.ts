@@ -303,6 +303,7 @@ export interface AgentComponent {
     functions: {
         agentAppendMessage: AgentRegisteredFunction;
         agentCompleteRun: AgentRegisteredFunction;
+        agentDeleteMessage: AgentRegisteredFunction;
         agentEnsureThread: AgentRegisteredFunction;
         agentEpisodeRecall: AgentRegisteredFunction;
         agentEpisodeUpsert: AgentRegisteredFunction;
@@ -490,6 +491,46 @@ export const agentComponent = (): AgentComponent => {
             await context.db.patch(thread["_id"] as never, { messageCount: seq + 1, updatedAt: now });
 
             return { seq };
+        });
+
+    /**
+     * Delete a message by `(threadKey, messageKey)`. A no-op when absent, so a
+     * workflow replay re-running the delete is harmless.
+     *
+     * Used for exactly one thing: retiring the spent HITL approval marker. The
+     * marker is a pending-decision AFFORDANCE, not conversation content — every
+     * client renders its Approve/Reject purely from `status ===
+     * "awaiting_approval"`, and `model-messages.ts` drops rows with that status
+     * so the model never sees a duplicate tool-result part for the call.
+     *
+     * That is why the marker is DELETED rather than moved to a terminal status:
+     * a terminal status would flip it into a second, bogus tool RESULT on both
+     * surfaces at once — an extra result event carrying the placeholder's text
+     * in every client, and a duplicated tool-result part in the model prompt
+     * (breaking provider tool-call pairing). The real outcome is already
+     * recorded on the tool-result row under the same `toolCallId`, so removing
+     * the placeholder loses nothing.
+     *
+     * `messageCount` is deliberately NOT decremented — it is the thread's next-
+     * `seq` high-water mark, and rolling it back would hand a later message a
+     * `seq` that is already taken.
+     */
+    const agentDeleteMessage = mutation
+        .input({
+            messageKey: v.string(),
+            threadKey: v.string(),
+        })
+        .mutation(async ({ args, ctx: context }): Promise<void> => {
+            const existing = await context.db
+                .query(MESSAGES_TABLE)
+                .withIndex("byMessageKey", (q) => q.eq("threadKey", args.threadKey).eq("messageKey", args.messageKey))
+                .first();
+
+            if (!existing) {
+                return;
+            }
+
+            await context.db.delete(existing["_id"] as never);
         });
 
     const agentPatchThread = mutation
@@ -946,6 +987,7 @@ export const agentComponent = (): AgentComponent => {
             agentGraphTraverse: graph.agentGraphTraverse,
             agentGraphUpsert: graph.agentGraphUpsert,
             agentMessages,
+            agentDeleteMessage: asInternal(agentDeleteMessage),
             agentPatchThread: asInternal(agentPatchThread),
             agentResolveApproval,
             agentRun,

@@ -100,6 +100,9 @@ interface TurnContext {
     agent: AgentDefinition;
     /** History-compaction seam, when the runtime provided one (else `undefined`). */
     compact: AgentCompact | undefined;
+    /** Patch this run's thread by key (status/error/usage/…). */
+    /** Retire a persisted message by key (dispatches `agents:agentDeleteMessage`). */
+    deleteMessage: (messageKey: string) => Promise<void>;
     env: Record<string, unknown>;
     generate: AgentGenerate;
     /** Read the thread's synced state (dispatches `agents:agentState`) — the tool ctx's `getState`. */
@@ -111,7 +114,6 @@ interface TurnContext {
     memoryContext: string | undefined;
     /** Live-only token-delta sink, when the runtime provided one (else `undefined`). */
     onTokenDelta: AgentTokenSink | undefined;
-    /** Patch this run's thread by key (status/error/usage/…). */
     patchThread: (patch: Record<string, unknown>) => Promise<void>;
     persist: (message: Record<string, unknown>) => Promise<void>;
     run: AgentRunFunction;
@@ -285,7 +287,7 @@ const approvalTimeoutMs = (configured: number | string | undefined): number => {
  * pending tool call on the same instance could resolve this one instead.
  */
 const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Promise<ApprovalDecision> => {
-    const { agent, instanceId, patchThread, persist, step } = turnContext;
+    const { agent, deleteMessage, instanceId, patchThread, persist, step } = turnContext;
 
     await persist({
         content: `Awaiting approval to run tool "${call.name}".`,
@@ -321,6 +323,17 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
 
             return { decision: "reject", note: "approval timed out" };
         });
+
+    // Retire the marker the moment a decision is reached — by a human OR by the
+    // timeout. Every client reads this row alone to decide whether to OFFER an
+    // Approve/Reject, so leaving it behind keeps advertising an action that can
+    // no longer be delivered (the instance that would receive it is finished).
+    // It is deleted rather than restatused because any non-"awaiting_approval"
+    // status turns it into a second, bogus tool RESULT — see the mutation's
+    // docstring. The real outcome lands on the tool-result row next.
+    // All three outcomes strand the same marker, so this is not on the timeout
+    // branch alone.
+    await deleteMessage(`${instanceId}:approval:${call.id}`);
 
     // Resume: back to running before we act on the decision.
     await patchThread({ status: "running" });
@@ -1119,6 +1132,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     const completeRun = toFunctionReference(paths.completeRun);
     const ensureThread = toFunctionReference(paths.ensureThread);
     const listMessages = toFunctionReference(paths.listMessages);
+    const deleteMessageRef = toFunctionReference(paths.deleteMessage);
     const patchThread = toFunctionReference(paths.patchThread);
     const setStateRef = toFunctionReference(paths.setState);
     const stateRef = toFunctionReference(paths.state);
@@ -1129,6 +1143,10 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     const patchThreadByKey = async (patch: Record<string, unknown>): Promise<void> => {
         await run(patchThread, { key: params.threadKey, ...patch });
+    };
+
+    const deleteMessageByKey = async (messageKey: string): Promise<void> => {
+        await run(deleteMessageRef, { messageKey, threadKey: params.threadKey });
     };
 
     /** The user turn that opens the run. Runs after any queue wait, so a parked run appends only once it owns the thread. */
@@ -1206,6 +1224,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         listMessages,
         memoryContext,
         onTokenDelta,
+        deleteMessage: deleteMessageByKey,
         patchThread: patchThreadByKey,
         persist,
         run,

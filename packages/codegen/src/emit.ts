@@ -1043,9 +1043,9 @@ const renderSandboxFunctionRegistry = (usesSandbox: boolean, functions: Readonly
  * `api.agents.agentRun` exist as typed references
  * (`useSubscription(api.agents.agentMessages, { key })`,
  * `useAgentState({ api, threadKey })` over `api.agents.agentState`,
- * `useMutation(api.agents.agentResolveApproval)`). The four thread-write
- * mutations (`agentAppendMessage`/`agentEnsureThread`/`agentPatchThread`/
- * `agentSetState`) stay internal — the loop dispatches them by path over the
+ * `useMutation(api.agents.agentResolveApproval)`). The thread-write mutations
+ * (`agentAppendMessage`/`agentDeleteMessage`/`agentEnsureThread`/
+ * `agentPatchThread`/`agentSetState`) stay internal — the loop dispatches them by path over the
  * scheduler channel and nothing client- or caller-side needs a reference;
  * `agentResolveApproval` is public because a client resolves approvals with it,
  * and `agentRun` is public because an HTTP-only client (the `@lunora/mcp`

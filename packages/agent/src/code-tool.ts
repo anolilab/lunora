@@ -129,11 +129,15 @@ const resolveReferences = (value: unknown, results: Record<string, unknown>): un
     const resolved: Record<string, unknown> = {};
 
     for (const [key, nested] of Object.entries(object)) {
-        // A model-supplied `__proto__` own key (own after JSON.parse) would hit
-        // `Object.prototype`'s setter and swap the accumulator's prototype, so a
-        // composed tool could read attacker-chosen inherited properties. Skip the
-        // unsafe keys, mirroring `getPath`'s own-property-only read side.
-        if (key === "__proto__" || key === "constructor" || key === "prototype") {
+        // A model-supplied `__proto__` own key (own after JSON.parse) is the one
+        // name that does not create an own property here: it hits
+        // `Object.prototype`'s setter and swaps the accumulator's prototype, so
+        // a composed tool would read attacker-chosen inherited properties.
+        // ONLY that name is skipped — `constructor` and `prototype` are plain
+        // own keys on an object literal (assigning them shadows nothing and
+        // pollutes nothing), so skipping those would buy no safety and would
+        // silently drop a tool argument legitimately called `constructor`.
+        if (key === "__proto__") {
             continue;
         }
 

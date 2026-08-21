@@ -1015,6 +1015,12 @@ export interface AgentFunctionPaths {
      * next queued run in the same mutation.
      */
     completeRun: string;
+
+    /**
+     * The internal `agents:agentDeleteMessage` mutation the loop dispatches to
+     * retire the HITL approval marker once the decision has landed.
+     */
+    deleteMessage: string;
     ensureThread: string;
     /** The internal `agents:agentEpisodeRecall` query the loop dispatches for an episodic-kind read. */
     episodeRecall: string;

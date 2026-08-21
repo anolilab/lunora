@@ -225,9 +225,11 @@ const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
 /**
  * 64-bit FNV-1a over a string, as 16 lowercase hex chars. Used to build the
  * workflow dedup instance id from the provider's raw delivery id: hashing keeps
- * the full id's entropy in a fixed-length, always-instance-id-safe key, where
- * sanitize-then-truncate collapsed distinct ids differing only in stripped
- * punctuation or past the cutoff — silently swallowing the second event.
+ * the whole id significant in a fixed-length, always-instance-id-safe key,
+ * where sanitize-then-truncate collapsed distinct ids differing only in
+ * stripped punctuation or past the cutoff — silently swallowing the second
+ * event. A checksum, NOT a cryptographic hash: it is applied to an id whose
+ * authenticity the caller has already verified by signature.
  * Algorithm lifted from `@lunora/replica`'s bit-verified `fnv1a64Hex`.
  */
 const fnv1a64Hex = (input: string): string => {
@@ -324,9 +326,14 @@ const startChannelRun = async (
     }
 
     // An absent or empty id gives no dedup key. Otherwise hash the RAW id: the
-    // hex digest is always instance-id-safe, fixed-length (`<channel>-` + 16
-    // chars, well under Cloudflare's 64-char limit), and keeps the full id's
-    // entropy — no two distinct deliveries can collapse to one key.
+    // hex digest is always instance-id-safe and fixed-length (`<channel>-` + 16
+    // chars, well under Cloudflare's 64-char limit) while keeping the whole id
+    // significant, where sanitize-then-truncate discarded everything past the
+    // cutoff. FNV-1a is a checksum, not a cryptographic hash — an attacker who
+    // can choose a delivery id can find a collision — so the integrity of this
+    // key rests on the upstream signature verification of the id, not on the
+    // digest; against ACCIDENTAL collision between honest ids, 64 bits is
+    // ample.
     if (id === undefined || id === "") {
         await workflow.create({ params: run });
 

@@ -1263,6 +1263,45 @@ describe(runAgentLoop, () => {
         expect(rejected?.toolCallId).toBe("call_1");
         expect(rejected?.content).toContain("approval timed out");
         expect(runtime.threads.get("thread-1")?.status).toBe("idle");
+
+        // The pending-approval MARKER must be gone: every client derives its
+        // Approve/Reject affordance from that row alone, so leaving it behind
+        // keeps offering a decision that can no longer be delivered (the
+        // instance it would resolve has finished).
+        expect(runtime.messages.has("thread-1:wf-1:approval:call_1")).toBe(false);
+    });
+
+    it("clears the pending-approval marker once a human decision lands", async () => {
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => "charged",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: true,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        journal.events.set("approval:call_1", { decision: "approve" });
+
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", {}, ""), finalTurn("done")]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        // Not timeout-specific: an approved (or rejected) call stranded the same
+        // marker, and the clients could not tell it was spent.
+        expect(runtime.messages.has("thread-1:wf-1:approval:call_1")).toBe(false);
+
+        // The real outcome still lands, on the tool-result row.
+        const result = [...runtime.messages.values()].find((message) => message.toolCallId === "call_1");
+
+        expect(result?.status).toBe("approved");
+        expect(result?.content).toBe("charged");
     });
 
     it("defaults the approval wait timeout to 3 days when the agent sets none", async () => {

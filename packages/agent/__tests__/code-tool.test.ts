@@ -58,17 +58,24 @@ describe(resolveReferences, () => {
         expect(resolved.y).toBeUndefined();
     });
 
-    it("skips `__proto__`/`constructor`/`prototype` own keys when rebuilding input objects", () => {
-        const input = JSON.parse(String.raw`{"__proto__": {"isAdmin": true}, "constructor": {"c": 1}, "prototype": {"p": 1}, "a": 1}`) as Record<
-            string,
-            unknown
-        >;
+    it("skips a `__proto__` own key when rebuilding input objects", () => {
+        const input = JSON.parse(String.raw`{"__proto__": {"isAdmin": true}, "a": 1}`) as Record<string, unknown>;
         const resolved = resolveReferences(input, {}) as Record<string, unknown>;
 
         expect(Object.keys(resolved)).toStrictEqual(["a"]);
         expect(Object.getPrototypeOf(resolved)).toBe(Object.prototype);
         expect(resolved.isAdmin).toBeUndefined();
-        expect(resolved.constructor).toBe(Object);
+    });
+
+    it("keeps `constructor`/`prototype` — they are ordinary own keys, and dropping them would lose a real tool argument", () => {
+        // Neither name is a setter on a plain object literal, so assigning them
+        // pollutes nothing; a tool whose input genuinely has a `constructor`
+        // field must still receive it.
+        const resolved = resolveReferences({ constructor: { c: 1 }, prototype: { p: 1 } }, {}) as Record<string, unknown>;
+
+        expect(Object.keys(resolved).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["constructor", "prototype"]);
+        expect(resolved.constructor).toStrictEqual({ c: 1 });
+        expect(Object.getPrototypeOf(resolved)).toBe(Object.prototype);
     });
 });
 
