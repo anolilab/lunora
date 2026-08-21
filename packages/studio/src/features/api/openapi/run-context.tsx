@@ -5,6 +5,7 @@ import { createContext, use, useState } from "react";
 
 import { useT } from "../../../i18n/i18n-context";
 import { adminRef, callOptions, dispatchByKind, errorMessage, fireAndForget } from "../../../lib/internal";
+import restDispatch from "../../../lib/rest-dispatch";
 import type { ApiOperation } from "./openapi-model";
 import { exampleForSchema } from "./schema-view";
 
@@ -29,38 +30,6 @@ interface OperationRun {
 }
 
 const OperationRunContext = createContext<null | OperationRun>(null);
-
-/**
- * Dispatch a plain REST route (an `httpRouter()` operation, no `functionPath`)
- * to the worker origin with the admin bearer. A same-origin fetch would be
- * answered by the studio's own server — under `lunora dev` the SPA fallback
- * returns the studio document as a 200 for any non-`/_lunora/*` path — so the
- * request must target the worker explicitly. When `origin` is empty the path
- * is fetched same-origin as before. Exported for tests.
- */
-const restDispatch = async (operation: ApiOperation, parsedArgs: unknown, origin: string, adminToken: null | string): Promise<unknown> => {
-    const hasBody = operation.method !== "GET" && operation.method !== "HEAD";
-    const url = origin === "" ? operation.httpPath : new URL(operation.httpPath, origin).toString();
-
-    const fetchResponse = await fetch(url, {
-        body: hasBody ? JSON.stringify(parsedArgs) : undefined,
-        headers: {
-            ...(hasBody ? { "content-type": "application/json" } : {}),
-            ...(adminToken === null || adminToken === "" ? {} : { authorization: `Bearer ${adminToken}` }),
-        },
-        method: operation.method,
-    });
-
-    // Read the body once, then parse — a Response stream can't be read
-    // twice, so `.json().catch(() => .text())` would throw on a non-JSON body.
-    const text = await fetchResponse.text();
-
-    try {
-        return JSON.parse(text) as unknown;
-    } catch {
-        return text;
-    }
-};
 
 /**
  * Read the current operation's live run state. Must be used inside an
@@ -148,4 +117,4 @@ const OperationRunProvider = ({ children, operation }: OperationRunProviderProps
     return <OperationRunContext value={value}>{children}</OperationRunContext>;
 };
 
-export { OperationRunProvider, restDispatch, useOperationRun };
+export { OperationRunProvider, useOperationRun };

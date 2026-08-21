@@ -1,18 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ApiOperation } from "../../../../src/features/api/openapi/openapi-model";
-import { restDispatch } from "../../../../src/features/api/openapi/run-context";
+import restDispatch from "../../src/lib/rest-dispatch";
 
-const operation: ApiOperation = {
-    httpPath: "/api/health",
-    key: "/api/health#get",
-    method: "GET",
-    operationId: "getHealth",
-    responses: [],
-    summary: "",
-    tags: [],
-    title: "getHealth",
-};
+const operation = { httpPath: "/api/health", method: "GET" };
 
 /** A fetch stub resolving with a JSON body; records its call for assertions. */
 const stubFetch = (): ReturnType<typeof vi.fn> => {

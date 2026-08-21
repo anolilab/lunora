@@ -43,6 +43,7 @@ const unitTestFiles = [
     "__tests__/lib/internal.test.ts",
     "__tests__/lib/mask-preview-heuristic.test.ts",
     "__tests__/lib/operation-log.test.ts",
+    "__tests__/lib/rest-dispatch.test.ts",
     "__tests__/lib/ws-token-provider.test.ts",
 ];
 
