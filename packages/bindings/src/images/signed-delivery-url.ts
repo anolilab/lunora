@@ -12,13 +12,37 @@
  * Pure WebCrypto, no binding I/O → deterministic, safe to call from any handler.
  */
 
-import { assertCanonicalSafe, extractHost, fromBase64Url, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical } from "../../../../shared/hmac-url";
+import {
+    assertCanonicalSafe,
+    extractHost,
+    fromBase64Url,
+    isOnlySlashesPath,
+    MAX_SIGNED_URL_TTL_SECONDS,
+    signCanonical,
+    validateTtlSeconds,
+    verifyCanonical,
+} from "../../../../shared/hmac-url";
 import type { TransformOptions } from "./types";
 
-// Hoisted to module scope so the literal isn't recompiled on every call. The
-// base64url codec, bounded key cache, host extraction, and sign/verify live in
-// `shared/hmac-url.ts` (shared byte-for-byte with `@lunora/storage`).
+// Hoisted to module scope so the literals aren't recompiled on every call. The
+// base64url codec, bounded key cache, host extraction, sign/verify, and the
+// base-path predicate live in `shared/hmac-url.ts` (shared byte-for-byte with
+// `@lunora/storage`).
 const LEADING_SLASH_RE = /^\//;
+
+// Strip every trailing slash from the base URL — a linear scan (no regex
+// backtracking), mirroring `@lunora/storage`'s `trimTrailingSlashes` so an
+// accepted only-slashes base like `https://cdn.test//` joins to a single-slash
+// pathname the verifier's key reconstruction agrees with.
+const trimTrailingSlashes = (value: string): string => {
+    let end = value.length;
+
+    while (end > 0 && value[end - 1] === "/") {
+        end -= 1;
+    }
+
+    return value.slice(0, end);
+};
 
 // Stable, order-independent serialization of the transform so the same options
 // canonicalize byte-for-byte regardless of key insertion order. Object-valued
@@ -76,12 +100,10 @@ export interface SignedImageUrlOptions {
 export const buildSignedImageUrl = async (options: SignedImageUrlOptions): Promise<string> => {
     const expiresInSeconds = options.expiresInSeconds ?? 60 * 60;
 
-    if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
-        throw new TypeError("@lunora/bindings/images: expiresInSeconds must be a positive finite number");
-    }
+    const ttlProblem = validateTtlSeconds(expiresInSeconds, MAX_SIGNED_URL_TTL_SECONDS);
 
-    if (expiresInSeconds > MAX_SIGNED_URL_TTL_SECONDS) {
-        throw new TypeError(`@lunora/bindings/images: expiresInSeconds must not exceed ${String(MAX_SIGNED_URL_TTL_SECONDS)} (7 days)`);
+    if (ttlProblem !== undefined) {
+        throw new TypeError(`@lunora/bindings/images: ${ttlProblem}`);
     }
 
     // A path on `baseUrl` would be prepended to the key in the minted URL's
@@ -90,6 +112,9 @@ export const buildSignedImageUrl = async (options: SignedImageUrlOptions): Promi
     // a base mounted at a subpath makes every minted URL fail verification. The
     // signature only binds host + key, not the base path, so we can't recover it
     // on verify; reject it loudly here instead of silently minting dead URLs.
+    // A pathname of only slashes is fine — the trailing-slash trim below
+    // collapses it to the bare origin (see `isOnlySlashesPath` in
+    // `shared/hmac-url.ts`).
     let basePath = "";
 
     try {
@@ -98,7 +123,7 @@ export const buildSignedImageUrl = async (options: SignedImageUrlOptions): Promi
         // Non-absolute baseUrl (host-only form handled by `extractHost`): no path.
     }
 
-    if (basePath !== "" && basePath !== "/") {
+    if (basePath !== "" && !isOnlySlashesPath(basePath)) {
         throw new TypeError(
             `@lunora/bindings/images: baseUrl must not carry a path ("${basePath}") — the key is verified from the full URL pathname, so a subpath base would make every signed URL fail verification`,
         );
@@ -120,7 +145,7 @@ export const buildSignedImageUrl = async (options: SignedImageUrlOptions): Promi
 
     const sig = await signCanonical(options.secret, canonicalize(host, normalizedKey, exp, transform));
 
-    const base = options.baseUrl.endsWith("/") ? options.baseUrl.slice(0, -1) : options.baseUrl;
+    const base = trimTrailingSlashes(options.baseUrl);
     const safeKey = encodeKey(normalizedKey);
     const tParameter = transform === "" ? "" : `&t=${encodeURIComponent(transform)}`;
 
