@@ -435,4 +435,30 @@ describe("stripe adapter", () => {
         expect((call?.args[0] as { amount?: number }).amount).toBe(1000);
         expect(session.state).toBe("refunded");
     });
+
+    it("fails closed on an unknown subscription status (regression)", async () => {
+        expect.assertions(1);
+
+        const base = makeClient([]) as unknown as Record<string, unknown>;
+        const client = {
+            ...base,
+            subscriptions: {
+                ...(base.subscriptions as Record<string, unknown>),
+                retrieve: async (id: string) => {
+                    return {
+                        id,
+                        items: { data: [{ price: { id: "price_1" }, quantity: 1 }] },
+                        metadata: { referenceId: "user_1" },
+                        status: "some_future_status",
+                    };
+                },
+            },
+        } as unknown as Stripe;
+        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+
+        const subscription = await adapter.getSubscriptionStatus("sub_1");
+
+        // An unrecognized status must map to non-entitling `past_due`, never `active`.
+        expect(subscription.state).toBe("past_due");
+    });
 });

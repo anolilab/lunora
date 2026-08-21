@@ -384,4 +384,23 @@ describe("polar adapter", () => {
         // "refunded" — a strictly smaller amount is still pinned as "refunded" here.
         expect(session.state).toBe("refunded");
     });
+
+    it("fails closed on an unknown subscription status (regression)", async () => {
+        expect.assertions(1);
+
+        const client = {
+            ...makeClient(),
+            subscriptions: {
+                get: async () => {
+                    return { id: "sub_1", metadata: { referenceId: "user_1" }, status: "some_future_status" };
+                },
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        const subscription = await adapter.getSubscriptionStatus("sub_1");
+
+        // An unrecognized status must map to non-entitling `past_due`, never `active`.
+        expect(subscription.state).toBe("past_due");
+    });
 });

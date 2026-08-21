@@ -155,7 +155,8 @@ const subscriptionFromStripe = (input: unknown): Subscription => {
         provider: "stripe",
         quantity: firstQuantity(subscription) ?? 1,
         referenceId: readReferenceId(subscription) ?? "",
-        state: SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(subscription, "status") ?? ""] ?? "active",
+        // Fail closed: an unrecognized Stripe status is treated as non-entitling `past_due`.
+        state: SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(subscription, "status") ?? ""] ?? "past_due",
         updatedAt: now,
     };
 };

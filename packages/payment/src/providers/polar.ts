@@ -105,7 +105,8 @@ const subscriptionFromPolar = (input: unknown): Subscription => {
         provider: "polar",
         quantity: 1,
         referenceId: referenceFromMetadata(subscription) ?? "",
-        state: SUBSCRIPTION_STATE_BY_POLAR_STATUS[readString(subscription, "status") ?? ""] ?? "active",
+        // Fail closed: an unrecognized Polar status is treated as non-entitling `past_due`.
+        state: SUBSCRIPTION_STATE_BY_POLAR_STATUS[readString(subscription, "status") ?? ""] ?? "past_due",
         updatedAt: now,
     };
 };
