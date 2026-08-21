@@ -22,10 +22,16 @@ const coverage = {
         "**/dist/**",
     ],
     // RATCHET floor, pinned ~2pp under the measurement against the `mocks`
-    // project alone (84.1 stmts / 73.5 branches / 77.1 funcs / 84.4 lines) —
-    // the workerd project is intentionally uncovered (v8 coverage cannot see
-    // into workerd; see the file-level comment). Raise when tests land, never
-    // lower.
+    // project alone (84.1 stmts / 73.5 branches / 77.1 funcs / 84.4 lines on
+    // both the Node 22 and Node 24 legs) — the workerd project is intentionally
+    // uncovered (v8 coverage cannot see into workerd; see the file-level
+    // comment). Raise when tests land, never lower.
+    //
+    // Note for local runs: `LUNORA_WORKERD_TESTS=1` adds the workerd project to
+    // this same config, and these thresholds then apply to a run whose second
+    // project contributes tests but no v8 coverage. CI never hits that — its
+    // coverage leg runs with the gate off — so a local threshold failure under
+    // the gate is the gate, not a regression.
     thresholds: {
         branches: 71,
         functions: 75,

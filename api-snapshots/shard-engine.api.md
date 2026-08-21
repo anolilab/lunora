@@ -3389,7 +3389,9 @@ const createSystemReader: (options?: SystemReaderOptions) => SystemDatabaseReade
 ```ts
 const decideDurableAttach: (run: DurableStreamRun | undefined, context: {
     generation?: number;
-    live: boolean;
+    live?: {
+        generation: number;
+    };
     resuming: boolean;
 }) => DurableAttachDecision;
 ```

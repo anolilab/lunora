@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DurableStreamRun } from "../src/durable-stream";
-import { appendStreamChunk, claimStreamRun, finishStreamRun, migrateDurableStreams, readStreamRun } from "../src/durable-stream";
+import { appendStreamChunk, claimStreamRun, finishStreamRun, migrateDurableStreams, readStreamRun, trimStreamRuns } from "../src/durable-stream";
 import type { DurableStreamSink } from "../src/durable-stream-runner";
 import { decideDurableAttach, DurableStreamRunner } from "../src/durable-stream-runner";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -17,6 +17,9 @@ import createSqliteExec from "./_helpers/node-sqlite";
 
 const GENERATION = 1_700_000_000_000;
 
+/** A live producer under the key, stamped with the same generation as the stored row. */
+const LIVE = { generation: GENERATION };
+
 const run = (status: DurableStreamRun["status"], startedAt = GENERATION): DurableStreamRun => {
     return { lastSeq: 3, startedAt, status };
 };
@@ -26,21 +29,32 @@ describe(decideDurableAttach, () => {
         it("attaches fresh when the caller holds nothing", () => {
             expect.assertions(1);
 
-            expect(decideDurableAttach(undefined, { live: false, resuming: false })).toBe("attach");
+            expect(decideDurableAttach(undefined, { resuming: false })).toBe("attach");
         });
 
         it("interrupts a resume whose transcript no longer exists", () => {
             expect.assertions(1);
 
-            expect(decideDurableAttach(undefined, { live: false, resuming: true })).toBe("interrupted");
+            expect(decideDurableAttach(undefined, { resuming: true })).toBe("interrupted");
         });
 
-        it("interrupts a resume even when a (foreign, by construction) producer is live under the key", () => {
+        it("still joins a live producer whose row a TTL sweep removed", () => {
+            expect.assertions(2);
+
+            // `trimStreamRuns` deletes on `startedAt + ttlMs` regardless of
+            // status, so a generator outliving its procedure's `ttlMs` keeps
+            // producing under a key with no row. The producer IS the run —
+            // failing its consumers here would break a resume that used to work.
+            expect(decideDurableAttach(undefined, { live: LIVE, resuming: true })).toBe("attach");
+            expect(decideDurableAttach(undefined, { generation: GENERATION, live: LIVE, resuming: true })).toBe("attach");
+        });
+
+        it("interrupts a resume onto a rowless live producer of a different generation", () => {
             expect.assertions(1);
 
-            // `claimStreamRun` writes the row before any chunk flows, so a live
-            // producer with no row cannot be the run this caller is resuming.
-            expect(decideDurableAttach(undefined, { live: true, resuming: true })).toBe("interrupted");
+            // The row is gone, but the producer's own stamp still proves this is
+            // not the run the caller holds a prefix of.
+            expect(decideDurableAttach(undefined, { generation: GENERATION - 1, live: LIVE, resuming: true })).toBe("interrupted");
         });
     });
 
@@ -50,26 +64,26 @@ describe(decideDurableAttach, () => {
 
             const stored = run("running");
 
-            expect(decideDurableAttach(stored, { generation: GENERATION - 1, live: true, resuming: true })).toBe("interrupted");
-            expect(decideDurableAttach(stored, { generation: GENERATION - 1, live: false, resuming: true })).toBe("interrupted");
+            expect(decideDurableAttach(stored, { generation: GENERATION - 1, live: LIVE, resuming: true })).toBe("interrupted");
+            expect(decideDurableAttach(stored, { generation: GENERATION - 1, resuming: true })).toBe("interrupted");
         });
 
         it("interrupts a resume onto a terminal run of a different generation instead of replaying it", () => {
             expect.assertions(1);
 
-            expect(decideDurableAttach(run("complete"), { generation: GENERATION - 1, live: false, resuming: true })).toBe("interrupted");
+            expect(decideDurableAttach(run("complete"), { generation: GENERATION - 1, resuming: true })).toBe("interrupted");
         });
 
         it("attaches a resume to the live producer when the generation matches", () => {
             expect.assertions(1);
 
-            expect(decideDurableAttach(run("running"), { generation: GENERATION, live: true, resuming: true })).toBe("attach");
+            expect(decideDurableAttach(run("running"), { generation: GENERATION, live: LIVE, resuming: true })).toBe("attach");
         });
 
         it("replays a terminal run when the resume's generation matches", () => {
             expect.assertions(1);
 
-            expect(decideDurableAttach(run("complete"), { generation: GENERATION, live: false, resuming: true })).toBe("replay-terminal");
+            expect(decideDurableAttach(run("complete"), { generation: GENERATION, resuming: true })).toBe("replay-terminal");
         });
 
         it("ignores the generation on a fresh attach", () => {
@@ -77,14 +91,14 @@ describe(decideDurableAttach, () => {
 
             // `sinceChunk: 0` means "asking fresh" — there is no held prefix a
             // mismatch could corrupt, so the stamp carries no meaning.
-            expect(decideDurableAttach(run("complete"), { generation: GENERATION - 1, live: false, resuming: false })).toBe("reclaim");
+            expect(decideDurableAttach(run("complete"), { generation: GENERATION - 1, resuming: false })).toBe("reclaim");
         });
 
         it("preserves the pre-stamp behavior when the caller sends no generation (older client)", () => {
             expect.assertions(2);
 
-            expect(decideDurableAttach(run("running"), { live: true, resuming: true })).toBe("attach");
-            expect(decideDurableAttach(run("complete"), { live: false, resuming: true })).toBe("replay-terminal");
+            expect(decideDurableAttach(run("running"), { live: LIVE, resuming: true })).toBe("attach");
+            expect(decideDurableAttach(run("complete"), { resuming: true })).toBe("replay-terminal");
         });
     });
 
@@ -92,15 +106,15 @@ describe(decideDurableAttach, () => {
         it("replays the recorded outcome to a resuming caller", () => {
             expect.assertions(2);
 
-            expect(decideDurableAttach(run("complete"), { live: false, resuming: true })).toBe("replay-terminal");
-            expect(decideDurableAttach(run("error"), { live: false, resuming: true })).toBe("replay-terminal");
+            expect(decideDurableAttach(run("complete"), { resuming: true })).toBe("replay-terminal");
+            expect(decideDurableAttach(run("error"), { resuming: true })).toBe("replay-terminal");
         });
 
         it("reclaims for a caller asking fresh", () => {
             expect.assertions(2);
 
-            expect(decideDurableAttach(run("complete"), { live: false, resuming: false })).toBe("reclaim");
-            expect(decideDurableAttach(run("error"), { live: false, resuming: false })).toBe("reclaim");
+            expect(decideDurableAttach(run("complete"), { resuming: false })).toBe("reclaim");
+            expect(decideDurableAttach(run("error"), { resuming: false })).toBe("reclaim");
         });
     });
 
@@ -108,13 +122,13 @@ describe(decideDurableAttach, () => {
         it("interrupts a resuming caller — the tail cannot be regenerated without duplicating it", () => {
             expect.assertions(1);
 
-            expect(decideDurableAttach(run("running"), { live: false, resuming: true })).toBe("interrupted");
+            expect(decideDurableAttach(run("running"), { resuming: true })).toBe("interrupted");
         });
 
         it("reclaims for a caller asking fresh so an eviction cannot wedge the key", () => {
             expect.assertions(1);
 
-            expect(decideDurableAttach(run("running"), { live: false, resuming: false })).toBe("reclaim");
+            expect(decideDurableAttach(run("running"), { resuming: false })).toBe("reclaim");
         });
     });
 
@@ -122,8 +136,8 @@ describe(decideDurableAttach, () => {
         it("joins the live producer", () => {
             expect.assertions(2);
 
-            expect(decideDurableAttach(run("running"), { live: true, resuming: false })).toBe("attach");
-            expect(decideDurableAttach(run("running"), { live: true, resuming: true })).toBe("attach");
+            expect(decideDurableAttach(run("running"), { live: LIVE, resuming: false })).toBe("attach");
+            expect(decideDurableAttach(run("running"), { live: LIVE, resuming: true })).toBe("attach");
         });
     });
 });
@@ -171,6 +185,14 @@ describe("durableStreamRunner.attach", () => {
 
     const chunksOf = (events: SinkEvent[]): SinkEvent[] => events.filter((event) => event.type === "chunk");
 
+    /** Wait until the producer has fanned out its first chunk. Not an `expect` — a retried assertion would inflate `expect.assertions`. */
+    const waitForFirstChunk = async (events: SinkEvent[]): Promise<void> =>
+        vi.waitFor(() => {
+            if (chunksOf(events).length === 0) {
+                throw new Error("no chunk delivered yet");
+            }
+        });
+
     it("starts a fresh run and stamps every chunk with the run's generation", async () => {
         expect.assertions(4);
 
@@ -201,7 +223,7 @@ describe("durableStreamRunner.attach", () => {
     });
 
     it("joins the live producer on a matching-generation resume, replaying the missed prefix first", async () => {
-        expect.assertions(4);
+        expect.assertions(2);
 
         const runner = new DurableStreamRunner({ sql: () => harness.sql });
         const first = recordingSink();
@@ -220,9 +242,7 @@ describe("durableStreamRunner.attach", () => {
 
         const producing = runner.attach({ iterator: () => answer(), runKey: "run-a", sinceChunk: 0, sink: first.sink });
 
-        await vi.waitFor(() => {
-            expect(chunksOf(first.events)).toHaveLength(1);
-        });
+        await waitForFirstChunk(first.events);
 
         const generation = chunksOf(first.events)[0]?.generation;
 
@@ -240,6 +260,48 @@ describe("durableStreamRunner.attach", () => {
         await producing;
 
         expect(chunksOf(second.events).map((event) => event.data)).toStrictEqual(["one", "two"]);
+        expect(second.events.at(-1)?.type).toBe("complete");
+    });
+
+    it("rejoins a live producer whose row a TTL sweep deleted mid-run", async () => {
+        expect.assertions(3);
+
+        const runner = new DurableStreamRunner({ sql: () => harness.sql });
+        const first = recordingSink();
+        const second = recordingSink();
+
+        let release = (): void => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        const answer = async function* (): AsyncGenerator<string> {
+            yield "live";
+            await gate;
+            yield "tail";
+        };
+
+        // A short retention with a generator that outlives it: the sweep deletes
+        // on `startedAt + ttlMs` regardless of status, so the row goes while the
+        // producer is still running.
+        const producing = runner.attach({ iterator: () => answer(), runKey: "run-a", sinceChunk: 0, sink: first.sink, ttlMs: 50 });
+
+        await waitForFirstChunk(first.events);
+
+        const generation = chunksOf(first.events)[0]?.generation;
+
+        trimStreamRuns(harness.sql, Date.now() + 60_000);
+
+        expect(readStreamRun(harness.sql, "run-a")).toBeUndefined();
+
+        // The consumer reconnects into that window. The producer IS the run —
+        // it must rejoin and keep streaming, not be told the run is gone.
+        await runner.attach({ generation, iterator: () => answer(), runKey: "run-a", sinceChunk: 1, sink: second.sink });
+
+        release();
+        await producing;
+
+        expect(chunksOf(second.events).map((event) => event.data)).toStrictEqual(["tail"]);
         expect(second.events.at(-1)?.type).toBe("complete");
     });
 

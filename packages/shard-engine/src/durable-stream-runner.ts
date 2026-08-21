@@ -90,21 +90,34 @@ type DurableAttachDecision = "attach" | "interrupted" | "reclaim" | "replay-term
  * `live` short-circuit precisely because the live producer can be the foreign
  * run. A caller that sends no generation (older client) keeps the previous
  * behavior.
+ *
+ * `context.live` carries the producing run's own stamp rather than a bare
+ * boolean because the row and the producer can disagree: {@link trimStreamRuns}
+ * deletes on `startedAt + ttlMs` regardless of status, so a generator that
+ * outlives its procedure's `ttlMs` keeps producing under a key whose row is
+ * gone. A live producer is always attachable — it is the run, row or no row —
+ * and its in-memory stamp is what a resume is checked against in that window.
  */
-const decideDurableAttach = (run: DurableStreamRun | undefined, context: { generation?: number; live: boolean; resuming: boolean }): DurableAttachDecision => {
-    if (run === undefined) {
-        // A resuming caller holds a prefix of a transcript that no longer
-        // exists (trimmed, or reclaimed); attaching fresh would silently
-        // splice a new run onto it.
-        return context.resuming ? "interrupted" : "attach";
-    }
+const decideDurableAttach = (
+    run: DurableStreamRun | undefined,
+    context: { generation?: number; live?: { generation: number }; resuming: boolean },
+): DurableAttachDecision => {
+    // The stamp of the run under this key, from whichever source still knows it.
+    const current = run?.startedAt ?? context.live?.generation;
 
-    if (context.resuming && context.generation !== undefined && context.generation !== run.startedAt) {
+    if (context.resuming && context.generation !== undefined && current !== undefined && context.generation !== current) {
         return "interrupted";
     }
 
-    if (context.live) {
+    if (context.live !== undefined) {
         return "attach";
+    }
+
+    if (run === undefined) {
+        // A resuming caller holds a prefix of a transcript that no longer
+        // exists (trimmed, or reclaimed) and no producer is carrying it;
+        // attaching fresh would silently splice a new run onto that prefix.
+        return context.resuming ? "interrupted" : "attach";
     }
 
     if (run.status === "complete" || run.status === "error") {
@@ -141,9 +154,7 @@ interface DurableStreamAttach {
  * to prevent. A dead producer of the caller's own run replays the persisted
  * tail first.
  */
-const failInterrupted = (run: DurableStreamRun | undefined, request: DurableStreamAttach, sink: DurableStreamSink, replay: () => boolean): void => {
-    const mismatched = run !== undefined && request.generation !== undefined && request.generation !== run.startedAt;
-
+const failInterrupted = (mismatched: boolean, sink: DurableStreamSink, replay: () => boolean): void => {
     if (mismatched || replay()) {
         sink.fail({
             code: "STREAM_INTERRUPTED",
@@ -217,10 +228,13 @@ class DurableStreamRunner {
         const run = readStreamRun(sql, runKey);
         const resuming = sinceChunk > 0;
         const live = this.runs.get(runKey);
-        const decision = decideDurableAttach(run, { generation: request.generation, live: live !== undefined, resuming });
+        // A TTL sweep can delete the row of a still-producing run, so the live
+        // producer's own stamp stands in for the row's when there is no row.
+        const current = run?.startedAt ?? live?.generation;
+        const decision = decideDurableAttach(run, { generation: request.generation, live, resuming });
         const replay = (): boolean => {
             for (const chunk of readStreamChunks(sql, runKey, sinceChunk)) {
-                if (!sink.chunk({ data: JSON.parse(chunk.dataJson) as unknown, generation: run?.startedAt, seq: chunk.seq })) {
+                if (!sink.chunk({ data: JSON.parse(chunk.dataJson) as unknown, generation: current, seq: chunk.seq })) {
                     return false;
                 }
             }
@@ -241,7 +255,7 @@ class DurableStreamRunner {
         }
 
         if (decision === "interrupted") {
-            failInterrupted(run, request, sink, replay);
+            failInterrupted(request.generation !== undefined && current !== undefined && request.generation !== current, sink, replay);
 
             return;
         }
