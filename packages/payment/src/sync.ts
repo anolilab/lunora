@@ -3,7 +3,9 @@
  *
  * Flow: claim the event id (inbound idempotency) → map the action to an FSM transition → upsert
  * if legal, otherwise no-op. Duplicate and out-of-order webhooks are absorbed here, not by the
- * caller.
+ * caller — with one exception: an event whose target row does not exist yet reports `"orphaned"`,
+ * which the HTTP layer answers with a 500 to request ONE redelivery (bounded below), because
+ * absorbing it would burn the event id before the row it patches exists.
  */
 import { LunoraPaymentError } from "./errors";
 import { addMoney, compareMoney, zeroMoney } from "./money";

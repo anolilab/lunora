@@ -238,7 +238,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 quantity: firstQuantity(object),
                 referenceId: readReferenceId(object),
                 subscriptionId: readString(object, "id"),
-                type: stateToEventType(SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(object, "status") ?? ""]),
+                // Fail closed BEFORE `stateToEventType`: an unmapped status reaching it as `undefined`
+                // degrades to `subscription.updated`, a metadata patch that PRESERVES an existing
+                // `active` row — the same fail-open the snapshot mapper above closes.
+                type: stateToEventType(SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(object, "status") ?? ""] ?? "past_due"),
             };
         }
 

@@ -385,6 +385,34 @@ describe("polar adapter", () => {
         expect(session.state).toBe("refunded");
     });
 
+    it("fails closed on an unknown status in the webhook path (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            data: { id: "sub_1", metadata: { referenceId: "user_1" }, status: "some_future_status" },
+            type: "subscription.updated",
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("evt_unknown", timestamp, sign("evt_unknown", timestamp, payload)), payload });
+
+        // Not `subscription.updated` — that patch would preserve an existing entitling state.
+        expect(action.type).toBe("subscription.past_due");
+    });
+
+    it("rejects a fractional webhook amount as a payment error, not a raw RangeError (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({ data: { amount: 25.5, currency: "usd", id: "ref_1", order_id: "ord_1" }, type: "refund.created" });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+
+        // `BigInt(25.5)` would throw a bare RangeError straight through the adapter boundary.
+        await expect(adapter.parseWebhook({ headers: headersFor("evt_frac", timestamp, sign("evt_frac", timestamp, payload)), payload })).rejects.toMatchObject(
+            { code: "VALIDATION_ERROR" },
+        );
+    });
+
     it("fails closed on an unknown subscription status (regression)", async () => {
         expect.assertions(1);
 

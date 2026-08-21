@@ -526,6 +526,40 @@ describe("stripe adapter", () => {
         expect(session.state).toBe("refunded");
     });
 
+    it("fails closed on an unknown status in the webhook path, for created and updated alike (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const unknownStatusEvent = async (type: string) =>
+            adapter.parseWebhook({
+                headers: webhookHeaders,
+                payload: JSON.stringify({
+                    data: {
+                        object: {
+                            customer: "cus_1",
+                            id: "sub_1",
+                            items: { data: [{ price: { id: "price_1" }, quantity: 1 }] },
+                            metadata: { referenceId: "user_1" },
+                            status: "some_future_status",
+                        },
+                    },
+                    id: `evt_${type}`,
+                    type,
+                }),
+            });
+
+        // An unmapped status must not reach `stateToEventType` as `undefined`: that degrades to
+        // `subscription.updated`, a metadata patch that leaves an existing `active` row entitling.
+        const [created, updated] = await Promise.all([
+            unknownStatusEvent("customer.subscription.created"),
+            unknownStatusEvent("customer.subscription.updated"),
+        ]);
+
+        expect(created.type).toBe("subscription.past_due");
+        expect(updated.type).toBe("subscription.past_due");
+    });
+
     it("fails closed on an unknown subscription status (regression)", async () => {
         expect.assertions(1);
 

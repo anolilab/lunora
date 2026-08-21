@@ -151,7 +151,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
             return {
                 ...base,
-                amount: money(BigInt(readNumber(object, "total_amount") ?? readNumber(object, "amount") ?? 0), currency),
+                // Raw webhook minor units go to `money()` unconverted: `BigInt()` on a fractional or
+                // non-finite amount throws a bare RangeError past the adapter boundary, while `money()`
+                // rejects it as a VALIDATION_ERROR the caller can actually handle.
+                amount: money(readNumber(object, "total_amount") ?? readNumber(object, "amount") ?? 0, currency),
                 customerId: readString(object, "customer_id"),
                 referenceId: referenceFromMetadata(object),
                 sessionId: readString(object, "id"),
@@ -163,7 +166,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "refund.created": {
             return {
                 ...base,
-                amount: money(BigInt(readNumber(object, "amount") ?? 0), currency),
+                amount: money(readNumber(object, "amount") ?? 0, currency),
                 referenceId: referenceFromMetadata(object),
                 sessionId: readString(object, "order_id") ?? readString(object, "id"),
                 type: "payment.refunded",
@@ -179,7 +182,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             const type =
                 eventType === "subscription.revoked"
                     ? "subscription.canceled"
-                    : stateToEventType(SUBSCRIPTION_STATE_BY_POLAR_STATUS[readString(object, "status") ?? ""]);
+                    : // Fail closed before `stateToEventType` — see the equivalent note in the Stripe
+                      // adapter: an unmapped status must not degrade to a state-preserving metadata patch.
+                      stateToEventType(SUBSCRIPTION_STATE_BY_POLAR_STATUS[readString(object, "status") ?? ""] ?? "past_due");
 
             return {
                 ...base,

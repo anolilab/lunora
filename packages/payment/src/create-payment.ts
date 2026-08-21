@@ -443,7 +443,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 return jsonResponse({ applied: result.applied, reason: result.reason }, 500);
             }
 
-            // Acknowledge once verified so the provider stops retrying — a no-op is still a 200.
+            // Every other outcome acknowledges: once verified, a no-op is still a 200 and the provider
+            // stops retrying.
             return jsonResponse({ applied: result.applied, reason: result.reason }, 200);
         },
 
