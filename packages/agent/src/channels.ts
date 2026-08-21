@@ -219,8 +219,50 @@ const discordPongResponse = (channel: AgentInboundChannelKind, body: string): Re
 /** The eligible targets for a channel, paired with their resolved `onInbound` config. */
 type EligibleTarget = { config: NonNullable<AgentDefinition["onInbound"]>; target: AgentChannelTarget };
 
-/** Characters not allowed in a Cloudflare Workflow instance id — hoisted, avoids recompilation. */
-const UNSAFE_INSTANCE_ID = /[^\w-]/gu;
+/** One 16-bit limb of the FNV-1a state as four lowercase hex chars. */
+const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
+
+/**
+ * 64-bit FNV-1a over a string, as 16 lowercase hex chars. Used to build the
+ * workflow dedup instance id from the provider's raw delivery id: hashing keeps
+ * the full id's entropy in a fixed-length, always-instance-id-safe key, where
+ * sanitize-then-truncate collapsed distinct ids differing only in stripped
+ * punctuation or past the cutoff — silently swallowing the second event.
+ * Algorithm lifted from `@lunora/replica`'s bit-verified `fnv1a64Hex`.
+ */
+const fnv1a64Hex = (input: string): string => {
+    /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and multiplication; the bit ops ARE the algorithm */
+    // Offset basis 0xcbf29ce484222325, low limb first.
+    let h0 = 0x23_25;
+    let h1 = 0x84_22;
+    let h2 = 0x9C_E4;
+    let h3 = 0xCB_F2;
+
+    for (let index = 0; index < input.length; index += 1) {
+        const point = input.codePointAt(index) ?? 0;
+
+        // A code point above the BMP occupies limbs 0 and 1.
+        h0 ^= point & 0xFF_FF;
+        h1 ^= (point >>> 16) & 0xFF_FF;
+
+        const p0 = h0 * 0x01_B3;
+        const p1 = h1 * 0x01_B3;
+        const p2 = h2 * 0x01_B3 + h0 * 0x01_00;
+        const p3 = h3 * 0x01_B3 + h1 * 0x01_00;
+
+        const c1 = p1 + (p0 >>> 16);
+        const c2 = p2 + (c1 >>> 16);
+        const c3 = p3 + (c2 >>> 16);
+
+        h0 = p0 & 0xFF_FF;
+        h1 = c1 & 0xFF_FF;
+        h2 = c2 & 0xFF_FF;
+        h3 = c3 & 0xFF_FF;
+    }
+
+    return hex4(h3) + hex4(h2) + hex4(h1) + hex4(h0);
+    /* eslint-enable no-bitwise */
+};
 
 /** Matches Cloudflare Workflows' "instance already exists" rejection (hoisted). */
 const DUPLICATE_INSTANCE = /already[\s-]?exists/iu;
@@ -281,18 +323,18 @@ const startChannelRun = async (
         throw new LunoraError("BAD_REQUEST", `@lunora/agent: inbound channel run params ${BRANCH_MARKER_REJECTION}`);
     }
 
-    // Sanitize the id alone (the `channel-` prefix is already instance-id-safe);
-    // an id absent or reduced to empty by sanitization gives no dedup key.
-    const sanitizedId = id === undefined ? "" : id.replaceAll(UNSAFE_INSTANCE_ID, "");
-
-    if (sanitizedId === "") {
+    // An absent or empty id gives no dedup key. Otherwise hash the RAW id: the
+    // hex digest is always instance-id-safe, fixed-length (`<channel>-` + 16
+    // chars, well under Cloudflare's 64-char limit), and keeps the full id's
+    // entropy — no two distinct deliveries can collapse to one key.
+    if (id === undefined || id === "") {
         await workflow.create({ params: run });
 
         return ack();
     }
 
     try {
-        await workflow.create({ id: `${channel}-${sanitizedId}`.slice(0, 60), params: run });
+        await workflow.create({ id: `${channel}-${fnv1a64Hex(id)}`, params: run });
     } catch (error) {
         if (isDuplicateInstanceError(error)) {
             return ack();
