@@ -8,6 +8,7 @@ import { stableWireKey } from "../../../shared/wire-key";
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
 import { isReadableStore } from "./is-readable-store";
+import { subscribeReactiveArgs } from "./subscribe-reactive-args";
 
 /** The args a paginated query exposes minus the framework-supplied page cursor. */
 type PaginatedArgs<F extends FunctionReference> = Omit<ArgsOf<F>, "paginationOpts">;
@@ -108,7 +109,7 @@ const createPaginatedEngine = <T>(
 
     // For a reactive args source this starts at `"skip"` and is replaced by the
     // store's first (synchronous) emission when `pageResults` gains a subscriber.
-    let currentBaseArgs: "skip" | Record<string, unknown> = isReadableStore(baseArgs) ? "skip" : baseArgs;
+    let currentBaseArgs: "skip" | Record<string, unknown> = isReadableStore<"skip" | Record<string, unknown>>(baseArgs) ? "skip" : baseArgs;
 
     const rebuildPageResults = (): void => {
         if (currentBaseArgs === "skip") {
@@ -302,31 +303,24 @@ const createPaginatedEngine = <T>(
         // Wire internal store updates through to this readable's subscribers.
         const unsubInternal = pageResultsInternal.subscribe(set);
 
-        let unsubscribeArgs: Unsubscribe | undefined;
-
-        if (isReadableStore(baseArgs)) {
-            // Reactive args: every emission is a full teardown + fresh
-            // construction — pagination resets to the first page, exactly as if
-            // the engine had been built anew with the emitted args.
-            unsubscribeArgs = baseArgs.subscribe((resolved) => {
-                teardownAll();
-                pagesStore.set(initialPages(initialNumItems));
-                currentBaseArgs = resolved;
-                syncSubscriptions();
-                rebuildPageResults();
-            });
-        } else if (currentBaseArgs !== "skip") {
-            // Eagerly open subscriptions now that someone is watching.
+        // Open the page subscriptions now that someone is watching. With a
+        // reactive args source every emission is a full teardown + fresh
+        // construction — the teardown resets pagination to the first page, so a
+        // new emission builds exactly as if the engine were new.
+        const stopArgs = subscribeReactiveArgs<"skip" | Record<string, unknown>>(baseArgs, (resolved) => {
+            currentBaseArgs = resolved;
             syncSubscriptions();
             rebuildPageResults();
-        }
+
+            return () => {
+                teardownAll();
+                pagesStore.set(initialPages(initialNumItems));
+            };
+        });
 
         return () => {
-            unsubscribeArgs?.();
+            stopArgs();
             unsubInternal();
-            teardownAll();
-            // Reset so a re-subscribe starts clean.
-            pagesStore.set(initialPages(initialNumItems));
             pageResultsInternal.set([]);
         };
     });

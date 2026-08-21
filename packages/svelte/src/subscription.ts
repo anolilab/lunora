@@ -5,8 +5,8 @@ import { readable, writable } from "svelte/store";
 
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
-import { isReadableStore } from "./is-readable-store";
 import type { ReactiveArgs } from "./query";
+import { subscribeReactiveArgs } from "./subscribe-reactive-args";
 
 interface SubscriptionStoreOptions {
     onError?: (error: Error) => void;
@@ -65,8 +65,12 @@ function subscription<F extends FunctionReference>(
         // `onReset` (clearing `data`) and returns a no-op teardown without opening
         // a socket — so the reset path below is reachable, unlike a local early
         // return that would make it dead code.
-        const open = (resolved: ArgsOf<F> | "skip"): Unsubscribe =>
-            createQuerySubscription(
+        const open = (resolved: ArgsOf<F> | "skip"): Unsubscribe => {
+            // Each emission starts from a clean slate: drop the error the
+            // previous args produced before opening the new subscription.
+            errorStore.set(undefined);
+
+            return createQuerySubscription(
                 client,
                 functionRef,
                 resolved,
@@ -86,26 +90,12 @@ function subscription<F extends FunctionReference>(
                 },
                 { shardKey },
             );
+        };
 
-        let teardown: Unsubscribe;
-        let unsubscribeArgs: Unsubscribe | undefined;
-
-        if (isReadableStore(args)) {
-            // Reactive args: tear down the previous subscription BEFORE opening
-            // the next, and clear the stale error so each emission starts fresh.
-            teardown = () => {};
-            unsubscribeArgs = (args as Readable<ArgsOf<F> | "skip">).subscribe((resolved) => {
-                teardown();
-                errorStore.set(undefined);
-                teardown = open(resolved);
-            });
-        } else {
-            teardown = open(args);
-        }
+        const stopArgs = subscribeReactiveArgs<ArgsOf<F> | "skip">(args, open);
 
         return () => {
-            unsubscribeArgs?.();
-            teardown();
+            stopArgs();
             errorStore.set(undefined);
         };
     });

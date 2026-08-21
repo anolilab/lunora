@@ -5,7 +5,7 @@ import { readable } from "svelte/store";
 
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
-import { isReadableStore } from "./is-readable-store";
+import { subscribeReactiveArgs } from "./subscribe-reactive-args";
 
 /** Query args, the skip sentinel, or a reactive (`Readable`) source of either. */
 export type ReactiveArgs<F extends FunctionReference> = ArgsOf<F> | "skip" | Readable<ArgsOf<F> | "skip">;
@@ -95,23 +95,6 @@ export function query<F extends FunctionReference>(
                 { shardKey: options.shardKey },
             );
 
-        if (!isReadableStore(args)) {
-            return open(args);
-        }
-
-        // Reactive args: each emission tears down the previous subscription
-        // BEFORE opening the next (so a `"skip"` emission cannot leak the old
-        // one — its `open("skip")` only fires the reset and returns a no-op).
-        let teardown: Unsubscribe = () => {};
-
-        const unsubscribeArgs = (args as Readable<ArgsOf<F> | "skip">).subscribe((resolved) => {
-            teardown();
-            teardown = open(resolved);
-        });
-
-        return () => {
-            unsubscribeArgs();
-            teardown();
-        };
+        return subscribeReactiveArgs<ArgsOf<F> | "skip">(args, open);
     });
 }
