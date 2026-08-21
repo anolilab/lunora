@@ -1794,11 +1794,18 @@ abstract class ShardDO {
         // The hooks deliberately run before any teardown so they observe
         // pre-cleanup state; the `finally` guarantees the deterministic
         // teardown below still runs when the dispatch machinery itself throws
-        // (e.g. a malformed attachment in `lifecycleInfo`).
+        // (e.g. a malformed attachment in `lifecycleInfo`). The failure is held
+        // rather than left in flight so a teardown step can't displace it, and
+        // rethrown once cleanup is done.
+        let dispatchError: { error: unknown } | undefined;
+        let relayError: { error: unknown } | undefined;
+
         try {
             if (attachment.connectionId !== undefined) {
                 await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
             }
+        } catch (error) {
+            dispatchError = { error };
         } finally {
             // Abort in-flight stream iterators bound to this socket so user
             // handlers stop pumping into a closed channel rather than discovering
@@ -1844,7 +1851,30 @@ abstract class ShardDO {
 
             // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
             // socket detaches from its owner, so the owner stops forwarding to it.
-            await this.relay?.announceDrain(ws);
+            // The detach is a network post, so it can reject — hold that too
+            // rather than letting it escape the `finally` and replace a dispatch
+            // failure the caller still has to see.
+            try {
+                await this.relay?.announceDrain(ws);
+            } catch (error) {
+                relayError = { error };
+            }
+        }
+
+        // Rethrow outside the `finally` so neither failure can be lost to the
+        // other: a dispatch failure always wins (the relay one is only a
+        // diagnostic then), and a relay failure still surfaces on its own.
+        if (dispatchError !== undefined) {
+            if (relayError !== undefined) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for a relay drain that failed behind a dispatch error
+                console.error("[@lunora/do] relay drain failed during socket close:", relayError.error);
+            }
+
+            throw dispatchError.error;
+        }
+
+        if (relayError !== undefined) {
+            throw relayError.error;
         }
     }
 

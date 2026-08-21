@@ -1,6 +1,6 @@
 import type { CdcChange, DatabaseWriterLike, SocketAttachment, SqlExec } from "@lunora/shard-engine";
 import { createShardCtxDb as createShardContextDatabase, readCdcCursor, readShapePokeCursor, runShardMigrations } from "@lunora/shard-engine";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState } from "../src/shard-do";
@@ -619,5 +619,65 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         // …but the durable row is gone and the attachment is cleared anyway.
         expect(readShapePokeCursor(harness.sql, "conn-8", "s1")).toBeUndefined();
         expect(ws.attachment).toBeUndefined();
+    });
+
+    it("keeps the dispatch failure as the thrown error when the relay drain also fails", async () => {
+        expect.assertions(2);
+
+        // `announceDrain` is a network post, so it can reject. Running it in the
+        // teardown `finally` must not let it displace the dispatch error the
+        // caller still has to see.
+        class ThrowingDispatchShard extends ShapePokeShard {
+            // eslint-disable-next-line class-methods-use-this -- test override: fail the dispatch machinery unconditionally
+            protected override async dispatchLifecycle(): Promise<void> {
+                throw new Error("dispatch machinery failed");
+            }
+        }
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ThrowingDispatchShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-9", subs: {} };
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+        // Install a relay whose drain rejects. The unit harness has no relay
+        // (`announceDrain` is skipped), and close touches no other relay method
+        // — but a subscribe does, so this lands after the subscribe above.
+        (shard as unknown as { relay: { announceDrain: () => Promise<void> } }).relay = {
+            announceDrain: () => Promise.reject(new Error("relay detach failed")),
+        };
+
+        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).rejects.toThrow("dispatch machinery failed");
+        // The relay failure is reported, not swallowed silently.
+        expect(consoleError).toHaveBeenCalledWith("[@lunora/do] relay drain failed during socket close:", expect.any(Error));
+
+        consoleError.mockRestore();
+    });
+
+    it("surfaces a relay drain failure when the lifecycle dispatch succeeded", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-10", subs: {} };
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+        // Install a relay whose drain rejects. The unit harness has no relay
+        // (`announceDrain` is skipped), and close touches no other relay method
+        // — but a subscribe does, so this lands after the subscribe above.
+        (shard as unknown as { relay: { announceDrain: () => Promise<void> } }).relay = {
+            announceDrain: () => Promise.reject(new Error("relay detach failed")),
+        };
+
+        // Nothing else in flight → the relay error is the one the runtime sees…
+        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).rejects.toThrow("relay detach failed");
+        // …and the teardown ahead of it still ran.
+        expect(readShapePokeCursor(harness.sql, "conn-10", "s1")).toBeUndefined();
     });
 });
