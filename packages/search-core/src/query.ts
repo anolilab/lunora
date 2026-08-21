@@ -369,7 +369,7 @@ export const planSearchPage = (options: { cursor?: null | string; endCursor?: nu
     if (offset + numberItems >= MAX_SEARCH_SCAN) {
         throw new LunoraError(
             "BAD_REQUEST",
-            `search pagination reaches the ${String(MAX_SEARCH_SCAN)}-document limit (offset ${String(offset)} + ${String(numberItems)} requested) — a page must end below the cap so \`hasMore\` stays observable; narrow the query or the filters instead`,
+            `search pagination reaches the ${String(MAX_SEARCH_SCAN)}-document limit (offset ${String(offset)} + ${String(numberItems)} requested) — a page must end below the cap so the probe row that answers \`hasMore\` still fits: retry with numItems ${String(Math.max(1, MAX_SEARCH_SCAN - offset - 1))} or fewer, or narrow the query or the filters instead`,
         );
     }
 

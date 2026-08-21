@@ -172,6 +172,15 @@ describe(planSearchPage, () => {
         expect(() => planSearchPage({ cursor: encodeSearchCursor(1000), numItems: 24 })).toThrow(LunoraError);
     });
 
+    it("names the largest page size that would still fit, so the caller can retry", () => {
+        expect.assertions(1);
+
+        // A power-of-two walk lands its final page exactly on the cap (512 at
+        // offset 512, 256 at 768, …); the refusal has to say what to ask for
+        // instead, or the caller can only guess.
+        expect(() => planSearchPage({ cursor: encodeSearchCursor(512), numItems: 512 })).toThrow("retry with numItems 511 or fewer");
+    });
+
     it("accepts a cursor-addressed page ending below the cap", () => {
         expect.assertions(1);
 

@@ -36,7 +36,7 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.22"
+        "@lunora/errors": "workspace:*"
     },
     "devDependencies": {
         "@types/node": "catalog:types",
