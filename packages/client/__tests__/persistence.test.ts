@@ -78,6 +78,18 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
         });
     });
 
+    it("load() preserves clientId, version, and identity", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a", { clientId: "c-1", identity: "u-1", version: "v2" }));
+
+        const [loaded] = await adapter.load();
+
+        expect(loaded).toMatchObject({ clientId: "c-1", identity: "u-1", version: "v2" });
+    });
+
     it("remove() drops a single mutation by id and leaves the rest in order", async () => {
         expect.assertions(1);
 
