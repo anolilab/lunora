@@ -124,7 +124,9 @@ describe("parseDevVariableEntries", () => {
     it("drops blank lines, comments, and invalid keys", () => {
         expect.assertions(1);
 
-        const content = ["", "# a comment", "VALID=1", "bad-key=2", "   ", "ALSO_VALID=3"].join("\n");
+        // `%bad=2` fails dotenv's `[\w.-]+` key shape; dashed/dotted keys are
+        // valid dotenv keys and are covered by the parity table below.
+        const content = ["", "# a comment", "VALID=1", "%bad=2", "   ", "ALSO_VALID=3"].join("\n");
 
         expect(parseDevVariableEntries(content)).toStrictEqual([
             { key: "VALID", value: "1" },
@@ -149,12 +151,34 @@ describe("parseDevVariableEntries", () => {
         expect(parseDevVariableEntries("")).toStrictEqual([]);
     });
 
-    it("keeps a later duplicate key as a separate entry (de-dup is the caller's job)", () => {
+    it("resolves duplicate keys last-wins, like dotenv's object overwrite", () => {
         expect.assertions(1);
 
-        expect(parseDevVariableEntries("K=1\nK=2")).toStrictEqual([
-            { key: "K", value: "1" },
-            { key: "K", value: "2" },
-        ]);
+        expect(parseDevVariableEntries("K=1\nK=2")).toStrictEqual([{ key: "K", value: "2" }]);
+    });
+
+    // wrangler parses `.dev.vars` with dotenv (16.6.1), so the reader must
+    // accept exactly what the worker sees. Each row asserts the parse dotenv
+    // itself produces for a line shape the old strict split diverged on. If
+    // wrangler ever bumps its dotenv major, extend this table first — it is
+    // the tripwire for parser drift.
+    describe("dotenv parity", () => {
+        it.each([
+            { expected: [{ key: "FOO", value: "x" }], line: "export FOO=x" },
+            { expected: [{ key: "FOO.BAR", value: "x" }], line: "FOO.BAR=x" },
+            { expected: [{ key: "FOO-BAR", value: "x" }], line: "FOO-BAR=x" },
+            { expected: [{ key: "FOO", value: "x" }], line: "FOO=x # note" },
+            { expected: [{ key: "FOO", value: "a\nb" }], line: String.raw`FOO="a\nb"` },
+            { expected: [{ key: "FOO", value: "colon" }], line: "FOO: colon" },
+            { expected: [{ key: "FOO", value: "tick" }], line: "FOO=`tick`" },
+            { expected: [{ key: "FOO", value: "multi\nline" }], line: 'FOO="multi\nline"' },
+            { expected: [], line: "# comment=notakey" },
+            // Single quotes do NOT expand escapes — the backslash-n stays literal.
+            { expected: [{ key: "FOO", value: String.raw`keep\n` }], line: String.raw`FOO='keep\n'` },
+        ])("parses $line like dotenv", ({ expected, line }) => {
+            expect.assertions(1);
+
+            expect(parseDevVariableEntries(line)).toStrictEqual(expected);
+        });
     });
 });
