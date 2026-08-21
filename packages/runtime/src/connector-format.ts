@@ -15,7 +15,14 @@
  * the line-delimited stream an Airbyte incremental source emits.
  *
  * Both consume the SAME page, so a single endpoint feeds either ecosystem.
+ *
+ * Shard admin RPCs hand docs over in wire form (`encodeWire` tags for bigint /
+ * bytes), so both formatters decode each doc and map it to warehouse-portable
+ * JSON before it reaches third-party output — see {@link toPortableDocument}.
  */
+
+import { toBase64 } from "../../../shared/base64";
+import { decodeWire, isPlainObject } from "../../../shared/wire-codec";
 
 /**
  * One change record in a {@link ConnectorSyncPage}. Mirrors a row of the CDC log
@@ -80,6 +87,57 @@ type AirbyteMessage =
 const DEFAULT_PRIMARY_KEY = "_id";
 
 /**
+ * Map a decoded value to warehouse-portable JSON: a `bigint` becomes a number
+ * when it fits the safe-integer range (else its decimal string), bytes become
+ * a base64 string, containers recurse, pure JSON passes through unchanged.
+ */
+const toPortableJson = (value: unknown): unknown => {
+    if (typeof value === "bigint") {
+        return value >= Number.MIN_SAFE_INTEGER && value <= Number.MAX_SAFE_INTEGER ? Number(value) : value.toString();
+    }
+
+    if (value instanceof ArrayBuffer) {
+        return toBase64(new Uint8Array(value));
+    }
+
+    if (ArrayBuffer.isView(value)) {
+        return toBase64(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((item) => toPortableJson(item));
+    }
+
+    if (isPlainObject(value)) {
+        const result: Record<string, unknown> = {};
+
+        for (const key of Object.keys(value)) {
+            const mapped = toPortableJson(value[key]);
+
+            if (key === "__proto__") {
+                // A plain assignment for a literal `__proto__` field fires the
+                // prototype setter instead of creating an own property (see the
+                // same handling in shared/wire-codec) — install it explicitly.
+                Object.defineProperty(result, key, { configurable: true, enumerable: true, value: mapped, writable: true });
+            } else {
+                result[key] = mapped;
+            }
+        }
+
+        return result;
+    }
+
+    return value;
+};
+
+/**
+ * Decode a wire-form doc (as shard admin RPCs return it) and map every
+ * non-JSON leaf to a warehouse-portable value. Identity for pure-JSON docs.
+ */
+const toPortableDocument = (wireDocument: Record<string, unknown>): Record<string, unknown> =>
+    toPortableJson(decodeWire(wireDocument)) as Record<string, unknown>;
+
+/**
  * Format a {@link ConnectorSyncPage} as a Fivetran connector-function response.
  *
  * Inserts and upserts both land in `insert` (Fivetran upserts on primary key, so
@@ -119,16 +177,18 @@ const toFivetranResponse = (page: ConnectorSyncPage, primaryKey: Record<string, 
     for (const change of page.changes) {
         schema[change.table] ??= { primary_key: [pkFor(change.table)] };
 
+        const portable = toPortableDocument(change.doc);
+
         if (change.op === "delete") {
-            bucketFor(remove, change.table).push(change.doc);
+            bucketFor(remove, change.table).push(portable);
         } else if (change.op === "update") {
-            bucketFor(update, change.table).push(change.doc);
+            bucketFor(update, change.table).push(portable);
         } else {
             // `insert`, `upsert`, and any op outside the Fivetran verbs (a
             // connector that has drifted from the schema) all land in `insert` —
             // Fivetran upserts on primary key, so the row still lands and a sync
             // never hard-fails on one unknown op.
-            bucketFor(insert, change.table).push(change.doc);
+            bucketFor(insert, change.table).push(portable);
         }
     }
 
@@ -152,7 +212,8 @@ const toAirbyteMessages = (page: ConnectorSyncPage, emittedAt: number = Date.now
     const messages: AirbyteMessage[] = [];
 
     for (const change of page.changes) {
-        const data = change.op === "delete" ? { ...change.doc, _lunora_deleted: true } : change.doc;
+        const portable = toPortableDocument(change.doc);
+        const data = change.op === "delete" ? { ...portable, _lunora_deleted: true } : portable;
 
         messages.push({ record: { data, emitted_at: emittedAt, stream: change.table }, type: "RECORD" });
     }
