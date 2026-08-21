@@ -3370,7 +3370,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/observability':
-        specifier: 1.0.0-alpha.32
+        specifier: 1.0.0-alpha.33
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
@@ -3595,7 +3595,7 @@ importers:
         specifier: workspace:*
         version: link:../flags
       '@lunora/observability':
-        specifier: 1.0.0-alpha.32
+        specifier: 1.0.0-alpha.33
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
@@ -4929,7 +4929,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/observability':
-        specifier: 1.0.0-alpha.32
+        specifier: 1.0.0-alpha.33
         version: link:../observability
       '@types/node':
         specifier: catalog:types
