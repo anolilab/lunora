@@ -117,6 +117,7 @@ export type {
     ShardTrafficResult,
     StorageListPage,
     StorageObject,
+    StoredQuery,
     Unsubscribe,
     User,
     VectorIndexSummary,

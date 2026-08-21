@@ -1,8 +1,6 @@
 import type { AsyncStorageLike } from "./async-storage-persistence";
-import type { CachedQuery, QueryCacheAdapter } from "./types";
-
-/** A stored read-cache row: the {@link CachedQuery} plus its primary key. */
-type StoredQuery = CachedQuery & { key: string };
+import { singleBlobStore } from "./single-blob-store";
+import type { QueryCacheAdapter, StoredQuery } from "./types";
 
 interface AsyncStorageQueryCacheOptions {
     /** Storage key the cache is serialized under; defaults to `"lunora:query-cache"`. */
@@ -34,44 +32,18 @@ const DEFAULT_MAX_ENTRIES = 500;
  * are the upgrade path.
  */
 const createAsyncStorageQueryCache = (options: AsyncStorageQueryCacheOptions): QueryCacheAdapter => {
-    const { storage } = options;
-    const key = options.key ?? DEFAULT_KEY;
     const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
-
-    // Serialize all access so a read-modify-write isn't interleaved with another.
-    let chain: Promise<unknown> = Promise.resolve();
-    const serialize = <T>(run: () => Promise<T>): Promise<T> => {
-        const next = chain.then(run, run);
-
-        chain = next.then(
-            () => undefined,
-            () => undefined,
-        );
-
-        return next;
-    };
+    const blob = singleBlobStore(options.storage, options.key ?? DEFAULT_KEY);
 
     const readAll = async (): Promise<Map<string, StoredQuery>> => {
-        const raw = await storage.getItem(key);
+        const parsed = await blob.read();
 
-        if (raw === null) {
-            return new Map();
-        }
-
-        try {
-            const parsed: unknown = JSON.parse(raw);
-
-            return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-                ? new Map(Object.entries(parsed as Record<string, StoredQuery>))
-                : new Map();
-        } catch {
-            // Corrupt payload (partial write, hand-edited store) — start clean
-            // rather than wedging every load. The lost cache is re-fetchable.
-            return new Map();
-        }
+        return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+            ? new Map(Object.entries(parsed as Record<string, StoredQuery>))
+            : new Map();
     };
 
-    const writeAll = (entries: Map<string, StoredQuery>): Promise<void> => storage.setItem(key, JSON.stringify(Object.fromEntries(entries)));
+    const writeAll = (entries: Map<string, StoredQuery>): Promise<void> => blob.write(Object.fromEntries(entries));
 
     /** Drop oldest rows by `ts` until the cache is back under the cap. */
     const evict = (entries: Map<string, StoredQuery>): void => {
@@ -93,15 +65,15 @@ const createAsyncStorageQueryCache = (options: AsyncStorageQueryCacheOptions): Q
     };
 
     return {
-        clear: () => serialize(() => storage.removeItem(key)),
+        clear: blob.clear,
         load: () =>
-            serialize(async () => {
+            blob.serialize(async () => {
                 const entries = await readAll();
 
                 return [...entries.values()];
             }),
         put: (entryKey, entry) =>
-            serialize(async () => {
+            blob.serialize(async () => {
                 const entries = await readAll();
 
                 entries.set(entryKey, { ...entry, key: entryKey });
@@ -110,7 +82,7 @@ const createAsyncStorageQueryCache = (options: AsyncStorageQueryCacheOptions): Q
                 await writeAll(entries);
             }),
         remove: (entryKey) =>
-            serialize(async () => {
+            blob.serialize(async () => {
                 const entries = await readAll();
 
                 if (entries.delete(entryKey)) {

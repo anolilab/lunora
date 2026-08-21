@@ -1,10 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { createDatabaseOpener, createWithStore, promisifyRequest } from "./idb-utility";
-import type { CachedQuery, QueryCacheAdapter } from "./types";
-
-/** A stored read-cache row: the {@link CachedQuery} plus its primary key. */
-type StoredQuery = CachedQuery & { key: string };
+import type { QueryCacheAdapter, StoredQuery } from "./types";
 
 /**
  * Compose the read-cache key for a subscription. Mirrors how

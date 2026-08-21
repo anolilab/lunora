@@ -1535,6 +1535,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `StoredQuery` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `StreamHandle` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
