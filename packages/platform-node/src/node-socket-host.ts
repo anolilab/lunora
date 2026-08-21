@@ -60,6 +60,19 @@ interface SocketRow {
 }
 
 /**
+ * Whether a value can key a `WeakMap`. `SocketHost.accept` takes `unknown`, so
+ * a conformant caller may hand this host a primitive — indexing one throws
+ * `TypeError: Invalid value used as weak map key`.
+ *
+ * A primitive raw is therefore accepted and tracked, but not resolvable
+ * through `handleFor` (which answers `undefined` for it, the same as for a
+ * socket this host never accepted). Every real transport hands over an object;
+ * if a primitive-keyed transport ever appears, pair the WeakMap with a plain
+ * `Map` for primitives, cleaned on the same close path.
+ */
+const isWeakKey = (value: unknown): value is object => (typeof value === "object" && value !== null) || typeof value === "function";
+
+/**
  * The socket-host half of a Node platform instance, plus the test-only hooks
  * `@lunora/platform/conformance`'s `ConformanceHost` needs to drive a recycle
  * from inside a test.
@@ -135,8 +148,8 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
                 state.closed = true;
                 runtimeSockets.delete(state.id);
 
-                if (state.raw !== undefined) {
-                    byRaw.delete(state.raw as object);
+                if (isWeakKey(state.raw)) {
+                    byRaw.delete(state.raw);
                 }
 
                 // A closed socket is never restored, so its durable row is
@@ -172,6 +185,15 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
             const id = crypto.randomUUID();
             const tagSet = new Set(tags);
+
+            // The durable write goes first, because it is the only fallible
+            // step (a rejected INSERT, an attachment `serialize` refuses).
+            // Registering the runtime state first would leave a half-accepted
+            // socket — enumerable through `getSockets`, with no row behind it —
+            // in the maps of a call that threw.
+            // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
+            upsertRow.run(id, attachment === undefined ? null : serialize(attachment), JSON.stringify([...tagSet]));
+
             const state: NodeSocket = {
                 attachment,
                 bufferedAmount: 0,
@@ -184,10 +206,10 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
             };
 
             runtimeSockets.set(id, state);
-            byRaw.set(raw as object, state);
 
-            // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
-            upsertRow.run(id, attachment === undefined ? null : serialize(attachment), JSON.stringify([...tagSet]));
+            if (isWeakKey(raw)) {
+                byRaw.set(raw, state);
+            }
 
             return createHandle(state);
         },
@@ -197,9 +219,10 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
             return filtered.map((state) => state.handle);
         },
-        // Explicit `undefined` guard: a restored socket's `raw` is `undefined`,
-        // and without the guard a `handleFor(undefined)` lookup could match one.
-        handleFor: (raw) => (raw === undefined ? undefined : byRaw.get(raw as object)?.handle),
+        // The `isWeakKey` guard doubles as the `undefined` guard: a restored
+        // socket's `raw` is `undefined`, and a `handleFor(undefined)` lookup
+        // must never match one.
+        handleFor: (raw) => (isWeakKey(raw) ? byRaw.get(raw)?.handle : undefined),
         idFor: (handle) => {
             const id = handleIds.get(handle);
 
@@ -271,9 +294,15 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
             // A restored-but-previously-unknown id has no durable row, and
             // `persistAttachment`/`persistTags` are UPDATE-only — without this
-            // upsert a later `serializeAttachment` on the restored handle would
+            // insert a later `serializeAttachment` on the restored handle would
             // silently write nothing, violating SocketHost guarantee 2.
-            if (database.open) {
+            //
+            // Only when there is no row at all. An existing row whose
+            // `attachment` is SQL NULL belongs to a socket this host *did*
+            // track, accepted without an attachment — writing the caller's
+            // fallback over it would persist state this host never received,
+            // and the fallback is documented as covering an untracked id only.
+            if (row === undefined && database.open) {
                 // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
                 upsertRow.run(id, state.attachment === undefined ? null : serialize(state.attachment), JSON.stringify([...state.tags]));
             }
