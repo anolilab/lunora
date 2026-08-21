@@ -621,10 +621,12 @@ const isValidIdentifier = (candidate: string): boolean => VALID_IDENTIFIER.test(
  * actually lives, instead of debugging generated source.
  */
 const assertMethodsGeneratable = (namespace: SdkNamespace): void => {
-    // Both a method and its subscription land in this one map: a namespace with a
-    // query `list` and a sibling `subscribeList` otherwise passes validation and
-    // then emits `SubscribeList` twice — a compile error in Go, a silent shadow
-    // in Python.
+    // Both a method and its derived members land in this one map: a namespace
+    // with a query `list` and a sibling `subscribeList` otherwise passes
+    // validation and then emits `SubscribeList` twice — a compile error in Go, a
+    // silent shadow in Python. `Watch` is reserved for the same reason: the Dart
+    // target emits a second `watchX` Stream member per query. Any future target
+    // that adds a per-method member with a new prefix must reserve it here too.
     const seenMethod = new Map<string, string>();
 
     for (const method of namespace.methods) {
@@ -636,14 +638,16 @@ const assertMethodsGeneratable = (namespace: SdkNamespace): void => {
             );
         }
 
-        const names = method.verb === "query" ? [memberBase, `Subscribe${memberBase}`] : [memberBase];
+        const names = method.verb === "query" ? [memberBase, `Subscribe${memberBase}`, `Watch${memberBase}`] : [memberBase];
 
         for (const name of names) {
             const clash = seenMethod.get(name);
 
             if (clash !== undefined) {
+                const hint = name.startsWith("Watch") ? ` (the Dart target emits a "watch" Stream member for every query)` : "";
+
                 throw new Error(
-                    `sdk: functions "${clash}" and "${method.functionPath}" both generate "${name}" — rename one so the generated methods stay distinct.`,
+                    `sdk: functions "${clash}" and "${method.functionPath}" both generate "${name}"${hint} — rename one so the generated methods stay distinct.`,
                 );
             }
 
