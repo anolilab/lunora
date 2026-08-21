@@ -21,6 +21,17 @@ const coverage = {
         "**/node_modules/**",
         "**/dist/**",
     ],
+    // RATCHET floor, pinned ~2pp under the measurement against the `mocks`
+    // project alone (84.1 stmts / 73.5 branches / 77.1 funcs / 84.4 lines) —
+    // the workerd project is intentionally uncovered (v8 coverage cannot see
+    // into workerd; see the file-level comment). Raise when tests land, never
+    // lower.
+    thresholds: {
+        branches: 71,
+        functions: 75,
+        lines: 82,
+        statements: 82,
+    },
 };
 
 /**
