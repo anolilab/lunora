@@ -1746,6 +1746,34 @@ export interface FlagSecurityDefaultIR {
 
 /* eslint-enable no-secrets/no-secrets -- re-enable after the FlagSecurityDefaultIR doc block */
 
+/* eslint-disable no-secrets/no-secrets -- the referenced advisor lint rule id in the doc comment, not a credential */
+
+/**
+ * One `ctx.flags` read lexically inside a `query(...)` handler — the
+ * `flag_read_in_subscription` advisor lint input. Flag changes append nothing to
+ * `__cdc_log`, so a subscribed query is never re-run when a flag flips and keeps
+ * serving the branch it last picked; `useFlag` is the reactive path. Structurally
+ * identical to the advisor's `AdvisorFlagRead` (same field set) so values pass
+ * straight through `lintSchema` without conversion, exactly as `R2sqlCallIR` does.
+ *
+ * Only `query` handlers are recorded — unlike `R2sqlCallIR` / `NondeterministicCallIR`
+ * there is no `kind` field, because `mutation`/`action` handlers run once and have
+ * no subscription staleness to warn about, so the feeder drops them rather than
+ * handing the lint rows it would discard.
+ */
+export interface FlagReadIR {
+    /** The accessed `ctx.flags` surface, e.g. `ctx.flags.boolean` / `ctx.flags.details.string`. */
+    callee: string;
+    /** Export binding name of the query performing the read. */
+    exportName: string;
+    /** Source file relative to `<projectRoot>/lunora/`, without extension (the api namespace). */
+    file: string;
+    /** 1-based line of the read, or `0` when unknown. */
+    line: number;
+}
+
+/* eslint-enable no-secrets/no-secrets -- re-enable after the FlagReadIR doc block */
+
 /**
  * One `generateText` / `streamText` call in `lunora/` whose `tools` reach a
  * privileged side effect (a DB write, function dispatch, or outbound

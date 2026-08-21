@@ -359,6 +359,7 @@ interface LintSchemaOptions {
     containers?: ReadonlyArray<ContainerIR>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
+    flagReads?: ReadonlyArray<FlagReadIR>;
     flagSecurityDefaults?: ReadonlyArray<FlagSecurityDefaultIR>;
     geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<HttpActionGuardIR>;

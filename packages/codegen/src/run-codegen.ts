@@ -26,6 +26,7 @@ import discoverCrons from "./discover-crons";
 import discoverExportSinks from "./discover-export-sinks";
 import discoverFailOpenGuards from "./discover-fail-open-guards";
 import { buildStudioFeatures, hasPaymentStoreTables } from "./discover-feature-usage";
+import discoverFlagReads from "./discover-flag-reads";
 import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
 import { discoverFlagKeys } from "./discover-flags";
 import { discoverFunctions, listLunoraSourceFiles, resolveStandardSchemaType } from "./discover-functions";
@@ -556,6 +557,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   exportSinks: discoverExportSinks(project, lunoraDirectory),
                   staleMigrationImports: discoverStaleMigrationImports(project, lunoraDirectory),
                   failOpenGuards: discoverFailOpenGuards(project, lunoraDirectory),
+                  flagReads: discoverFlagReads(project, lunoraDirectory),
                   flagSecurityDefaults: discoverFlagSecurityDefaults(project, lunoraDirectory),
                   geoIndexUsages: discoverGeoIndexUsages(project, lunoraDirectory),
                   httpActionGuards: discoverHttpActionGuards(project, lunoraDirectory),

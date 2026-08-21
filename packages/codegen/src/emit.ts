@@ -3076,6 +3076,7 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
         return EMPTY_HELPER_FRAGMENTS;
     }
 
+    /* eslint-disable no-secrets/no-secrets -- the flagged string is the `flag_read_in_subscription` advisory's rule id in a comment, not a credential. */
     return {
         build: `
             const flagsClient: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
@@ -3103,6 +3104,7 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
             const flags: import("${flagsSpecifier}").LunoraFlags = flagsClient;
 `,
         configField: `\n    flags?: (env: Record<string, unknown>) => import("${flagsSpecifier}").Provider;`,
+        /* eslint-enable no-secrets/no-secrets */
         contextField: `\n                flags,`,
         importLines: [`import { createFlags } from "${flagsSpecifier}";`, `import flagsConfig from "../flags.js";`],
         stub: "",
