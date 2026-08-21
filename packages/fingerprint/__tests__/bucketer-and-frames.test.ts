@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import { fingerprint, fingerprintError, fingerprintLog, messageBucketFor, normalizeMessage, sha256Hex } from "../src/index";
+import { parseFrames } from "../src/superlog";
 
 const nodeSha256 = (input: string): string => createHash("sha256").update(input).digest("hex");
 
@@ -249,5 +250,41 @@ describe("fingerprintLog routing", () => {
 
         expect(fp.exceptionType).toBe("FATAL");
         expect(fp.hash).toBe(fingerprintLog({ body: "boom", service: "unknown", severity: "FATAL", stacktrace: null }).hash);
+    });
+});
+
+describe("stacktrace parser clamps", () => {
+    it("parses a pathological paren-heavy line in bounded time", () => {
+        expect.assertions(2);
+
+        // O(k * len) before the clamps: every whitespace-preceded "(" sliced the
+        // rest of the line. Must return (frame or not) without stalling.
+        const line = `at ${"x (".repeat(20_000)}f.js:1:1)`;
+        const start = performance.now();
+        const frames = parseFrames(line);
+        const elapsed = performance.now() - start;
+
+        expect(Array.isArray(frames)).toBe(true);
+        expect(elapsed).toBeLessThan(200);
+    });
+
+    it("caps a 100-line stack at STACK_FRAMES_MAX frames", () => {
+        expect.assertions(1);
+
+        const stack = Array.from({ length: 100 }, (_, index) => `    at fn${String(index)} (src/handler.ts:${String(index + 1)}:1)`).join("\n");
+
+        expect(parseFrames(stack)).toHaveLength(64);
+    });
+
+    it("keeps the fingerprint of a well-formed stack byte-identical", () => {
+        expect.assertions(2);
+
+        const fp = fingerprint({
+            stacktrace: "    at handler (/repo/packages/api/src/handler.ts:5:3)",
+            type: "TypeError",
+        });
+
+        expect(fp.topFrame).toBe("handler@packages/api/src/handler.ts");
+        expect(fp.hash).toBe("d1886ae5325dfff1");
     });
 });
