@@ -211,11 +211,11 @@ describe("definePresence", () => {
         expect(present[0]?.userId).toBe("user-a");
     });
 
-    it("listPresent caps the read at maxMembers, keeping the newest heartbeats", async () => {
+    it("listPresent caps the read at maxSessions, keeping the newest heartbeats", async () => {
         expect.assertions(2);
 
         const db = createMemoryDb();
-        const presence = definePresence({ maxMembers: 3, ttlMs: 10_000 });
+        const presence = definePresence({ maxSessions: 3, ttlMs: 10_000 });
 
         // Five distinct anonymous sessions (no userId, so no dedup), each with
         // a fresher heartbeat than the last.
@@ -230,6 +230,50 @@ describe("definePresence", () => {
         expect(present).toHaveLength(3);
         // Newest-first and truncated from the oldest end: 1400, 1300, 1200.
         expect(present.map((member) => member.lastSeen)).toEqual([1400, 1300, 1200]);
+    });
+
+    it("counts maxSessions in session rows, so one user's tabs consume several", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ maxSessions: 2, ttlMs: 10_000 });
+
+        // "multi" has two tabs (two rows) and heartbeats last, so it fills the
+        // whole cap and "solo" — equally live — falls off the bottom. This is
+        // why the option is named for sessions: sizing it by head count would
+        // drop currently-heartbeating members from "who's here".
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "solo"), { roomId: "room-1", sessionId: "solo-1" });
+        vi.setSystemTime(2000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "multi"), { roomId: "room-1", sessionId: "multi-1" });
+        vi.setSystemTime(3000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "multi"), { roomId: "room-1", sessionId: "multi-2" });
+
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(present.map((member) => member.userId)).toEqual(["multi"]);
+
+        // Raising the cap past the session count restores the dropped member.
+        const roomy = definePresence({ maxSessions: 3, ttlMs: 10_000 });
+        const all = await roomy.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(all.map((member) => member.userId)).toEqual(["multi", "solo"]);
+    });
+
+    it("falls back to the default cap for a non-finite maxSessions", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        // `Math.max(1, Math.floor(NaN))` is NaN, which would reach the reader
+        // as `LIMIT NaN` and return nothing.
+        const presence = definePresence({ maxSessions: Number.NaN, ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-1"), { roomId: "room-1", sessionId: "sess-1" });
+
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(present.map((member) => member.userId)).toEqual(["user-1"]);
     });
 
     it("heartbeat reaps long-expired rows but never one inside the grace window", async () => {

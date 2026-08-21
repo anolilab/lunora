@@ -60,8 +60,13 @@ import type { MutationCtx as MutationContext, RegisteredLifecycleHook, Registere
 /** Default time-to-live for a presence row: a heartbeat keeps a member "present" for this long. */
 const DEFAULT_TTL_MS = 30_000;
 
-/** Default upper bound on rows `listPresent` reads per call — far above any realistic room. */
-const DEFAULT_MAX_MEMBERS = 512;
+/**
+ * Default upper bound on SESSION ROWS `listPresent` reads per call. Sized for
+ * sessions, not people: a user with three tabs open holds three rows, and the
+ * per-user dedup runs after the read, so the cap has to clear the room's
+ * expected tab count rather than its head count.
+ */
+const DEFAULT_MAX_SESSIONS = 1024;
 
 /**
  * How many of a room's oldest rows each heartbeat inspects for reaping. Small
@@ -124,12 +129,19 @@ interface DefinePresenceOptions {
     disconnectGraceMs?: number;
 
     /**
-     * Upper bound on rows `listPresent` reads per call. The read is
-     * newest-first over the `(roomId, lastSeen)` index, so the visible set is
-     * always the freshest heartbeats; a room with more rows than this has its
-     * oldest (least-live) entries truncated. Defaults to 512.
+     * Upper bound on SESSION ROWS `listPresent` reads per call — one row per
+     * `(roomId, sessionId)`, so one per open tab, NOT one per person. The read
+     * is newest-first over the `(roomId, lastSeen)` index, so the rows kept are
+     * always the freshest heartbeats and a room with more sessions than this
+     * has its stalest ones truncated.
+     *
+     * Because the multi-tab dedup collapses rows only AFTER the read, a cap
+     * below the room's live session count drops real, currently-heartbeating
+     * members off the bottom of the list. Size it against expected tabs (a
+     * 300-person room at two tabs each is 600 rows), not expected people.
+     * Defaults to 1024. A non-finite value falls back to the default.
      */
-    maxMembers?: number;
+    maxSessions?: number;
 
     /**
      * How long (ms) a heartbeat keeps a member present. `listPresent` excludes
@@ -237,7 +249,12 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
     // A grace window longer than the TTL would never hide the row before the
     // TTL filter already does, so clamp it; negative values disable the grace.
     const disconnectGraceMs = Math.max(0, Math.min(options.disconnectGraceMs ?? 0, ttlMs));
-    const maxMembers = Math.max(1, Math.floor(options.maxMembers ?? DEFAULT_MAX_MEMBERS));
+    // `Number.isFinite` first: a `NaN` / `Infinity` option would otherwise flow
+    // through `Math.max`/`Math.floor` unchanged and reach the reader as
+    // `LIMIT NaN`.
+    const requestedSessions = options.maxSessions;
+    const maxSessions =
+        requestedSessions !== undefined && Number.isFinite(requestedSessions) ? Math.max(1, Math.floor(requestedSessions)) : DEFAULT_MAX_SESSIONS;
 
     const heartbeat = mutation
         .input({
@@ -306,14 +323,15 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
         const cutoff = Date.now() - ttlMs;
 
         // Bounded newest-first read over the `(roomId, lastSeen)` index: cost
-        // scales with `maxMembers`, not with however many rows the room has
+        // scales with `maxSessions`, not with however many rows the room has
         // ever accumulated — this query re-runs for every subscriber on every
-        // heartbeat, so an unbounded `.collect()` here is the hot path.
+        // heartbeat, so an unbounded `.collect()` here is the hot path. The cap
+        // counts session rows; the dedup below then collapses a user's tabs.
         const rows = await context.db
             .query(PRESENCE_TABLE)
             .withIndex("byRoomLastSeen", (q) => q.eq("roomId", args.roomId))
             .order("desc")
-            .take(maxMembers);
+            .take(maxSessions);
 
         // Rows arrive newest heartbeat first, so the dedup below keeps the
         // freshest row per user and the returned list stays newest-first.
