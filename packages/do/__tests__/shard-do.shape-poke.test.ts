@@ -590,4 +590,34 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         // Untouched: a different socket's connection.
         expect(readShapePokeCursor(harness.sql, "conn-7", "s1")).toBeDefined();
     });
+
+    it("still purges durable cursors and clears the attachment when lifecycle dispatch throws", async () => {
+        expect.assertions(3);
+
+        // The dispatch *machinery* throwing (not a hook — hooks are swallowed
+        // per-hook inside `dispatchLifecycle`) must not skip the deterministic
+        // teardown: durable cursor purge + attachment clear live in a `finally`.
+        class ThrowingDispatchShard extends ShapePokeShard {
+            // eslint-disable-next-line class-methods-use-this -- test override: fail the dispatch machinery unconditionally
+            protected override async dispatchLifecycle(): Promise<void> {
+                throw new Error("dispatch machinery failed");
+            }
+        }
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ThrowingDispatchShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-8", subs: {} };
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+
+        // The dispatch failure still surfaces to the runtime…
+        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).rejects.toThrow("dispatch machinery failed");
+
+        // …but the durable row is gone and the attachment is cleared anyway.
+        expect(readShapePokeCursor(harness.sql, "conn-8", "s1")).toBeUndefined();
+        expect(ws.attachment).toBeUndefined();
+    });
 });

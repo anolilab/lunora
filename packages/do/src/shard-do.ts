@@ -1791,55 +1791,61 @@ abstract class ShardDO {
         // dispatches; the hooks run under the connecting user's identity.
         const attachment = this.readAttachment(ws);
 
-        if (attachment.connectionId !== undefined) {
-            await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
-        }
+        // The hooks deliberately run before any teardown so they observe
+        // pre-cleanup state; the `finally` guarantees the deterministic
+        // teardown below still runs when the dispatch machinery itself throws
+        // (e.g. a malformed attachment in `lifecycleInfo`).
+        try {
+            if (attachment.connectionId !== undefined) {
+                await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
+            }
+        } finally {
+            // Abort in-flight stream iterators bound to this socket so user
+            // handlers stop pumping into a closed channel rather than discovering
+            // it on the next yield.
+            const cancellers = this.streamCancellers.get(ws);
 
-        // Abort in-flight stream iterators bound to this socket so user
-        // handlers stop pumping into a closed channel rather than discovering
-        // it on the next yield.
-        const cancellers = this.streamCancellers.get(ws);
+            if (cancellers) {
+                for (const controller of cancellers.values()) {
+                    controller.abort();
+                }
 
-        if (cancellers) {
-            for (const controller of cancellers.values()) {
-                controller.abort();
+                this.streamCancellers.delete(ws);
             }
 
-            this.streamCancellers.delete(ws);
-        }
+            // Drop the per-socket subscription memo too — leaving it would pin
+            // the socket in the WeakMap until GC and (more importantly) keep the
+            // stale memo set around if the same socket id is reused after a
+            // bounce. Cheap to recompute on the next subscribe.
+            this.subMemos.delete(ws);
+            this.shapeMemos.delete(ws);
+            this.globalShapeSnapshots.delete(ws);
 
-        // Drop the per-socket subscription memo too — leaving it would pin
-        // the socket in the WeakMap until GC and (more importantly) keep the
-        // stale memo set around if the same socket id is reused after a
-        // bounce. Cheap to recompute on the next subscribe.
-        this.subMemos.delete(ws);
-        this.shapeMemos.delete(ws);
-        this.globalShapeSnapshots.delete(ws);
+            // Drop the durable global-shape and shape-poke-cursor baselines for
+            // this socket too — leaving them would orphan rows under a
+            // `connectionId` that can never reconnect (a fresh upgrade mints a
+            // new id), slowly leaking both tables.
+            if (attachment.connectionId !== undefined) {
+                try {
+                    deleteGlobalShapeSnapshotsForConnection(this.sql as SqlExec, attachment.connectionId);
+                } catch {
+                    /* stub sql / missing table — nothing durable to clean up */
+                }
 
-        // Drop the durable global-shape and shape-poke-cursor baselines for
-        // this socket too — leaving them would orphan rows under a
-        // `connectionId` that can never reconnect (a fresh upgrade mints a
-        // new id), slowly leaking both tables.
-        if (attachment.connectionId !== undefined) {
-            try {
-                deleteGlobalShapeSnapshotsForConnection(this.sql as SqlExec, attachment.connectionId);
-            } catch {
-                /* stub sql / missing table — nothing durable to clean up */
+                try {
+                    deleteShapePokeCursorsForConnection(this.sql as SqlExec, attachment.connectionId);
+                } catch {
+                    /* stub sql / missing table — nothing durable to clean up */
+                }
             }
 
-            try {
-                deleteShapePokeCursorsForConnection(this.sql as SqlExec, attachment.connectionId);
-            } catch {
-                /* stub sql / missing table — nothing durable to clean up */
-            }
+            // Clear the attachment so a future reconnection starts clean.
+            (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
+
+            // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
+            // socket detaches from its owner, so the owner stops forwarding to it.
+            await this.relay?.announceDrain(ws);
         }
-
-        // Clear the attachment so a future reconnection starts clean.
-        (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
-
-        // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
-        // socket detaches from its owner, so the owner stops forwarding to it.
-        await this.relay?.announceDrain(ws);
     }
 
     /** Hibernation API: invoked on socket error. */
