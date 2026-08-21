@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PaymentAdapter } from "../src/adapter";
 import { createPayment } from "../src/create-payment";
 import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
-import type { Subscription, WebhookAction } from "../src/types";
+import type { PaymentSession, Subscription, WebhookAction } from "../src/types";
 
 const subscription = (referenceId: string, state: Subscription["state"]): Subscription => {
     return {
@@ -16,6 +16,20 @@ const subscription = (referenceId: string, state: Subscription["state"]): Subscr
         quantity: 1,
         referenceId,
         state,
+        updatedAt: 0,
+    };
+};
+
+const paymentSession = (referenceId: string): PaymentSession => {
+    return {
+        amount: money(1000, "USD"),
+        capturedAmount: money(1000, "USD"),
+        createdAt: 0,
+        id: "pi_1",
+        provider: "stripe",
+        referenceId,
+        refundedAmount: money(0, "USD"),
+        state: "captured",
         updatedAt: 0,
     };
 };
@@ -225,6 +239,97 @@ describe("createPayment", () => {
         const stored = await store.getSubscription("stripe", "sub_1");
 
         expect(stored?.state).toBe("canceled");
+    });
+
+    it("refunds an owned session with a derived idempotency key and syncs the store", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(paymentSession("user_1"));
+
+        let forwardedKey: string | undefined;
+        const adapter = fakeAdapter({
+            refundPayment: async (input) => {
+                forwardedKey = input.idempotencyKey;
+
+                return { ...paymentSession("user_1"), refundedAmount: money(1000, "USD"), state: "refunded" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        const updated = await payment.refundPayment({ sessionId: "pi_1" });
+
+        expect(forwardedKey).toBe("refund_payment:stripe:pi_1");
+        expect(updated.state).toBe("refunded");
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ state: "refunded" });
+    });
+
+    it("collapses a refund on another reference's session to NOT_FOUND (no existence oracle)", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(paymentSession("user_2"));
+
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: (referenceId) => referenceId === "user_1", store });
+
+        // NOT_FOUND, not FORBIDDEN — indistinguishable from a genuinely missing session.
+        await expect(payment.refundPayment({ sessionId: "pi_1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("rejects a refund on a nonexistent session with NOT_FOUND", async () => {
+        expect.assertions(1);
+
+        const payment = createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() });
+
+        await expect(payment.refundPayment({ sessionId: "pi_absent" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("captures an owned session through the facade and syncs the store", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession({ ...paymentSession("user_1"), capturedAmount: money(0, "USD"), state: "authorized" });
+
+        let forwardedKey: string | undefined;
+        const adapter = fakeAdapter({
+            capturePayment: async (input) => {
+                forwardedKey = input.idempotencyKey;
+
+                return paymentSession("user_1");
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.capturePayment({ sessionId: "pi_1" });
+
+        expect(forwardedKey).toBe("capture_payment:stripe:pi_1");
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ state: "captured" });
+    });
+
+    it("cancels an owned payment through the facade and syncs the store", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession({ ...paymentSession("user_1"), capturedAmount: money(0, "USD"), state: "authorized" });
+
+        let forwardedKey: string | undefined;
+        const adapter = fakeAdapter({
+            cancelPayment: async (_sessionId, cancelOptions) => {
+                forwardedKey = cancelOptions?.idempotencyKey;
+
+                return { ...paymentSession("user_1"), capturedAmount: money(0, "USD"), state: "canceled" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.cancelPayment("pi_1");
+
+        expect(forwardedKey).toBe("cancel_payment:stripe:pi_1");
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ state: "canceled" });
     });
 
     it("acknowledges a verified webhook with 200 and applies it", async () => {
@@ -650,5 +755,25 @@ describe("createPayment — attach / check / track", () => {
             { allowed: true, balance: 70, featureId: "api_calls", limit: 100, unlimited: false, used: 30 },
             { allowed: true, featureId: "export", unlimited: true },
         ]);
+    });
+
+    it("listBalances issues one batched usage read for all metered features", async () => {
+        expect.assertions(3);
+
+        const manyMetered = { plans: { pro: { features: [], limits: { api_calls: 100, exports: 10, seats: 5 }, priceIds: ["price_1"] } } };
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(activeSubscription("user_1"));
+
+        const sumUsage = vi.spyOn(store, "sumUsage");
+        const sumUsageByFeature = vi.spyOn(store, "sumUsageByFeature");
+        const payment = createPayment({ adapter: fakeAdapter(), entitlements: manyMetered, store });
+
+        const balances = await payment.listBalances("user_1");
+
+        expect(balances.map((balance) => balance.featureId)).toEqual(["api_calls", "exports", "seats"]);
+        // N metered features cost one batched read, not N per-feature scans.
+        expect(sumUsage).not.toHaveBeenCalled();
+        expect(sumUsageByFeature).toHaveBeenCalledTimes(1);
     });
 });

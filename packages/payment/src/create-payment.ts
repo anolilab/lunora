@@ -20,11 +20,14 @@ import applyWebhookAction from "./sync";
 import type {
     AttachInput,
     CancelSubscriptionOptions,
+    CaptureInput,
     CheckInput,
     CheckoutInput,
     CheckoutResult,
     CheckResult,
     FeatureBalance,
+    PaymentSession,
+    RefundInput,
     Subscription,
     TrackInput,
     TrackResult,
@@ -97,7 +100,11 @@ export interface LunoraPayment {
      * with `mode` defaulting to `"subscription"`. Returns a hosted-checkout URL to redirect to.
      */
     attach: (input: AttachInput) => Promise<CheckoutResult>;
+    /** Cancel the caller's own uncaptured payment (authorized, derived idempotency key, store synced). */
+    cancelPayment: (sessionId: string, options?: { idempotencyKey?: string }) => Promise<PaymentSession>;
     cancelSubscription: (subscriptionId: string, options?: CancelSubscriptionOptions) => Promise<Subscription>;
+    /** Capture the caller's own authorized payment (authorized, derived idempotency key, store synced). */
+    capturePayment: (input: CaptureInput) => Promise<PaymentSession>;
 
     /**
      * Is a reference allowed something right now? Pass `featureId` to check a grant/allowance (boolean
@@ -113,6 +120,8 @@ export interface LunoraPayment {
     /** Resolve every configured feature's allowance for a reference in one call. Requires `entitlements`. */
     listBalances: (referenceId: string) => Promise<FeatureBalance[]>;
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;
+    /** Refund the caller's own captured payment (authorized, derived idempotency key, store synced). */
+    refundPayment: (input: RefundInput) => Promise<PaymentSession>;
     readonly store: PaymentStore;
 
     /**
@@ -200,6 +209,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
     // Resolve one feature's allowance — shared by `check` and `listBalances`. A metered feature
     // (numeric plan limit) subtracts usage tracked this period; a boolean feature is granted or not.
+    // The balance arithmetic for a metered feature — shared by the single-feature `check` path and
+    // the batched `listBalances` path so the two can never disagree.
+    const meteredResult = (limit: number, used: number, need: number): CheckResult => {
+        const balance = limit - used;
+
+        return { allowed: balance >= need, balance, limit, unlimited: false, used };
+    };
+
     const evaluateFeature = async (
         entitlements: Entitlements,
         subscriptions: ReadonlyArray<Subscription>,
@@ -211,18 +228,47 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
         if (limit !== undefined) {
             const used = await store.sumUsage(referenceId, featureId, usagePeriodStart(subscriptions));
-            const balance = limit - used;
 
-            return { allowed: balance >= need, balance, limit, unlimited: false, used };
+            return meteredResult(limit, used, need);
         }
 
         return { allowed: entitlements.has(featureId), unlimited: entitlements.has(featureId) };
+    };
+
+    // Shared ownership guard for the money-moving session operations. Collapse "doesn't exist" and
+    // "not yours" into one indistinguishable NOT_FOUND so the endpoint can't be used as a
+    // cross-tenant existence oracle (same posture as `cancelSubscription`).
+    const ownedSession = async (sessionId: string): Promise<PaymentSession> => {
+        const existing = await store.getPaymentSession(adapter.identifier, sessionId);
+
+        if (!existing) {
+            throw new LunoraPaymentError("NOT_FOUND", `payment session "${sessionId}" not found`);
+        }
+
+        try {
+            await ensureAuthorized(existing.referenceId);
+        } catch {
+            throw new LunoraPaymentError("NOT_FOUND", `payment session "${sessionId}" not found`);
+        }
+
+        return existing;
     };
 
     return {
         adapter,
 
         attach: async (input) => startCheckout({ ...input, mode: input.mode ?? "subscription" }),
+
+        cancelPayment: async (sessionId, cancelOptions) => {
+            await ownedSession(sessionId);
+
+            const key = cancelOptions?.idempotencyKey ?? idempotencyKey("cancel_payment", adapter.identifier, sessionId);
+            const updated = await adapter.cancelPayment(sessionId, { ...cancelOptions, idempotencyKey: key });
+
+            await store.upsertPaymentSession(updated);
+
+            return updated;
+        },
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
             const existing = await store.getSubscription(adapter.identifier, subscriptionId);
@@ -244,6 +290,17 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             const updated = await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key });
 
             await store.upsertSubscription(updated);
+
+            return updated;
+        },
+
+        capturePayment: async (input) => {
+            await ownedSession(input.sessionId);
+
+            const key = input.idempotencyKey ?? idempotencyKey("capture_payment", adapter.identifier, input.sessionId);
+            const updated = await adapter.capturePayment({ ...input, idempotencyKey: key });
+
+            await store.upsertPaymentSession(updated);
 
             return updated;
         },
@@ -357,22 +414,39 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             const subscriptions = await store.listSubscriptionsByReference(referenceId);
             const entitlements = resolveEntitlements(options.entitlements, subscriptions);
+            const names = featureNames(options.entitlements);
+            const metered = names.filter((featureId) => entitlements.limit(featureId) !== undefined);
+            // One batched ledger read for every metered feature instead of one unbounded scan each.
+            const usage =
+                metered.length === 0 ? new Map<string, number>() : await store.sumUsageByFeature(referenceId, metered, usagePeriodStart(subscriptions));
 
-            // `Promise.all` preserves the sorted `featureNames` order.
-            return Promise.all(
-                featureNames(options.entitlements).map(async (featureId) => {
-                    return {
-                        featureId,
-                        ...(await evaluateFeature(entitlements, subscriptions, referenceId, featureId, 1)),
-                    };
-                }),
-            );
+            // `names` is already sorted; mapping it preserves the order.
+            return names.map((featureId) => {
+                const limit = entitlements.limit(featureId);
+
+                if (limit !== undefined) {
+                    return { featureId, ...meteredResult(limit, usage.get(featureId) ?? 0, 1) };
+                }
+
+                return { featureId, allowed: entitlements.has(featureId), unlimited: entitlements.has(featureId) };
+            });
         },
 
         listSubscriptions: async (referenceId) => {
             await ensureAuthorized(referenceId);
 
             return store.listSubscriptionsByReference(referenceId);
+        },
+
+        refundPayment: async (input) => {
+            await ownedSession(input.sessionId);
+
+            const key = input.idempotencyKey ?? idempotencyKey("refund_payment", adapter.identifier, input.sessionId);
+            const updated = await adapter.refundPayment({ ...input, idempotencyKey: key });
+
+            await store.upsertPaymentSession(updated);
+
+            return updated;
         },
 
         store,
