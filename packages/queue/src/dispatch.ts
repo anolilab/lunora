@@ -122,16 +122,40 @@ interface CaptureHarness {
 }
 
 /**
- * A `ctx.run` pinned to one message: every call it makes carries that message's
- * id, so a deterministic dispatch failure comes back attributed to it (see
- * {@link resolveAttributedFailure}) and only that message is taken out of the
- * batch. The pin wins over a caller-supplied `messageId` — the whole point of
- * `message.run` is that a handler never has to know the option exists.
+ * A `ctx.run` pinned to one message. Every call it makes carries two ids:
+ * `messageId`, that message's id, so a deterministic dispatch failure comes
+ * back attributed to it (see {@link resolveAttributedFailure}) and only that
+ * message is taken out of the batch; and `dedupId`, `<messageId>#<n>` with `n`
+ * counting THIS message's calls in order, so a redelivery applies each call
+ * exactly once.
+ *
+ * The two must not be the same value. The shard's dedup table is keyed
+ * `(identity, mutationId)` with no function path in it, and every
+ * server-initiated dispatch shares the `"system:"` identity — so pinning one
+ * id onto every call would make `m.run(chargeCustomer)` followed by
+ * `m.run(sendReceipt)` collide: the second would return the first's cached
+ * result and never execute. The per-call counter is what keeps them distinct.
+ *
+ * The counter restarts at 1 for every delivery (this closure is built per
+ * message per dispatch), which is exactly the property dedup needs: a
+ * redelivered handler replays from the start, so its first call reproduces
+ * `#1` and dedups against its own first-run result. That assumes the handler
+ * issues its `run` calls in a deterministic ORDER — already an at-least-once
+ * replay assumption; a handler that branches nondeterministically must pass
+ * its own stable `dedupId`.
+ *
+ * The pin wins over caller-supplied options — the whole point of `message.run`
+ * is that a handler never has to know either option exists.
  */
-const pinRunToMessage =
-    (run: DispatchRunFunction, messageId: string): DispatchRunFunction =>
-    <F extends FunctionReference>(function_: F, arguments_?: ArgsOf<F>, options?: RunFunctionOptions): Promise<unknown> =>
-        run(function_, arguments_, { ...options, messageId });
+const pinRunToMessage = (run: DispatchRunFunction, messageId: string): DispatchRunFunction => {
+    let callCount = 0;
+
+    return <F extends FunctionReference>(function_: F, arguments_?: ArgsOf<F>, options?: RunFunctionOptions): Promise<unknown> => {
+        callCount += 1;
+
+        return run(function_, arguments_, { ...options, dedupId: `${messageId}#${String(callCount)}`, messageId });
+    };
+};
 
 /**
  * Wrap one message so `ack`/`retry` record their disposition (keyed by the

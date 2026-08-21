@@ -267,10 +267,13 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                 response = await fetchImpl(url, {
                     // `id` is the receiver's at-least-once dedup key: the worker's
                     // dispatch endpoint forwards it to the shard as the replay-dedup
-                    // `mutationId`, so a redelivered queue message re-running the same
-                    // `ctx.run` mutation is applied once. `JSON.stringify` omits the
-                    // key when the caller supplied no `messageId`.
-                    body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, id: runOptions.messageId, shardKey: runOptions.shardKey }),
+                    // `mutationId`, so a redelivered dispatch of the same call is
+                    // applied once. Deliberately `dedupId`, never `messageId` — the
+                    // shard keys dedup on `(identity, mutationId)` with no function
+                    // path, so a per-MESSAGE id reused across a handler's several
+                    // calls would make the second call return the first's cached
+                    // result. `JSON.stringify` omits the key when unset.
+                    body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, id: runOptions.dedupId, shardKey: runOptions.shardKey }),
                     headers,
                     method: "POST",
                     signal: deadline.signal,
