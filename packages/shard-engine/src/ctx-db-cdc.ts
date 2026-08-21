@@ -218,18 +218,55 @@ const cdcTouchesTables = (sql: SqlExec, sinceSeq: number, tables: ReadonlySet<st
  * parameter per dependency would walk into workerd's 100-bound-parameter cap on
  * a wide read-set.
  */
-const cdcCanVouchFor = (sql: SqlExec, deps: ReadonlySet<string>): boolean => {
-    if (deps.size === 0) {
-        return false;
-    }
+const localTableCache = new WeakMap<object, Set<string>>();
 
-    const local = new Set(
+/** Every physical table in this DO's SQLite. */
+const readLocalTables = (sql: SqlExec): Set<string> =>
+    new Set(
         runDrizzle<{ name: string }>(sql, dsql`SELECT name FROM sqlite_master WHERE type = 'table'`)
             .toArray()
             .map((row) => row.name),
     );
 
+const cdcCanVouchFor = (sql: SqlExec, deps: ReadonlySet<string>): boolean => {
+    if (deps.size === 0) {
+        return false;
+    }
+
+    // The catalog is memoized per `sql` handle, because it moves only when a
+    // migration runs while this question is asked on every resume evaluation —
+    // and that is the hot path the whole two-stage read exists to keep flat
+    // (measured: the uncached scan cost ~18% of `evaluateResume`).
+    //
+    // Only a POSITIVE answer is ever cached. A dep the cache does not know
+    // re-reads the catalog once and retries, so a table created after the cache
+    // was built is picked up rather than being refused forever; and because a
+    // miss always re-reads, the cache can never turn a vouchable dep into a
+    // refusal. The reverse — a table DROPPED after being cached — would leave a
+    // stale vouch, but a query whose dependency no longer exists cannot read it
+    // to begin with, so no live subscription can hold one.
+    let local = localTableCache.get(sql);
+    let reread = false;
+
+    if (local === undefined) {
+        local = readLocalTables(sql);
+        reread = true;
+        localTableCache.set(sql, local);
+    }
+
     for (const dep of deps) {
+        if (local.has(dep)) {
+            continue;
+        }
+
+        if (reread) {
+            return false;
+        }
+
+        local = readLocalTables(sql);
+        reread = true;
+        localTableCache.set(sql, local);
+
         if (!local.has(dep)) {
             return false;
         }

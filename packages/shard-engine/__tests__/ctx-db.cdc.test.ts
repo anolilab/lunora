@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { CdcChange, DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
-import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations, trimCdcChanges } from "../src/ctx-db";
+import {
+    applyCdcChanges,
+    cdcCanVouchFor,
+    createShardCtxDb as createShardContextDatabase,
+    readCdcChanges,
+    runShardMigrations,
+    trimCdcChanges,
+} from "../src/ctx-db";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -118,6 +125,39 @@ describe("ctx-db change-data-capture", () => {
 
         expect(drained.changes).toStrictEqual([]);
         expect(drained.cursor).toBe(5);
+    });
+
+    describe("cdcCanVouchFor", () => {
+        it("vouches for a local table and refuses anything the changelog never records", () => {
+            expect.assertions(3);
+
+            setupWriter(true);
+
+            // A real table: the changelog records every write to it, so "nothing
+            // changed" is a claim it can support.
+            expect(cdcCanVouchFor(harness.sql, new Set(["messages"]))).toBe(true);
+            // A `.global()` table is never created locally, so it falls to the
+            // default — as does the flags/admin wildcard, which is not a table.
+            expect(cdcCanVouchFor(harness.sql, new Set(["messages", "profiles"]))).toBe(false);
+            expect(cdcCanVouchFor(harness.sql, new Set(["*"]))).toBe(false);
+        });
+
+        it("picks up a table created after the catalog was first read", () => {
+            expect.assertions(2);
+
+            setupWriter(true);
+
+            // Warm the memo, and record a miss for a table that does not exist yet.
+            expect(cdcCanVouchFor(harness.sql, new Set(["late_arrival"]))).toBe(false);
+
+            harness.sql.exec(`CREATE TABLE late_arrival (id TEXT PRIMARY KEY)`);
+
+            // Only positive answers are cached: a dep the memo does not know
+            // re-reads the catalog rather than refusing forever. Getting this
+            // wrong would silently deny every resume for a table added by a later
+            // migration, which no test would otherwise notice.
+            expect(cdcCanVouchFor(harness.sql, new Set(["late_arrival"]))).toBe(true);
+        });
     });
 
     it("trims entries at or below a checkpointed seq", async () => {
