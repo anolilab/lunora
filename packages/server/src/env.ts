@@ -2,6 +2,8 @@ import { LunoraError } from "@lunora/errors";
 import type { Infer, Validator } from "@lunora/values";
 import { optionalInner } from "@lunora/values";
 
+import { isSecretKeyName } from "../../../shared/secret-key";
+
 /**
  * Typed, lazily-validated env accessor — the Lunora answer to void's
  * `defineEnv`. Validates `env` per key against a map of `v.*` validators, masks
@@ -87,25 +89,6 @@ const URL_CREDENTIAL = /\b([a-z][\w.+-]*:\/\/[\w.%+-]+):[\w.%+-]+@/gu;
 /** The fixed placeholder substituted for any redacted secret. */
 const REDACTED = "[redacted]";
 
-/**
- * Keys whose **value** is a secret. Mirrors `@lunora/config`'s `.dev.vars`
- * scaffolder regex (`packages/config/src/scaffold-dev-variables.ts`, `SECRET_KEY`)
- * so the runtime validator and the scaffolder agree on what "looks secret". Kept
- * as a small local copy rather than importing `@lunora/config` — `@lunora/server`
- * is the app runtime and must not take a build/CLI-layer dependency on the config
- * package. If you change this, change it there too.
- *
- * A key is secret-named when it ends in key/password/secret/token as a real
- * WORD, in any of the conventions keys actually arrive in: SCREAMING_SNAKE
- * (`API_KEY`, `TOKEN`), lower snake or bare (`api_key`, `password`), or
- * camelCase (`apiToken`, `clientSecret`). Anchored at the end of the key so
- * `SECRETARY` never matches, and requiring a `^`/`_`/`-` boundary (or a
- * camel-hump `[a-z]Key`) so `MONKEY`/`monkey`/`donkey` (suffix mid-word) never
- * match either. The camel boundary deliberately over-redacts `sortKey` /
- * `idempotencyKey` — masking a non-secret beats leaking a secret.
- */
-const SECRET_KEY = /(?:^|[_-])(?:key|password|secret|token|KEY|PASSWORD|SECRET|TOKEN)$|[a-z](?:Key|Password|Secret|Token)$/u;
-
 /** Whether a value (already a string) looks like a credential by prefix or entropy. */
 const looksLikeSecretValue = (value: string): boolean => {
     if (SECRET_VALUE_PREFIXES.some((prefix) => prefix.test(value))) {
@@ -161,7 +144,7 @@ const redactSecrets = (message: string): string => {
     out = out.replaceAll(KEYED_VALUE, (match: string, ...groups: unknown[]) => {
         const named = groups.at(-1) as { key?: string } | undefined;
 
-        return named?.key !== undefined && SECRET_KEY.test(named.key) ? `${named.key}=${REDACTED}` : match;
+        return named?.key !== undefined && isSecretKeyName(named.key) ? `${named.key}=${REDACTED}` : match;
     });
 
     out = out.replaceAll(HIGH_ENTROPY_TOKEN, REDACTED);
@@ -184,7 +167,7 @@ const redactSecrets = (message: string): string => {
 const redactValueForKey = (message: string, key: string, raw: unknown): string => {
     const masked = redactSecrets(message);
 
-    if (typeof raw === "string" && raw !== "" && SECRET_KEY.test(key)) {
+    if (typeof raw === "string" && raw !== "" && isSecretKeyName(key)) {
         return masked.replaceAll(raw, REDACTED);
     }
 

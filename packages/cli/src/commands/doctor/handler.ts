@@ -5,6 +5,7 @@ import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderVa
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { collectExportGaps, findWranglerFile, readWranglerJsonc, validateWranglerConfig } from "@lunora/config/cloudflare";
 
+import { isSecretKeyName } from "../../../../../shared/secret-key";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -79,9 +80,6 @@ interface RunDoctorOptions {
     executablePath?: string;
     logger: Logger;
 }
-
-/** Keys whose name looks like a secret — same heuristic the dev-vars scaffolder uses. */
-const SECRET_KEY_PATTERN = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
 
 /** A D1 `database_id` placeholder that still needs `wrangler d1 create` run. */
 const isD1PlaceholderId = (databaseId: string): boolean => {
@@ -247,7 +245,7 @@ const checkDevVariables = (cwd: string, findings: Finding[]): void => {
     }
 
     const unfilled = parseDevVariableEntries(content)
-        .filter((entry) => SECRET_KEY_PATTERN.test(entry.key) && isPlaceholderValue(entry.value))
+        .filter((entry) => isSecretKeyName(entry.key) && isPlaceholderValue(entry.value))
         .map((entry) => entry.key);
 
     if (unfilled.length > 0) {

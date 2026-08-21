@@ -4,11 +4,9 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { isSecretKeyName } from "../../../shared/secret-key";
 import { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "../src/package-secrets-registry";
 import { buildPackageSecretsBlock, ensureDevVariables, ensureDevVarsExample, isPlaceholderValue } from "../src/scaffold-dev-variables";
-
-/** Keys whose name implies a secret value — mirrors the scaffolder's SECRET_KEY regex. */
-const SECRET_KEY_PATTERN = /(?:^|[_-])(?:key|password|secret|token|KEY|PASSWORD|SECRET|TOKEN)$|[a-z](?:Key|Password|Secret|Token)$/u;
 
 /** Strip one layer of surrounding quotes from a raw value string. */
 const stripQuotes = (raw: string): string =>
@@ -16,7 +14,7 @@ const stripQuotes = (raw: string): string =>
 
 /**
  * Parse a `.dev.vars` block and return the unquoted values of every
- * secret-keyed assignment (keys matching {@link SECRET_KEY_PATTERN}).
+ * secret-keyed assignment (keys {@link isSecretKeyName} accepts).
  * Uses a functional pipeline — no `if` branches in test scope.
  */
 const secretEntryValues = (text: string): string[] =>
@@ -31,7 +29,7 @@ const secretEntryValues = (text: string): string[] =>
         .map(({ trimmed, equalsIndex }) => {
             return { key: trimmed.slice(0, equalsIndex).trim(), rawValue: trimmed.slice(equalsIndex + 1).trim() };
         })
-        .filter(({ key }) => SECRET_KEY_PATTERN.test(key))
+        .filter(({ key }) => isSecretKeyName(key))
         .map(({ rawValue }) => stripQuotes(rawValue));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,11 +87,11 @@ describe("packageSecretsRegistry", () => {
         expect.hasAssertions();
 
         // Reviewer-visible assertion: the registry can never emit a real secret
-        // value for keys that match the SECRET_KEY_PATTERN. Non-secret keys
+        // value for secret-named keys. Non-secret keys
         // (like AUTH_URL) may carry real default values (e.g. a localhost URL).
         const secretEntries = Object.values(PACKAGE_SECRETS_REGISTRY)
             .flat()
-            .filter((entry) => SECRET_KEY_PATTERN.test(entry.key));
+            .filter((entry) => isSecretKeyName(entry.key));
 
         for (const entry of secretEntries) {
             expect(isPlaceholderValue(entry.placeholderValue), `${entry.key}.placeholderValue must be a placeholder`).toBe(true);

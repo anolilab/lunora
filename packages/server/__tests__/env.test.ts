@@ -235,20 +235,39 @@ describe("redactSecrets", () => {
         expect(redactSecrets("DB_PASSWORD: short")).toContain("DB_PASSWORD=[redacted]");
     });
 
-    it("masks camelCase and lowercase secret-named keys", () => {
-        expect.assertions(4);
+    it("masks secret-named keys in every convention keys arrive in", () => {
+        expect.assertions(8);
 
+        // camelCase / lowercase — the spellings request bodies and thrown
+        // errors actually use.
         expect(redactSecrets("password: hunter2")).toBe("password=[redacted]");
         expect(redactSecrets("apiToken=abc123")).toBe("apiToken=[redacted]");
         expect(redactSecrets("authSecret: x")).toBe("authSecret=[redacted]");
+        // No-separator compounds: the suffix is not preceded by `_`, so a
+        // boundary-only rule silently misses these.
+        expect(redactSecrets("OPENAI_APIKEY=abc")).toBe("OPENAI_APIKEY=[redacted]");
+        expect(redactSecrets("APITOKEN=abc")).toBe("APITOKEN=[redacted]");
+        expect(redactSecrets("MYPASSWORD=abc")).toBe("MYPASSWORD=[redacted]");
+        expect(redactSecrets("AUTHSECRET=abc")).toBe("AUTHSECRET=[redacted]");
         expect(redactSecrets("TOKEN=abc")).toBe("TOKEN=[redacted]");
     });
 
-    it("does not treat words merely ending in a secret suffix as secret keys", () => {
-        expect.assertions(2);
+    it("masks Title-case and kebab separated secret keys", () => {
+        expect.assertions(1);
 
+        // `KEYED_VALUE` captures `[A-Za-z_]\w*`, so a kebab key is only ever
+        // seen from its last `-` segment (`Token` here) — which still redacts.
+        expect(redactSecrets("Api_Key=abc")).toBe("Api_Key=[redacted]");
+    });
+
+    it('does not treat ordinary words ending in "key" as secret keys', () => {
+        expect.assertions(3);
+
+        // `MONKEY` and `APIKEY` are structurally identical, so the exclusion is
+        // a word list rather than a boundary rule — see shared/secret-key.ts.
         expect(redactSecrets("MONKEY=banana")).toBe("MONKEY=banana");
         expect(redactSecrets("monkey: banana")).toBe("monkey: banana");
+        expect(redactSecrets("donkey=grey")).toBe("donkey=grey");
     });
 
     it("masks bare high-entropy >=24-char tokens", () => {
