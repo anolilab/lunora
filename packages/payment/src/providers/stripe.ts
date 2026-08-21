@@ -205,7 +205,12 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             // attached. Capturing under the cs_… id here and the pi_… id on the later
             // payment_intent.succeeded would create two rows for one payment — defer to
             // payment_intent.succeeded, the authoritative capture, instead.
-            if (paymentIntentId === undefined) {
+            //
+            // Only when an intent is actually coming, though: a fully discounted session settles as
+            // `no_payment_required` and Stripe creates NO PaymentIntent for it, so deferring would
+            // drop the order entirely and an app fulfilling off `paymentSessions` would silently stop
+            // serving free orders. Those keep the cs_… id — the only id that payment ever has.
+            if (paymentIntentId === undefined && readString(object, "payment_status") !== "no_payment_required") {
                 return { ...base, type: "unhandled" };
             }
 
@@ -216,7 +221,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 amount: amountTotal === undefined ? undefined : money(BigInt(Math.round(amountTotal)), currency),
                 customerId: readString(object, "customer"),
                 referenceId: readReferenceId(object),
-                sessionId: paymentIntentId,
+                sessionId: paymentIntentId ?? readString(object, "id"),
                 type: "payment.captured",
             };
         }

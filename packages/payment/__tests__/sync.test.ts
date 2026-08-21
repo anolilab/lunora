@@ -313,8 +313,8 @@ describe("applyWebhookAction", () => {
         await expect(store.listSubscriptionsByReference("user_1")).resolves.toHaveLength(1);
     });
 
-    it("releases the claim on an orphaned subscription.updated so the retry is not a duplicate", async () => {
-        expect.assertions(2);
+    it("releases the claim on an orphaned subscription.updated, then gives up rather than retry forever", async () => {
+        expect.assertions(3);
 
         const store = new MemoryPaymentStore();
 
@@ -329,8 +329,15 @@ describe("applyWebhookAction", () => {
         // No row exists yet (out-of-order delivery) — the event is orphaned, not consumed.
         await expect(applyWebhookAction(store, updated)).resolves.toEqual({ applied: false, reason: "orphaned" });
 
-        // The claim was released: replaying the SAME event id is not a duplicate.
-        await expect(applyWebhookAction(store, updated)).resolves.toEqual({ applied: false, reason: "orphaned" });
+        // The claim was released, so the provider's retry re-processes rather than deduping — and
+        // it is re-attempted here (the ordering-repair test covers it succeeding once the row lands).
+        // With the row still missing, the retry is the LAST one: a row that never appears
+        // (subscription predating the integration, a store reset) stops 500ing before the provider
+        // disables the endpoint.
+        await expect(applyWebhookAction(store, updated)).resolves.toEqual({ applied: false, reason: "unhandled" });
+
+        // And it stays given-up: the claim is kept, so further redeliveries are acknowledged.
+        await expect(applyWebhookAction(store, updated)).resolves.toEqual({ applied: false, reason: "duplicate" });
     });
 
     it("applies an out-of-order subscription.updated once the create event lands (ordering repair)", async () => {

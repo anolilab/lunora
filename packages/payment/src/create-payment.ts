@@ -13,6 +13,7 @@ import type { Entitlements, EntitlementsConfig } from "./entitlements";
 import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 import { LunoraPaymentError } from "./errors";
 import { derivedIdempotencyKey, idempotencyKey } from "./idempotency";
+import { addMoney, compareMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
@@ -26,6 +27,7 @@ import type {
     CheckoutResult,
     CheckResult,
     FeatureBalance,
+    Money,
     PaymentSession,
     RefundInput,
     Subscription,
@@ -58,6 +60,9 @@ const nextUsageStamp = (): number => {
 
     return lastUsageStamp;
 };
+
+/** The amount, as stable idempotency-key parts — a full-amount operation is its own distinct part. */
+const amountPart = (amount: Money | undefined): string => (amount ? `${amount.currency}:${String(amount.minorUnits)}` : "full");
 
 /** Drop a caller-supplied `referenceId` from checkout metadata — it's framework-controlled, never caller-set. */
 const stripReferenceId = (metadata: Record<string, string> | undefined): Record<string, string> | undefined =>
@@ -115,7 +120,11 @@ export interface LunoraPayment {
     createCheckout: (input: CheckoutInput) => Promise<CheckoutResult>;
     /** Open the provider billing portal for the caller's own customer (derived from the store). */
     createPortalSession: (referenceId: string, returnUrl: string) => Promise<{ url: string }>;
-    /** Verify + normalize + apply a provider webhook. Always 200 once verified, even on no-op. */
+
+    /**
+     * Verify + normalize + apply a provider webhook. 200 once verified, even on a no-op — except an
+     * event whose target row doesn't exist yet, which returns 500 so the provider redelivers it once.
+     */
     handleWebhook: (request: Request) => Promise<Response>;
     /** Resolve every configured feature's allowance for a reference in one call. Requires `entitlements`. */
     listBalances: (referenceId: string) => Promise<FeatureBalance[]>;
@@ -239,19 +248,55 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     // "not yours" into one indistinguishable NOT_FOUND so the endpoint can't be used as a
     // cross-tenant existence oracle (same posture as `cancelSubscription`).
     const ownedSession = async (sessionId: string): Promise<PaymentSession> => {
-        const existing = await store.getPaymentSession(adapter.identifier, sessionId);
+        // Every failure below raises the SAME message: `toErrorBody` echoes a payment error's message
+        // verbatim to the caller, so varying it by cause would rebuild the existence oracle this
+        // collapse exists to prevent.
+        const notFound = (): LunoraPaymentError => new LunoraPaymentError("NOT_FOUND", `payment session "${sessionId}" not found`);
 
+        let existing = await store.getPaymentSession(adapter.identifier, sessionId);
+
+        // No local row yet is normal, not an error: an authorize-then-capture inside one request, and
+        // any manual-capture flow driven by `payment_intent.*`, runs before the webhook that creates
+        // the row. Ask the provider before giving up, so those flows work through the facade.
         if (!existing) {
-            throw new LunoraPaymentError("NOT_FOUND", `payment session "${sessionId}" not found`);
+            try {
+                existing = await adapter.getPaymentStatus(sessionId);
+            } catch {
+                throw notFound();
+            }
+        }
+
+        // Nothing to authorize against — refuse rather than let an unowned session through.
+        if (!existing.referenceId) {
+            throw notFound();
         }
 
         try {
             await ensureAuthorized(existing.referenceId);
         } catch {
-            throw new LunoraPaymentError("NOT_FOUND", `payment session "${sessionId}" not found`);
+            throw notFound();
         }
 
         return existing;
+    };
+
+    /**
+     * Persist an adapter result onto the stored row.
+     *
+     * An adapter returns a PROVIDER-shaped session, not a store row: Polar's `refundPayment` pins
+     * `amount`/`capturedAmount` to the refund amount and blanks `referenceId`, and Stripe's
+     * `intentToSession` blanks `referenceId` for any checkout-originated intent (the reference lives
+     * on the checkout session, not the PaymentIntent). Writing one verbatim would wipe the captured
+     * total and orphan the row from `by_reference`, leaving it unauthorizable — and so permanently
+     * unrefundable. Merge the way the webhook path does (`sync.ts`): the stored row owns identity and
+     * money, and each operation contributes only the fields it actually establishes.
+     */
+    const persistSession = async (existing: PaymentSession, patch: Partial<PaymentSession>): Promise<PaymentSession> => {
+        const merged: PaymentSession = { ...existing, ...patch, updatedAt: Date.now() };
+
+        await store.upsertPaymentSession(merged);
+
+        return merged;
     };
 
     return {
@@ -260,14 +305,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         attach: async (input) => startCheckout({ ...input, mode: input.mode ?? "subscription" }),
 
         cancelPayment: async (sessionId, cancelOptions) => {
-            await ownedSession(sessionId);
+            const existing = await ownedSession(sessionId);
 
             const key = cancelOptions?.idempotencyKey ?? idempotencyKey("cancel_payment", adapter.identifier, sessionId);
             const updated = await adapter.cancelPayment(sessionId, { ...cancelOptions, idempotencyKey: key });
 
-            await store.upsertPaymentSession(updated);
-
-            return updated;
+            // A cancel establishes the state and nothing else — the amounts on the row stand.
+            return persistSession(existing, { state: updated.state });
         },
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
@@ -295,14 +339,17 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         },
 
         capturePayment: async (input) => {
-            await ownedSession(input.sessionId);
+            const existing = await ownedSession(input.sessionId);
 
-            const key = input.idempotencyKey ?? idempotencyKey("capture_payment", adapter.identifier, input.sessionId);
+            // The amount is part of the key: `CaptureInput` supports partial captures, and reusing one
+            // key across two different amounts makes the provider reject the second call as a
+            // parameter mismatch — while two identical ones must still replay rather than double-charge.
+            const key = input.idempotencyKey ?? (await derivedIdempotencyKey("capture_payment", adapter.identifier, input.sessionId, amountPart(input.amount)));
             const updated = await adapter.capturePayment({ ...input, idempotencyKey: key });
 
-            await store.upsertPaymentSession(updated);
-
-            return updated;
+            // The provider's captured total is authoritative here, and its own `payment.captured`
+            // webhook later ASSIGNS the same value (never accumulates), so both paths agree.
+            return persistSession(existing, { capturedAmount: updated.capturedAmount, state: updated.state });
         },
 
         check: async (input) => {
@@ -439,14 +486,33 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         },
 
         refundPayment: async (input) => {
-            await ownedSession(input.sessionId);
+            const existing = await ownedSession(input.sessionId);
 
-            const key = input.idempotencyKey ?? idempotencyKey("refund_payment", adapter.identifier, input.sessionId);
-            const updated = await adapter.refundPayment({ ...input, idempotencyKey: key });
+            // Resolve the resulting refunded total BEFORE moving money: a mismatched currency or an
+            // over-refund must fail with nothing issued, not leave a refund the ledger can't record.
+            const refunded = input.amount ? addMoney(existing.refundedAmount, input.amount) : existing.capturedAmount;
 
-            await store.upsertPaymentSession(updated);
+            if (compareMoney(refunded, existing.capturedAmount) > 0) {
+                throw new LunoraPaymentError(
+                    "VALIDATION_ERROR",
+                    `refundPayment(): refunding ${String(input.amount?.minorUnits)} would exceed the captured amount on session "${input.sessionId}"`,
+                );
+            }
 
-            return updated;
+            // Amount and reason are part of the key — see `capturePayment`; partial refunds of one
+            // session are legitimate and must not collide on the provider's idempotency window.
+            const key =
+                input.idempotencyKey ??
+                (await derivedIdempotencyKey("refund_payment", adapter.identifier, input.sessionId, amountPart(input.amount), input.reason ?? ""));
+
+            await adapter.refundPayment({ ...input, idempotencyKey: key });
+
+            // Deliberately no `refundedAmount` here: the provider's refund webhook owns the running
+            // total, because only it knows whether that provider reports refunds as a delta or as a
+            // cumulative total (`sync.ts`). Writing it here too would double-count on a delta provider.
+            // The state IS derived locally — from the amount this call refunds, not from the adapter's
+            // own state, which Polar pins to "refunded" for a partial refund too.
+            return persistSession(existing, { state: compareMoney(refunded, existing.capturedAmount) < 0 ? "partially_refunded" : "refunded" });
         },
 
         store,

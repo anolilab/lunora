@@ -28,6 +28,12 @@ const SUBSCRIPTION_STATE_BY_TYPE: Partial<Record<WebhookActionType, Subscription
     "subscription.paused": "paused",
 };
 
+/**
+ * Prefix for the companion claim that bounds an orphaned event to a single retry. Claimed in the same
+ * dedupe store as real event ids, so the bound survives isolate restarts without a second store.
+ */
+const ORPHAN_RETRY_MARKER = "orphan-retry:";
+
 const SUBSCRIPTION_ACTION_BY_TYPE: Partial<Record<WebhookActionType, SubscriptionAction>> = {
     "subscription.active": "activate",
     "subscription.canceled": "cancel",
@@ -261,10 +267,24 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, ob
     }
 
     if (result.reason === "orphaned") {
-        // The row this event patches doesn't exist yet (out-of-order delivery).
-        // Release the claim so the provider's retry re-processes it after the
-        // create event lands — otherwise the id is burned and the update is lost.
-        await store.releaseEvent(action.provider, action.eventId);
+        // The row this event patches doesn't exist yet (out-of-order delivery). Release the claim so
+        // the provider's retry re-processes it after the create event lands — otherwise the id is
+        // burned and the update is lost.
+        //
+        // BOUNDED, because the row may never appear: a subscription created before the integration
+        // existed, a store/tenant reset, or a completed-but-unpaid checkout whose
+        // `customer.subscription.created` never arrives. Retrying such an event forever makes the
+        // provider hammer the endpoint until it disables it (Stripe gives up after ~3 days), taking
+        // every other event down with it. A companion marker in the same claim store records that the
+        // event has already had its retry; the second sighting keeps the claim and acknowledges, so
+        // the event stops rather than the endpoint. The observer sees `reason: "unhandled"` for it.
+        const retryable = await store.markEventProcessed(action.provider, `${ORPHAN_RETRY_MARKER}${action.eventId}`);
+
+        if (retryable) {
+            await store.releaseEvent(action.provider, action.eventId);
+        } else {
+            result = { applied: false, reason: "unhandled" };
+        }
     }
 
     notifyObserver(observer, { action: action.type, eventId: action.eventId, provider: action.provider, reason: result.reason, type: "webhook.applied" });

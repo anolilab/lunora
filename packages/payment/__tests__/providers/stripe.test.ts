@@ -277,6 +277,37 @@ describe("stripe adapter", () => {
         expect(action.sessionId).toBe("pi_1");
     });
 
+    it("still captures a fully discounted session, which never gets a payment intent (regression)", async () => {
+        expect.assertions(3);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        // A 100%-off session settles as `no_payment_required` and Stripe creates NO PaymentIntent,
+        // so deferring would drop the order entirely — it keeps the cs_… id it will always have.
+        const action = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: {
+                    object: {
+                        amount_total: 0,
+                        currency: "usd",
+                        customer: "cus_1",
+                        id: "cs_free",
+                        metadata: { referenceId: "user_1" },
+                        mode: "payment",
+                        payment_status: "no_payment_required",
+                    },
+                },
+                id: "evt_cs_free",
+                type: "checkout.session.completed",
+            }),
+        });
+
+        expect(action.type).toBe("payment.captured");
+        expect(action.sessionId).toBe("cs_free");
+        expect(action.referenceId).toBe("user_1");
+    });
+
     it("defers a completed session without a payment_intent to payment_intent.succeeded (regression)", async () => {
         expect.assertions(4);
 
@@ -287,7 +318,7 @@ describe("stripe adapter", () => {
         const completed = await adapter.parseWebhook({
             headers: webhookHeaders,
             payload: JSON.stringify({
-                data: { object: { amount_total: 1000, currency: "usd", customer: "cus_1", id: "cs_1", mode: "payment" } },
+                data: { object: { amount_total: 1000, currency: "usd", customer: "cus_1", id: "cs_1", mode: "payment", payment_status: "unpaid" } },
                 id: "evt_cs_async",
                 type: "checkout.session.completed",
             }),
