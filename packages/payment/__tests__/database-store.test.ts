@@ -194,6 +194,41 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(12);
     });
 
+    it("sumUsageByFeature matches per-feature sumUsage in one read (parity)", async () => {
+        expect.assertions(4);
+
+        const store = createDatabasePaymentStore(makeDb());
+        const event = (idempotencyKey: string, featureId: string, createdAt: number, quantity: number, mode?: "set") => {
+            return {
+                createdAt,
+                featureId,
+                idempotencyKey,
+                ...(mode === undefined ? {} : { mode }),
+                provider: "stripe" as const,
+                quantity,
+                referenceId: "user_1",
+                reportedToProvider: false,
+            };
+        };
+
+        // Three features, mixed periods, including a `set` marker mid-period.
+        await store.recordUsage(event("a1", "api_calls", 10, 30));
+        await store.recordUsage(event("a2", "api_calls", 20, 5, "set"));
+        await store.recordUsage(event("a3", "api_calls", 30, 7));
+        await store.recordUsage(event("b1", "seats", 5, 2)); // before the period start
+        await store.recordUsage(event("b2", "seats", 15, 3));
+
+        const since = 10;
+        const batched = await store.sumUsageByFeature("user_1", ["api_calls", "seats", "storage"], since);
+
+        // Parity with three individual sumUsage calls, including the set-marker fold.
+        expect(batched.get("api_calls")).toBe(await store.sumUsage("user_1", "api_calls", since));
+        expect(batched.get("seats")).toBe(await store.sumUsage("user_1", "seats", since));
+        // A feature with zero events is present in the map as 0, not absent.
+        expect(batched.get("storage")).toBe(0);
+        expect(batched.get("api_calls")).toBe(12);
+    });
+
     it("releaseEvent rolls back a claim so the id can be re-processed", async () => {
         expect.assertions(3);
 
