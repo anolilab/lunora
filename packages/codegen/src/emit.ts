@@ -3082,23 +3082,25 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
                 provider: () => config.flags?.(env),
                 targetingKey: () => flagsConfig.identify?.({ identity: identity ?? null, userId: userId ?? null }),
             });
-            // A flag lives in the OpenFeature provider, so flipping one appends
-            // nothing to \`__cdc_log\` and a subscription whose result branches on it
-            // cannot be proven current on reconnect. Of every surface stamped here
-            // this is the one that moves fastest — changing on the operator's
-            // schedule is the entire point of a flag — so the re-snapshot is the
-            // difference between a rollout taking effect and a reconnected client
-            // holding the old branch until some unrelated row happens to move.
+            // Deliberately NOT stamped unvouchable, unlike the other external
+            // reads on this ctx.
             //
-            // \`details\` is a nested object of the same four evaluations, so it is
-            // wrapped in its own right: the outer wrapper hands back plain
-            // (non-function) members untouched, and an unwrapped
-            // \`ctx.flags.details.*\` would be exactly the silent hole this closes.
-            const flags: import("${flagsSpecifier}").LunoraFlags = markUnvouchableReads(
-                { ...flagsClient, details: markUnvouchableReads(flagsClient.details, options.onRead, ["boolean", "number", "object", "string"]) },
-                options.onRead,
-                ["boolean", "number", "object", "string"],
-            );
+            // Flags are an input the invalidation system does not model at all:
+            // a flip appends nothing to \`__cdc_log\`, so it re-runs no live
+            // subscription either. Refusing the resume would converge the ONE
+            // moment a client reconnects while leaving it stale for the whole
+            // time it stays connected — a permanent cost for half the property,
+            // and an inconsistency between the two states that is harder to
+            // explain than either extreme.
+            //
+            // The reactive path already exists and is correct: a \`useFlag\`
+            // subscription is served through \`FLAGS_FUNCTION_PREFIX\`, tagged
+            // \`ADMIN_WILDCARD\`, and re-evaluated on every write-flush. Branching
+            // on a flag INSIDE a cached query is a point-in-time evaluation, and
+            // the \`flag_read_in_subscription\` advisory says so — the same answer
+            // the repo gives for \`Date.now()\` in a query, which is the identical
+            // class of unmodellable input.
+            const flags: import("${flagsSpecifier}").LunoraFlags = flagsClient;
 `,
         configField: `\n    flags?: (env: Record<string, unknown>) => import("${flagsSpecifier}").Provider;`,
         contextField: `\n                flags,`,

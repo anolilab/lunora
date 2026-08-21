@@ -280,7 +280,17 @@ abstract class RelayLink {
 
     /** Resolve a sibling owner/relay by name off this DO's namespace binding. */
     protected siblingStub(targetName: string): SiblingStub | undefined {
-        return siblingStub(this.host.env(), this.host.shardBinding(), targetName);
+        return siblingStub(this.host.env(), this.bindingName(), targetName);
+    }
+
+    /**
+     * The namespace binding this DO addresses siblings through. In-memory by
+     * default — the runtime stamps it on every forwarded request, so any DO woken
+     * BY a request knows it. {@link OwnerRelay} overrides this; see there for the
+     * wake that carries no request.
+     */
+    protected bindingName(): string | undefined {
+        return this.host.shardBinding();
     }
 
     /** POST a control frame to a sibling by name, fire-and-forget. Best-effort: a transient cross-DO failure drops the frame rather than throwing into the handler. */
@@ -409,6 +419,9 @@ class OwnerRelay extends RelayLink {
      * poke.
      */
     private registryCache: { cohort: Map<string, CohortShapeEntry>; proxies: Map<string, ProxyShapeEntry> } | undefined;
+
+    /** The binding this owner last saw or read back, memoized so a cold wake reads `__lunora_relay_binding` at most once. See {@link OwnerRelay.bindingName}. */
+    private recordedBinding: string | undefined;
 
     /** The owner's current promotion state (plan 075 Phase 4), carried across `relayCount()` calls so hysteresis has memory — a shard hovering near the threshold can't flap. */
     private promotionState: PromotionState = "owned";
@@ -852,7 +865,62 @@ class OwnerRelay extends RelayLink {
     /** Ensure the reserved owner-side relay tables exist (both auto-hidden from the data browser by the `__lunora` prefix). Idempotent, and independent of `runShardMigrations` so the control channel never depends on migration ordering. */
     private ensureRelayTables(): void {
         this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relays (idx INTEGER PRIMARY KEY)");
+        this.host.sql().exec("CREATE TABLE IF NOT EXISTS __lunora_relay_binding (id INTEGER PRIMARY KEY, binding TEXT NOT NULL)");
         migrateRelayShapes(this.host.sql());
+    }
+
+    /**
+     * The owner's binding, falling back to the one it durably recorded.
+     *
+     * An owner in relay mode holds no sockets of its own, so it is evicted
+     * freely — and it can then be woken by an ALARM (the TTL sweep and the
+     * external-source poll both end in `flushChangedTables`, which reaches
+     * `onFlush`). An alarm carries no request, so the in-memory binding the
+     * runtime stamps per request is gone, `canAddressSiblings()` is false, and
+     * the multicast is skipped.
+     *
+     * That loses no rows — the cohort cursor never advances, so the next flush
+     * that CAN address siblings covers the widened range and `buildShapeDiff`
+     * ships current values. But a shard whose subscribers are all on relays and
+     * whose data only changes on a timer sends no relay→owner traffic to
+     * re-supply it, so "until the next request" can mean indefinitely.
+     *
+     * Recorded when learned and read back at most once per wake. Deliberately
+     * NOT ensured before reading: the read sits behind the `canAddressSiblings`
+     * guard that exists to keep a single-DO shard's flush off SQLite entirely,
+     * so a missing table simply means "nothing recorded", exactly as before.
+     */
+    // eslint-disable-next-line @typescript-eslint/member-ordering -- co-located with `ensureRelayTables`, whose table it reads and writes; hoisting it to the protected block would separate the override from the storage it is entirely about
+    protected override bindingName(): string | undefined {
+        const live = this.host.shardBinding();
+
+        if (live !== undefined && live !== "") {
+            if (live !== this.recordedBinding) {
+                this.recordedBinding = live;
+                this.ensureRelayTables();
+                this.host
+                    .sql()
+                    .exec("INSERT INTO __lunora_relay_binding (id, binding) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET binding = excluded.binding", live);
+            }
+
+            return live;
+        }
+
+        if (this.recordedBinding !== undefined) {
+            return this.recordedBinding;
+        }
+
+        try {
+            const rows = this.host.sql().exec<{ binding: string }>("SELECT binding FROM __lunora_relay_binding WHERE id = 1").toArray();
+
+            this.recordedBinding = rows[0]?.binding;
+        } catch {
+            // No table yet (nothing has ever recorded one) — indistinguishable
+            // from "not known", which is the answer either way.
+            this.recordedBinding = undefined;
+        }
+
+        return this.recordedBinding;
     }
 
     /**

@@ -284,4 +284,46 @@ describe("relay collapse (detach on drain)", () => {
         expect(detach).toStrictEqual({ body: { relayIndex: 0, type: "relay_detach" }, name: "room-1" });
         expect(detach?.name).toBe("room-1"); // forwarded to the owner, not a relay
     });
+
+    it("keeps a known binding when a later request carries an empty one", async () => {
+        expect.assertions(1);
+
+        const posts: { body: { type?: string }; name: string }[] = [];
+        const namespace = {
+            get: (id: { __name: string }) => {
+                return {
+                    fetch: async (_url: string, init: { body: string }) => {
+                        posts.push({ body: JSON.parse(init.body) as { type?: string }, name: id.__name });
+
+                        return new Response(undefined, { status: 204 });
+                    },
+                };
+            },
+            idFromName: (name: string) => {
+                return { __name: name };
+            },
+        };
+
+        const state = {
+            acceptWebSocket() {},
+            getWebSockets: () => [] as WebSocket[],
+            id: { name: "room-1::relay::0" },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        } as unknown as ShardDOState;
+
+        const shard = new RelaySetShard(state, { SHARD: namespace });
+
+        await shard.fetch(new Request("https://shard.internal/_lunora/route", { headers: { "x-lunora-shard-binding": "SHARD" }, method: "GET" }));
+
+        // A sibling that does not yet know its OWN binding stamps the empty
+        // string (`shardBinding() ?? ""`), and `headers.get` returns `""` rather
+        // than `null` — so a bare `??` let that overwrite the good value and
+        // `siblingStub` then resolved `env[""]` to nothing, taking the whole
+        // relay tier silently dark until some later request carried a real one.
+        await shard.fetch(new Request("https://shard.internal/_lunora/route", { headers: { "x-lunora-shard-binding": "" }, method: "GET" }));
+
+        await shard.webSocketClose({} as WebSocket, 1000, "", true);
+
+        expect(posts.find((post) => post.body.type === "relay_detach")?.name).toBe("room-1");
+    });
 });

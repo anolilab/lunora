@@ -5190,7 +5190,17 @@ abstract class ShardDO {
         // Learn the DO namespace binding the runtime routes through, so this DO can
         // address its siblings for the relay hub (plan 075 Phase 2). Sent on every
         // forwarded request; kept across requests once known.
-        this.shardBinding = request.headers.get("x-lunora-shard-binding") ?? this.shardBinding;
+        //
+        // An EMPTY header is treated as "not supplied", not as a value. A sibling
+        // POST stamps `shardBinding() ?? ""` (see `relay-hub.ts`), so a peer that
+        // does not yet know its own binding sends the empty string — and `??`
+        // alone would let that overwrite a binding this DO already knew, because
+        // `headers.get` returns `""` rather than `null`. `siblingStub` then
+        // resolves `env[""]` to nothing and the whole relay tier goes silently
+        // dark until some later request happens to carry a real value.
+        const suppliedBinding = request.headers.get("x-lunora-shard-binding");
+
+        this.shardBinding = suppliedBinding === null || suppliedBinding === "" ? this.shardBinding : suppliedBinding;
 
         // The non-RPC routes (WS upgrade + the internal owner↔relay control channel)
         // are handled up front; everything past here is the shard-local RPC endpoint.
