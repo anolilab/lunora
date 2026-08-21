@@ -235,29 +235,29 @@ const fnv1a64Hex = (input: string): string => {
     // Offset basis 0xcbf29ce484222325, low limb first.
     let h0 = 0x23_25;
     let h1 = 0x84_22;
-    let h2 = 0x9C_E4;
-    let h3 = 0xCB_F2;
+    let h2 = 0x9c_e4;
+    let h3 = 0xcb_f2;
 
     for (let index = 0; index < input.length; index += 1) {
         const point = input.codePointAt(index) ?? 0;
 
         // A code point above the BMP occupies limbs 0 and 1.
-        h0 ^= point & 0xFF_FF;
-        h1 ^= (point >>> 16) & 0xFF_FF;
+        h0 ^= point & 0xff_ff;
+        h1 ^= (point >>> 16) & 0xff_ff;
 
-        const p0 = h0 * 0x01_B3;
-        const p1 = h1 * 0x01_B3;
-        const p2 = h2 * 0x01_B3 + h0 * 0x01_00;
-        const p3 = h3 * 0x01_B3 + h1 * 0x01_00;
+        const p0 = h0 * 0x01_b3;
+        const p1 = h1 * 0x01_b3;
+        const p2 = h2 * 0x01_b3 + h0 * 0x01_00;
+        const p3 = h3 * 0x01_b3 + h1 * 0x01_00;
 
         const c1 = p1 + (p0 >>> 16);
         const c2 = p2 + (c1 >>> 16);
         const c3 = p3 + (c2 >>> 16);
 
-        h0 = p0 & 0xFF_FF;
-        h1 = c1 & 0xFF_FF;
-        h2 = c2 & 0xFF_FF;
-        h3 = c3 & 0xFF_FF;
+        h0 = p0 & 0xff_ff;
+        h1 = c1 & 0xff_ff;
+        h2 = c2 & 0xff_ff;
+        h3 = c3 & 0xff_ff;
     }
 
     return hex4(h3) + hex4(h2) + hex4(h1) + hex4(h0);
