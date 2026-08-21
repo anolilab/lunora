@@ -14,9 +14,12 @@
  * {@link QueueJob} on the queue); `createQueueConsumer` wraps your `queue()`
  * handler (it dispatches each message and uses the message's native `ack()` /
  * `retry()` so failures ride Queues' retry + dead-letter machinery); and
- * `httpDispatcher` is the default dispatcher (POSTs each job to the Worker's
- * `/_lunora/scheduler/dispatch` endpoint, authenticated with the admin bearer).
+ * `httpDispatcher` is the default dispatcher (dispatches each job to the
+ * Worker's `/_lunora/scheduler/dispatch` endpoint via `@lunora/dispatch`'s
+ * `createDispatchRunner`, authenticated with the admin bearer).
  */
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import type {
@@ -41,17 +44,6 @@ import type {
  * `@lunora/scheduler`; no dependency edge between them.
  */
 const MAX_QUEUE_BATCH = 100;
-
-/** Strip trailing slashes from an origin so the dispatch path joins cleanly. */
-const trimTrailingSlashes = (value: string): string => {
-    let end = value.length;
-
-    while (end > 0 && value[end - 1] === "/") {
-        end -= 1;
-    }
-
-    return value.slice(0, end);
-};
 
 /**
  * Build a Queues producer that enqueues Lunora function dispatches. Concurrency
@@ -116,7 +108,7 @@ const createQueueConsumer =
                         throw new LunoraError("INTERNAL", "@lunora/scheduler: queue message body is not a QueueJob (missing functionPath)");
                     }
 
-                    await options.dispatch(message.body);
+                    await options.dispatch(message.body, message.id);
                     message.ack();
                 } catch {
                     // Hand off to Queues' retry/dead-letter machinery.
@@ -127,30 +119,23 @@ const createQueueConsumer =
     };
 
 /**
- * Default {@link QueueDispatch}: POST each job to the Worker's
+ * Default {@link QueueDispatch}: dispatch each job to the Worker's
  * `/_lunora/scheduler/dispatch` endpoint (the same path SchedulerDO dispatches
- * through), authenticated with the admin bearer. A non-2xx response throws so
- * the consumer retries the message.
+ * through) via `@lunora/dispatch`'s `createDispatchRunner` — which bounds the
+ * call with the runner's default timeout (a hung origin no longer holds the
+ * whole `queue()` invocation open) and threads the queue message id through for
+ * failure attribution. Any dispatch failure throws so the consumer retries the
+ * message.
  */
 const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
-    const fetchImpl = options.fetchImpl ?? (globalThis as unknown as { fetch: typeof fetch }).fetch;
+    const run = createDispatchRunner({
+        env: { LUNORA_ADMIN_TOKEN: options.adminToken, LUNORA_ORIGIN_URL: options.originUrl },
+        fetchImpl: options.fetchImpl,
+        label: "@lunora/scheduler",
+    });
 
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("@lunora/scheduler: no fetch implementation available — pass fetchImpl or run on a platform with global fetch");
-    }
-
-    const url = `${trimTrailingSlashes(options.originUrl)}/_lunora/scheduler/dispatch`;
-
-    return async (job: QueueJob): Promise<void> => {
-        const response = await fetchImpl(url, {
-            body: JSON.stringify({ args: job.args ?? {}, functionPath: job.functionPath, shardKey: job.shardKey }),
-            headers: { authorization: `Bearer ${options.adminToken}`, "content-type": "application/json" },
-            method: "POST",
-        });
-
-        if (!response.ok) {
-            throw new LunoraError("INTERNAL", `@lunora/scheduler: queue dispatch failed (${response.status.toString()}): ${await response.text()}`);
-        }
+    return async (job: QueueJob, messageId?: string): Promise<void> => {
+        await run({ __lunoraRef: job.functionPath }, job.args, { messageId, shardKey: job.shardKey });
     };
 };
 

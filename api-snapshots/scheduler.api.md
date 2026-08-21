@@ -221,7 +221,7 @@ interface QueueConsumerOptions {
 ### `QueueDispatch` (type)
 
 ```ts
-type QueueDispatch = (job: QueueJob) => Promise<void>;
+type QueueDispatch = (job: QueueJob, messageId?: string) => Promise<void>;
 ```
 
 ### `QueueEnqueueOptions` (interface)

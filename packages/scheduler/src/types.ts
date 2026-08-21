@@ -385,8 +385,12 @@ export interface QueueWorkpool {
     ) => Promise<void>;
 }
 
-/** Dispatches a single {@link QueueJob} — the consumer's per-message worker. */
-export type QueueDispatch = (job: QueueJob) => Promise<void>;
+/**
+ * Dispatches a single {@link QueueJob} — the consumer's per-message worker.
+ * `messageId` is the queue message's native id, threaded through so the
+ * dispatcher can attribute a failure to the exact message that caused it.
+ */
+export type QueueDispatch = (job: QueueJob, messageId?: string) => Promise<void>;
 
 /** Options for `createQueueConsumer`. */
 export interface QueueConsumerOptions {
