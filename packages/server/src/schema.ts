@@ -168,6 +168,37 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     ) => TableBuilder<Shape>;
 
     /**
+     * Declare this table EPHEMERAL — state the shard rebuilds rather than
+     * remembers.
+     *
+     * A memory table is a full `ctx.db` table: indexes, `where`, `orderBy`,
+     * pagination, relations, live queries. What it is not is durable. Its rows
+     * are wiped the moment the Durable Object is reconstructed — which happens
+     * on every eviction, and a WebSocket-hibernating shard is evicted often — so
+     * a memory table holds only what can be derived again: presence and cursors,
+     * a live participant list, a rate-limit window, an actor's scratch state.
+     *
+     * Pair it with `onShardInit` to rebuild whatever the app needs present.
+     * The framework guarantees the ordering: every memory table is cleared, and
+     * every init hook has run, before any handler can read one. Without a hook a
+     * memory table simply comes back empty, which is a correct state for
+     * presence and a wrong one for a cache someone is treating as authoritative.
+     *
+     * **On Cloudflare the rows still transit the DO's SQLite.** workerd exposes
+     * exactly one SQL handle and no memory-backed database, so `.memory()` buys
+     * the LIFETIME (and skips the CDC changelog, so an append-heavy presence
+     * table does not grow the op-log), not the write. Treat it as "state I am
+     * happy to lose", not as "state that is free to write" — see
+     * `PlatformCapabilities.memoryTables`, rated `emulated` for exactly this
+     * reason.
+     *
+     * Rejected alongside `.global()` (a D1 table is not this shard's to clear),
+     * `.commitOrdered()` (a sequence that resets is not a sequence), and
+     * `.source()` (an externally-materialized table is not ours to wipe).
+     */
+    memory: () => TableBuilder<Shape>;
+
+    /**
      * Name the column holding the owning user's id, so "only the owner sees these
      * rows" is declared once here rather than restated in every shape.
      *
@@ -342,6 +373,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     let shardMode: ShardMode = { kind: "root" };
     let isCommitOrdered = false;
     let isExternallyManaged = false;
+    let isMemory = false;
     let isPublic = false;
     let ownerField: string | undefined;
     let softDelete: { field: string } | undefined;
@@ -415,6 +447,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         },
         get indexes() {
             return indexes;
+        },
+        memory() {
+            isMemory = true;
+
+            return builder;
+        },
+        get memoryMode() {
+            return isMemory;
         },
         ownedBy(field) {
             ownerField = field;
@@ -1141,6 +1181,46 @@ const indexFieldsFromSchema = (schema: Schema): IndexFieldsByTable => {
  * is arbitrary — `.global().commitOrdered()` and `.commitOrdered().global()`
  * must both be caught, and only the assembled table knows both facts.
  */
+const validateMemoryTables = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (!table.memoryMode) {
+            continue;
+        }
+
+        // Each of these is a promise `.memory()` cannot keep, not a style rule.
+        // The first three are semantic; the companion kinds after them are
+        // mechanical — clearing a memory table is a `DELETE FROM` on the base
+        // table, which leaves a search/geo/aggregate/rank companion (a separate
+        // table) and a vector index (an external store) still describing rows
+        // that no longer exist.
+        const conflicts: ReadonlyArray<readonly [boolean, string]> = [
+            [table.shardMode.kind === "global", ".global() — those rows live in D1, which this shard does not own and cannot clear"],
+            [
+                table.commitOrderedMode === true,
+                ".commitOrdered() — the counter resets with the table, so the sequence would restart and a consumer's cursor would silently skip everything after it",
+            ],
+            [
+                table.externalSource !== undefined,
+                ".source() — the table is materialized by the ingest loop, so wiping it on every eviction would fight the puller",
+            ],
+            [table.searchIndexes.length > 0, ".searchIndex() — the FTS shadow is a separate table that clearing the rows would leave stale"],
+            [table.geoIndexes.length > 0, ".geoIndex() — the geohash companion is a separate table that clearing the rows would leave stale"],
+            [table.aggregateIndexes.length > 0, ".aggregateIndex() — the counter companion is a separate table that clearing the rows would leave stale"],
+            [table.rankIndexes.length > 0, ".rankIndex() — the rank companion is a separate table that clearing the rows would leave stale"],
+            [table.vectorIndexes.length > 0, ".vectorize() — vectors live in an external index that a shard restart cannot clear"],
+        ];
+
+        const conflict = conflicts.find(([hit]) => hit)?.[1];
+
+        if (conflict !== undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: table "${tableName}" is both .memory() and ${conflict}. Plain .index() is supported; SQLite maintains it through the DELETE.`,
+            );
+        }
+    }
+};
+
 const validateCommitOrdered = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
         if (table.commitOrderedMode && table.shardMode.kind === "global") {
@@ -1162,6 +1242,7 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
     validateExternalSources(tables);
     validateCommitOrdered(tables);
+    validateMemoryTables(tables);
     validateIndexFields(tables);
 
     return withExtend({ tables, vectorIndexes });

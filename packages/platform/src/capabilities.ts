@@ -96,8 +96,22 @@ export interface PlatformCapabilities {
         keyValueStore?: Capability;
         /** Local SQL execution inside a shard. */
         localSql?: Capability;
+
         /** Email sending (Resend / SES / etc). */
         mail?: Capability;
+
+        /**
+         * `.memory()` tables — the ephemeral tier: rows cleared on every shard
+         * cold start, never written to the CDC changelog, refilled by
+         * `onShardInit`.
+         *
+         * The rating answers "does a memory table avoid durable storage on this
+         * host", NOT "does it work". The lifetime semantics are the engine's and
+         * hold everywhere; whether the rows actually stay out of the durable
+         * store depends on the host offering a second, memory-backed SQL handle,
+         * which is a per-target fact.
+         */
+        memoryTables?: Capability;
 
         /** Object storage (R2 / S3 / MinIO). */
         objectStorage?: Capability;
@@ -169,6 +183,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "`state.storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a Durable Object executes one event at a time — so the allocation order IS the commit order, with no lock of ours in the path",
         },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
+        memoryTables: {
+            level: "emulated",
+            note: "The lifetime is real — an eviction drops the DO's heap and the framework clears every `.memory()` table on reconstruction, so the rows behave exactly like heap state, and their writes stay out of the CDC changelog. The STORAGE is not: workerd exposes one SQL handle and no memory-backed database, so a memory row is still written to the DO's SQLite and then deleted. `.memory()` buys the semantics, not the write",
+        },
         shardAlarms: { level: "native", note: "state.storage.setAlarm" },
         shardPlacement: {
             level: "native",
@@ -275,6 +293,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "The sequence orders commits correctly, but the serialization it depends on is Lunora's per-shard write gate rather than a platform property — one process, one better-sqlite3 handle per shard key. Correct here; not something the host guarantees the way a Durable Object does",
         },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
+        memoryTables: {
+            level: "emulated",
+            note: "Same shape as Cloudflare and for a different reason: better-sqlite3 CAN open `:memory:`, but a shard's memory tables share the one handle its durable tables use, so they are cleared rather than never written. A host process also outlives far more than a Durable Object does, so cold starts — and therefore `onShardInit` — are much rarer here than in production on Cloudflare; do not use this target to judge how often a memory table is actually empty",
+        },
         shardAlarms: {
             level: "emulated",
             note: "setTimeout over a durable row, dispatched to onAlarm and re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never",

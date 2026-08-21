@@ -154,6 +154,7 @@ export interface TableDefinitionLike {
     readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly isPublic?: boolean;
+    readonly memoryMode?: boolean;
     readonly rankIndexes?: ReadonlyArray<RankIndexDefinitionLike>;
     readonly relationMap?: Record<string, RelationDefinitionLike>;
     readonly searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;

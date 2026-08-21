@@ -60,6 +60,7 @@ import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
 import { allocateCommitSeq, COMMIT_SEQ_FIELD } from "./ctx-db-commit-seq";
 import { createCompanionSync } from "./ctx-db-companions";
+import { isMemoryTable } from "./ctx-db-memory";
 import type { RankPageDeps } from "./ctx-db-rank-page";
 import { computeRankPage } from "./ctx-db-rank-page";
 import { SCAN_DEP } from "./dependency-tracker";
@@ -2084,7 +2085,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
     /** Append a post-image to the changelog when CDC is enabled; a no-op otherwise. */
     const recordCdc = (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): void => {
-        if (cdcEnabled) {
+        // A `.memory()` table never reaches the changelog. Its rows do not
+        // survive the next eviction, so a CDC consumer replaying them would
+        // materialize state the shard itself no longer believes in — and the log
+        // is append-only with no `trimCdcChanges` caller in `ShardDO`, so a
+        // heartbeat-rate presence table would grow it without bound for the life
+        // of the shard. Live queries are unaffected: subscription refresh is
+        // driven by the changed-table set, not by CDC.
+        if (cdcEnabled && !isMemoryTable(schema.tables[table])) {
             appendCdcChange(sql, clock(), table, id, op, doc);
         }
     };

@@ -231,6 +231,14 @@ export interface TableIR {
      * `false`.
      */
     isPublic?: boolean;
+
+    /**
+     * `true` when the table chain carried `.memory()` — its rows are cleared on
+     * every Durable Object cold start and never reach the CDC changelog.
+     * Optional: hand-built IR and tables that never called `.memory()` default it
+     * to `false`.
+     */
+    memory?: boolean;
     name: string;
     /** Rank indexes declared inline via `.rankIndex(name, …)`. */
     rankIndexes: ReadonlyArray<RankIndexIR>;
@@ -312,7 +320,7 @@ export interface FunctionIR {
      * it into the `LUNORA_LIFECYCLE_HOOKS` manifest keyed by this side. Absent on
      * ordinary functions.
      */
-    lifecycle?: "connect" | "disconnect";
+    lifecycle?: "connect" | "disconnect" | "init";
 
     /**
      * The `.output(validator)` declaration, when the chain has one.

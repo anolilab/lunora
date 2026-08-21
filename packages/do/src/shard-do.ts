@@ -1084,6 +1084,15 @@ abstract class ShardDO {
      * SQLite-in-DO does not support them and the runtime would crash with
      * "cannot start a transaction within a transaction".
      */
+
+    /**
+     * The once-per-instance shard-init run, memoized. Absent until the first
+     * dispatch on this instance; absent again after an eviction drops the heap,
+     * which is precisely when init has to happen. See
+     * {@link ShardDO.ensureShardInit}.
+     */
+    private shardInitOnce?: Promise<void>;
+
     private transactionDepth: number = 0;
 
     /**
@@ -1690,6 +1699,8 @@ abstract class ShardDO {
      * {@link ShardRunner}, which forwards to the Cloudflare implementation below.
      */
     public async fetch(request: Request): Promise<Response> {
+        await this.ensureShardInit();
+
         return this.runner.handleFetch(request);
     }
 
@@ -1712,6 +1723,8 @@ abstract class ShardDO {
      * ctx's own trace rather than a per-frame root.
      */
     public async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+        await this.ensureShardInit();
+
         // Map the runtime socket to the handle enumeration also yields, so
         // per-socket memo state is keyed identically on both paths. Falls back to
         // the raw socket only when the host cannot map it — in which case
@@ -1725,6 +1738,8 @@ abstract class ShardDO {
      * again would throw "WebSocket has been closed" in the Workers runtime.
      */
     public async webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+        await this.ensureShardInit();
+
         // Same boundary conversion as `webSocketMessage`: per-socket state is keyed
         // on the handle, so the close path must resolve the same identity or it
         // would tear down nothing.
@@ -1808,6 +1823,8 @@ abstract class ShardDO {
      * this stays dormant there.
      */
     public async alarm(): Promise<void> {
+        await this.ensureShardInit();
+
         return this.withTriggerTrace("alarm", async () => this.runner.handleAlarm());
     }
 
@@ -1829,7 +1846,8 @@ abstract class ShardDO {
     public abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown>;
 
     /**
-     * The registered function paths to dispatch when a socket connects/disconnects.
+     * The registered function paths to dispatch on a lifecycle moment —
+     * `connect`/`disconnect` per socket, `init` once per Durable Object instance.
      * Base default is empty; the codegen subclass overrides it to return the
      * generated lifecycle manifest keyed by `event`. Kept as a data hook (like
      * `tableRefs`/`rlsMetadata`) so the security-load-bearing dispatch — running
@@ -1837,7 +1855,7 @@ abstract class ShardDO {
      * base and can't be mis-wired by generated code.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated lifecycle manifest
-    protected lifecycleHookPaths(_event: "connect" | "disconnect"): ReadonlyArray<string> {
+    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init"): ReadonlyArray<string> {
         return [];
     }
 
@@ -1867,6 +1885,37 @@ abstract class ShardDO {
                     message: error instanceof Error ? error.message : String(error),
                     timestamp: Date.now(),
                 });
+            }
+        }
+    }
+
+    /**
+     * Run every registered `onShardInit` hook, once, on a freshly-constructed
+     * instance. Called by the generated {@link ShardDO.runShardInit} override
+     * AFTER it has cleared the schema's `.memory()` tables — that order is the
+     * contract: a hook exists to refill what the clear emptied.
+     *
+     * Dispatched with NO request identity, under the system flag (which satisfies
+     * the internal-visibility gate). There is genuinely no caller here — the
+     * instance was constructed because the runtime needed it, not because a user
+     * asked — so `ctx.auth` is anonymous and RLS does not apply, exactly as for a
+     * cron tick. `withRequestIdentity` is deliberately NOT used: inheriting
+     * whatever identity happens to be on the instance would run a rebuild as an
+     * arbitrary user.
+     *
+     * Sequential, and a throw is contained per hook: one hook that cannot rebuild
+     * its slice must not skip the others, and none of them may fail the dispatch
+     * that woke the shard (see {@link ShardDO.ensureShardInit}).
+     */
+    protected async dispatchShardInit(): Promise<void> {
+        const event = { shardKey: this.currentShardKey() };
+
+        for (const functionPath of this.lifecycleHookPaths("init")) {
+            try {
+                // eslint-disable-next-line no-await-in-loop -- sequential by design: a later hook may depend on state an earlier one rebuilt, and a throwing hook must not skip the rest
+                await this.withSystemDispatch(() => this.handleRpc(functionPath, event));
+            } catch (error: unknown) {
+                this.recordShardInitError(functionPath, error);
             }
         }
     }
@@ -3546,6 +3595,61 @@ abstract class ShardDO {
     /** This DO's shard key (its DO name), or `__root__` for the single-DO default. The `tenantBy` mapper binds it into the source query. */
     protected currentShardKey(): string {
         return this.runner.shardKey ?? ROOT_SHARD_NAME;
+    }
+
+    /**
+     * Run the once-per-instance shard init — clear `.memory()` tables, then fire
+     * every `onShardInit` hook — before the caller's dispatch proceeds.
+     *
+     * **Why this lives in the base class and is awaited at every entry point.**
+     * A memory table is emptied by the eviction that dropped this instance's
+     * heap, and the init hooks are what refill it. Any dispatch that reached user
+     * code before they finished would read a silently empty table — not an error,
+     * just wrong data — which is the single hazard `.memory()` carries. Putting
+     * the gate on `fetch` / `webSocketMessage` / `webSocketClose` / `alarm`
+     * means a new dispatch path cannot forget it: there is no fifth way into this
+     * object from the runtime.
+     *
+     * Memoized as a PROMISE, not a boolean: concurrent entries (an alarm racing
+     * an RPC on a freshly-woken shard) must all wait on the same run rather than
+     * each starting their own. The field lives on the instance, so it is absent
+     * exactly when the heap was dropped — the same signal `ensureMigrated` uses.
+     *
+     * A failure is absorbed here, deliberately. An init hook that cannot rebuild
+     * presence must not take down the request that woke the shard; the memory
+     * table is left as it is (empty) and the error is recorded. Absorbing also
+     * keeps the memo from caching a rejected promise, which would turn one bad
+     * init into a permanently broken instance.
+     */
+    protected async ensureShardInit(): Promise<void> {
+        this.shardInitOnce ??= this.runShardInit().catch((error: unknown) => {
+            this.recordShardInitError("__shard_init__", error);
+        });
+
+        await this.shardInitOnce;
+    }
+
+    /**
+     * The shard-init body. A no-op here; the generated subclass overrides it to
+     * clear the schema's `.memory()` tables and dispatch the `onShardInit`
+     * manifest. Kept as a seam (rather than the base reaching for a schema it
+     * does not have) for the same reason `pollExternalSources` is one.
+     * @returns a promise that settles when init is complete.
+     */
+    // eslint-disable-next-line class-methods-use-this -- a seam: the base has no schema to clear, the generated subclass overrides
+    protected async runShardInit(): Promise<void> {
+        await Promise.resolve();
+    }
+
+    /**
+     * Record a contained `onShardInit` failure into the log ring. Mirrors
+     * {@link ShardDO.recordExternalSourceError}: the generated override needs to
+     * write this line and the log ring is private, so the seam keeps the buffer
+     * encapsulated. `hookPath` is the failing hook's function path, or
+     * `__shard_init__` when the failure was outside any single hook.
+     */
+    protected recordShardInitError(hookPath: string, error: unknown, trace?: TraceRefLike): void {
+        this.recordShapeError(`init:${hookPath}`, error, trace);
     }
 
     /**

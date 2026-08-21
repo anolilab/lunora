@@ -540,6 +540,7 @@ interface TableBuilderAccumulator {
     globalBackend?: TableIR["globalBackend"];
     indexes: IndexIR[];
     isPublic: boolean;
+    memory: boolean;
     rankIndexes: RankIndexIR[];
     relations: RelationIR[];
     searchIndexes: SearchIndexIR[];
@@ -641,6 +642,13 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
 
         case "index": {
             accumulator.indexes.push(parseIndexCall(args));
+
+            break;
+        }
+
+        case "memory": {
+            // `.memory()` takes no arguments — its presence is the declaration.
+            accumulator.memory = true;
 
             break;
         }
@@ -790,6 +798,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         geoIndexes: [],
         indexes: [],
         isPublic: false,
+        memory: false,
         rankIndexes: [],
         relations: [],
         searchIndexes: [],
@@ -851,6 +860,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         globalBackend: accumulator.shardMode === "global" ? (accumulator.globalBackend ?? "d1") : undefined,
         indexes: accumulator.indexes,
         isPublic: accumulator.isPublic,
+        memory: accumulator.memory,
         name,
         rankIndexes: accumulator.rankIndexes,
         relations: accumulator.relations,

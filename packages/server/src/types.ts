@@ -374,6 +374,15 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     isPublic?: boolean;
 
     /**
+     * Set by `.memory()` (named `memoryMode`, not `memory`, so the data field
+     * doesn't collide with the fluent `.memory()` builder method — same
+     * convention as `shardBy()`/`shardMode`). When `true`, the table's rows are
+     * cleared every time the Durable Object is reconstructed, and its writes
+     * never reach the CDC changelog. Absent/`false` ⇒ an ordinary durable table.
+     */
+    memoryMode?: boolean;
+
+    /**
      * Set by `.ownedBy(field)` — the column holding the owning user's id (named
      * `ownerField`, a data field, rather than colliding with the fluent
      * `.ownedBy()` builder method — same convention as `shardBy()`/`shardMode`).
@@ -400,6 +409,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      * `.relations((r) => …)` builder method doesn't collide with this field.
      */
     relationMap: Record<string, RelationDefinition>;
+
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;
 
     shape: Shape;
@@ -686,7 +696,15 @@ interface RunAction {
 }
 
 /** Which side of the WebSocket lifecycle a hook fires on. */
-type LifecycleEventKind = "connect" | "disconnect";
+
+/**
+ * Which lifecycle moment a hook fires on.
+ *
+ * `connect`/`disconnect` are per-SOCKET and fire many times over a shard's life.
+ * `init` is per-INSTANCE and fires once per cold start, before any handler runs
+ * — see {@link ShardInitEvent}.
+ */
+type LifecycleEventKind = "connect" | "disconnect" | "init";
 
 /**
  * The event a connection-lifecycle hook receives as its second argument. It is
@@ -707,9 +725,26 @@ interface LifecycleEvent {
 
 /**
  * A registered connection-lifecycle hook — an internal mutation tagged with the
- * lifecycle side it fires on. Produced by `onConnect` / `onDisconnect`.
+ * lifecycle side it fires on. Produced by `onConnect` / `onDisconnect` /
+ * `onShardInit`.
  */
 type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & { readonly lifecycle: LifecycleEventKind };
+
+/**
+ * The event an `onShardInit` hook receives.
+ *
+ * Deliberately thin, and deliberately NOT a {@link LifecycleEvent}: there is no
+ * socket here. An init hook fires because the Durable Object was constructed,
+ * not because anyone connected — so there is no `connectionId` to report and no
+ * user to attribute it to. The hook runs as a trusted system dispatch with no
+ * request identity, exactly like a cron tick; `ctx.auth` is anonymous and RLS
+ * does not apply. Derive whatever you need from `shardKey` and the shard's own
+ * durable tables, never from an ambient caller — there isn't one.
+ */
+interface ShardInitEvent {
+    /** The shard this Durable Object instance serves. */
+    readonly shardKey: string;
+}
 
 /**
  * A streaming query registration. Unlike {@link RegisteredFunction} the handler
@@ -2394,6 +2429,7 @@ export type {
     SearchIndexDefinition,
     Secrets,
     SecretsStoreSecretLike,
+    ShardInitEvent,
     ShardMode,
     SpanEvaluation,
     SpanHandle,

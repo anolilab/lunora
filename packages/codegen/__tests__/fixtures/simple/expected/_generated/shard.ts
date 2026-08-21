@@ -520,9 +520,16 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             };
         }
 
-        protected override lifecycleHookPaths(event: "connect" | "disconnect"): readonly string[] {
+        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
+
+        protected override async runShardInit(): Promise<void> {
+            this.ensureMigrated();
+
+            await this.dispatchShardInit();
+        }
+
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
             return LUNORA_TABLE_REFS[table];

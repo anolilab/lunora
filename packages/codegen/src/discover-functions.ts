@@ -60,14 +60,18 @@ const INTERNAL_FACTORIES: Record<string, "action" | "mutation" | "query"> = {
 };
 
 /**
- * Connection-lifecycle factory names exported from `@lunora/server`, mapped to
- * the lifecycle side they fire on. A call to one of these registers an internal
- * mutation tagged `lifecycle: "connect" | "disconnect"` so emit collects it into
- * the `LUNORA_LIFECYCLE_HOOKS` manifest the DO dispatches on socket open/close.
+ * Lifecycle factory names exported from `@lunora/server`, mapped to the moment
+ * they fire on. A call to one of these registers an internal mutation tagged
+ * with its `lifecycle` so emit collects it into the `LUNORA_LIFECYCLE_HOOKS`
+ * manifest: `connect`/`disconnect` are dispatched per socket, `init` once per
+ * Durable Object instance before any handler runs.
  */
-const LIFECYCLE_FACTORIES: Record<string, "connect" | "disconnect"> = {
+type LifecycleMoment = "connect" | "disconnect" | "init";
+
+const LIFECYCLE_FACTORIES: Record<string, LifecycleMoment> = {
     onConnect: "connect",
     onDisconnect: "disconnect",
+    onShardInit: "init",
 };
 
 interface DiscoveredFunction {
@@ -75,7 +79,7 @@ interface DiscoveredFunction {
     /** Set when the builder chain includes `.expose({ rest: true })` (plan 167). */
     expose?: { cache?: ExposeCacheIR; rest?: boolean };
     kind: string;
-    lifecycle?: "connect" | "disconnect";
+    lifecycle?: LifecycleMoment;
     /** The `.output(validator)` declaration, when the chain has one. */
     output?: ValidatorIR;
     returnType: string;
@@ -828,7 +832,7 @@ interface ProcedureClassification {
      * the socket side it fires on. The classification is otherwise an internal
      * mutation. Absent for ordinary procedures.
      */
-    lifecycle?: "connect" | "disconnect";
+    lifecycle?: LifecycleMoment;
 
     /**
      * Builder-terminal chain root — the expression to the left of the terminal

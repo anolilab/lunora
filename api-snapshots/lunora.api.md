@@ -657,6 +657,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ShardInitEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShardMode` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1118,6 +1122,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `onDisconnect` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `onShardInit` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -2290,6 +2298,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `buildReprojectionMigration` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `clearMemoryTables` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -5171,6 +5183,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ShardInitEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShardMode` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5632,6 +5648,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `onDisconnect` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `onShardInit` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6906,6 +6926,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SecretsStoreSecretLike` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ShardInitEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

@@ -845,7 +845,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect";
+type LifecycleEventKind = "connect" | "disconnect" | "init";
 ```
 
 ### `LifecycleHandler` (type)
@@ -1768,6 +1768,14 @@ interface ShapeReadWhereRequest {
 }
 ```
 
+### `ShardInitEvent` (interface)
+
+```ts
+interface ShardInitEvent {
+    readonly shardKey: string;
+}
+```
+
 ### `ShardMode` (type)
 
 ```ts
@@ -1962,6 +1970,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     index: (name: string, fields: ReadonlyArray<(keyof Shape & string) | (typeof SYSTEM_INDEX_FIELDS)[number]>, options?: {
         unique?: boolean;
     }) => TableBuilder<Shape>;
+    memory: () => TableBuilder<Shape>;
     ownedBy: (field: keyof Shape & string) => TableBuilder<Shape>;
     public: () => TableBuilder<Shape>;
     rankIndex: (name: string, options: InlineRankIndexOptions<Shape>) => TableBuilder<Shape>;
@@ -1997,6 +2006,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     indexes: ReadonlyArray<IndexDefinition>;
     isExternallyManaged?: boolean;
     isPublic?: boolean;
+    memoryMode?: boolean;
     ownerField?: string;
     rankIndexes: ReadonlyArray<RankIndexDefinition>;
     relationMap: Record<string, RelationDefinition>;
@@ -2805,6 +2815,12 @@ const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
 
 ```ts
 const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
+```
+
+### `onShardInit` (const)
+
+```ts
+const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook;
 ```
 
 ### `presenceExtension` (const)
@@ -4495,7 +4511,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect";
+type LifecycleEventKind = "connect" | "disconnect" | "init";
 ```
 
 ### `LogFields` (type)
@@ -4841,6 +4857,14 @@ interface SecretsStoreSecretLike {
 }
 ```
 
+### `ShardInitEvent` (interface)
+
+```ts
+interface ShardInitEvent {
+    readonly shardKey: string;
+}
+```
+
 ### `ShardMode` (type)
 
 ```ts
@@ -4983,6 +5007,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     indexes: ReadonlyArray<IndexDefinition>;
     isExternallyManaged?: boolean;
     isPublic?: boolean;
+    memoryMode?: boolean;
     ownerField?: string;
     rankIndexes: ReadonlyArray<RankIndexDefinition>;
     relationMap: Record<string, RelationDefinition>;

@@ -2724,6 +2724,7 @@ interface TableDefinitionLike {
     readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly isPublic?: boolean;
+    readonly memoryMode?: boolean;
     readonly rankIndexes?: ReadonlyArray<RankIndexDefinitionLike>;
     readonly relationMap?: Record<string, RelationDefinitionLike>;
     readonly searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
@@ -3217,6 +3218,12 @@ const clearCapturedMail: (sql: SqlExec) => {
 };
 ```
 
+### `clearMemoryTables` (const)
+
+```ts
+const clearMemoryTables: (sql: SqlExec, schema: SchemaLike) => number;
+```
+
 ### `clearQueueMessages` (const)
 
 ```ts
@@ -3555,6 +3562,12 @@ const isFtsAvailable: (sql: SqlExec) => boolean;
 const isLossyBody: (body: unknown) => boolean;
 ```
 
+### `isMemoryTable` (const)
+
+```ts
+const isMemoryTable: (definition: TableDefinitionLike | undefined) => boolean;
+```
+
 ### `isRelationPredicate` (const)
 
 ```ts
@@ -3647,6 +3660,12 @@ const materializeExternalRowsIncremental: (writer: DatabaseWriterLike, pulled: R
     deletedIds?: ReadonlySet<string>;
     table: string;
 }) => Promise<IncrementalMaterializeResult>;
+```
+
+### `memoryTableNames` (const)
+
+```ts
+const memoryTableNames: (schema: SchemaLike) => string[];
 ```
 
 ### `mergeChangedKeys` (const)

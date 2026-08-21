@@ -2384,14 +2384,15 @@ export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
  */
 
 /**
- * Build the `LUNORA_LIFECYCLE_HOOKS` manifest body: the connect/disconnect
- * function-path arrays the generated ShardDO iterates on socket open/close. Each
+ * Build the `LUNORA_LIFECYCLE_HOOKS` manifest body: the connect/disconnect/init
+ * function-path arrays the generated ShardDO iterates — the first two on socket
+ * open/close, `init` once per instance before any handler runs. Each
  * entry is the same `${namespace}:${fn}` key the function lands under in
  * `LUNORA_FUNCTIONS`, so the DO dispatches a hook by path like any other
  * registered function. Functions arrive pre-sorted, so the arrays are stable.
  */
-const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connect: string[]; disconnect: string[] } => {
-    const manifest: { connect: string[]; disconnect: string[] } = { connect: [], disconnect: [] };
+const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connect: string[]; disconnect: string[]; init: string[] } => {
+    const manifest: { connect: string[]; disconnect: string[]; init: string[] } = { connect: [], disconnect: [], init: [] };
 
     for (const definition of functions) {
         if (!definition.lifecycle) {
@@ -2509,14 +2510,17 @@ ${agentRegistry.prelude}${sandboxRegistry.prelude}
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBodyWithAgents}};
 ${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}
 /**
- * Connection-lifecycle manifest: the function paths the generated ShardDO
- * dispatches when a client's WebSocket connects (\`connect\`) or disconnects
- * (\`disconnect\`). Each path also resolves through {@link LUNORA_FUNCTIONS}; the
- * DO runs every hook under the socket's verified identity via system dispatch.
+ * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
+ * client's WebSocket connects (\`connect\`) or disconnects (\`disconnect\`), and
+ * once per Durable Object instance before any handler runs (\`init\`). Each path
+ * also resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
+ * socket's verified identity; \`init\` has no caller, so it runs anonymous — both
+ * via system dispatch.
  */
-export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[] } = {
+export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[] } = {
     connect: [${lifecycleHooks.connect.map((path) => JSON.stringify(path)).join(", ")}],
     disconnect: [${lifecycleHooks.disconnect.map((path) => JSON.stringify(path)).join(", ")}],
+    init: [${lifecycleHooks.init.map((path) => JSON.stringify(path)).join(", ")}],
 };
 
 /**
@@ -4277,6 +4281,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // Hyperdrive into this DO's SQLite by the poll alarm. Everything below is gated on
     // this, so a schema with no sourced table emits a byte-identical `shard.ts`.
     const hasSourcedTables = schema.tables.some((table) => table.externalSource !== undefined);
+    const hasMemoryTables = schema.tables.some((table) => table.memory === true);
 
     if (hasD1Global && hasHyperdriveGlobal) {
         // Mixing backends needs a per-table routing writer (id-addressed ops must
@@ -4397,7 +4402,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, buildReprojectionMigration, ${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         // `TraceRefLike` rides along with the source imports: the poll override
         // takes the alarm's trace so its contained failures are correlated, and
         // `@lunora/do` projects it structurally rather than re-exporting the
@@ -4719,6 +4724,30 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
     // `pullExternalSourceTick` in @lunora/do (query under `tenantBy(shardKey)` →
     // id-lift → diff → apply through the validated CDC writer). System-owned (alarm
     // tier, no request identity), so it never loosens `ctx.sql`'s action-only contract.
+    // Once-per-instance init: empty every `.memory()` table, then fire the
+    // `onShardInit` manifest. The base awaits this at every runtime entry point
+    // (fetch / webSocketMessage / webSocketClose / alarm) before user code runs,
+    // so a handler can never observe a memory table between the eviction that
+    // emptied it and the hooks that refill it.
+    //
+    // Always emitted, even with no hooks and no memory tables: `dispatchShardInit`
+    // iterates an empty manifest and costs nothing, and gating it at emit time
+    // would mean a project that adds its first `onShardInit` to a shard generated
+    // before this flag existed silently never fires it. The `clearMemoryTables`
+    // call IS gated — it is only meaningful with a memory table, and leaving it out
+    // keeps the import off shards that have none.
+    //
+    // `ensureMigrated()` runs first because the clear is a `DELETE FROM` and the
+    // table has to exist: on a cold start this is the earliest code to touch SQL,
+    // ahead of the dispatch that would normally have migrated.
+    const shardInitOverride = `
+        protected override async runShardInit(): Promise<void> {
+            this.ensureMigrated();
+${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema as unknown as SchemaLike);\n" : ""}
+            await this.dispatchShardInit();
+        }
+`;
+
     /* eslint-disable no-secrets/no-secrets -- the emitted `pullExternalSourceIncrementalTick(this.sql …)` poll-loop call is a dense generated identifier, not a credential */
     const externalSourceOverride = hasSourcedTables
         ? `
@@ -5145,9 +5174,10 @@ ${relationFanout.override}
             };
         }
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
-        protected override lifecycleHookPaths(event: "connect" | "disconnect"): readonly string[] {
+        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
+${shardInitOverride}
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
             return LUNORA_TABLE_REFS[table];

@@ -39,7 +39,7 @@ export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, serveStorageObjec
 export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, IdentityValidation, InferIdentity } from "./identity";
 export { defineIdentity } from "./identity";
 export type { LifecycleHandler } from "./lifecycle";
-export { onConnect, onDisconnect } from "./lifecycle";
+export { onConnect, onDisconnect, onShardInit } from "./lifecycle";
 export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere } from "./list-args";
 export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, defineListArgs } from "./list-args";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskRegistry, MaskStrategy } from "./mask/index";
@@ -155,6 +155,7 @@ export type {
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,
+    ShardInitEvent,
     ShardMode,
     SpanEvaluation,
     SpanHandle,

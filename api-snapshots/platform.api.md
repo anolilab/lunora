@@ -263,6 +263,7 @@ interface PlatformCapabilities {
         keyValueStore?: Capability;
         localSql?: Capability;
         mail?: Capability;
+        memoryTables?: Capability;
         objectStorage?: Capability;
         objectStorageBackups?: Capability;
         pipelines?: Capability;

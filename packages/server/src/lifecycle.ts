@@ -36,17 +36,20 @@
  * is replayed to `onDisconnect`; it is never required to make either hook run.
  */
 
-import type { LifecycleEvent, MutationCtx as MutationContext, RegisteredLifecycleHook } from "./types";
+import type { LifecycleEvent, MutationCtx as MutationContext, RegisteredLifecycleHook, ShardInitEvent } from "./types";
 
 /** Handler for a connection-lifecycle hook. */
 type LifecycleHandler = (context: MutationContext, event: LifecycleEvent) => Promise<void> | void;
+
+/** Handler for a shard-init hook. */
+type ShardInitHandler = (context: MutationContext, event: ShardInitEvent) => Promise<void> | void;
 
 /**
  * Wrap a lifecycle handler as an internal mutation tagged with its side. The
  * event is forwarded verbatim (no validator map — its shape is framework-fixed),
  * so this bypasses the arg-parsing the `query`/`mutation` factories apply.
  */
-const wrapLifecycle = (lifecycle: "connect" | "disconnect", handler: LifecycleHandler): RegisteredLifecycleHook => {
+const wrapLifecycle = (lifecycle: "connect" | "disconnect" | "init", handler: LifecycleHandler | ShardInitHandler): RegisteredLifecycleHook => {
     return {
         args: {},
         handler: (context: unknown, event: unknown) => handler(context as MutationContext, event as LifecycleEvent),
@@ -62,5 +65,49 @@ const onConnect = (handler: LifecycleHandler): RegisteredLifecycleHook => wrapLi
 /** Register a hook that fires once when a client's WebSocket disconnects. */
 const onDisconnect = (handler: LifecycleHandler): RegisteredLifecycleHook => wrapLifecycle("disconnect", handler);
 
-export { onConnect, onDisconnect };
-export type { LifecycleHandler };
+/**
+ * Register a hook that fires ONCE per Durable Object instance, before any
+ * handler on that instance can run — the re-init half of `.memory()` tables.
+ *
+ * A shard is not a process that stays up. Cloudflare reconstructs the Durable
+ * Object after every eviction, and a shard whose sockets are hibernating is
+ * evicted routinely, so "cold start" is a steady-state event rather than a rare
+ * one. Everything the shard held in memory is gone at that moment: the JS heap,
+ * and every `.memory()` table, which the framework has already cleared by the
+ * time this hook runs.
+ *
+ * ```ts
+ * // lunora/init.ts
+ * import { onShardInit } from "@lunora/server";
+ *
+ * export const warm = onShardInit(async (ctx, event) => {
+ *     // Rebuild ephemeral state from the durable tables that outlived us.
+ *     for await (const member of ctx.db.roomMembers.iterate({ where: { roomId: event.shardKey } })) {
+ *         await ctx.db.presence.insert({ userId: member.userId, status: "away" });
+ *     }
+ * });
+ * ```
+ *
+ * **Ordering is the guarantee.** Memory tables are cleared, then every init hook
+ * runs to completion, and only then does the dispatch that triggered the cold
+ * start proceed. No handler, subscription refresh, alarm, or shape poke can
+ * observe a memory table in the gap. Hooks run sequentially in manifest order,
+ * so one may depend on state an earlier one wrote.
+ *
+ * **It is a mutation, and it runs on every cold start.** Keep it cheap and keep
+ * it idempotent: it is on the latency path of the request that woke the shard,
+ * and it will run again — many times — over the shard's life. Writing to durable
+ * tables from here is legal and occasionally right, but remember it is a
+ * rebuild, not a migration; use `defineMigration` for anything that should
+ * happen once.
+ *
+ * **No caller identity.** The hook dispatches as a trusted system call with no
+ * request identity — `ctx.auth` is anonymous and RLS does not apply, exactly as
+ * for a cron tick. A throw is logged and does NOT fail the dispatch that woke
+ * the shard: an init hook that cannot rebuild presence must not take the whole
+ * shard down with it, and the memory table is simply left empty.
+ */
+const onShardInit = (handler: ShardInitHandler): RegisteredLifecycleHook => wrapLifecycle("init", handler);
+
+export { onConnect, onDisconnect, onShardInit };
+export type { LifecycleHandler, ShardInitHandler };
