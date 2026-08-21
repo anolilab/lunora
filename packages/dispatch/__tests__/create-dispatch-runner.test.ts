@@ -113,27 +113,15 @@ describe("createDispatchRunner", () => {
         );
     });
 
-    // `AbortSignal.timeout`'s internal abort is a real native timer that
-    // `vi.useFakeTimers()` cannot advance (unlike a JS-land `setTimeout`), so
-    // these tests replace `AbortSignal.timeout` itself with a controller whose
-    // signal the test aborts directly — deterministic and instant, and it
-    // still proves the runner asked for the right duration.
-    const stubAbortSignalTimeout = (): { abort: (reason: Error) => void; spy: ReturnType<typeof vi.spyOn> } => {
-        const controller = new AbortController();
-        const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
-
-        return {
-            abort: (reason: Error) => {
-                controller.abort(reason);
-            },
-            spy,
-        };
-    };
+    // The runner's deadline is a JS-land `setTimeout` (shared/abort-deadline.ts),
+    // so `vi.useFakeTimers()` drives it directly: advancing past the deadline
+    // fires the abort, deterministic and instant, and the advance distance
+    // proves the runner armed the right duration.
 
     // A fetchImpl that hangs until its signal aborts, rejecting with the
-    // signal's `reason` — the same contract real `fetch` follows for an
-    // `AbortSignal.timeout`-bound request (rejects with the signal's reason,
-    // not a hardcoded generic error).
+    // signal's `reason` — the same contract real `fetch` follows for a
+    // signal-bound request (rejects with the signal's reason, not a
+    // hardcoded generic error).
     const hangingFetchImpl = (): ReturnType<typeof vi.fn<typeof fetch>> =>
         vi.fn<typeof fetch>(
             (_url, init) =>
@@ -173,50 +161,46 @@ describe("createDispatchRunner", () => {
     it("rejects within the default timeout when the dispatch never settles, with a status outside the deterministic set", async () => {
         expect.assertions(4);
 
-        const { abort, spy } = stubAbortSignalTimeout();
+        vi.useFakeTimers();
 
         try {
             const fetchImpl = hangingFetchImpl();
             const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
 
-            abort(new DOMException("The operation timed out.", "TimeoutError"));
+            // One ms short of the default deadline: the timer is still armed,
+            // proving the runner asked for the full 30s window.
+            await vi.advanceTimersByTimeAsync(29_999);
+
+            expect(vi.getTimerCount()).toBe(1);
+
+            await vi.advanceTimersByTimeAsync(1);
 
             const error = (await pending) as { status?: unknown };
 
-            expect(spy).toHaveBeenCalledWith(30_000);
             expect(error).toBeInstanceOf(Error);
             expect(error.status).toBe(503);
             expect((error as Error).message).toMatch(/timed out after 30000ms/);
         } finally {
-            spy.mockRestore();
+            vi.useRealTimers();
         }
     });
 
     it("rethrows a non-timeout abort/network failure unchanged", async () => {
         expect.assertions(1);
 
-        const { abort, spy } = stubAbortSignalTimeout();
+        // Not a timeout — e.g. a DNS failure surfaced straight from the fetch
+        // implementation.
+        const fetchImpl = vi.fn<typeof fetch>(async () => {
+            throw new TypeError("fetch failed");
+        });
 
-        try {
-            const fetchImpl = hangingFetchImpl();
-            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
-
-            // Not a timeout — e.g. a DNS failure the fetch implementation
-            // surfaces on the same signal-driven rejection path.
-            abort(new TypeError("fetch failed"));
-
-            const error = (await pending) as Error;
-
-            expect(error.message).toBe("fetch failed");
-        } finally {
-            spy.mockRestore();
-        }
+        await expect(createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF)).rejects.toThrow("fetch failed");
     });
 
     it("overrides the default timeout with RunFunctionOptions.timeoutMs", async () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
-        const { abort, spy } = stubAbortSignalTimeout();
+        vi.useFakeTimers();
 
         try {
             const fetchImpl = hangingFetchImpl();
@@ -224,49 +208,64 @@ describe("createDispatchRunner", () => {
                 (error: unknown) => error,
             );
 
-            abort(new DOMException("The operation timed out.", "TimeoutError"));
+            await vi.advanceTimersByTimeAsync(1000);
 
             const error = (await pending) as { message?: unknown };
 
-            expect(spy).toHaveBeenCalledWith(1000);
             expect(error.message).toMatch(/timed out after 1000ms/);
         } finally {
-            spy.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
+    it("leaves no pending deadline timer once a fast dispatch settles", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const run = createDispatchRunner({ env: ENV, fetchImpl: async () => Response.json({ ok: 1 }, { status: 200 }), label: "@lunora/queue" });
+
+            await expect(run(REF)).resolves.toEqual({ ok: 1 });
+            // `dispose()` in the runner's `finally` cleared the deadline timer.
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
         }
     });
 
     it("maps a deadline that fires DURING a successful response's stalled body read to the same retryable 503 (PR review)", async () => {
         expect.assertions(2);
 
-        const { abort, spy } = stubAbortSignalTimeout();
+        vi.useFakeTimers();
 
         try {
             const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => responseWithHangingBody({ ok: true, status: 200 }, init?.signal));
             const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
 
-            // Headers already "arrived" (fetchImpl resolved) by the time this
-            // fires; the pending `response.text()` read must still see it.
-            abort(new DOMException("The operation timed out.", "TimeoutError"));
+            // Headers already "arrived" (fetchImpl resolved) by the time the
+            // deadline fires; the pending `response.text()` read must still see it.
+            await vi.advanceTimersByTimeAsync(30_000);
 
             const error = (await pending) as { status?: unknown };
 
             expect(error.status).toBe(503);
             expect((error as Error).message).toMatch(/timed out after 30000ms/);
         } finally {
-            spy.mockRestore();
+            vi.useRealTimers();
         }
     });
 
     it("maps a deadline that fires DURING a non-ok response's stalled error-body read to the same retryable 503 (PR review)", async () => {
         expect.assertions(2);
 
-        const { abort, spy } = stubAbortSignalTimeout();
+        vi.useFakeTimers();
 
         try {
             const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => responseWithHangingBody({ ok: false, status: 500 }, init?.signal));
             const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
 
-            abort(new DOMException("The operation timed out.", "TimeoutError"));
+            await vi.advanceTimersByTimeAsync(30_000);
 
             const error = (await pending) as { status?: unknown };
 
@@ -275,7 +274,7 @@ describe("createDispatchRunner", () => {
             expect(error.status).toBe(503);
             expect((error as Error).message).toMatch(/timed out after 30000ms/);
         } finally {
-            spy.mockRestore();
+            vi.useRealTimers();
         }
     });
 });
