@@ -98,6 +98,12 @@ describe("normalizeDocUrl", () => {
         expect(normalizeDocUrl("/docs/durable-objects")).toBe("/docs/durable-objects");
     });
 
+    it("folds a backslash separator into the slash the url parser would see", () => {
+        expect.assertions(1);
+
+        expect(normalizeDocUrl(String.raw`/docs\sharding`)).toBe("/docs/sharding");
+    });
+
     it.each([
         ["a literal traversal", "/docs/../../api/search"],
         ["an encoded traversal", "/docs/%2e%2e/%2e%2e/api/search"],
@@ -106,6 +112,9 @@ describe("normalizeDocUrl", () => {
         ["a single-dot segment", "/docs/./x"],
         ["an encoded slash hiding a traversal", "/docs/a%2Fb/.."],
         ["a malformed percent-escape", "/docs/100%"],
+        ["a backslash traversal", String.raw`/docs/..\..\..\api/internal`],
+        ["a mixed slash/backslash traversal", String.raw`/docs/..\../admin`],
+        ["an encoded backslash segment", "/docs/%5c..%5cadmin"],
     ])("rejects %s", (_label, input) => {
         expect.assertions(1);
 
