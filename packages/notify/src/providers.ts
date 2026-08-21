@@ -152,15 +152,11 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
         },
         isAvailable: () => (options.webPush ?? options.fcm) !== undefined,
         send: async (payload) => {
-            // ROUTING is on the first target — the endpoint IS the decision, present
-            // means web push, absent means FCM — because `ctx.push`'s own fan-out
-            // (`deliver`) sends exactly one target per call.
-            //
-            // The SSRF re-check, though, must cover EVERY target: `notify.send()`
-            // hands a caller-shaped message straight to the engine, so a
-            // multi-recipient push `to` does reach this router, and the provider
-            // POSTs all of them. Guarding only `to[0]` would let every later entry
-            // walk past the rebinding check — the one place it is enforced.
+            // The SSRF re-check must cover EVERY target: `notify.send()` hands a
+            // caller-shaped message straight to the engine, so a multi-recipient
+            // push `to` does reach this router, and the provider POSTs all of
+            // them. Guarding only `to[0]` would let every later entry walk past
+            // the rebinding check — the one place it is enforced.
             const targets = Array.isArray(payload.to) ? payload.to : [payload.to];
             const endpoints = targets.map((entry) => webPushEndpoint(entry));
 
@@ -171,7 +167,37 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
                 }
             }
 
-            return pick(endpoints[0]).send(payload);
+            // ROUTING is per target — the endpoint IS the decision, present means
+            // web push, absent means FCM. `ctx.push`'s own fan-out (`deliver`)
+            // sends exactly one target per call, but the `notify.send()` path
+            // above can carry a mixed-kind `to`, so the targets are partitioned
+            // and each group goes to its own provider — routing the whole send by
+            // one target's kind would hand FCM tokens to the Web Push transport
+            // (or the reverse). A single-kind `to` passes through unchanged.
+            const webPushTargets = targets.filter((_, index) => endpoints[index] !== undefined);
+            const fcmTargets = targets.filter((_, index) => endpoints[index] === undefined);
+            const sampleEndpoint = endpoints.find((endpoint) => endpoint !== undefined);
+
+            if (fcmTargets.length === 0 && sampleEndpoint !== undefined) {
+                return pick(sampleEndpoint).send(payload);
+            }
+
+            if (webPushTargets.length === 0) {
+                return pick(undefined).send(payload);
+            }
+
+            // Mixed kinds: narrow `to` per group (keeping the scalar-vs-array
+            // shape convention), send both, and merge — successful only when both
+            // receipts are, returning the first failure otherwise so a failed
+            // group is never masked by a succeeding one.
+            const narrowed = (group: typeof targets): PushPayload => {
+                return { ...payload, to: group.length === 1 && group[0] !== undefined ? group[0] : group };
+            };
+
+            const webPushReceipt = await pick(sampleEndpoint).send(narrowed(webPushTargets));
+            const fcmReceipt = await pick(undefined).send(narrowed(fcmTargets));
+
+            return [webPushReceipt, fcmReceipt].find((receipt) => !receipt.success) ?? webPushReceipt;
         },
     };
 };
