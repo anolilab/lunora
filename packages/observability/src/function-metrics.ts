@@ -202,6 +202,24 @@ interface RecordFunctionMetricInput {
 /** Floor `ts` to the start of its history bucket. */
 const bucketFloor = (ts: number): number => Math.floor(ts / FUNCTION_METRICS_BUCKET_MS) * FUNCTION_METRICS_BUCKET_MS;
 
+/**
+ * The bucket most recently pruned PER SHARD, so the retention delete runs once
+ * per window instead of once per dispatch.
+ *
+ * Keyed by the storage handle rather than a module-level scalar: workerd hosts
+ * several Durable Object instances of the same class in one isolate, so a shared
+ * scalar lets a busy shard claim the window and every other shard on that
+ * isolate skip its prune entirely — the retention bound would then not hold,
+ * which is the one thing this marker exists to guarantee. A `WeakMap` means an
+ * evicted DO's entry is collected with it.
+ *
+ * The delete itself is per-`path` while the marker is per handle: the winning
+ * call prunes only the path it wrote, and a path not written in that window is
+ * pruned by its own next write in a later window — retention is delayed by at
+ * most one window per path, never unbounded.
+ */
+const lastPrunedBucket = new WeakMap<object, number>();
+
 /** Collapse a dispatch's index hits to one entry per distinct `(table, index)` so each counts as one read. */
 const dedupeIndexHits = (hits: ReadonlyArray<IndexHit>): IndexHit[] => {
     const seen = new Map<string, IndexHit>();
@@ -468,18 +486,23 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
         errorCount,
     );
 
-    // Bounded retention: keep only the most recent buckets for this path.
-    runSql(
-        sql,
-        `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"
-         WHERE path = ?
-           AND bucket_ms <= (
-            SELECT MAX(bucket_ms) - ? FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ?
-           )`,
-        input.path,
-        FUNCTION_METRICS_BUCKET_RETENTION * FUNCTION_METRICS_BUCKET_MS,
-        input.path,
-    );
+    // Bounded retention: keep only the most recent buckets for this path — run
+    // once per window (see `lastPrunedBucket`) instead of on every dispatch.
+    if (lastPrunedBucket.get(sql) !== bucket) {
+        lastPrunedBucket.set(sql, bucket);
+
+        runSql(
+            sql,
+            `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"
+             WHERE path = ?
+               AND bucket_ms <= (
+                SELECT MAX(bucket_ms) - ? FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ?
+               )`,
+            input.path,
+            FUNCTION_METRICS_BUCKET_RETENTION * FUNCTION_METRICS_BUCKET_MS,
+            input.path,
+        );
+    }
 
     // Causal attribution: one PK-keyed upsert per distinct full-scanned table.
     // Skipped entirely for the common indexed dispatch (empty `scannedTables`),

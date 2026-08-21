@@ -102,6 +102,19 @@ interface RecordAuthEventInput {
 const bucketFloor = (ts: number): number => Math.floor(ts / AUTH_METRICS_BUCKET_MS) * AUTH_METRICS_BUCKET_MS;
 
 /**
+ * The bucket most recently pruned PER SHARD, so the retention delete runs once
+ * per window instead of once per recorded attempt.
+ *
+ * Keyed by the storage handle rather than a module-level scalar: workerd hosts
+ * several Durable Object instances of the same class in one isolate, so a shared
+ * scalar lets a busy shard claim the window and every other shard on that
+ * isolate skip its prune entirely — the retention bound would then not hold,
+ * which is the one thing this marker exists to guarantee. A `WeakMap` means an
+ * evicted DO's entry is collected with it.
+ */
+const lastPrunedBucket = new WeakMap<object, number>();
+
+/**
  * Create the two reserved auth-metrics tables. Idempotent, so the read and write
  * paths can call it defensively. The accumulator is a single keyed row; the
  * bucket table is keyed by `bucket_ms` (one row per minute window).
@@ -134,9 +147,9 @@ const ensureAuthMetricsTables = (sql: SqlExec): void => {
  * `failures` advances only when `outcome === "fail"`. `since_ms` is set once on
  * the first attempt and never moved (so it stays a true first-seen marker).
  *
- * Exactly two `INSERT … ON CONFLICT … DO UPDATE` statements plus a bounded
- * `DELETE`, all keyed by primary key — cheap enough to fire off the auth
- * response path without blocking it.
+ * Exactly two `INSERT … ON CONFLICT … DO UPDATE` statements, all keyed by
+ * primary key, plus a bounded `DELETE` that runs once per bucket window —
+ * cheap enough to fire off the auth response path without blocking it.
  */
 const recordAuthEvent = (sql: SqlExec, input: RecordAuthEventInput): void => {
     ensureAuthMetricsTables(sql);
@@ -173,15 +186,20 @@ const recordAuthEvent = (sql: SqlExec, input: RecordAuthEventInput): void => {
         failureCount,
     );
 
-    // Bounded retention: keep only the most recent buckets.
-    runSql(
-        sql,
-        `DELETE FROM "${AUTH_METRICS_BUCKETS_TABLE}"
-         WHERE bucket_ms <= (
-            SELECT MAX(bucket_ms) - ? FROM "${AUTH_METRICS_BUCKETS_TABLE}"
-         )`,
-        AUTH_METRICS_BUCKET_RETENTION * AUTH_METRICS_BUCKET_MS,
-    );
+    // Bounded retention: keep only the most recent buckets — run once per
+    // window (see `lastPrunedBucket`) instead of on every recorded attempt.
+    if (lastPrunedBucket.get(sql) !== bucket) {
+        lastPrunedBucket.set(sql, bucket);
+
+        runSql(
+            sql,
+            `DELETE FROM "${AUTH_METRICS_BUCKETS_TABLE}"
+             WHERE bucket_ms <= (
+                SELECT MAX(bucket_ms) - ? FROM "${AUTH_METRICS_BUCKETS_TABLE}"
+             )`,
+            AUTH_METRICS_BUCKET_RETENTION * AUTH_METRICS_BUCKET_MS,
+        );
+    }
 };
 
 /**

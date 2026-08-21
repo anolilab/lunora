@@ -423,6 +423,27 @@ describe("time-series buckets", () => {
         expect(readFunctionMetricBuckets(sql, "new:fn").buckets).toHaveLength(1);
     });
 
+    it("issues the retention delete once per bucket window", () => {
+        expect.assertions(2);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        const execSpy = vi.spyOn(sql, "exec");
+        const deletes = () => execSpy.mock.calls.filter(([query]) => typeof query === "string" && query.includes("DELETE")).length;
+
+        recordFunctionMetric(sql, dispatch({ ts: 1_000_000 }));
+        recordFunctionMetric(sql, dispatch({ ts: 1_000_001 }));
+
+        // Same minute window: the second dispatch skips the prune entirely.
+        expect(deletes()).toBe(1);
+
+        recordFunctionMetric(sql, dispatch({ ts: 1_000_000 + FUNCTION_METRICS_BUCKET_MS }));
+
+        // A dispatch in a later window prunes again.
+        expect(deletes()).toBe(2);
+    });
+
     it("returns every path's buckets when no path is given", () => {
         expect.assertions(1);
 
