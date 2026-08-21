@@ -34,13 +34,13 @@ const style = computed(() => {
 });
 
 const showImage = computed(() => {
-    const image = props.user?.image;
+    const image = props.user?.image ?? undefined;
 
     return image !== undefined && image !== "" && !failed.value;
 });
 </script>
 
 <template>
-    <img v-if="showImage" alt="" class="lunora-auth-avatar" :src="user?.image" :style="style" @error="failed = true" />
+    <img v-if="showImage" alt="" class="lunora-auth-avatar" :src="user?.image ?? undefined" :style="style" @error="failed = true" />
     <span v-else aria-hidden="true" class="lunora-auth-avatar lunora-auth-avatar--initials" :style="style">{{ userInitials(user) }}</span>
 </template>

@@ -105,6 +105,30 @@ describe("createProfileController", () => {
         expect(getSession).not.toHaveBeenCalled();
     });
 
+    it("saves for a user with no avatar, whose image arrives as null", async () => {
+        expect.assertions(2);
+
+        // better-auth sends `image: null` for a user who has never set one.
+        // Seeded as a value it makes the field uncontrolled and `submit`'s
+        // `.trim()` throw, so the form can never be saved.
+        const getSession = vi.fn(() => ok({ user: { image: null, name: "Grace" } }));
+        const client = stubClient({ getSession });
+        const { context } = makeContext(client);
+        const controller = createProfileController(context);
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        expect(controller.getState().fields.image.value).toBe("");
+
+        await controller.actions.submit();
+
+        expect(client.updateUser as ReturnType<typeof vi.fn>).toHaveBeenCalledWith({ image: undefined, name: "Grace" });
+    });
+
     it("propagates an errored session read instead of blanking the fields", async () => {
         expect.assertions(2);
 

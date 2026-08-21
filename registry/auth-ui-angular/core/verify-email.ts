@@ -109,7 +109,12 @@ const createResendVerificationController = (context: ControllerContext, options:
                       const session = assertOk(await context_.authClient.getSession());
                       const email = session.data?.user?.email;
 
-                      return email === undefined ? {} : { email };
+                      // `typeof`, not `!== undefined`: the form engine seeds
+                      // anything that is not `undefined`, and a `null` field
+                      // value would break the input and `submit`'s `.trim()`.
+                      // better-auth types `email` non-null, but the seed
+                      // contract is "a string or nothing" either way.
+                      return typeof email === "string" ? { email } : {};
                   }
                 : undefined,
         submit: async (values, context_) => {

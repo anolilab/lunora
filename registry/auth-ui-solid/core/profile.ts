@@ -44,13 +44,22 @@ const createProfileController = (context: ControllerContext, options: ProfileOpt
                   const user = session.data?.user;
                   const values: Partial<Record<ProfileField, string>> = {};
 
-                  // Only keys that are actually present — seeding `""` for an
-                  // absent value would blank a field (see `sign-up.ts`).
-                  if (user?.image !== undefined) {
+                  /*
+                   * Only keys that are actually present — seeding `""` for an
+                   * absent value would blank a field (see `sign-up.ts`).
+                   *
+                   * `typeof … === "string"`, not `!== undefined`: better-auth
+                   * sends `image: null` for a user who has never set an avatar,
+                   * and the form engine seeds anything that is not `undefined`.
+                   * A `null` in a field value binds to a controlled input as
+                   * uncontrolled and makes `submit`'s `.trim()` throw, so the
+                   * form could never be saved. `null` means absent here.
+                   */
+                  if (typeof user?.image === "string") {
                       values.image = user.image;
                   }
 
-                  if (user?.name !== undefined) {
+                  if (typeof user?.name === "string") {
                       values.name = user.name;
                   }
 

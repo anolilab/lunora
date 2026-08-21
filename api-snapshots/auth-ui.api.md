@@ -739,7 +739,7 @@ interface AuthUser {
     email?: string;
     emailVerified?: boolean;
     id?: string;
-    image?: string;
+    image?: string | null;
     name?: string;
 }
 ```
@@ -2519,10 +2519,14 @@ const createActiveMemberController = (context: ControllerContext, options: {
         try {
             const [session, organization] = await Promise.all([
                 context.authClient.getSession().then(assertOk),
-                context.authClient.organization.getFullOrganization().then(assertOk),
+                context.authClient.organization.getFullOrganization(),
             ]);
             const userId = session.data?.user?.id;
-            const role = organization.data?.members?.find((member) => member.userId === userId)?.role;
+            if (userId === undefined) {
+                store.update({ loading: false, role: undefined, status: "success" });
+                return;
+            }
+            const role = assertOk(organization).data?.members?.find((member) => member.userId === userId)?.role;
             store.update({ loading: false, role, status: "success" });
         }
         catch (error) {
@@ -3503,10 +3507,10 @@ const createProfileController = (context: ControllerContext, options: ProfileOpt
                 const session = assertOk(await context_.authClient.getSession());
                 const user = session.data?.user;
                 const values: Partial<Record<ProfileField, string>> = {};
-                if (user?.image !== undefined) {
+                if (typeof user?.image === "string") {
                     values.image = user.image;
                 }
-                if (user?.name !== undefined) {
+                if (typeof user?.name === "string") {
                     values.name = user.name;
                 }
                 return values;
@@ -3532,7 +3536,7 @@ const createResendVerificationController = (context: ControllerContext, options:
         ? async (context_) => {
             const session = assertOk(await context_.authClient.getSession());
             const email = session.data?.user?.email;
-            return email === undefined ? {} : { email };
+            return typeof email === "string" ? { email } : {};
         }
         : undefined,
     submit: async (values, context_) => {
@@ -5636,7 +5640,7 @@ interface AuthUser {
     email?: string;
     emailVerified?: boolean;
     id?: string;
-    image?: string;
+    image?: string | null;
     name?: string;
 }
 ```
@@ -7818,10 +7822,14 @@ const createActiveMemberController = (context: ControllerContext, options: {
         try {
             const [session, organization] = await Promise.all([
                 context.authClient.getSession().then(assertOk),
-                context.authClient.organization.getFullOrganization().then(assertOk),
+                context.authClient.organization.getFullOrganization(),
             ]);
             const userId = session.data?.user?.id;
-            const role = organization.data?.members?.find((member) => member.userId === userId)?.role;
+            if (userId === undefined) {
+                store.update({ loading: false, role: undefined, status: "success" });
+                return;
+            }
+            const role = assertOk(organization).data?.members?.find((member) => member.userId === userId)?.role;
             store.update({ loading: false, role, status: "success" });
         }
         catch (error) {
@@ -8802,10 +8810,10 @@ const createProfileController = (context: ControllerContext, options: ProfileOpt
                 const session = assertOk(await context_.authClient.getSession());
                 const user = session.data?.user;
                 const values: Partial<Record<ProfileField, string>> = {};
-                if (user?.image !== undefined) {
+                if (typeof user?.image === "string") {
                     values.image = user.image;
                 }
-                if (user?.name !== undefined) {
+                if (typeof user?.name === "string") {
                     values.name = user.name;
                 }
                 return values;
@@ -8831,7 +8839,7 @@ const createResendVerificationController = (context: ControllerContext, options:
         ? async (context_) => {
             const session = assertOk(await context_.authClient.getSession());
             const email = session.data?.user?.email;
-            return email === undefined ? {} : { email };
+            return typeof email === "string" ? { email } : {};
         }
         : undefined,
     submit: async (values, context_) => {

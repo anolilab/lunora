@@ -317,6 +317,30 @@ describe("errored getSession is an error, not signed-out", () => {
         expect(controller.getState().error).toBeDefined();
     });
 
+    it("active-member reports no role, not an error, for a signed-out user", async () => {
+        expect.assertions(2);
+
+        // Signed out is a successful 200 with no user; the organization read
+        // then answers 401 for the same reason. Neither is an error state —
+        // nobody has a role in an organization when nobody is signed in.
+        const { context } = makeContext(
+            stubClient({
+                getSession: vi.fn(() => ok(null)),
+                organization: { getFullOrganization: vi.fn(() => fail("unauthorized")) },
+            }),
+        );
+        const controller = createActiveMemberController(context);
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        expect(controller.getState().status).toBe("success");
+        expect(controller.getState().role).toBeUndefined();
+    });
+
     it("resend-verification prefill propagates the failure instead of seeding an empty string", async () => {
         expect.assertions(2);
 
