@@ -5653,15 +5653,22 @@ class LunoraClient {
         // server truth, re-folded under the overlay afterwards. With no optimistic
         // layers active `serverBase === lastValue`, so this is the historical path.
         if (isMutationDelta(delta)) {
-            const merged = state.serverBase === undefined ? undefined : applyDelta(state.serverBase, delta);
+            // No cached base is NOT a merge failure — there is nothing to merge
+            // into and nothing to corrupt. This is the legacy `broadcastDelta`
+            // fan-out, which stamps no `cursor` at all (see `ShardDO.broadcastDelta`:
+            // "legacy broadcast path has no diff baseline to protect"), so handing
+            // the change itself to a subscriber that has not been seeded strands
+            // no cursor and is the behaviour that path has always had. Asking for
+            // a snapshot here would turn every such broadcast into a re-subscribe.
+            if (state.serverBase === undefined) {
+                return delta;
+            }
 
-            // A recognised row delta that will not merge (no cached base, or a base
-            // whose shape the delta can't be spliced into) must NOT fall through to
-            // wholesale replacement: that publishes the `{ key, op, table, row }`
-            // envelope itself as the query's value — and the frame advances the
-            // resume cursor, so nothing would ever reconcile it. Ask for a snapshot
-            // instead.
-            return merged ?? UNMERGEABLE_DELTA;
+            // A base we DO hold and cannot splice the delta into is the dangerous
+            // case: wholesale replacement publishes the `{ key, op, table, row }`
+            // envelope over a real query result, and a frame that carries a cursor
+            // advances it, so nothing would ever reconcile it. Ask for a snapshot.
+            return applyDelta(state.serverBase, delta) ?? UNMERGEABLE_DELTA;
         }
 
         // Opaque delta payload (e.g. a full result the server sent verbatim):

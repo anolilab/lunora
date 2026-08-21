@@ -1524,6 +1524,43 @@ describe("lunoraClient", () => {
             vi.useRealTimers();
         });
 
+        it("publishes a delta that arrives with no cached base instead of re-subscribing", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = firstSub(socket);
+
+            socket.receive({ id: sub.id, type: "ack" });
+
+            // No `data` frame first, and no `cursor` on the delta — this is the
+            // legacy `ShardDO.broadcastDelta` fan-out, which stamps neither. An
+            // absent base is NOT a merge failure: there is nothing to merge into
+            // and nothing to corrupt, and because no cursor moves, publishing the
+            // change strands nothing. Treating it as unmergeable would turn every
+            // broadcast to an unseeded subscriber into a re-subscribe.
+            socket.receive({ delta: { key: "m-1", op: "insert", row: { id: "m-1", text: "hi" }, table: "messages:list" }, id: sub.id, type: "delta" });
+
+            expect(received).toStrictEqual([{ key: "m-1", op: "insert", row: { id: "m-1", text: "hi" }, table: "messages:list" }]);
+
+            // …and it did NOT ask for a fresh snapshot.
+            expect(wireFrames(socket).filter((frame) => frame.type === "subscribe")).toHaveLength(1);
+
+            client.close();
+        });
+
         it("re-subscribes for a snapshot (and never publishes the raw envelope) when a delta can't merge into the cached shape", () => {
             expect.assertions(4);
 
