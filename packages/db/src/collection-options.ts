@@ -17,6 +17,15 @@ interface Gate {
     await: (threshold: number) => Promise<void>;
     /** Whether `threshold` has already been reached (so no waiting is needed). */
     passed: (threshold: number) => boolean;
+
+    /**
+     * Settle every parked waiter, then rewind the watermark to "nothing
+     * confirmed". For an identity switch: the previous identity's writes are
+     * already durable server-side (so its waiters must settle, not hang), while
+     * the new identity starts a fresh sequence space the old mark must not
+     * answer for.
+     */
+    reset: () => void;
     /** How many waiters are still held — a diagnostics read. */
     waiting: () => number;
 }
@@ -52,6 +61,13 @@ const createGate = (): Gate => {
             });
         },
         passed: (threshold) => threshold <= highest,
+        reset: () => {
+            for (const waiter of waiters.splice(0)) {
+                waiter.resolve();
+            }
+
+            highest = Number.NEGATIVE_INFINITY;
+        },
         waiting: () => waiters.length,
     };
 };
@@ -90,14 +106,24 @@ const defaultOnFallback = (event: CheckpointFallbackEvent): void => {
 const registriesByClient = new WeakMap<LunoraClient, Map<string, CheckpointRegistry>>();
 
 /**
- * The identity each client's registries were minted under. The server keys its
+ * The identity each client's registries last advanced under. The server keys its
  * mutation watermark per identity (and `bindMutators` resets `clientSeq` on an
  * identity change to match), so a registry whose gates advanced under user A
  * would answer user B's `awaitMutationId(1)` immediately — dropping the overlay
  * before B's authoritative row synced. {@link getShardCheckpoints} checks this
- * lazily on every call and sweeps stale registries via
- * {@link releaseShardCheckpoints}, mirroring `resetCounterForIdentity` in
+ * lazily on every call and rewinds the client's registries in place (see
+ * {@link registryResets}), mirroring `resetCounterForIdentity` in
  * `define-mutators.ts` (there is no identity-change event to subscribe to).
+ *
+ * The identity is whatever `client.currentIdentity()` reports, which is
+ * deliberately the SAME key `confirmedMutationWatermark` buckets by. Without a
+ * stable `subject` passed to `setAuthToken` that key is a token hash, so a plain
+ * token refresh reads as an identity change and rewinds here — which is correct,
+ * not incidental: the client's watermark cache and `bindMutators`' `clientSeq`
+ * rewind on exactly the same signal, and a registry left ahead of a
+ * freshly-zeroed sequence space would release every subsequent overlay
+ * immediately. (An app that wants refreshes to be transparent passes `subject` —
+ * the same guidance the watermark cache already carries.)
  */
 const identityByClient = new WeakMap<LunoraClient, string | null>();
 
@@ -114,6 +140,26 @@ const identityByClient = new WeakMap<LunoraClient, string | null>();
  * Package-internal: deliberately not re-exported from `index.ts`.
  */
 const attachedRegistries = new WeakSet<CheckpointRegistry>();
+
+/**
+ * Identity-switch reset hooks for registries built by
+ * {@link createCheckpointRegistry}. Read by {@link getShardCheckpoints}'s sweep.
+ *
+ * A switch must rewind a shard's watermark space WITHOUT swapping the registry
+ * object: the documented wiring captures `checkpoints` once from
+ * `lunoraCollectionOptions` and hands it to `bindMutators` as an EXPLICIT
+ * registry (always honored, never re-derived), and codegen's
+ * `<shape>Collection()` returns it the same way. Replacing the instance would
+ * leave every one of those captures pointed at a retired gate — resolved to
+ * `Infinity` by its teardown, so each post-switch `awaitMutationId` returns
+ * already-settled and the overlay drops before the new identity's row syncs.
+ * Resetting in place keeps every captured reference live (and keeps the shard's
+ * {@link attachedRegistries} mark, so the first post-switch write is still gated).
+ *
+ * Package-internal, like {@link attachedRegistries}: an app resetting a live
+ * registry by hand would silently un-gate whatever is in flight.
+ */
+const registryResets = new WeakMap<CheckpointRegistry, () => void>();
 
 /** A watermark pair — the two monotonic lines a checkpoint registry gates on. */
 export interface CheckpointWatermark {
@@ -286,7 +332,7 @@ export const createCheckpointRegistry = (options: CheckpointRegistryOptions = {}
         armed.add(entry);
     };
 
-    return {
+    const registry: CheckpointRegistry = {
         acknowledge: ({ checkpoint, mutationId }) => {
             if (checkpoint !== undefined) {
                 arm("checkpoint", checkpoint);
@@ -324,6 +370,17 @@ export const createCheckpointRegistry = (options: CheckpointRegistryOptions = {}
             };
         },
     };
+
+    // Identity-switch rewind (see `registryResets`): drop armed timers, settle
+    // the previous identity's parked waiters, and empty both watermark spaces —
+    // all without replacing the object every consumer captured.
+    registryResets.set(registry, () => {
+        registry.dispose();
+        checkpointGate.reset();
+        mutationGate.reset();
+    });
+
+    return registry;
 };
 
 /**
@@ -365,6 +422,44 @@ export const releaseShardCheckpoints = (client: LunoraClient): void => {
 };
 
 /**
+ * Rewind `client`'s shard registries if the signed-in identity has moved since
+ * they last advanced. Idempotent and cheap (one `currentIdentity()` read on the
+ * no-change path), so every entry point into the watermark protocol can call it.
+ *
+ * Called from {@link getShardCheckpoints} (the collections' side) AND from
+ * `bindMutators`' `resetCounterForIdentity` (the write side). Both are needed:
+ * a mutator bound with an EXPLICIT registry — which is what the documented
+ * wiring and codegen's `<shape>Collection()` produce, since they capture
+ * `checkpoints` once and pass it down — never re-derives through
+ * `getShardCheckpoints`, so the collections' entry point alone would leave the
+ * first post-switch write gated on the previous identity's watermark. Pairing it
+ * with the `clientSeq` reset keeps the two halves of the protocol rewinding on
+ * one signal: a registry left ahead of a freshly-zeroed sequence space answers
+ * every later `awaitMutationId` immediately.
+ *
+ * Registries the caller built themselves ({@link createCheckpointRegistry}) are
+ * not in the derived map and are never touched — the caller owns their lifecycle.
+ *
+ * Package-internal: deliberately not re-exported from `index.ts`.
+ */
+export const syncShardCheckpointIdentity = (client: LunoraClient): void => {
+    const identity = client.currentIdentity();
+
+    if (registriesByClient.has(client) && identityByClient.get(client) !== identity) {
+        // The registries' watermarks belong to the PREVIOUS identity. Rewind each
+        // in place — settling its parked waiters and emptying its gates — rather
+        // than dropping the map: every consumer that captured this shard's
+        // registry keeps pointing at the object being reset, and the shard stays
+        // marked attached, so the first write under the new identity is still gated.
+        for (const registry of registriesByClient.get(client)?.values() ?? []) {
+            registryResets.get(registry)?.();
+        }
+    }
+
+    identityByClient.set(client, identity);
+};
+
+/**
  * The shared checkpoint registry for `client` + `shardKey` — created on first use.
  * This is the registry {@link lunoraCollectionOptions} and
  * {@link import("./define-mutators").bindMutators} default to, which is what makes
@@ -379,16 +474,7 @@ export const releaseShardCheckpoints = (client: LunoraClient): void => {
  * `lunoraCollectionOptions` and `bindMutators` call for that shard.
  */
 export const getShardCheckpoints = (client: LunoraClient, shardKey?: string, options?: CheckpointRegistryOptions): CheckpointRegistry => {
-    const identity = client.currentIdentity();
-
-    if (registriesByClient.has(client) && identityByClient.get(client) !== identity) {
-        // The registries belong to the previous identity: settle their waiters and
-        // disarm their timers (the old writes were already durable server-side),
-        // then start fresh so the new identity's watermark space starts empty.
-        releaseShardCheckpoints(client);
-    }
-
-    identityByClient.set(client, identity);
+    syncShardCheckpointIdentity(client);
 
     let byShard = registriesByClient.get(client);
 

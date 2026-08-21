@@ -215,63 +215,81 @@ describe("getShardCheckpoints (identity scope)", () => {
         expect(getShardCheckpoints(client, "shard-1")).toBe(getShardCheckpoints(client, "shard-1"));
     });
 
-    it("mints a fresh registry on an identity switch and settles the old one's waiters", async () => {
+    it("rewinds the watermark on an identity switch and settles the old identity's waiters", async () => {
         const { client, setIdentity } = makeClient();
 
         setIdentity("user-a");
 
-        const forA = getShardCheckpoints(client, "shard-1");
+        const registry = getShardCheckpoints(client, "shard-1");
 
-        forA.resolve({ checkpoint: 47, mutationId: 47 });
+        registry.resolve({ checkpoint: 47, mutationId: 47 });
 
-        const parked = forA.awaitMutationId(48);
+        const parked = registry.awaitMutationId(48);
 
         setIdentity("user-b");
 
-        const forB = getShardCheckpoints(client, "shard-1");
+        // The SAME object survives the switch — every consumer that captured it
+        // (the documented `const { checkpoints } =` wiring, codegen's
+        // `<shape>Collection()`) keeps a live reference.
+        expect(getShardCheckpoints(client, "shard-1")).toBe(registry);
 
-        expect(forB).not.toBe(forA);
-
-        // The old identity's parked waiters settle (the writes were already durable) — nothing hangs.
+        // The old identity's parked waiters settle (those writes were already durable) — nothing hangs.
         await expect(parked).resolves.toBeUndefined();
 
-        // The new identity's first ack (seq 1) must NOT be answered by the old gate's 47.
-        const firstAck = forB.awaitMutationId(1);
+        // The new identity's first ack (seq 1) must NOT be answered by the pre-switch 47.
+        const firstAck = registry.awaitMutationId(1);
 
         await expect(Promise.race([firstAck.then(() => "released"), flush().then(() => "pending")])).resolves.toBe("pending");
 
-        forB.resolve({ mutationId: 1 });
+        registry.resolve({ mutationId: 1 });
 
         await expect(firstAck).resolves.toBeUndefined();
     });
 
-    it("advances the post-switch registry from a collection created before the switch", async () => {
+    it("advances the rewound registry from a collection created before the switch", async () => {
         const { client, setIdentity } = makeClient();
 
         setIdentity("user-a");
 
         const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
         const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
-        const preSwitch = options.checkpoints;
+        const captured = options.checkpoints;
 
-        // Mount the collection's subscription under identity A.
+        // Mount the collection's subscription under identity A and advance it there.
         syncStarterOf(options.config)(recordingWriter().writer as never);
 
         const { onCheckpoint } = subscribeMock.mock.calls[0]?.[3] as { onCheckpoint: (watermark: { mutationId?: number }) => void };
 
+        onCheckpoint({ mutationId: 47 });
         setIdentity("user-b");
 
-        // The switch mints a fresh registry; the still-mounted collection's
-        // callbacks must advance THAT one, not the retired capture.
-        const fresh = getShardCheckpoints(client);
+        // The switch rewinds the shard's registry; a still-mounted collection's
+        // frames must advance it again from the new identity's sequence space.
+        const waiter = getShardCheckpoints(client).awaitMutationId(1);
 
-        expect(fresh).not.toBe(preSwitch);
-
-        const waiter = fresh.awaitMutationId(1);
+        await expect(Promise.race([waiter.then(() => "released"), flush().then(() => "pending")])).resolves.toBe("pending");
 
         onCheckpoint({ mutationId: 1 });
 
         await expect(waiter).resolves.toBeUndefined();
+        expect(captured).toBe(getShardCheckpoints(client));
+    });
+
+    it("leaves an explicit caller-owned registry untouched", async () => {
+        const { client, setIdentity } = makeClient();
+
+        setIdentity("user-a");
+
+        // A registry the caller built and drives themselves is not in the derived
+        // map, so the sweep must never rewind it behind their back.
+        const explicit = createCheckpointRegistry({ fallbackMs: 0 });
+
+        explicit.resolve({ mutationId: 47 });
+        getShardCheckpoints(client);
+        setIdentity("user-b");
+        getShardCheckpoints(client);
+
+        await expect(explicit.awaitMutationId(47)).resolves.toBeUndefined();
     });
 });
 
