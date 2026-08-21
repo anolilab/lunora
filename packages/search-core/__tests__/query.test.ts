@@ -110,6 +110,18 @@ describe(finishSearchPage, () => {
             page: [{ id: 1 }, { id: 2 }],
         });
     });
+
+    it("is terminal when the window is shorter than the page — a genuinely ended corpus", () => {
+        expect.assertions(1);
+
+        const window = [{ id: 1 }];
+
+        expect(finishSearchPage(window, { numItems: 2, offset: 0 })).toStrictEqual({
+            continueCursor: null,
+            isDone: true,
+            page: [{ id: 1 }],
+        });
+    });
 });
 
 describe(resolveSearchScan, () => {
@@ -139,13 +151,31 @@ describe(resolveSearchScan, () => {
 });
 
 describe(planSearchPage, () => {
-    it("accepts a page that reaches exactly the cap", () => {
+    it("accepts a page ending one row below the cap, where the hasMore probe still fits", () => {
         expect.assertions(1);
 
-        expect(planSearchPage({ cursor: null, numItems: MAX_SEARCH_SCAN })).toStrictEqual({
-            numItems: MAX_SEARCH_SCAN,
+        expect(planSearchPage({ cursor: null, numItems: MAX_SEARCH_SCAN - 1 })).toStrictEqual({
+            numItems: MAX_SEARCH_SCAN - 1,
             offset: 0,
         });
+    });
+
+    it("rejects a page that ends exactly at the cap, where hasMore is unobservable", () => {
+        expect.assertions(1);
+
+        expect(() => planSearchPage({ cursor: null, numItems: MAX_SEARCH_SCAN })).toThrow(LunoraError);
+    });
+
+    it("rejects a cursor-addressed page that ends exactly at the cap", () => {
+        expect.assertions(1);
+
+        expect(() => planSearchPage({ cursor: encodeSearchCursor(1000), numItems: 24 })).toThrow(LunoraError);
+    });
+
+    it("accepts a cursor-addressed page ending below the cap", () => {
+        expect.assertions(1);
+
+        expect(planSearchPage({ cursor: encodeSearchCursor(999), numItems: 24 })).toStrictEqual({ numItems: 24, offset: 999 });
     });
 
     it("rejects a page that reaches one row past the cap", () => {
