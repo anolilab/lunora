@@ -923,12 +923,6 @@ const eventForPath: (path: string) => AuthAuditEvent | undefined;
 const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string) => Promise<Response | undefined>;
 ```
 
-### `isAuthRoutePath` (const)
-
-```ts
-const isAuthRoutePath: (pathname: string, basePath: string) => boolean;
-```
-
 ### `loadEmailDomainLists` (const)
 
 ```ts
