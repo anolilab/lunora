@@ -542,7 +542,7 @@ describe("auto-registered agent runtime functions", () => {
 
         // Every runtime component function is auto-registered, and nothing else —
         // adding/removing/renaming a function in @lunora/agent must fail here
-        // until codegen's AGENT_RUNTIME_FUNCTION_NAMES list is updated.
+        // until the visibility literals below are updated to match.
         expect(emitted).toStrictEqual(Object.keys(runtime).toSorted((a, b) => a.localeCompare(b)));
 
         // The loop dispatches the mutations over the admin channel (internal);
@@ -555,6 +555,7 @@ describe("auto-registered agent runtime functions", () => {
         ).toStrictEqual([
             "agentAppendMessage",
             "agentCompleteRun",
+            "agentDeleteMessage",
             "agentEnsureThread",
             "agentEpisodeRecall",
             "agentEpisodeUpsert",
