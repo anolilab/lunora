@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { PaymentDatabase, PaymentRow } from "../src/database-store";
 import { createDatabasePaymentStore } from "../src/database-store";
 import { money } from "../src/money";
+import { MemoryPaymentStore } from "../src/store";
 import type { Customer, PaymentSession, Subscription } from "../src/types";
 
 // In-memory PaymentDatabase that mirrors the equality-filter semantics ctx.db provides.
@@ -94,6 +95,32 @@ describe("createDatabasePaymentStore", () => {
         await store.upsertCustomer(customer);
 
         await expect(store.getCustomerByReference("stripe", "user_1")).resolves.toEqual(customer);
+    });
+
+    it("keys customer upserts by (provider, referenceId) in both stores (parity regression)", async () => {
+        expect.assertions(5);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+        const memory = new MemoryPaymentStore();
+
+        // A re-mint — same (provider, referenceId), new provider customer id — must update the row
+        // in place, not fork a second row the read path can never find. Same sequence in both stores.
+        await store.upsertCustomer(customer);
+        await store.upsertCustomer({ ...customer, id: "cus_2" });
+        await memory.upsertCustomer(customer);
+        await memory.upsertCustomer({ ...customer, id: "cus_2" });
+
+        await expect(db.findMany("customers", { provider: "stripe", referenceId: "user_1" })).resolves.toHaveLength(1);
+        await expect(store.getCustomerByReference("stripe", "user_1")).resolves.toMatchObject({ id: "cus_2" });
+        // Parity: the memory store lands on the same surviving row.
+        await expect(memory.getCustomerByReference("stripe", "user_1")).resolves.toMatchObject({ id: "cus_2" });
+
+        // A second provider's customer for the same reference stays a separate row.
+        await store.upsertCustomer({ ...customer, id: "pcus_1", provider: "polar" });
+
+        await expect(db.findMany("customers", { referenceId: "user_1" })).resolves.toHaveLength(2);
+        await expect(store.getCustomerByReference("polar", "user_1")).resolves.toMatchObject({ id: "pcus_1" });
     });
 
     it("round-trips a payment session, preserving bigint money", async () => {

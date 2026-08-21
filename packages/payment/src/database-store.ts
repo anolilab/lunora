@@ -260,7 +260,10 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             return foldUsage(window);
         },
 
-        upsertCustomer: async (customer) => upsert("customers", { provider: customer.provider, providerCustomerId: customer.id }, customerToRow(customer)),
+        // Keyed on `(provider, referenceId)` — the same key `getCustomerByReference` reads and the
+        // memory store writes — so a re-mint (race or provider-side customer replacement) updates the
+        // reference's row in place instead of forking a second row the read path can never find.
+        upsertCustomer: async (customer) => upsert("customers", { provider: customer.provider, referenceId: customer.referenceId }, customerToRow(customer)),
 
         upsertPaymentSession: async (session) =>
             upsert("paymentSessions", { provider: session.provider, providerSessionId: session.id }, sessionToRow(session)),

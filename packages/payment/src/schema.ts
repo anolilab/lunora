@@ -28,6 +28,9 @@ const customers = defineTable({
     referenceId: v.string(),
 })
     .index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true })
+    // Not unique: one reference may legitimately hold a customer per provider (Stripe AND Polar).
+    // Uniqueness of `(provider, referenceId)` is enforced by `upsertCustomer`'s match key, not by
+    // an index — a second provider's customer for the same reference is a separate row by design.
     .index("by_reference", ["referenceId"]);
 
 const subscriptions = defineTable({
