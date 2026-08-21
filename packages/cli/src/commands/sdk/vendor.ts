@@ -17,8 +17,8 @@
  * I hold" answerable from the stamp this module writes.
  */
 
-import { cpSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { cpSync, existsSync, lstatSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 
 import type { SdkTarget } from "@lunora/codegen";
 import { LunoraError } from "@lunora/errors";
@@ -87,7 +87,19 @@ const copyEntry = (sourceRoot: string, outputDirectory: string, from: string, to
     const destination = join(outputDirectory, to);
 
     cpSync(source, destination, {
-        filter: (candidate) => !isTestFile(candidate.slice(candidate.lastIndexOf(sep) + 1)),
+        filter: (candidate) => {
+            // The transport comes from a giget-fetched (possibly hostile) source
+            // or an arbitrary `--from` directory. `cpSync` copies symlinks
+            // verbatim, so a planted link (`config.py -> ~/.ssh/id_rsa`) would
+            // land in the user's project and be followed by whatever reads the
+            // generated SDK. Refuse, matching the registry copy-in guard;
+            // throwing here aborts the copy and surfaces as a command failure.
+            if (lstatSync(candidate).isSymbolicLink()) {
+                throw new LunoraError("INTERNAL", `refusing to vendor "${relative(sourceRoot, candidate)}" — it is a symlink, not a regular file`);
+            }
+
+            return !isTestFile(candidate.slice(candidate.lastIndexOf(sep) + 1));
+        },
         force: true,
         recursive: true,
     });
