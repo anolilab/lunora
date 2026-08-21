@@ -184,6 +184,7 @@ class TestWsFrameConsumer(unittest.TestCase):
     # language must have, and it carries no name for this one yet — the fixture
     # arrived with the TypeScript fix. Give it one once all eight ports assert it.
     def test_reset_poke_replaces_the_view(self):
+        covers("shape_reset_poke_replaces_membership")
         shape = load("ws-frames.json")["shape"]
         client = LunoraClient("https://app.example")
         client._send = lambda _frame: None

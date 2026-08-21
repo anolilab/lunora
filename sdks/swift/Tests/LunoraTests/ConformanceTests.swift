@@ -71,6 +71,7 @@ final class ConformanceTests: XCTestCase {
             case "shape_subscribe_frame": try caseShapeSubscribeFrame()
             case "poke_sequence_materialises_rows": try casePokeSequenceMaterialisesRows()
             case "poke_parts_do_not_apply_before_poke_end": try casePokePartsDoNotApplyBeforePokeEnd()
+            case "shape_reset_poke_replaces_membership": try testResetPokeReplacesShapeMembership()
             case "optimistic_layer_rebases_onto_server_frame": try caseOptimisticLayerRebasesOntoServerFrame()
             case "optimistic_layer_drops_on_commit_cursor": try caseOptimisticLayerDropsOnCommitCursor()
             case "optimistic_layer_drops_on_settled_frame": try caseOptimisticLayerDropsOnSettledFrame()

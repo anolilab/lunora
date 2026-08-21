@@ -613,6 +613,8 @@ public final class ConformanceTest {
      */
     @SuppressWarnings("unchecked")
     private static void resetPokeReplacesShapeMembership() throws IOException {
+        covers("shape_reset_poke_replaces_membership");
+
         Map<String, Object> shape = (Map<String, Object>) fixture("ws-frames.json").get("shape");
         Client client = new Client("https://app.example", null);
 

@@ -421,6 +421,8 @@ private fun pokePartsDoNotApplyBeforePokeEnd() {
  * renders it for the rest of its life.
  */
 private fun resetPokeReplacesShapeMembership() {
+    covers("shape_reset_poke_replaces_membership")
+
     val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
     val client = Client("https://app.example")
 

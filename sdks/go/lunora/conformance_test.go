@@ -611,6 +611,8 @@ func TestPokePartsDoNotApplyBeforePokeEnd(t *testing.T) {
 // Not a manifest case: protocol/conformance-cases.json is required of every
 // port, and adding a name there reds the ports that have not landed this yet.
 func TestResetPokeReplacesTheView(t *testing.T) {
+	covers("shape_reset_poke_replaces_membership")
+
 	fixture := loadFixture(t, "ws-frames.json")
 
 	shape, ok := fixture["shape"].(map[string]any)

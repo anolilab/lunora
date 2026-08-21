@@ -137,6 +137,8 @@ void casePokeSequenceMaterialisesRows() {
 /// language must have, and it carries no name for this one yet — the fixture
 /// arrived with the TypeScript fix. Give it one once all eight ports assert it.
 void caseResetPokeReplacesTheView() {
+  covers('shape_reset_poke_replaces_membership');
+
   final shape = fixture('ws-frames.json')['shape'] as Map<String, Object?>;
   final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
   final delivered = <List<Object?>>[];

@@ -229,6 +229,7 @@ class TestWsFrames < Minitest::Test
   # the fixture arrived with the TypeScript fix. Give it one once all eight ports
   # assert it.
   def test_reset_poke_replaces_the_view
+    ConformanceManifest.covers("shape_reset_poke_replaces_membership")
     shape = fixture("ws-frames.json")["shape"]
     client = Lunora::Client.new("https://app.example")
     client.attach_socket(->(_frame) {})

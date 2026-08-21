@@ -102,6 +102,7 @@ fn conformance_manifest_is_covered() {
             "shape_subscribe_frame" => shape_subscribe_frame(),
             "poke_sequence_materialises_rows" => poke_sequence_materialises_rows(),
             "poke_parts_do_not_apply_before_poke_end" => poke_parts_do_not_apply_before_poke_end(),
+            "shape_reset_poke_replaces_membership" => reset_poke_replaces_the_view(),
             "optimistic_layer_rebases_onto_server_frame" => optimistic_layer_rebases_onto_server_frame(),
             "optimistic_layer_drops_on_commit_cursor" => optimistic_layer_drops_on_commit_cursor(),
             "optimistic_layer_drops_on_settled_frame" => optimistic_layer_drops_on_settled_frame(),
@@ -488,10 +489,8 @@ fn poke_parts_do_not_apply_before_poke_end() {
 /// disconnect of a `.global()` shape (they full-reseed on every reconnect) used
 /// to leave behind.
 ///
-/// A plain `#[test]` rather than a manifest case: `conformance-cases.json` is
-/// required of every port, so a name added there reds the ports that have not
-/// landed this yet.
-#[test]
+/// Dispatched from the shared manifest now that all eight ports assert it, so
+/// a future port cannot go green without it.
 fn reset_poke_replaces_the_view() {
     let document = fixture("ws-frames.json");
     let sequence = document["shape"]["pokeSequence"].as_array().expect("pokeSequence");
