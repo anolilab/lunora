@@ -406,4 +406,12 @@ export interface HttpDispatcherOptions {
     fetchImpl?: typeof fetch;
     /** Origin where the Worker is mounted (the `/_lunora/scheduler/dispatch` endpoint). */
     originUrl: string;
+
+    /**
+     * Abort a job's dispatch after this many ms; the abort is retryable, so the
+     * consumer retries the message. Defaults to 5 minutes — raise it for a
+     * workpool running jobs that legitimately run longer, lower it to fail a
+     * stuck origin faster.
+     */
+    timeoutMs?: number;
 }

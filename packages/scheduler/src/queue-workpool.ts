@@ -46,6 +46,21 @@ import type {
 const MAX_QUEUE_BATCH = 100;
 
 /**
+ * Default deadline for one job's dispatch, overridable per dispatcher via
+ * {@link HttpDispatcherOptions.timeoutMs}. Deliberately far above
+ * `@lunora/dispatch`'s 30s default: that budget is for an inline `ctx.run`
+ * inside a handler that is itself serving something, whereas a workpool is
+ * precisely where jobs that outlive a request live (an LLM call, an export, a
+ * payment round-trip). Truncating those at 30s would turn a working job into a
+ * retry loop — and an action's dedup read is not gated, so the retry can run
+ * concurrently with the still-in-flight first attempt. 5 minutes still bounds a
+ * hung origin well short of the platform killing the whole `queue()`
+ * invocation, which is what this dispatcher previously did with no deadline at
+ * all.
+ */
+const DEFAULT_JOB_TIMEOUT_MS = 300_000;
+
+/**
  * Build a Queues producer that enqueues Lunora function dispatches. Concurrency
  * and retry policy live on the consumer's `wrangler.jsonc` config, not here.
  */
@@ -121,11 +136,14 @@ const createQueueConsumer =
 /**
  * Default {@link QueueDispatch}: dispatch each job to the Worker's
  * `/_lunora/scheduler/dispatch` endpoint (the same path SchedulerDO dispatches
- * through) via `@lunora/dispatch`'s `createDispatchRunner` — which bounds the
- * call with the runner's default timeout (a hung origin no longer holds the
- * whole `queue()` invocation open) and threads the queue message id through for
+ * through) via `@lunora/dispatch`'s `createDispatchRunner` — which bounds each
+ * job with {@link HttpDispatcherOptions.timeoutMs} (default
+ * {@link DEFAULT_JOB_TIMEOUT_MS}), so a hung origin no longer holds the whole
+ * `queue()` invocation open, and threads the queue message id through for
  * failure attribution. Any dispatch failure throws so the consumer retries the
- * message.
+ * message — including a 2xx carrying a non-empty non-JSON body, which is an
+ * intermediary's page rather than a function's return value and therefore no
+ * evidence the job ran. An empty 2xx is a normal success (a `void` function).
  */
 const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
     const run = createDispatchRunner({
@@ -134,8 +152,10 @@ const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
         label: "@lunora/scheduler",
     });
 
+    const timeoutMs = options.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
+
     return async (job: QueueJob, messageId?: string): Promise<void> => {
-        await run({ __lunoraRef: job.functionPath }, job.args, { messageId, shardKey: job.shardKey });
+        await run({ __lunoraRef: job.functionPath }, job.args, { messageId, shardKey: job.shardKey, timeoutMs });
     };
 };
 

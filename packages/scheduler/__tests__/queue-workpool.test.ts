@@ -267,9 +267,38 @@ describe("httpDispatcher", () => {
 
             const error = (await pending) as Error & { status?: unknown };
 
-            expect(spy).toHaveBeenCalledWith(30_000);
+            expect(spy).toHaveBeenCalledWith(300_000);
             expect(error.status).toBe(503);
-            expect(error.message).toMatch(/timed out after 30000ms/u);
+            expect(error.message).toMatch(/timed out after 300000ms/u);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    it("honours a configured timeoutMs instead of the default", async () => {
+        expect.assertions(2);
+
+        const controller = new AbortController();
+        const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+
+        try {
+            const fetchMock = vi.fn<typeof fetch>(
+                (_url, init) =>
+                    new Promise((_resolve, reject) => {
+                        init?.signal?.addEventListener("abort", () => {
+                            reject(init.signal?.reason as Error);
+                        });
+                    }),
+            );
+            const dispatch = httpDispatcher({ adminToken: "admintok", fetchImpl: fetchMock, originUrl: "https://app.example", timeoutMs: 900_000 });
+            const pending = dispatch({ functionPath: "jobs:a" }).catch((error_: unknown) => error_);
+
+            controller.abort(new DOMException("The operation timed out.", "TimeoutError"));
+
+            const error = (await pending) as Error;
+
+            expect(spy).toHaveBeenCalledWith(900_000);
+            expect(error.message).toMatch(/timed out after 900000ms/u);
         } finally {
             spy.mockRestore();
         }

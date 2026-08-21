@@ -159,6 +159,7 @@ interface HttpDispatcherOptions {
     adminToken: string;
     fetchImpl?: typeof fetch;
     originUrl: string;
+    timeoutMs?: number;
 }
 ```
 
