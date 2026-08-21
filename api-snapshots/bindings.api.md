@@ -310,6 +310,7 @@ interface VerifyImageResult {
     key?: string;
     reason?: "bad_signature" | "expired" | "malformed";
     transform?: string;
+    transformOptions?: TransformOptions;
     valid: boolean;
 }
 ```
@@ -330,6 +331,12 @@ const buildSignedImageUrl: (options: SignedImageUrlOptions) => Promise<string>;
 
 ```ts
 const createImages: (options: LunoraImagesOptions) => Images;
+```
+
+### `parseSignedTransform` (const)
+
+```ts
+const parseSignedTransform: (t: string) => TransformOptions;
 ```
 
 ### `verifySignedImageUrl` (const)

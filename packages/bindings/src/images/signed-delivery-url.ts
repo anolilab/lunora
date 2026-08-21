@@ -23,6 +23,8 @@ const LEADING_SLASH_RE = /^\//;
 // Stable, order-independent serialization of the transform so the same options
 // canonicalize byte-for-byte regardless of key insertion order. Object-valued
 // keys (e.g. gravity coordinates) are JSON-encoded; primitives stringify plainly.
+// MUST stay the exact inverse of `parseSignedTransform` below — the round-trip
+// test in `__tests__/images/signed-delivery-url.test.ts` pins the pairing.
 const serializeTransform = (transform: TransformOptions | undefined): string => {
     if (transform === undefined) {
         return "";
@@ -33,6 +35,61 @@ const serializeTransform = (transform: TransformOptions | undefined): string => 
         .toSorted(([a], [b]) => (a > b ? 1 : 0) - (a < b ? 1 : 0))
         .map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`)
         .join("&");
+};
+
+/** The value encodings `serializeTransform` can emit for a `TransformOptions` key. */
+type TransformValueKind = "json" | "number" | "string" | "string-or-json";
+
+/**
+ * Per-key value kind for {@link parseSignedTransform}, derived from the
+ * declared {@link TransformOptions} type — the parser coerces by the type, not
+ * by sniffing the value (`background` is a string even when it looks numeric).
+ * `gravity` is the one union: a bare enum string, or a JSON object (which
+ * always starts with `{`, so the two are unambiguous).
+ */
+const TRANSFORM_KEY_KINDS = {
+    background: "string",
+    blur: "number",
+    brightness: "number",
+    contrast: "number",
+    draw: "json",
+    fit: "string",
+    flip: "string",
+    gamma: "number",
+    gravity: "string-or-json",
+    height: "number",
+    rotate: "number",
+    saturation: "number",
+    segment: "string",
+    sharpen: "number",
+    upscale: "string",
+    width: "number",
+} as const satisfies Record<keyof Required<TransformOptions>, TransformValueKind>;
+
+/** String-keyed view of {@link TRANSFORM_KEY_KINDS} for lookups from parsed input. */
+const KIND_BY_KEY: ReadonlyMap<string, TransformValueKind> = new Map(Object.entries(TRANSFORM_KEY_KINDS));
+
+/** Coerce one serialized transform value back to its declared type; throws `TypeError` naming the key on drift. */
+const coerceTransformValue = (key: string, kind: TransformValueKind, raw: string): unknown => {
+    if (kind === "string" || (kind === "string-or-json" && !raw.startsWith("{"))) {
+        return raw;
+    }
+
+    if (kind === "number") {
+        const value = Number(raw);
+
+        if (raw === "" || !Number.isFinite(value)) {
+            throw new TypeError(`@lunora/bindings/images: transform key "${key}" expects a number, got "${raw}"`);
+        }
+
+        return value;
+    }
+
+    try {
+        return JSON.parse(raw) as unknown;
+    } catch {
+        throw new TypeError(`@lunora/bindings/images: transform key "${key}" carries malformed JSON`);
+    }
 };
 
 // Host is lowercased so a signature minted for `Example.com` verifies against
@@ -46,6 +103,50 @@ const encodeKey = (key: string): string =>
         .split("/")
         .map((segment) => encodeURIComponent(segment))
         .join("/");
+
+/**
+ * Parse a verified transform string (the `t` query value handed back by
+ * {@link verifySignedImageUrl}) back into the {@link TransformOptions} it was
+ * serialized from, so the Worker can apply exactly the signed transform via
+ * `ctx.images.transform(...)` without hand-writing the inverse encoding.
+ *
+ * The exact inverse of `serializeTransform` above — the two MUST evolve
+ * together (the round-trip test in
+ * `__tests__/images/signed-delivery-url.test.ts` pins the pairing). Throws a
+ * `TypeError` on an unknown key or an uncoercible value: the input is meant to
+ * be a string whose HMAC already verified, so a parse failure means
+ * encoder/decoder drift in the library, never user input — fail loud rather
+ * than silently un-binding the transform the signature protects.
+ */
+export const parseSignedTransform = (t: string): TransformOptions => {
+    if (t === "") {
+        return {};
+    }
+
+    const options: Record<string, unknown> = {};
+
+    for (const part of t.split("&")) {
+        const eq = part.indexOf("=");
+
+        if (eq === -1) {
+            throw new TypeError(`@lunora/bindings/images: malformed transform segment "${part}" — expected key=value`);
+        }
+
+        // Split on the FIRST "=" only, so a value containing "=" survives.
+        const key = part.slice(0, eq);
+        const kind = KIND_BY_KEY.get(key);
+
+        if (kind === undefined) {
+            throw new TypeError(
+                `@lunora/bindings/images: unknown transform key "${key}" — the serialized transform does not match this version's TransformOptions`,
+            );
+        }
+
+        options[key] = coerceTransformValue(key, kind, part.slice(eq + 1));
+    }
+
+    return options;
+};
 
 export interface SignedImageUrlOptions {
     /** Delivery / Worker origin the signed URL points at (e.g. `https://cdn.acme.test`). */
@@ -139,6 +240,13 @@ export interface VerifyImageResult {
     reason?: "bad_signature" | "expired" | "malformed";
     /** The raw, verified transform string (the `t` query value), when present. */
     transform?: string;
+
+    /**
+     * The verified transform decoded back into the options object to pass to
+     * `ctx.images.transform(...)` — {@link parseSignedTransform} applied to
+     * `transform`. Present exactly when `transform` is.
+     */
+    transformOptions?: TransformOptions;
     valid: boolean;
 }
 
@@ -194,5 +302,8 @@ export const verifySignedImageUrl = async (input: string | URL, secret: string, 
         return { reason: "bad_signature", valid: false };
     }
 
-    return { key, transform: transform === "" ? undefined : transform, valid: true };
+    // A parse failure here throws rather than returning `valid: false`: the
+    // signature was genuine, so an unparseable transform means the library's
+    // encoder and decoder drifted — see `parseSignedTransform`.
+    return transform === "" ? { key, valid: true } : { key, transform, transformOptions: parseSignedTransform(transform), valid: true };
 };

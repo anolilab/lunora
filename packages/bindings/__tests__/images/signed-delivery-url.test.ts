@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { buildImageDeliveryUrl } from "../../src/images/delivery-url";
-import { buildSignedImageUrl, verifySignedImageUrl } from "../../src/images/signed-delivery-url";
+import { buildSignedImageUrl, parseSignedTransform, verifySignedImageUrl } from "../../src/images/signed-delivery-url";
+import type { TransformOptions } from "../../src/images/types";
 
 const SECRET = "test-signing-secret";
 const BASE = "https://cdn.acme.test";
@@ -253,5 +254,72 @@ describe("buildImageDeliveryUrl", () => {
         expect.assertions(1);
 
         expect(() => buildImageDeliveryUrl({ baseUrl: BASE })).toThrow(/requires either/);
+    });
+});
+
+describe("parseSignedTransform", () => {
+    it("round-trips every value kind through the serialized form", async () => {
+        expect.assertions(1);
+
+        // One key per kind the encoder emits: numbers, enum strings, a free
+        // string, the gravity string-or-object union, and the object-valued
+        // `draw` list. (TransformOptions has no boolean-typed key today; if one
+        // is added, extend this fixture with it.)
+        const transform: TransformOptions = {
+            background: "#00000080",
+            draw: [{ opacity: 0.5, url: "https://assets.acme.test/logo.png" }],
+            fit: "cover",
+            gravity: { mode: "box-center", x: 10, y: 20 },
+            width: 256,
+        };
+
+        const url = await buildSignedImageUrl({ baseUrl: BASE, key: "a.png", secret: SECRET, transform });
+        const result = await verifySignedImageUrl(url, SECRET);
+
+        expect(parseSignedTransform(result.transform ?? "")).toStrictEqual(transform);
+    });
+
+    it("parses the empty string to an empty options object", () => {
+        expect.assertions(1);
+
+        expect(parseSignedTransform("")).toStrictEqual({});
+    });
+
+    it("splits each segment on the first '=' only, so values containing '=' survive", () => {
+        expect.assertions(1);
+
+        expect(parseSignedTransform("background=color=red")).toStrictEqual({ background: "color=red" });
+    });
+
+    it("is surfaced by verifySignedImageUrl as transformOptions", async () => {
+        expect.assertions(3);
+
+        const url = await buildSignedImageUrl({
+            baseUrl: BASE,
+            key: "uploads/avatar.png",
+            secret: SECRET,
+            transform: { fit: "cover", height: 256, width: 256 },
+        });
+        const result = await verifySignedImageUrl(url, SECRET);
+
+        expect(result.valid).toBe(true);
+        expect(result.transformOptions).toStrictEqual({ fit: "cover", height: 256, width: 256 });
+
+        // No transform → no transformOptions (not an empty object).
+        const bare = await verifySignedImageUrl(await buildSignedImageUrl({ baseUrl: BASE, key: "a.png", secret: SECRET }), SECRET);
+
+        expect(bare.transformOptions).toBeUndefined();
+    });
+
+    it("throws on a key the current TransformOptions does not declare", () => {
+        expect.assertions(1);
+
+        expect(() => parseSignedTransform("wdith=256")).toThrow(/unknown transform key "wdith"/);
+    });
+
+    it("throws on an uncoercible value for a number-typed key", () => {
+        expect.assertions(1);
+
+        expect(() => parseSignedTransform("width=huge")).toThrow(/expects a number/);
     });
 });
