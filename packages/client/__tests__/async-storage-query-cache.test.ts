@@ -74,6 +74,57 @@ describe("createAsyncStorageQueryCache", () => {
         await expect(adapter.load()).resolves.toHaveLength(0);
     });
 
+    it("round-trips rich decoded server values across a cold restart", async () => {
+        expect.assertions(6);
+
+        const storage = createFakeAsyncStorage();
+        const value = {
+            blob: new Uint8Array([1, 2, 3]).buffer,
+            createdAt: new Date("2026-08-21T10:00:00.000Z"),
+            ratio: Number.NaN,
+            tags: new Set(["a", "b"]),
+            total: 9_007_199_254_740_993n,
+            byId: new Map([["k", 1]]),
+        };
+
+        await createAsyncStorageQueryCache({ storage }).put("posts:list::{}::", entry({ value }));
+
+        // A fresh adapter over the same storage — the cold-restart path, where
+        // nothing is left in memory to paper over a lossy encoding.
+        const [restored] = await createAsyncStorageQueryCache({ storage }).load();
+        const restoredValue = restored!.value as typeof value;
+
+        expect(restoredValue.createdAt).toBeInstanceOf(Date);
+        expect(restoredValue.createdAt.getTime()).toBe(value.createdAt.getTime());
+        expect(restoredValue.total).toBe(9_007_199_254_740_993n);
+        expect([...new Uint8Array(restoredValue.blob)]).toEqual([1, 2, 3]);
+        expect(restoredValue.byId).toStrictEqual(new Map([["k", 1]]));
+        expect(restoredValue.tags).toStrictEqual(new Set(["a", "b"]));
+    });
+
+    it("keeps NaN a number rather than collapsing it to null", async () => {
+        expect.assertions(1);
+
+        const storage = createFakeAsyncStorage();
+
+        await createAsyncStorageQueryCache({ storage }).put("m::{}::", entry({ value: { ratio: Number.NaN } }));
+
+        const [restored] = await createAsyncStorageQueryCache({ storage }).load();
+
+        expect((restored!.value as { ratio: number }).ratio).toBeNaN();
+    });
+
+    it("a bigint value stores instead of rejecting the put", async () => {
+        expect.assertions(1);
+
+        const storage = createFakeAsyncStorage();
+        const adapter = createAsyncStorageQueryCache({ storage });
+
+        // Raw JSON.stringify THROWS on a bigint, which would reject the put and
+        // leave the query silently uncached forever.
+        await expect(adapter.put("m::{}::", entry({ value: { total: 1n } }))).resolves.toBeUndefined();
+    });
+
     it("evicts the oldest entries by ts once maxEntries is exceeded", async () => {
         expect.assertions(1);
 
