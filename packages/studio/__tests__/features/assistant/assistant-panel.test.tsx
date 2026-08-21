@@ -293,7 +293,14 @@ describe("assistantPanel", () => {
             // left the client, so the model was told to use only listed tables and
             // given none, and every tool read went to the root shard whatever the
             // operator had open.
-            expect((args as { schema: unknown[] }).schema).toContainEqual({ columns: [], table: "messages" });
+            /*
+             * The TABLE travels — not "with exactly no columns". Asserting the
+             * empty column list made this a race: the schema probe resolves
+             * independently, so under load its columns can arrive before the chat
+             * call fires and the shape stops matching. What the test is actually
+             * about is that grounding reaches the server at all.
+             */
+            expect((args as { schema: { table: string }[] }).schema.map((fact) => fact.table)).toContain("messages");
             expect(args as Record<string, unknown>).toHaveProperty("shardKey");
         });
     });
