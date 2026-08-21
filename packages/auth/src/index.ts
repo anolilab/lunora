@@ -49,7 +49,7 @@ export type { EmailGateHookConfig } from "./email-gate";
 export { emailGateDatabaseHooks, withEmailGate } from "./email-gate";
 export type { EmailClass, EmailClassification, EmailGateConfig, EmailGateMiddlewareOptions } from "./email-guard";
 export { assertEmailAllowed, classifyEmail, emailGateMiddleware, loadEmailDomainLists } from "./email-guard";
-export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler";
+export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest, isAuthRoutePath } from "./handler";
 export type { LunoraAuthApiContext, WithAuthPluginsMiddleware, WithAuthPluginsOptions } from "./middleware";
 export { LunoraAuthHeadersError, withAuthPlugins } from "./middleware";
 export { compileMigrationsSql, ensureMigrated } from "./migrate";
