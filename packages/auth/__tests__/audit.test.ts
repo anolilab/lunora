@@ -218,6 +218,51 @@ describe("auth audit trail", () => {
         });
     });
 
+    describe("auth audit store — DDL memoization", () => {
+        it("runs the table DDL once per executor across appends", async () => {
+            expect.assertions(3);
+
+            const statements: string[] = [];
+            const counting: SqlExecutor = {
+                all: (sql, parameters) => executor.all(sql, parameters),
+                run: (sql, parameters) => {
+                    statements.push(sql.trimStart());
+
+                    return executor.run(sql, parameters);
+                },
+            };
+
+            await appendAuthAuditEntry(counting, { event: "sign-in", outcome: "success", ts: 1 });
+            await appendAuthAuditEntry(counting, { event: "sign-in", outcome: "success", ts: 2 });
+
+            expect(statements.filter((sql) => sql.startsWith("CREATE TABLE"))).toHaveLength(1);
+            expect(statements.filter((sql) => sql.startsWith("ALTER TABLE"))).toHaveLength(1);
+            expect(statements.filter((sql) => sql.startsWith("INSERT"))).toHaveLength(2);
+        });
+
+        it("retries the DDL after a rejected first ensure instead of caching the failure", async () => {
+            expect.assertions(3);
+
+            let failNext = true;
+            const flaky: SqlExecutor = {
+                all: (sql, parameters) => executor.all(sql, parameters),
+                run: (sql, parameters) => {
+                    if (failNext && sql.trimStart().startsWith("CREATE TABLE")) {
+                        failNext = false;
+
+                        return Promise.reject(new Error("transient DDL failure"));
+                    }
+
+                    return executor.run(sql, parameters);
+                },
+            };
+
+            await expect(appendAuthAuditEntry(flaky, { event: "sign-in", outcome: "success", ts: 1 })).rejects.toThrow("transient DDL failure");
+            await expect(appendAuthAuditEntry(flaky, { event: "sign-in", outcome: "success", ts: 2 })).resolves.toBeDefined();
+            await expect(readAuthAuditLog(flaky)).resolves.toHaveLength(1);
+        });
+    });
+
     describe("buildAuditEntry — classification & extraction", () => {
         it("classifies the endpoint path into a security event", () => {
             expect.assertions(5);
