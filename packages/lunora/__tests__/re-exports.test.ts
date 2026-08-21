@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -199,8 +199,12 @@ describe("lunora umbrella package coverage", () => {
     it("every packages/* directory is either re-exported or opted out with a reason", () => {
         expect.assertions(3);
 
+        // Only directories holding a manifest are packages. A renamed or deleted
+        // package leaves its `packages/<dir>/node_modules` behind — untracked, so
+        // invisible to `git status` — and counting that as an unaccounted package
+        // would fail this test on one working copy while CI stays green.
         const dirs = readdirSync(monorepoPackagesRoot, { withFileTypes: true })
-            .filter((entry) => entry.isDirectory())
+            .filter((entry) => entry.isDirectory() && existsSync(join(monorepoPackagesRoot, entry.name, "package.json")))
             .map((entry) => entry.name);
 
         const unaccounted = dirs.filter((dir) => !UPSTREAM_PACKAGE_DIRS.includes(dir) && !PACKAGE_OPT_OUT.has(dir));
