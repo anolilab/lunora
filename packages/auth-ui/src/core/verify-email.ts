@@ -103,9 +103,13 @@ const createResendVerificationController = (context: ControllerContext, options:
         prefill:
             options.initialEmail === undefined
                 ? async (context_) => {
-                      const session = await context_.authClient.getSession();
+                      // `assertOk`: an errored read throws into the form
+                      // engine's catch instead of blanking the field; and only
+                      // a present email is seeded (see `sign-up.ts`).
+                      const session = assertOk(await context_.authClient.getSession());
+                      const email = session.data?.user?.email;
 
-                      return { email: session.data?.user?.email ?? "" };
+                      return email === undefined ? {} : { email };
                   }
                 : undefined,
         submit: async (values, context_) => {

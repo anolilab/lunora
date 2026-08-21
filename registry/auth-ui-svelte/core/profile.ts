@@ -38,10 +38,23 @@ const createProfileController = (context: ControllerContext, options: ProfileOpt
         prefill: seeded
             ? undefined
             : async (context_) => {
-                  const session = await context_.authClient.getSession();
+                  // `assertOk`: an errored read throws into the form engine's
+                  // catch instead of blanking both fields with `""`.
+                  const session = assertOk(await context_.authClient.getSession());
                   const user = session.data?.user;
+                  const values: Partial<Record<ProfileField, string>> = {};
 
-                  return { image: user?.image ?? "", name: user?.name ?? "" };
+                  // Only keys that are actually present — seeding `""` for an
+                  // absent value would blank a field (see `sign-up.ts`).
+                  if (user?.image !== undefined) {
+                      values.image = user.image;
+                  }
+
+                  if (user?.name !== undefined) {
+                      values.name = user.name;
+                  }
+
+                  return values;
               },
         submit: async (values, context_) => {
             const image = values.image.trim();

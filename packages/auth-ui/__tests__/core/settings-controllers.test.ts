@@ -104,6 +104,27 @@ describe("createProfileController", () => {
         // caller passing a live session value would otherwise fight the prefill.
         expect(getSession).not.toHaveBeenCalled();
     });
+
+    it("propagates an errored session read instead of blanking the fields", async () => {
+        expect.assertions(2);
+
+        const getSession = vi.fn(() => Promise.resolve({ data: null, error: { message: "boom", status: 500 } }));
+        const onError = vi.fn();
+        const client = stubClient({ getSession });
+        const context = resolveContext({ authClient: client, nav: { navigate: vi.fn(), replace: vi.fn() }, onError });
+        const controller = createProfileController(context);
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        // The errored read reaches the form engine's error path — it used to be
+        // swallowed into `{ image: "", name: "" }`.
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(controller.getState().fields.name.value).toBe("");
+    });
 });
 
 describe("createChangeEmailController", () => {

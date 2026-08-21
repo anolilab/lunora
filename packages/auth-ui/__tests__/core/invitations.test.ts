@@ -97,4 +97,27 @@ describe("createAcceptInvitationController — sign-in bounce", () => {
             redirectTo: "/accept-invitation?invitationId=inv-1",
         });
     });
+
+    it("surfaces an errored session read instead of bouncing a possibly signed-in invitee to sign-in", async () => {
+        expect.assertions(2);
+
+        const { context, nav } = makeContext("/sign-in");
+
+        // better-auth resolves HTTP failures as `{ data: null, error }` — this
+        // must land in the error state, not read as "signed out".
+        (context.authClient.getSession as ReturnType<typeof vi.fn>).mockResolvedValue({ data: null, error: { message: "boom", status: 500 } });
+
+        const controller = createAcceptInvitationController(context, { invitationId: "inv-1" });
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        await controller.actions.accept();
+
+        expect(nav.replace).not.toHaveBeenCalled();
+        expect(controller.getState().error).toBeDefined();
+    });
 });

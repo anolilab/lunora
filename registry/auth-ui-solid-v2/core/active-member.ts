@@ -11,7 +11,7 @@
  * deciding that whatever this returns.
  */
 import type { ControllerContext } from "./config";
-import { mapAuthError } from "./map-error";
+import { assertOk, mapAuthError } from "./map-error";
 import { createStore } from "./store";
 import type { Controller, FlowStatus } from "./types";
 
@@ -36,7 +36,12 @@ const createActiveMemberController = (context: ControllerContext, options: { aut
         store.update({ error: undefined, loading: true });
 
         try {
-            const [session, organization] = await Promise.all([context.authClient.getSession(), context.authClient.organization.getFullOrganization()]);
+            // `assertOk` on both: an errored read must surface as an error, not
+            // as "no role" with `status: "success"`.
+            const [session, organization] = await Promise.all([
+                context.authClient.getSession().then(assertOk),
+                context.authClient.organization.getFullOrganization().then(assertOk),
+            ]);
             const userId = session.data?.user?.id;
             const role = organization.data?.members?.find((member) => member.userId === userId)?.role;
 
