@@ -23,10 +23,8 @@ export { handleSchemaEditRequest, SCHEMA_EDIT_ENDPOINT } from "./schema-edit-han
 export type { SeedRequest, SeedRequestBody, SeedResponse } from "./seed-handler";
 export { handleSeedRequest, SEED_ENDPOINT } from "./seed-handler";
 export type { LocalEndpointHandler, LocalEndpointRequest, LocalEndpointResponse } from "./serve-json-handler";
-// `csrfRejectionReason` is exported so both dev hosts run the SAME gate —
-// `./transport-guard` records what happened last time the hosts each carried
-// their own copy of a guard and drifted (the token-bearing document was served
-// to a relay). One implementation, every host imports it.
-export { csrfRejectionReason, serveJsonHandler } from "./serve-json-handler";
+// `serveJsonHandler` applies the shared CSRF gate itself, so a host gets that
+// defense by routing through it — no per-host copy of the check to drift.
+export { serveJsonHandler } from "./serve-json-handler";
 export { ALLOW_FORWARDED_ENV, headerValue, isLoopbackAddress, transportRejectionReason } from "./transport-guard";
 export type { StudioAssets, StudioHtmlConfig, WarnLogger } from "./types";

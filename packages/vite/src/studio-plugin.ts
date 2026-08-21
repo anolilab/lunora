@@ -11,7 +11,6 @@ import type { LocalEndpointHandler, StudioAssets } from "@lunora/config/studio-h
 import {
     applyStudioAssetCache,
     assetContentType,
-    csrfRejectionReason,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
     handleSeedRequest,
@@ -46,9 +45,6 @@ const JSON_ENDPOINT_HANDLERS: Readonly<Record<string, LocalEndpointHandler>> = {
     [SCHEMA_EDIT_ENDPOINT]: handleSchemaEditRequest,
     [SEED_ENDPOINT]: handleSeedRequest,
 };
-
-/** The local-dev endpoints that perform state-changing side effects (source writes + codegen). */
-const STATE_CHANGING_ENDPOINTS = new Set<string>(Object.keys(JSON_ENDPOINT_HANDLERS));
 
 /** Write a 200 response with the given body and content type. */
 const sendOk = (response: ServerResponse, body: Buffer | string, contentType: string): void => {
@@ -200,27 +196,10 @@ const createStudioHandler = (
             return;
         }
 
-        // CSRF defense for the state-changing endpoints (schema-edit /
-        // policy-scaffold / seed): the loopback gate above does NOT stop a
-        // cross-site page in the developer's own browser from driving these.
-        // The shared `@lunora/config` gate is deliberately invoked here,
-        // BEFORE `serveJsonHandler` (which runs the same check again), so the
-        // route defends even if that layer regresses — belt and braces, but
-        // one implementation, so the two layers can never drift apart.
-        if (STATE_CHANGING_ENDPOINTS.has(pathname)) {
-            const csrf = csrfRejectionReason(request);
-
-            if (csrf !== undefined) {
-                response.statusCode = 403;
-                response.setHeader("Content-Type", "application/json; charset=utf-8");
-                response.end(JSON.stringify({ error: csrf, ok: false }));
-
-                return;
-            }
-        }
-
         // Local state-changing JSON endpoints (schema-edit / policy-scaffold /
-        // seed). Loopback- and CSRF-gated above; never the worker. Intercepted
+        // seed). Loopback-gated above; `serveJsonHandler` applies the shared
+        // CSRF gate itself, before it reads a body or runs a handler, so this
+        // route carries no copy of that check. Never the worker. Intercepted
         // before the SPA fallback so they aren't shadowed. Each runs source
         // writes + codegen (or, for seed, Node-side row generation) so faker and
         // the toolchain stay out of the browser bundle and the worker.

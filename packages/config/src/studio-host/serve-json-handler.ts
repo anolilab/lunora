@@ -125,13 +125,13 @@ const originRejectionReason = (request: IncomingMessage): string | undefined => 
  * cannot set `application/json` without one (which same-origin policy then
  * blocks). Combined with layer 1 this denies the browser-driven CSRF vector.
  *
- * Exported (not just used by {@link serveJsonHandler}) because the Vite host's
- * `/__lunora` middleware invokes the same gate as a belt-and-braces pre-check
- * before handing the request to {@link serveJsonHandler}. It previously
- * carried its own line-for-line copy — the exact drift pattern
- * `./transport-guard` documents leaking the token-bearing document when the
- * two hosts diverged on a guard — so the one implementation lives here and
- * every host imports it.
+ * Module-private on purpose: this runs inside {@link serveJsonHandler}, before
+ * a body is read or a handler runs, so every host that routes an endpoint
+ * through that adapter is gated without doing anything. The Vite host used to
+ * carry its own line-for-line copy and call it first — the exact drift pattern
+ * `./transport-guard` records (the two hosts diverged on a guard and the
+ * token-bearing document went to a relay). One implementation, no call sites
+ * to keep in step.
  */
 const csrfRejectionReason = (request: IncomingMessage): string | undefined => {
     const method = (request.method ?? "GET").toUpperCase();
@@ -212,4 +212,4 @@ const serveJsonHandler = (
 };
 
 export type { LocalEndpointHandler, LocalEndpointRequest, LocalEndpointResponse };
-export { csrfRejectionReason, serveJsonHandler };
+export { serveJsonHandler };

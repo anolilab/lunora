@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it } from "vitest";
 
 import type { LocalEndpointHandler } from "../../src/studio-host/serve-json-handler";
-import { csrfRejectionReason, serveJsonHandler } from "../../src/studio-host/serve-json-handler";
+import { serveJsonHandler } from "../../src/studio-host/serve-json-handler";
 
 /** A minimal `IncomingMessage` carrying a method, headers, and an optional body. */
 const makeRequest = (method: string, headers: Record<string, string>, body?: string): IncomingMessage => {
@@ -125,48 +125,5 @@ describe("serveJsonHandler CSRF defense", () => {
 
         expect(seen?.projectRoot).toBe("/project");
         expect(seen?.schemaDirectory).toBe("custom-schema-dir");
-    });
-});
-
-// Export-level tests for the shared gate: the Vite host's `/__lunora`
-// middleware imports `csrfRejectionReason` directly (a pre-check before
-// `serveJsonHandler` runs it again), so its contract is pinned here, not only
-// through the handler.
-describe("csrfRejectionReason", () => {
-    it("rejects a cross-site Sec-Fetch-Site request", () => {
-        expect.assertions(1);
-
-        const request = makeRequest("POST", { "content-type": "application/json", "sec-fetch-site": "cross-site" });
-
-        expect(csrfRejectionReason(request)).toBe("cross-origin request rejected");
-    });
-
-    it("allows a same-origin json POST", () => {
-        expect.assertions(1);
-
-        const request = makeRequest("POST", {
-            "content-type": "application/json",
-            host: "127.0.0.1:5173",
-            origin: "http://127.0.0.1:5173",
-            "sec-fetch-site": "same-origin",
-        });
-
-        expect(csrfRejectionReason(request)).toBeUndefined();
-    });
-
-    it("falls back to the Origin-vs-Host comparison when Sec-Fetch-Site is absent", () => {
-        expect.assertions(1);
-
-        const request = makeRequest("POST", { "content-type": "application/json", host: "127.0.0.1:5173", origin: "http://evil.example" });
-
-        expect(csrfRejectionReason(request)).toBe("cross-origin request rejected");
-    });
-
-    it("rejects a state-changing request with a simple content-type", () => {
-        expect.assertions(1);
-
-        const request = makeRequest("POST", { host: "127.0.0.1:5173", "sec-fetch-site": "same-origin" });
-
-        expect(csrfRejectionReason(request)).toBe("content-type must be application/json");
     });
 });
