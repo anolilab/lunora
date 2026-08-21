@@ -150,6 +150,7 @@ interface MockClientImpls {
     runCronJob?: (name: string) => { name: string; ran: boolean };
     shardTraffic?: (table: string) => ShardTrafficResult;
     signedStorageUrl?: (key: string) => string;
+
     /**
      * The streaming dispatch, for the ops that answer `text/event-stream`.
      *

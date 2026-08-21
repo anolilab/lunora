@@ -320,8 +320,11 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
                      */
                     send({ code: "AI_CHAT_FAILED", message: "the assistant turn failed" }, "error");
                 } finally {
-                    if (open) {
+                    try {
                         controller.close();
+                    } catch {
+                        // Already torn down by a consumer that went away — the same
+                        // condition `send` swallows, and equally not a turn's problem.
                     }
                 }
             },

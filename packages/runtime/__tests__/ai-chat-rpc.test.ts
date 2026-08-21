@@ -175,8 +175,10 @@ const rpc = (args: Record<string, unknown>, admin = true): Request =>
  * nothing to gain from consuming incrementally, and buffering keeps the frame
  * split out of every assertion.
  */
-const frames = async (response: Response): Promise<{ data: string; event: string }[]> =>
-    (await response.text())
+const frames = async (response: Response): Promise<{ data: string; event: string }[]> => {
+    const body = await response.text();
+
+    return body
         .split("\n\n")
         .filter((raw) => raw.trim() !== "")
         .map((raw) => {
@@ -193,6 +195,7 @@ const frames = async (response: Response): Promise<{ data: string; event: string
 
             return { data, event };
         });
+};
 
 /**
  * The turn a response carries, whichever way the op answers.
@@ -205,7 +208,8 @@ const frames = async (response: Response): Promise<{ data: string; event: string
  */
 const decoded = async (response: Response): Promise<Record<string, unknown>> => {
     if ((response.headers.get("content-type") ?? "").includes("text/event-stream")) {
-        const terminal = (await frames(response)).find((frame) => frame.event === "complete");
+        const written = await frames(response);
+        const terminal = written.find((frame) => frame.event === "complete");
 
         if (terminal === undefined) {
             throw new Error("the stream ended without a complete frame");
@@ -1334,7 +1338,7 @@ describe("createWorker — aiChat token streaming", () => {
         const approval = body["pendingApproval"] as { sql?: string; ticket?: string } | undefined;
 
         expect(approval?.sql).toBe("SELECT 1");
-        expect(approval?.ticket).toBeTruthy();
+        expect(typeof approval?.ticket).toBe("string");
         expect(body["reply"]).toContain("I need to read messages.");
     });
 
