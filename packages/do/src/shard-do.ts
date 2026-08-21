@@ -835,7 +835,7 @@ const streamFrames = (
     id: string,
 ): {
     ack: () => void;
-    chunk: (data: unknown, seq?: number) => boolean;
+    chunk: (data: unknown, seq?: number, generation?: number) => boolean;
     complete: () => boolean;
     fail: (failure: { code: string; message: string }) => boolean;
 } => {
@@ -843,7 +843,11 @@ const streamFrames = (
         ack: () => {
             ws.send(JSON.stringify({ id, type: "ack" }));
         },
-        chunk: (data, seq) => trySendFrame(ws, JSON.stringify(seq === undefined ? { data, id, type: "chunk" } : { data, id, seq, type: "chunk" })),
+        // `generation` rides only durable chunks (an `undefined` key is dropped
+        // by JSON.stringify) — the client echoes it on resume so the server can
+        // refuse to splice a different run's tail onto the prefix it holds.
+        chunk: (data, seq, generation) =>
+            trySendFrame(ws, JSON.stringify(seq === undefined ? { data, id, type: "chunk" } : { data, generation, id, seq, type: "chunk" })),
         complete: () => trySendFrame(ws, JSON.stringify({ id, type: "complete" })),
         fail: (failure) => trySendFrame(ws, JSON.stringify({ error: failure, id, type: "error" })),
     };
@@ -4826,6 +4830,10 @@ abstract class ShardDO {
                 // `delivered` past real chunks and silently truncate the stream,
                 // so it is normalised here rather than trusted.
                 Number.isInteger(envelope.sinceChunk) && (envelope.sinceChunk as number) > 0 ? (envelope.sinceChunk as number) : 0,
+                // Same trust boundary for the resume generation: only a positive
+                // integer counts; anything else behaves like an older client
+                // that never sent one.
+                Number.isInteger(envelope.generation) && (envelope.generation as number) > 0 ? (envelope.generation as number) : undefined,
             ).catch(() => {
                 /* socket already gone; nothing to report */
             });
@@ -8298,7 +8306,14 @@ abstract class ShardDO {
      * `{type:"error"}`. Either way drop the controller.
      */
 
-    private async handleStream(ws: ShardSocketLike, id: string, functionPath: string, args: Record<string, unknown>, sinceSeq = 0): Promise<void> {
+    private async handleStream(
+        ws: ShardSocketLike,
+        id: string,
+        functionPath: string,
+        args: Record<string, unknown>,
+        sinceSeq = 0,
+        generation?: number,
+    ): Promise<void> {
         const iterable = this.executeStream(functionPath, args);
 
         if (!iterable) {
@@ -8330,7 +8345,7 @@ abstract class ShardDO {
         }
 
         if (iterable.durable) {
-            await this.attachDurableStream(ws, id, functionPath, args, { durable: iterable.durable, iterator: iterable.iterator }, sinceSeq);
+            await this.attachDurableStream(ws, id, functionPath, args, { durable: iterable.durable, iterator: iterable.iterator }, sinceSeq, generation);
 
             return;
         }
@@ -8412,6 +8427,7 @@ abstract class ShardDO {
         args: Record<string, unknown>,
         registration: { durable: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> },
         sinceChunk: number,
+        generation?: number,
     ): Promise<void> {
         const attachment = this.readAttachment(ws);
         // An ANONYMOUS caller shares nothing. Falling back to a constant here
@@ -8451,7 +8467,7 @@ abstract class ShardDO {
 
                 delivered = chunk.seq;
 
-                return frames.chunk(chunk.data, chunk.seq);
+                return frames.chunk(chunk.data, chunk.seq, chunk.generation);
             },
             complete: () => {
                 frames.complete();
@@ -8472,6 +8488,7 @@ abstract class ShardDO {
         });
 
         await this.durableStreams.attach({
+            ...(generation === undefined ? {} : { generation }),
             iterator: registration.iterator,
             runKey,
             sinceChunk,

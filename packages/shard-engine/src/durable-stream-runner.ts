@@ -53,8 +53,12 @@ const GC_INTERVAL_MS = 3_600_000;
  * longer in the set.
  */
 interface DurableStreamSink {
-    /** Deliver one chunk. `false` = the consumer is gone, and the sink is dropped. */
-    readonly chunk: (chunk: { data: unknown; seq: number }) => boolean;
+    /**
+     * Deliver one chunk. `false` = the consumer is gone, and the sink is
+     * dropped. `generation` is the run's `startedAt` stamp — the host forwards
+     * it to the consumer so a resume can prove it is continuing the same run.
+     */
+    readonly chunk: (chunk: { data: unknown; generation?: number; seq: number }) => boolean;
     /** The run finished successfully. */
     readonly complete: () => void;
     /** The run failed — the message is already redacted. */
@@ -78,9 +82,28 @@ type DurableAttachDecision = "attach" | "interrupted" | "reclaim" | "replay-term
  * a stored run this caller has no claim on (finished, or dead with nobody
  * resuming) — drop it and produce, so an eviction cannot wedge the key until its
  * TTL expires. `attach` joins the live producer, or starts one.
+ *
+ * `context.generation` is the `startedAt` stamp of the run the caller's held
+ * prefix belongs to. The run key is shared across a user's tabs, so a resume
+ * can land on a DIFFERENT run under the same key (another tab reclaimed it and
+ * started over) — a generation mismatch is `"interrupted"`, checked before the
+ * `live` short-circuit precisely because the live producer can be the foreign
+ * run. A caller that sends no generation (older client) keeps the previous
+ * behavior.
  */
-const decideDurableAttach = (run: DurableStreamRun | undefined, context: { live: boolean; resuming: boolean }): DurableAttachDecision => {
-    if (run === undefined || context.live) {
+const decideDurableAttach = (run: DurableStreamRun | undefined, context: { generation?: number; live: boolean; resuming: boolean }): DurableAttachDecision => {
+    if (run === undefined) {
+        // A resuming caller holds a prefix of a transcript that no longer
+        // exists (trimmed, or reclaimed); attaching fresh would silently
+        // splice a new run onto it.
+        return context.resuming ? "interrupted" : "attach";
+    }
+
+    if (context.resuming && context.generation !== undefined && context.generation !== run.startedAt) {
+        return "interrupted";
+    }
+
+    if (context.live) {
         return "attach";
     }
 
@@ -94,6 +117,12 @@ const decideDurableAttach = (run: DurableStreamRun | undefined, context: { live:
 
 /** One attach request, from the host's point of view. */
 interface DurableStreamAttach {
+    /**
+     * `startedAt` stamp of the run the caller's held prefix belongs to, echoed
+     * back by a resuming consumer. Absent on a first attach and from older
+     * clients that predate the stamp.
+     */
+    readonly generation?: number;
     /** Builds the handler's async iterable; called only when this attach starts the run. */
     readonly iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
     /** Identity of the run — the host folds in the caller's identity, function path, and arguments. */
@@ -106,6 +135,26 @@ interface DurableStreamAttach {
 }
 
 /**
+ * Settle an `"interrupted"` attach. On a generation mismatch the persisted
+ * chunks belong to a DIFFERENT run than the prefix the caller holds, so they
+ * are NOT replayed — delivering them is exactly the splice the decision exists
+ * to prevent. A dead producer of the caller's own run replays the persisted
+ * tail first.
+ */
+const failInterrupted = (run: DurableStreamRun | undefined, request: DurableStreamAttach, sink: DurableStreamSink, replay: () => boolean): void => {
+    const mismatched = run !== undefined && request.generation !== undefined && request.generation !== run.startedAt;
+
+    if (mismatched || replay()) {
+        sink.fail({
+            code: "STREAM_INTERRUPTED",
+            message: mismatched
+                ? "the run this durable stream resumed from no longer exists; start a new run"
+                : "the producer for this durable stream did not survive; start a new run",
+        });
+    }
+};
+
+/**
  * Drives durable runs for one shard. In-memory state tracks who is *currently*
  * producing; the transcript itself lives in SQLite, which is what lets an attach
  * on a later instance still replay it.
@@ -113,7 +162,7 @@ interface DurableStreamAttach {
 class DurableStreamRunner {
     private lastTrimAt = 0;
 
-    private readonly runs = new Map<string, { sinks: Set<DurableStreamSink> }>();
+    private readonly runs = new Map<string, { generation: number; sinks: Set<DurableStreamSink> }>();
 
     private readonly sql: () => SqlExec;
 
@@ -168,10 +217,10 @@ class DurableStreamRunner {
         const run = readStreamRun(sql, runKey);
         const resuming = sinceChunk > 0;
         const live = this.runs.get(runKey);
-        const decision = decideDurableAttach(run, { live: live !== undefined, resuming });
+        const decision = decideDurableAttach(run, { generation: request.generation, live: live !== undefined, resuming });
         const replay = (): boolean => {
             for (const chunk of readStreamChunks(sql, runKey, sinceChunk)) {
-                if (!sink.chunk({ data: JSON.parse(chunk.dataJson) as unknown, seq: chunk.seq })) {
+                if (!sink.chunk({ data: JSON.parse(chunk.dataJson) as unknown, generation: run?.startedAt, seq: chunk.seq })) {
                     return false;
                 }
             }
@@ -192,9 +241,7 @@ class DurableStreamRunner {
         }
 
         if (decision === "interrupted") {
-            if (replay()) {
-                sink.fail({ code: "STREAM_INTERRUPTED", message: "the producer for this durable stream did not survive; start a new run" });
-            }
+            failInterrupted(run, request, sink, replay);
 
             return;
         }
@@ -213,9 +260,15 @@ class DurableStreamRunner {
         }
 
         this.trim(sql);
-        claimStreamRun(sql, runKey, Date.now(), request.ttlMs ?? DEFAULT_TTL_MS);
 
-        const state = { sinks: new Set<DurableStreamSink>([sink]) };
+        // On a reclaim, never reuse the replaced run's stamp: two claims inside
+        // the same millisecond would otherwise share a generation, and a resume
+        // holding the old one could splice after all.
+        const startedAt = Math.max(Date.now(), run === undefined ? 0 : run.startedAt + 1);
+
+        claimStreamRun(sql, runKey, startedAt, request.ttlMs ?? DEFAULT_TTL_MS);
+
+        const state = { generation: startedAt, sinks: new Set<DurableStreamSink>([sink]) };
 
         this.runs.set(runKey, state);
 
@@ -236,7 +289,11 @@ class DurableStreamRunner {
      * whose viewers all left still finishes and is still there for the next
      * attach.
      */
-    private async produce(runKey: string, iterator: (signal: AbortSignal) => AsyncIterable<unknown>, state: { sinks: Set<DurableStreamSink> }): Promise<void> {
+    private async produce(
+        runKey: string,
+        iterator: (signal: AbortSignal) => AsyncIterable<unknown>,
+        state: { generation: number; sinks: Set<DurableStreamSink> },
+    ): Promise<void> {
         const sql = this.sql();
         // Not wired to any consumer's cancel: a consumer leaving must not end the
         // run. The controller exists to satisfy the handler's signature.
@@ -270,7 +327,7 @@ class DurableStreamRunner {
                     // than re-attempting on every remaining chunk. It loses
                     // nothing — the transcript is durable and it resumes from its
                     // last `seq`.
-                    if (!sink.chunk({ data, seq })) {
+                    if (!sink.chunk({ data, generation: state.generation, seq })) {
                         state.sinks.delete(sink);
                     }
                 }

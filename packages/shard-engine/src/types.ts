@@ -96,6 +96,16 @@ export interface SubscriptionEnvelope {
      * the topic's other subscribers. Bounded in size; never persisted.
      */
     data?: unknown;
+
+    /**
+     * Run generation on a resuming `stream` envelope: the `startedAt` stamp of
+     * the durable run the client's {@link SubscriptionEnvelope.sinceChunk}
+     * watermark belongs to, echoed back from the chunk frames that carried it.
+     * A resume whose generation does not match the stored run fails with
+     * `STREAM_INTERRUPTED` instead of splicing a different run's transcript
+     * onto the prefix the client already holds. Absent from older clients.
+     */
+    generation?: number;
     id: string;
     query?: SubscriptionQuery;
 
