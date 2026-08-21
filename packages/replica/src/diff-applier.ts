@@ -87,7 +87,7 @@ const applySingleDiff = (database: SqliteAdapter, diff: TableDiff, pkColumn: str
     for (const change of diff.changes) {
         switch (change.type) {
             case "delete": {
-                database.exec(`DELETE FROM ${table} WHERE ${pk} = ?`, [change.id]);
+                database.exec(`DELETE FROM ${table} WHERE ${pk} = ?`, [normalizeBindValue(change.id)]);
                 break;
             }
             case "insert": {
@@ -111,7 +111,7 @@ const applySingleDiff = (database: SqliteAdapter, diff: TableDiff, pkColumn: str
                 }
 
                 const sql = `UPDATE ${table} SET ${setClause(keys)} WHERE ${pk} = ?`;
-                const values = [...keys.map((k) => normalizeBindValue(data[k])), change.id];
+                const values = [...keys.map((k) => normalizeBindValue(data[k])), normalizeBindValue(change.id)];
 
                 database.exec(sql, values);
                 break;

@@ -534,6 +534,27 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
 
             expect(mirror.query<{ id: string }>("SELECT id FROM events ORDER BY id")).toStrictEqual([{ id: "1" }, { id: "2" }]);
         });
+
+        // Plan 402 companion: the row id is bound in every DELETE/UPDATE, so
+        // it must be normalized like every other bound value — before this,
+        // a non-bindable id (boolean/object/undefined in an untrusted server
+        // payload) threw inside the transaction and rolled back the whole
+        // batch, unrelated rows included.
+        it("a batch containing a delete with a non-bindable id still applies the rest of the batch", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("events", [
+                    { data: { id: "keep-1", label: "kept" }, type: "insert" },
+                    // A boolean id normalizes to 1 and matches nothing here.
+                    { id: true as never, type: "delete" },
+                ]),
+            );
+
+            expect(mirror.query<{ id: string }>("SELECT id FROM events")).toStrictEqual([{ id: "keep-1" }]);
+        });
     });
 
     // Plan 218: mirror schema version — a mirror created before column
