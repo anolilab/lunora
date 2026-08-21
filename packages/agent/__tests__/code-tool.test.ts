@@ -57,6 +57,19 @@ describe(resolveReferences, () => {
         expect(resolved.x).toBeUndefined();
         expect(resolved.y).toBeUndefined();
     });
+
+    it("skips `__proto__`/`constructor`/`prototype` own keys when rebuilding input objects", () => {
+        const input = JSON.parse(String.raw`{"__proto__": {"isAdmin": true}, "constructor": {"c": 1}, "prototype": {"p": 1}, "a": 1}`) as Record<
+            string,
+            unknown
+        >;
+        const resolved = resolveReferences(input, {}) as Record<string, unknown>;
+
+        expect(Object.keys(resolved)).toStrictEqual(["a"]);
+        expect(Object.getPrototypeOf(resolved)).toBe(Object.prototype);
+        expect(resolved.isAdmin).toBeUndefined();
+        expect(resolved.constructor).toBe(Object);
+    });
 });
 
 describe(runToolScript, () => {

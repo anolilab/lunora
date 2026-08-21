@@ -129,6 +129,14 @@ const resolveReferences = (value: unknown, results: Record<string, unknown>): un
     const resolved: Record<string, unknown> = {};
 
     for (const [key, nested] of Object.entries(object)) {
+        // A model-supplied `__proto__` own key (own after JSON.parse) would hit
+        // `Object.prototype`'s setter and swap the accumulator's prototype, so a
+        // composed tool could read attacker-chosen inherited properties. Skip the
+        // unsafe keys, mirroring `getPath`'s own-property-only read side.
+        if (key === "__proto__" || key === "constructor" || key === "prototype") {
+            continue;
+        }
+
         resolved[key] = resolveReferences(nested, results);
     }
 
