@@ -59,6 +59,48 @@ describe("createAdminUsersController", () => {
         expect(listUsers).toHaveBeenCalledTimes(1);
     });
 
+    it("resolves a superseded setSearch promise when the next keystroke lands, with one refetch for the burst", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const listUsers = vi.fn(() => ok({ total: 0, users: [] }));
+        const client = stubClient(listUsers);
+        const controller = createAdminUsersController(makeContext(client), { autoLoad: false });
+
+        const first = controller.actions.setSearch("a");
+
+        void controller.actions.setSearch("al");
+
+        // The first promise settles the moment the second call supersedes it —
+        // no timer advance needed.
+        await expect(first).resolves.toBeUndefined();
+
+        await vi.advanceTimersByTimeAsync(400);
+
+        expect(listUsers).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolves a pending setSearch promise on destroy without refetching", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const listUsers = vi.fn(() => ok({ total: 0, users: [] }));
+        const client = stubClient(listUsers);
+        const controller = createAdminUsersController(makeContext(client), { autoLoad: false });
+
+        const pending = controller.actions.setSearch("a");
+
+        controller.destroy();
+
+        await expect(pending).resolves.toBeUndefined();
+
+        await vi.advanceTimersByTimeAsync(400);
+
+        expect(listUsers).not.toHaveBeenCalled();
+    });
+
     it("drops a slow answer for a stale prefix once a faster answer for the current search has landed", async () => {
         expect.assertions(1);
 
