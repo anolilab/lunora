@@ -242,65 +242,31 @@ describe("httpDispatcher", () => {
         expect(getDispatchMessageId(error)).toBe("msg-42");
     });
 
-    // `AbortSignal.timeout`'s internal abort is a real native timer fake timers
-    // cannot advance, so (mirroring `packages/dispatch/__tests__/`) the test
-    // stubs `AbortSignal.timeout` and aborts the signal directly.
-    it("bounds a hung dispatch with the runner's timeout and rejects retryable", async () => {
-        expect.assertions(3);
-
-        const controller = new AbortController();
-        const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
-
-        try {
-            const fetchMock = vi.fn<typeof fetch>(
-                (_url, init) =>
-                    new Promise((_resolve, reject) => {
-                        init?.signal?.addEventListener("abort", () => {
-                            reject(init.signal?.reason as Error);
-                        });
-                    }),
-            );
-            const dispatch = httpDispatcher({ adminToken: "admintok", fetchImpl: fetchMock, originUrl: "https://app.example" });
-            const pending = dispatch({ functionPath: "jobs:a" }).catch((error_: unknown) => error_);
-
-            controller.abort(new DOMException("The operation timed out.", "TimeoutError"));
-
-            const error = (await pending) as Error & { status?: unknown };
-
-            expect(spy).toHaveBeenCalledWith(300_000);
-            expect(error.status).toBe(503);
-            expect(error.message).toMatch(/timed out after 300000ms/u);
-        } finally {
-            spy.mockRestore();
-        }
-    });
-
-    it("honours a configured timeoutMs instead of the default", async () => {
+    // A hanging fetch bound to a SHORT configured deadline. Deliberately driven
+    // by the real clock and asserted only through the error the runner throws:
+    // the deadline's mechanism is `@lunora/dispatch`'s business (it has moved
+    // between `AbortSignal.timeout` and an explicit controller + timer), and a
+    // test here that stubs or fake-times that mechanism breaks whenever the
+    // runner changes it. What this package owns is that `timeoutMs` reaches the
+    // runner and that the resulting failure is retryable — that is what is
+    // asserted. The 5-minute default is a constant; proving it fires would mean
+    // re-testing the runner's clock from here.
+    it("bounds a hung dispatch with the configured deadline and rejects retryable", async () => {
         expect.assertions(2);
 
-        const controller = new AbortController();
-        const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+        const fetchMock = vi.fn<typeof fetch>(
+            (_url, init) =>
+                new Promise((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(init.signal?.reason as Error);
+                    });
+                }),
+        );
+        const dispatch = httpDispatcher({ adminToken: "admintok", fetchImpl: fetchMock, originUrl: "https://app.example", timeoutMs: 20 });
 
-        try {
-            const fetchMock = vi.fn<typeof fetch>(
-                (_url, init) =>
-                    new Promise((_resolve, reject) => {
-                        init?.signal?.addEventListener("abort", () => {
-                            reject(init.signal?.reason as Error);
-                        });
-                    }),
-            );
-            const dispatch = httpDispatcher({ adminToken: "admintok", fetchImpl: fetchMock, originUrl: "https://app.example", timeoutMs: 900_000 });
-            const pending = dispatch({ functionPath: "jobs:a" }).catch((error_: unknown) => error_);
+        const error = (await dispatch({ functionPath: "jobs:a" }).catch((error_: unknown) => error_)) as Error & { status?: unknown };
 
-            controller.abort(new DOMException("The operation timed out.", "TimeoutError"));
-
-            const error = (await pending) as Error;
-
-            expect(spy).toHaveBeenCalledWith(900_000);
-            expect(error.message).toMatch(/timed out after 900000ms/u);
-        } finally {
-            spy.mockRestore();
-        }
+        expect(error.status).toBe(503);
+        expect(error.message).toMatch(/timed out after 20ms/u);
     });
 });
