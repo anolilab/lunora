@@ -6,7 +6,7 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
  * `evaluate`/`agentHarness` from `@lunora/testing` however the eval needs.
  * Entirely in-process: no `wrangler dev`/`lunora dev` needed, unlike `seed`/
  * `insights`. Metadata only; the handler (lazy-loaded via `loader`) holds the
- * logic. See `plans/245-eval-runner-design.md`.
+ * logic.
  */
 const evalCommand: Command = {
     description: "Run every *.eval.ts under evals/ via @lunora/testing's evaluate/agentHarness — no live worker needed",

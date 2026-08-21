@@ -358,6 +358,11 @@ catalogs:
     "@visulima/tui-kit": 1.0.3
     cfonts: ^3.3.1
     giget: 3.3.1
+    # The runtime TypeScript loader `lunora eval` uses to execute a discovered
+    # `*.eval.ts` (and everything it imports) on plain Node. Pure JavaScript, no
+    # per-platform native binary — unlike esbuild/tsx, which the published CLI
+    # would then make every consumer download.
+    jiti: 2.7.0
     magic-string: ^1.1.0
     react-reconciler: ^0.33.0
     smol-toml: 1.7.1

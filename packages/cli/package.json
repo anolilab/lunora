@@ -90,6 +90,7 @@
         "cfonts": "catalog:cli",
         "csv-parse": "catalog:prod",
         "giget": "catalog:cli",
+        "jiti": "catalog:cli",
         "jsonc-parser": "catalog:vite",
         "magic-string": "catalog:cli",
         "react": "catalog:frontend",

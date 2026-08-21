@@ -37,22 +37,27 @@ Every case must score 1 — each is a behavioural invariant, not a quality
 judgement, so there is no partial credit to allow for. A failure names the
 behaviour and prints the scorers that decided it.
 
-## Why `lunora eval` cannot run this yet
+## The other runner
 
-`ai-chat.eval.ts` is deliberately shaped as `lunora eval`'s `EvalModule` (a lone
-default export of `{ name, run, threshold }`), but
-`lunora eval --dir tests/ai-evals` fails to load it, and would fail on any eval
-file in this repo or in a Lunora app that imports project source:
+`ai-chat.eval.ts` is shaped as `lunora eval`'s `EvalModule` (a lone default
+export of `{ name, run, threshold }`), so the same file runs both ways:
 
-- The command loads a discovered `*.eval.ts` with a bare `import()`.
-- Node's native TypeScript execution resolves no extensions, and every module
-  here compiles under `moduleResolution: "bundler"` and therefore writes
-  extension-less relative imports, per the house style.
+```bash
+lunora eval --dir tests/ai-evals
+```
 
-So the import fails one hop in, at `shared/ai-chat`'s own `./sql-readonly`.
-Closing that needs the TS loader/transform the command's handler already flags
-as deferred (`plans/245-eval-runner-design.md` §8.3). When it lands, this file
-runs there unchanged; until then the vitest gate is the runner.
+That used to fail. The command loaded a discovered `*.eval.ts` with a bare
+`import()`, and Node's native TypeScript execution strips types but resolves no
+extensions — while every module here, and every file in a scaffolded Lunora
+app, compiles under `moduleResolution: "bundler"` and therefore writes
+extension-less relative imports. The load died one hop in, at `shared/ai-chat`'s
+own `./sql-readonly`. The command now loads eval files through a runtime TS
+loader, so an eval that imports project source resolves.
+
+`__tests__/lunora-eval-cli.test.ts` is what keeps it that way, and it shells out
+to the built binary deliberately: Vitest resolves and transforms whatever it is
+handed, so an in-process test of the runner passes whether or not the shipped
+command can load anything.
 
 ## Why the results are not in the Studio's Evals panel
 
