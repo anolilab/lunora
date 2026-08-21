@@ -390,3 +390,80 @@ describe("seedPlan — unique columns", () => {
         expect(rows[1]).toStrictEqual({ _id: "730f300b-1bf5-4730-9340-429bb785ee9b", age: 509, email: "courtney51@hotmail.com", name: "Griffin Towne" });
     });
 });
+
+describe("seedPlan — unique columns beyond enums and strings", () => {
+    const rowsOf = (shape: Parameters<typeof defineTable>[0], count: number): ReadonlyArray<Record<string, unknown>> =>
+        seedPlan(defineSchema({ t: defineTable(shape) }), { counts: { t: count }, now: 1_700_000_000_000, seed: 3 }).find((entry) => entry.table === "t")!.rows;
+
+    const distinct = (rows: ReadonlyArray<Record<string, unknown>>, column: string): number => new Set(rows.map((row) => JSON.stringify(row[column]))).size;
+
+    it("deals a declared numeric range without replacement and stays inside it", () => {
+        expect.hasAssertions();
+
+        const rows = rowsOf({ n: v.number().min(1).max(100).unique() }, 100);
+
+        expect(distinct(rows, "n")).toBe(100);
+        expect(rows.every((row) => typeof row.n === "number" && row.n >= 1 && row.n <= 100)).toBe(true);
+    });
+
+    it("refuses a batch larger than a declared numeric range", () => {
+        expect.hasAssertions();
+
+        expect(() => rowsOf({ n: v.number().min(1).max(100).unique() }, 200)).toThrow(/unique column "n" has only 100 possible values/);
+    });
+
+    it("keeps unbounded numeric, bigint, temporal, and bytes columns collision-free at scale", () => {
+        expect.hasAssertions();
+
+        // None of these declares a domain, so uniqueness has to come from the
+        // index rather than from the generator's luck.
+        expect(distinct(rowsOf({ n: v.number().unique() }, 2000), "n")).toBe(2000);
+        expect(distinct(rowsOf({ b: v.bigint().unique() }, 2000), "b")).toBe(2000);
+        expect(distinct(rowsOf({ d: v.date().unique() }, 500), "d")).toBe(500);
+        expect(distinct(rowsOf({ y: v.bytes().unique() }, 500), "y")).toBe(500);
+    });
+
+    it("refuses a unique literal column past its single possible value", () => {
+        expect.hasAssertions();
+
+        // A literal accepts exactly one value, so tagging it per row would emit
+        // values the column's own validator rejects.
+        expect(rowsOf({ lit: v.literal("same").unique() }, 1)[0]!.lit).toBe("same");
+        expect(() => rowsOf({ lit: v.literal("same").unique() }, 2)).toThrow(/unique column "lit" has only 1 possible values/);
+    });
+
+    it("keeps unique strings inside maxLength (regression: the index tag was appended after truncation)", () => {
+        expect.hasAssertions();
+
+        const rows = rowsOf({ s: v.string().max(16).unique() }, 200);
+
+        expect(rows.every((row) => typeof row.s === "string" && row.s.length <= 16)).toBe(true);
+        expect(distinct(rows, "s")).toBe(200);
+    });
+
+    it("keeps format-email columns valid addresses even when the name heuristic misses", () => {
+        expect.hasAssertions();
+
+        const rows = rowsOf({ contact: v.string().email().unique() }, 50);
+
+        expect(rows.every((row) => /^[^@]+@[^@]+$/.test(String(row.contact)))).toBe(true);
+        expect(distinct(rows, "contact")).toBe(50);
+    });
+
+    it("refuses unique columns whose declared shape an index tag would violate", () => {
+        expect.hasAssertions();
+
+        expect(() =>
+            rowsOf(
+                {
+                    s: v
+                        .string()
+                        .pattern(/^[a-z]{3}$/)
+                        .unique(),
+                },
+                5,
+            ),
+        ).toThrow(/pattern-constrained/);
+        expect(() => rowsOf({ s: v.string().url().unique() }, 5)).toThrow(/format "uri"/);
+    });
+});
