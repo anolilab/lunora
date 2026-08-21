@@ -373,7 +373,7 @@ describe("stream", () => {
 
             first.open();
 
-            const {id} = (first.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>).find((f) => f.type === "stream") as { id: string });
+            const { id } = first.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>).find((f) => f.type === "stream") as { id: string };
 
             // A seq-bearing chunk marks the stream durable; `generation` is the
             // server's stamp for the run these chunks belong to.

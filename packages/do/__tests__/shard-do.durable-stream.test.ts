@@ -285,7 +285,7 @@ describe("shardDO durable streams", () => {
         await shard.driveMessage(tabA, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
         await waitForTerminator(tabA);
 
-        const {generation} = (parseFrames(tabA).find((frame) => frame.type === "chunk") as { generation: number });
+        const { generation } = parseFrames(tabA).find((frame) => frame.type === "chunk") as { generation: number };
 
         // Tab B asks the same question FRESH: the finished run is reclaimed and
         // run #2 starts under the same key.
