@@ -1649,6 +1649,14 @@ interface Role {
 }
 ```
 
+### `RunQueryOptions` (interface)
+
+```ts
+interface RunQueryOptions {
+    untracked?: boolean;
+}
+```
+
 ### `ScheduledFunctionDoc` (interface)
 
 ```ts
@@ -4721,6 +4729,14 @@ interface RelationDefinition {
 
 ```ts
 type RestCacheConfig = RestCachePolicy;
+```
+
+### `RunQueryOptions` (interface)
+
+```ts
+interface RunQueryOptions {
+    untracked?: boolean;
+}
 ```
 
 ### `ScheduledFunctionDoc` (interface)

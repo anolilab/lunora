@@ -617,6 +617,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RunQueryOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ScheduledFunctionDoc` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5127,6 +5131,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RunQueryOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ScheduledFunctionDoc` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6854,6 +6862,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RestCacheConfig` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RunQueryOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

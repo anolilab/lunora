@@ -26,7 +26,7 @@ describe("defineTable().commitOrdered()", () => {
     it("is absent on a table that never opted in", () => {
         expect.assertions(1);
 
-        expect(defineTable({ title: v.string() }).commitOrderedMode).toBeUndefined();
+        expect(defineTable({ title: v.string() }).commitOrderedMode).toBe(false);
     });
 
     it("rejects .global() in either chain order", () => {

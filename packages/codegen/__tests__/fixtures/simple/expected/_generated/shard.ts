@@ -970,7 +970,25 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);
             ctx.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx);
-            ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("query", reference.__lunoraRef, fnArgs, ctx);
+            // `ctx.runQuery(ref, args, { untracked: true })` runs the sub-query on
+            // its OWN context, built without the read-footprint hooks — so its
+            // reads never enter this subscription's footprint and a write to the
+            // tables it touched does not re-run us. Everything else is inherited:
+            // `functionPath` (log/metric attribution), `headroom` (the sub-query
+            // must not escape this dispatch's resource ceiling), and — load-bearing
+            // — the identity BY VALUE. Omitting identity would let `buildCtx` fall
+            // back to the shared per-request fields, which a concurrent RPC may
+            // have re-set, and an RLS-scoped sub-query would then read as the wrong
+            // user. A tracked call keeps sharing `ctx` exactly as before.
+            ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) =>
+                dispatchRun(
+                    "query",
+                    reference.__lunoraRef,
+                    fnArgs,
+                    runOptions?.untracked === true
+                        ? this.buildCtx({ functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId } })
+                        : ctx,
+                );
 
             return ctx;
         }

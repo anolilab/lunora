@@ -621,9 +621,56 @@ interface FunctionHandle<Kind extends "action" | "mutation" | "query" | "stream"
  * `RegisteredFunction<ArgsValidator, …>` constraint, because `handler`'s args
  * are in a contravariant position. Two inference sites it is.
  */
+
+/**
+ * Options for `ctx.runQuery`.
+ *
+ * Lunora's answer to Convex's `useStaleSnapshot`, and deliberately NOT a port of
+ * it. Convex needs that flag because a mutation there validates its whole read
+ * set at commit, so merely *reading* a hot append-only table manufactures OCC
+ * conflicts. Lunora has no such conflict class: its OCC is a compare-and-swap on
+ * the `__doc__` of each row a mutation actually WRITES (see `runGuardedWrite`),
+ * so a read costs a mutation nothing and there is nothing for a stale snapshot
+ * to relieve.
+ *
+ * What a read does cost here is REACTIVITY. Every table a live query touches
+ * enters its read footprint, and every write to any of those tables re-runs the
+ * subscription. A query that reads one hot table — an append-only audit log, a
+ * counter, a feed — therefore re-runs on every append even when the append
+ * cannot change its result. That is Lunora's version of the pressure Convex is
+ * relieving, and {@link RunQueryOptions.untracked} is the release valve.
+ */
+interface RunQueryOptions {
+    /**
+     * Run the query without recording its reads in the CALLER's read footprint.
+     * The subscription therefore does not re-run when the tables that query
+     * touched change.
+     *
+     * The result is exactly as fresh as a tracked call — same SQLite, same
+     * instant, no snapshot involved. The only thing given up is the invalidation
+     * edge, so use it when the read genuinely should not wake the subscriber
+     * (a monotonic counter rendered once, a config row, an audit tail whose
+     * growth is irrelevant to the result) — and never for data whose change
+     * should reach the client, which is what makes the subscription stale
+     * indefinitely rather than merely late.
+     *
+     * Scoped to the sub-query and nothing else: the untracked call runs on its
+     * own context, so a read interleaved on the caller's `ctx.db` while it is in
+     * flight still tracks normally. That is why this is an option on
+     * `ctx.runQuery` rather than a `ctx.db.untracked(...)` scope — a
+     * writer-wide flag would silently swallow a concurrent read's dependency
+     * (compare `meterExempt`'s documented interleaving caveat, which is
+     * tolerable for a resource meter and would not be here).
+     *
+     * No effect outside a subscription: a one-shot query records no footprint,
+     * so there is nothing to opt out of.
+     */
+    untracked?: boolean;
+}
+
 interface RunQuery {
-    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
-    <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args, options?: RunQueryOptions): Promise<R>;
 }
 
 /** `ctx.runMutation` — overloaded for the same reason as {@link RunQuery}. */
@@ -2338,6 +2385,7 @@ export type {
     RegisteredStream,
     RelationDefinition,
     RestCacheConfig,
+    RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,
     Scheduler,
