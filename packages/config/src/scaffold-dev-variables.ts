@@ -32,8 +32,15 @@ const requiredSecrets = (packageNames: ReadonlyArray<string>): SecretEntry[] => 
 /** Bytes of entropy per generated secret — 32 bytes → 64 hex chars (matches `openssl rand -hex 32`). */
 const SECRET_BYTES = 32;
 
-/** A key whose value is a secret we should generate rather than copy from the example. */
-const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
+/**
+ * A key whose value is a secret we should generate rather than copy from the
+ * example. Ends in key/password/secret/token as a real word — SCREAMING_SNAKE
+ * (`API_KEY`), lower snake or bare (`api_key`, `password`), or camelCase
+ * (`apiToken`) — with a boundary so `MONKEY`/`monkey` never match. Mirrors
+ * `@lunora/server`'s `redactSecrets` regex (`packages/server/src/env.ts`,
+ * `SECRET_KEY`); if you change this, change it there too.
+ */
+const SECRET_KEY = /(?:^|[_-])(?:key|password|secret|token|KEY|PASSWORD|SECRET|TOKEN)$|[a-z](?:Key|Password|Secret|Token)$/u;
 
 /**
  * Markers that flag a value as a fill-me-in placeholder rather than a usable

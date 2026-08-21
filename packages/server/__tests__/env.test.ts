@@ -235,6 +235,22 @@ describe("redactSecrets", () => {
         expect(redactSecrets("DB_PASSWORD: short")).toContain("DB_PASSWORD=[redacted]");
     });
 
+    it("masks camelCase and lowercase secret-named keys", () => {
+        expect.assertions(4);
+
+        expect(redactSecrets("password: hunter2")).toBe("password=[redacted]");
+        expect(redactSecrets("apiToken=abc123")).toBe("apiToken=[redacted]");
+        expect(redactSecrets("authSecret: x")).toBe("authSecret=[redacted]");
+        expect(redactSecrets("TOKEN=abc")).toBe("TOKEN=[redacted]");
+    });
+
+    it("does not treat words merely ending in a secret suffix as secret keys", () => {
+        expect.assertions(2);
+
+        expect(redactSecrets("MONKEY=banana")).toBe("MONKEY=banana");
+        expect(redactSecrets("monkey: banana")).toBe("monkey: banana");
+    });
+
     it("masks bare high-entropy >=24-char tokens", () => {
         expect.assertions(1);
 

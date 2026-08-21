@@ -95,10 +95,16 @@ const REDACTED = "[redacted]";
  * is the app runtime and must not take a build/CLI-layer dependency on the config
  * package. If you change this, change it there too.
  *
- * Anchored at the end of the key (`…SECRET`, `…_TOKEN`) so `STRIPE_SECRET_KEY`
- * and `API_TOKEN` match while an innocuous `SECRETARY` does not.
+ * A key is secret-named when it ends in key/password/secret/token as a real
+ * WORD, in any of the conventions keys actually arrive in: SCREAMING_SNAKE
+ * (`API_KEY`, `TOKEN`), lower snake or bare (`api_key`, `password`), or
+ * camelCase (`apiToken`, `clientSecret`). Anchored at the end of the key so
+ * `SECRETARY` never matches, and requiring a `^`/`_`/`-` boundary (or a
+ * camel-hump `[a-z]Key`) so `MONKEY`/`monkey`/`donkey` (suffix mid-word) never
+ * match either. The camel boundary deliberately over-redacts `sortKey` /
+ * `idempotencyKey` — masking a non-secret beats leaking a secret.
  */
-const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
+const SECRET_KEY = /(?:^|[_-])(?:key|password|secret|token|KEY|PASSWORD|SECRET|TOKEN)$|[a-z](?:Key|Password|Secret|Token)$/u;
 
 /** Whether a value (already a string) looks like a credential by prefix or entropy. */
 const looksLikeSecretValue = (value: string): boolean => {

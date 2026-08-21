@@ -8,7 +8,7 @@ import { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "../src/package-sec
 import { buildPackageSecretsBlock, ensureDevVariables, ensureDevVarsExample, isPlaceholderValue } from "../src/scaffold-dev-variables";
 
 /** Keys whose name implies a secret value — mirrors the scaffolder's SECRET_KEY regex. */
-const SECRET_KEY_PATTERN = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
+const SECRET_KEY_PATTERN = /(?:^|[_-])(?:key|password|secret|token|KEY|PASSWORD|SECRET|TOKEN)$|[a-z](?:Key|Password|Secret|Token)$/u;
 
 /** Strip one layer of surrounding quotes from a raw value string. */
 const stripQuotes = (raw: string): string =>
