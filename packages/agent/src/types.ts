@@ -639,6 +639,16 @@ export interface AgentConfig {
     activeTools?: ReadonlyArray<string>;
 
     /**
+     * How long a human-in-the-loop tool approval may stay pending before the
+     * run stops waiting (a Cloudflare Workflows duration — ms number or a
+     * string like `"3 days"`). Default `"3 days"`. On timeout the call is
+     * treated as REJECTED (the run records why and continues down the normal
+     * rejection path), so a run whose approver never answers ends instead of
+     * hibernating forever.
+     */
+    approvalTimeout?: number | string;
+
+    /**
      * Automatic thread-history compaction. When the persisted history exceeds
      * `maxMessages`, the loop summarizes the older messages (all but the most
      * recent `keepRecent`, default `ceil(maxMessages / 2)`) into one system-message

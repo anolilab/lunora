@@ -51,6 +51,9 @@ class DurableStepJournal {
     /** Names the run hibernated on (a `waitForEvent` that had no event yet). */
     public readonly waitedNames: string[] = [];
 
+    /** The options each entered wait was given (name → options), for asserting timeouts. */
+    public readonly resolvedWaitOptions = new Map<string, { timeout?: number | string; type: string }>();
+
     private readonly entries = new Map<string, { output: unknown }>();
 
     private readonly resolvedWaits = new Map<string, { payload: unknown }>();
@@ -80,6 +83,8 @@ class DurableStepJournal {
      */
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- mirrors AgentStepLike.waitForEvent's generic host signature so the mock stays assignable
     public async waitForEvent<T>(name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: T; type: string }> {
+        this.resolvedWaitOptions.set(name, options);
+
         const memo = this.resolvedWaits.get(name);
 
         if (memo) {
@@ -1194,6 +1199,87 @@ describe(runAgentLoop, () => {
 
         expect(String(toolResult?.content[0]?.output.value)).toContain("rejected by the user");
         expect(runtime.threads.get("thread-1")?.status).toBe("idle");
+    });
+
+    it("times out a never-answered approval as a rejection instead of hibernating forever", async () => {
+        let toolRuns = 0;
+
+        const agent = defineAgent({
+            approvalTimeout: "1 hour",
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => {
+                        toolRuns += 1;
+
+                        return "charged";
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: true,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        // A step whose approval wait's timeout elapses: the host rejects the
+        // `waitForEvent` promise (durable `do` steps delegate to the journal).
+        const waitOptions: { timeout?: number | string; type: string }[] = [];
+        const step = {
+            do: async <T>(name: string, callback: () => Promise<T>): Promise<T> => journal.do(name, callback),
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- mirrors AgentStepLike.waitForEvent's generic host signature so the mock stays assignable
+            waitForEvent: async <T>(name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: T; type: string }> => {
+                if (name.startsWith("approval:")) {
+                    waitOptions.push(options);
+                    throw new Error("waitForEvent timed out");
+                }
+
+                return journal.waitForEvent<T>(name, options);
+            },
+        };
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", { amount: 100 }, "charging…"), finalTurn("could not charge")]);
+
+        const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step }));
+
+        // The run ENDED (no eternal hibernation) down the normal rejection path.
+        expect(result).toStrictEqual({ stopped: "final", text: "could not charge", turns: 2 });
+        expect(toolRuns).toBe(0);
+        expect(journal.invoked).not.toContain("tool:charge:call_1");
+
+        // The wait carried the agent's configured timeout.
+        expect(waitOptions).toStrictEqual([{ timeout: "1 hour", type: "agent-approval:call_1" }]);
+
+        // A terminal rejected record explains why, and the thread is released.
+        const rejected = [...runtime.messages.values()].find((message) => message.status === "rejected");
+
+        expect(rejected?.toolCallId).toBe("call_1");
+        expect(rejected?.content).toContain("approval timed out");
+        expect(runtime.threads.get("thread-1")?.status).toBe("idle");
+    });
+
+    it("defaults the approval wait timeout to 3 days when the agent sets none", async () => {
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => "charged",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: true,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        // Deliver the decision up front so the run completes; the journal records the wait's options.
+        journal.events.set("approval:call_1", { decision: "approve" });
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", {}, ""), finalTurn("done")]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(journal.resolvedWaitOptions.get("approval:call_1")?.timeout).toBe("3 days");
     });
 
     it("memoizes a function needsApproval gate in its own durable step — it resolves once, not once per replay", async () => {

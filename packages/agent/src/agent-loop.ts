@@ -196,13 +196,28 @@ const resolveNeedsApproval = async (
 };
 
 /**
+ * How long a HITL approval wait hibernates before it gives up (overridable per
+ * agent via `approvalTimeout`). A slow approver is the NORMAL case — overnight
+ * or over a weekend — so the default is generous; but with no bound at all a
+ * never-answered approval hibernates the instance forever, and once the
+ * thread's staleness horizon passes, its pending approval can never be
+ * resolved again. Must stay well under `component.ts`'s
+ * `ABANDONED_APPROVAL_MS` so the wait always times out before the thread is
+ * reclaimed out from under it.
+ */
+const DEFAULT_APPROVAL_TIMEOUT = "3 days";
+
+/**
  * Pause the run on a human-in-the-loop tool approval: persist an
  * `"awaiting_approval"` marker (filtered out of the model prompt, but observable
  * by a client), move the thread to `"awaiting_input"`, then hibernate on the
  * deterministically named durable event `approval:<toolCallId>`. A workflow
  * replay memoizes the resolved wait, so the run resumes with the recorded
  * decision without pausing (or re-persisting) again. Named ONLY from the
- * replay-stable `call.id`.
+ * replay-stable `call.id`. The wait carries a timeout (default
+ * {@link DEFAULT_APPROVAL_TIMEOUT}, configurable via the agent's
+ * `approvalTimeout`) so a never-answered approval ends as a rejection instead
+ * of hibernating the run forever.
  *
  * The wait's match `type` is scoped to THIS call (`agent-approval:<call.id>`,
  * the same format `component.ts`'s `agentResolveApproval` sends) — native CF
@@ -211,7 +226,7 @@ const resolveNeedsApproval = async (
  * pending tool call on the same instance could resolve this one instead.
  */
 const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Promise<ApprovalDecision> => {
-    const { instanceId, patchThread, persist, step } = turnContext;
+    const { agent, instanceId, patchThread, persist, step } = turnContext;
 
     await persist({
         content: `Awaiting approval to run tool "${call.name}".`,
@@ -223,12 +238,29 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
     });
     await patchThread({ status: "awaiting_input" });
 
-    const event = await step.waitForEvent<ApprovalDecision>(`approval:${call.id}`, { type: `agent-approval:${call.id}` });
+    let decision: ApprovalDecision;
+
+    try {
+        const event = await step.waitForEvent<ApprovalDecision>(`approval:${call.id}`, {
+            timeout: agent.approvalTimeout ?? DEFAULT_APPROVAL_TIMEOUT,
+            type: `agent-approval:${call.id}`,
+        });
+
+        decision = { decision: event.payload.decision, ...(event.payload.note === undefined ? {} : { note: event.payload.note }) };
+    } catch {
+        // The wait's timeout elapsed — the host surfaces it as a rejection of the
+        // `waitForEvent` promise (the same shape the dequeue wait and the fan-out
+        // join already treat as their timeout). Without this the run hibernates
+        // forever and, once the thread's staleness horizon passes, the pending
+        // approval becomes permanently unresolvable. Treat it as a rejection so
+        // the loop records why and continues down the existing rejection path.
+        decision = { decision: "reject", note: "approval timed out" };
+    }
 
     // Resume: back to running before we act on the decision.
     await patchThread({ status: "running" });
 
-    return { decision: event.payload.decision, ...(event.payload.note === undefined ? {} : { note: event.payload.note }) };
+    return decision;
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
