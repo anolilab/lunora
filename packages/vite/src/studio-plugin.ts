@@ -23,6 +23,8 @@ import {
     SCHEMA_EDIT_ENDPOINT,
     SEED_ENDPOINT,
     serveJsonHandler,
+    STUDIO_ASSET_CACHE_CONTROL,
+    studioAssetRevalidation,
     studioAssetsStamp,
     transportRejectionReason,
 } from "@lunora/config/studio-host";
@@ -209,15 +211,15 @@ const createStudioHandler = (
         // Key the ETag on the requested file (not just its kind) so each chunk
         // revalidates independently; the rebuild stamp busts them all at once.
         const fileName = pathname.slice(pathname.lastIndexOf("/") + 1);
-        const etag = stamp === undefined ? undefined : `W/"${fileName}-${String(stamp)}"`;
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
+        const { etag, notModified } = studioAssetRevalidation(fileName, stamp, request.headers?.["if-none-match"]);
 
-        response.setHeader("Cache-Control", "no-cache");
+        response.setHeader("Cache-Control", STUDIO_ASSET_CACHE_CONTROL);
 
         if (etag !== undefined) {
             response.setHeader("ETag", etag);
 
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
-            if (headerValue(request.headers?.["if-none-match"]) === etag.toLowerCase()) {
+            if (notModified) {
                 response.statusCode = 304;
                 response.end();
 

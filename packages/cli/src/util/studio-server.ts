@@ -33,6 +33,9 @@ import {
     SCHEMA_EDIT_ENDPOINT,
     SEED_ENDPOINT,
     serveJsonHandler,
+    STUDIO_ASSET_CACHE_CONTROL,
+    STUDIO_DOCUMENT_CACHE_CONTROL,
+    studioAssetRevalidation,
     studioAssetsStamp,
     transportRejectionReason,
 } from "@lunora/config/studio-host";
@@ -150,7 +153,28 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         styleHref: "/styles.css",
     });
 
-    const sendAsset = (response: ServerResponse, body: Buffer, contentType: string): void => {
+    const sendAsset = (request: IncomingMessage, response: ServerResponse, body: Buffer, contentType: string, fileName: string): void => {
+        // The entry + stylesheet sit at stable, unhashed URLs, so without these
+        // headers the browser heuristically caches them and serves a rebuilt
+        // `@lunora/studio` stale until a hard reload. The revalidation decision
+        // is the shared one (`@lunora/config/studio-host`), so this host and the
+        // Vite route answer identically: `no-cache` + a stamp-keyed weak ETag,
+        // `304` on a match.
+        const { etag, notModified } = studioAssetRevalidation(fileName, assetsStamp, request.headers["if-none-match"]);
+
+        response.setHeader("Cache-Control", STUDIO_ASSET_CACHE_CONTROL);
+
+        if (etag !== undefined) {
+            response.setHeader("ETag", etag);
+
+            if (notModified) {
+                response.statusCode = 304;
+                response.end();
+
+                return;
+            }
+        }
+
         response.statusCode = 200;
         response.setHeader("Content-Type", contentType);
         response.end(body);
@@ -176,7 +200,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         sendText(response, 403, deniedMessage);
     };
 
-    const serveStaticAsset = (pathname: string, response: ServerResponse): boolean => {
+    const serveStaticAsset = (pathname: string, request: IncomingMessage, response: ServerResponse): boolean => {
         // Own the studio's static assets: `/styles.css`, plus every `.js` / `.js.map`
         // under the standalone directory — the `studio.js` entry and its on-demand,
         // code-split `chunk-*.js` siblings. Anything else is an SPA route and falls
@@ -204,7 +228,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         }
 
         if (isStyle) {
-            sendAsset(response, assets.styles, "text/css; charset=utf-8");
+            sendAsset(request, response, assets.styles, "text/css; charset=utf-8", "styles.css");
 
             return true;
         }
@@ -223,7 +247,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             return true;
         }
 
-        sendAsset(response, bytes, assetContentType(fileName));
+        sendAsset(request, response, bytes, assetContentType(fileName), fileName);
 
         return true;
     };
@@ -298,13 +322,19 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             return;
         }
 
-        if (serveStaticAsset(pathname, response)) {
+        if (serveStaticAsset(pathname, request, response)) {
             return;
         }
 
         // Everything else is an SPA route → serve the document (history fallback),
-        // so a hard load of a deep link like `/data` boots the router there.
-        sendAsset(response, document, "text/html; charset=utf-8");
+        // so a hard load of a deep link like `/data` boots the router there. The
+        // document embeds the admin token on loopback binds: `no-store` keeps it
+        // out of the browser's disk cache, and it never carries an ETag (a cached
+        // `304` for a token-bearing document would be its own bug).
+        response.statusCode = 200;
+        response.setHeader("Cache-Control", STUDIO_DOCUMENT_CACHE_CONTROL);
+        response.setHeader("Content-Type", "text/html; charset=utf-8");
+        response.end(document);
     });
 
     server.on("upgrade", (request, socket, head) => {

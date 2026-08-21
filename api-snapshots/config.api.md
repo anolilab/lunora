@@ -2128,6 +2128,18 @@ const SCHEMA_EDIT_ENDPOINT = "/__lunora/schema-edit";
 const SEED_ENDPOINT = "/__lunora/seed";
 ```
 
+### `STUDIO_ASSET_CACHE_CONTROL` (const)
+
+```ts
+const STUDIO_ASSET_CACHE_CONTROL = "no-cache";
+```
+
+### `STUDIO_DOCUMENT_CACHE_CONTROL` (const)
+
+```ts
+const STUDIO_DOCUMENT_CACHE_CONTROL = "no-store";
+```
+
 ### `SchemaEditRequest` (interface)
 
 ```ts
@@ -2176,6 +2188,15 @@ interface SeedRequestBody {
 interface SeedResponse {
     readonly body: unknown;
     readonly status: number;
+}
+```
+
+### `StudioAssetRevalidation` (interface)
+
+```ts
+interface StudioAssetRevalidation {
+    etag?: string;
+    notModified: boolean;
 }
 ```
 
@@ -2301,6 +2322,12 @@ const resolveStandaloneDirectory: (resolveFrom?: string) => string | undefined;
 
 ```ts
 const serveJsonHandler: (request: IncomingMessage, response: ServerResponse, handle: LocalEndpointHandler, projectRoot: string, schemaDirectory?: string) => void;
+```
+
+### `studioAssetRevalidation` (const)
+
+```ts
+const studioAssetRevalidation: (fileName: string, stamp: number | undefined, ifNoneMatch: string | string[] | undefined) => StudioAssetRevalidation;
 ```
 
 ### `studioAssetsStamp` (const)
