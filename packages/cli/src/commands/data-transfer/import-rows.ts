@@ -57,7 +57,7 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
         return JSON.stringify({ doc: parsedDocument, table });
     };
 
-    const remapEnvelope = (trimmed: string, lineNumber: number): string => {
+    const parseEnvelope = (trimmed: string, lineNumber: number): Record<string, unknown> => {
         let parsed: Record<string, unknown>;
 
         try {
@@ -79,7 +79,11 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
             throw new LunoraError("INTERNAL", `line ${String(lineNumber)}: import envelope is missing a string \`table\``);
         }
 
-        if (parsed["doc"] !== null && typeof parsed["doc"] === "object" && !Array.isArray(parsed["doc"])) {
+        return parsed;
+    };
+
+    const remapEnvelope = (parsed: Record<string, unknown>): string => {
+        if (typeof parsed["table"] === "string" && parsed["doc"] !== null && typeof parsed["doc"] === "object" && !Array.isArray(parsed["doc"])) {
             let document = parsed["doc"] as Record<string, unknown>;
 
             if (storageIdMap !== undefined) {
@@ -93,7 +97,7 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
 
             // Rebuild from the parsed envelope so any field beyond
             // `{ table, doc }` survives the rewrite.
-            parsed["doc"] = remapDocument === undefined ? document : remapDocument(document, parsed["table"]);
+            return JSON.stringify({ ...parsed, doc: remapDocument === undefined ? document : remapDocument(document, parsed["table"]) });
         }
 
         return JSON.stringify(parsed);
@@ -110,10 +114,13 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
             return wrapBareDocument(trimmed, lineNumber);
         }
 
-        // Every envelope is parsed when a rewrite is configured — a storage id or
-        // an object path can sit in a plain column, which no substring of the
-        // line announces. With neither, the line goes through untouched.
-        return storageIdMap === undefined && remapDocument === undefined ? trimmed : remapEnvelope(trimmed, lineNumber);
+        // Every envelope is parsed, so a corrupted line fails with its line
+        // number instead of as a whole-batch server error. With no rewrite
+        // configured the ORIGINAL string goes through — re-serialising an
+        // unmodified line would churn key order/whitespace for nothing.
+        const parsed = parseEnvelope(trimmed, lineNumber);
+
+        return storageIdMap === undefined && remapDocument === undefined ? trimmed : remapEnvelope(parsed);
     };
 };
 
