@@ -1,11 +1,19 @@
 /**
- * The `.dev.vars` line grammar — one owner, shared by every reader/writer of the
+ * The `.dev.vars` grammar — one owner, shared by every reader/writer of the
  * file so the format can't drift between packages. `@lunora/cli`'s `env`
  * command (parse/serialize) and `@lunora/config`'s scaffolder (comment-
  * preserving rewrite) do different *transforms*, but they agree on these
- * primitives: the filename, what a `KEY` looks like, how lines split, and how
- * quotes strip.
+ * primitives: the filename, how the file parses, and what a writable `KEY`
+ * looks like.
+ *
+ * Reading and writing are deliberately asymmetric. Reads go through dotenv —
+ * literally the parser `wrangler dev` runs — so Lunora accepts every line the
+ * worker accepts. Writes emit the strict `KEY="value"` subset and validate the
+ * key against {@link DEV_VARS_KEY_PATTERN}, so what we generate stays boring
+ * and unambiguous under that same parser.
  */
+// eslint-disable-next-line e18e/ban-dependencies -- the native replacements are not equivalent here: `process.loadEnvFile` mutates `process.env` from a path (we parse content), and `node:util`'s `parseEnv` drops the `KEY: value` form dotenv accepts, so it would reintroduce the very disagreement with wrangler this module exists to remove.
+import { parse } from "dotenv";
 
 /** The conventional filename for local Cloudflare dev secrets (gitignored). */
 const DEV_VARS_FILE: string = ".dev.vars";
@@ -13,113 +21,53 @@ const DEV_VARS_FILE: string = ".dev.vars";
 /** Its committed, secret-free counterpart that scaffolding reads from. */
 const DEV_VARS_EXAMPLE_FILE: string = ".dev.vars.example";
 
-/** A bare `KEY` identifier — the part left of `=` in a `.dev.vars` line. */
+/**
+ * A bare `KEY` identifier accepted on the **write** path — `lunora env set`,
+ * `env unset`, `env generate`, and {@link upsertDevVariableLine}'s line
+ * targeting. Deliberately stricter than what the reader accepts: dotenv keys
+ * are `[\w.-]+`, but a key we *write* stays a conventional env-var name so it
+ * needs no quoting and round-trips through every consumer. Never use this to
+ * decide whether a line in an existing file counts — that is the reader's job.
+ */
 const DEV_VARS_KEY_PATTERN: RegExp = /^[A-Za-z_]\w*$/u;
 
 /** Splits file content into lines on either newline style. */
 const DEV_VARS_NEWLINE: RegExp = /\r?\n/u;
 
-/** Strip one layer of matching single/double quotes from a value, if present. */
-const unquoteDevVariable = (value: string): string => {
-    if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
-        return value.slice(1, -1);
-    }
-
-    return value;
-};
-
 /**
- * Split one `.dev.vars` line into its `key` and (trimmed, still-quoted) `value`
- * at the first `=`. Returns `undefined` for blank lines, comments, and anything
- * whose left side isn't a valid `KEY` (so a comment containing `=` is ignored).
- */
-const splitDevVariableLine = (line: string): undefined | { key: string; value: string } => {
-    const trimmed = line.trim();
-
-    if (trimmed === "" || trimmed.startsWith("#")) {
-        return undefined;
-    }
-
-    const equals = trimmed.indexOf("=");
-
-    if (equals <= 0) {
-        return undefined;
-    }
-
-    const key = trimmed.slice(0, equals).trim();
-
-    if (!DEV_VARS_KEY_PATTERN.test(key)) {
-        return undefined;
-    }
-
-    return { key, value: trimmed.slice(equals + 1).trim() };
-};
-
-/**
- * The dotenv `LINE` matcher, ported from dotenv 16.6.1 (`lib/main.js:9`) — the
- * reference implementation, because wrangler parses `.dev.vars` with dotenv
- * and this reader must accept exactly what the worker sees. The only edits
- * from the original are collapsing the redundant `(?:^|^)` / `(?:$|$)` anchors
- * to `^` / `$` (identical semantics) and adding the `u` flag.
+ * Parse `.dev.vars` content into its `{ key, value }` entries, in file order.
  *
- * Accepts, per dotenv: an optional `export ` prefix, keys of `[\w.-]+`, `=` or
- * `: ` separators, single/double/backtick-quoted values (spanning multiple
- * lines inside quotes), and `#` comments terminating unquoted values.
+ * Delegates to dotenv's own `parse()` — the literal function `wrangler dev` /
+ * `@cloudflare/vite-plugin` run over this file before handing the variables to
+ * the worker. Using the library rather than a compatible reimplementation is
+ * the point: every line the worker sees, Lunora reads identically, including
+ * `export `-prefixed lines, dotted/dashed keys, `KEY: value` separators,
+ * quote stripping (single/double/backtick), `\n`/`\r` expansion inside double
+ * quotes, `#` comments ending unquoted values, and multi-line quoted values.
+ * Duplicate keys resolve last-wins, at the key's first position — dotenv
+ * returns an object, so a repeated key overwrites in place.
  *
- * The backtracking/complexity lints are real observations about dotenv's own
- * regex, suppressed deliberately: rewriting it to a linear form is exactly the
- * "compatible reimplementation" drift this module exists to prevent, and the
- * input is the developer's own small local `.dev.vars` — the same bytes
- * wrangler already runs this very pattern over.
+ * The canonical read of the whole file: every reader of `.dev.vars` (and of
+ * `.dev.vars.example`) goes through here or through {@link
+ * parseDevVariableLine} below, so the format cannot drift between packages.
  */
-const DEV_VARS_LINE_PATTERN: RegExp =
-    // eslint-disable-next-line regexp/no-super-linear-backtracking, sonarjs/slow-regex, sonarjs/regex-complexity -- verbatim dotenv 16.6.1 reference regex; see note above
-    /^\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?$/gmu;
-
-/** All line-break styles, for dotenv's pre-parse `\n` normalisation. */
-const ANY_LINE_BREAK = /\r\n?/gu;
-
-/** One layer of matching single/double/backtick quotes around a whole value (dotenv's quote-strip step). */
-const QUOTED_VALUE_PATTERN = /^(["'`])([\s\S]*)\1$/mu;
-
-/**
- * Parse `.dev.vars` content into its `{ key, value }` entries, in file order,
- * with dotenv semantics — the same `parse()` wrangler and
- * `@cloudflare/vite-plugin` feed the worker (dotenv 16.6.1), so every line the
- * worker sees, Lunora reads identically: `export `-prefixed lines,
- * dotted/dashed keys, quote stripping, `\n`/`\r` expansion inside double
- * quotes, `#` comments ending unquoted values, and duplicate keys resolved
- * last-wins (one entry, at the key's first position — matching dotenv's
- * object overwrite). The canonical read of the whole file — callers that just
- * want the variables (rather than a comment-preserving rewrite) use this
- * instead of hand-rolling the split loop.
- */
-const parseDevVariableEntries = (content: string): { key: string; value: string }[] => {
-    const entries = new Map<string, string>();
-
-    // dotenv normalises every line break to `\n` before matching, so
-    // multi-line quoted values come out with plain `\n` separators.
-    const normalized = content.replaceAll(ANY_LINE_BREAK, "\n");
-
-    for (const match of normalized.matchAll(DEV_VARS_LINE_PATTERN)) {
-        const key = match[1] as string;
-        let value = (match[2] ?? "").trim();
-        const maybeQuote = value[0];
-
-        // Strip one layer of matching single/double/backtick quotes.
-        value = value.replace(QUOTED_VALUE_PATTERN, "$2");
-
-        if (maybeQuote === '"') {
-            value = value.replaceAll(String.raw`\n`, "\n").replaceAll(String.raw`\r`, "\r");
-        }
-
-        entries.set(key, value);
-    }
-
-    return [...entries].map(([key, value]) => {
+const parseDevVariableEntries = (content: string): { key: string; value: string }[] =>
+    Object.entries(parse(content)).map(([key, value]) => {
         return { key, value };
     });
-};
+
+/**
+ * The single `{ key, value }` a one-line `.dev.vars` fragment defines, or
+ * `undefined` for a blank line, a comment, or anything that isn't an entry.
+ *
+ * Same grammar as {@link parseDevVariableEntries} by construction (it IS that
+ * parse, over one line) — the line-oriented rewriters need to know which key a
+ * given line defines so they can replace that line and leave every comment and
+ * blank around it verbatim, which a whole-file parse cannot tell them. A value
+ * quoted across several lines is the one shape this cannot see; such a line
+ * reads as its own unterminated fragment, exactly as it did before.
+ */
+const parseDevVariableLine = (line: string): undefined | { key: string; value: string } => parseDevVariableEntries(line)[0];
 
 /**
  * Escape a runtime string for safe literal interpolation into a `RegExp`
@@ -211,7 +159,6 @@ export {
     DEV_VARS_NEWLINE,
     escapeRegExp,
     parseDevVariableEntries,
-    splitDevVariableLine,
-    unquoteDevVariable,
+    parseDevVariableLine,
     upsertDevVariableLine,
 };

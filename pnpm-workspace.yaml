@@ -251,6 +251,14 @@ catalogs:
     prettier-plugin-svelte: 4.1.1
     react-doctor: 0.9.11
   node:
+    # Exact-pinned (no caret): this is the parser `wrangler dev` runs over
+    # `.dev.vars`, and `@lunora/config` reads that file with the same library so
+    # the CLI/studio can't disagree with the worker about what a line means. A
+    # dotenv release that changes the grammar is a behaviour change for us, so
+    # it gets vetted (the parity fixtures in
+    # `packages/config/__tests__/dev-variables-format.test.ts` are the tripwire)
+    # rather than floated in on a range.
+    dotenv: 16.6.1
     fast-glob: ^3.3.3
     rimraf: 6.1.3
     semver: ^7.8.5

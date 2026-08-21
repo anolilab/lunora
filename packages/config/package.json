@@ -75,6 +75,7 @@
         "@visulima/colorize": "catalog:cli",
         "@visulima/find-ai-runner": "catalog:cli",
         "dockerode": "catalog:tooling",
+        "dotenv": "catalog:node",
         "es-module-lexer": "catalog:vite",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"

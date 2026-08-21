@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { DEV_VARS_KEY_PATTERN, parseDevVariableEntries, splitDevVariableLine, unquoteDevVariable } from "../src/dev-variables-format";
+import { DEV_VARS_KEY_PATTERN, parseDevVariableEntries, parseDevVariableLine } from "../src/dev-variables-format";
 
+// Write-side key validation only (`env set`/`unset`/`generate`, the upsert's
+// line targeting) — deliberately stricter than what the dotenv reader accepts.
 describe("dEV_VARS_KEY_PATTERN", () => {
     it.each(["KEY", "AUTH_SECRET", "_underscore", "a1", "Mixed_Case_9"])("accepts the valid key %s", (key) => {
         expect.assertions(1);
@@ -16,95 +18,64 @@ describe("dEV_VARS_KEY_PATTERN", () => {
     });
 });
 
-describe("unquoteDevVariable", () => {
-    it("strips one layer of matching double quotes", () => {
+describe("parseDevVariableLine", () => {
+    it("reads a simple KEY=value line", () => {
         expect.assertions(1);
 
-        expect(unquoteDevVariable('"value"')).toBe("value");
+        expect(parseDevVariableLine("KEY=value")).toStrictEqual({ key: "KEY", value: "value" });
     });
 
-    it("strips one layer of matching single quotes", () => {
-        expect.assertions(1);
+    it("trims surrounding whitespace and strips quotes", () => {
+        expect.assertions(3);
 
-        expect(unquoteDevVariable("'value'")).toBe("value");
-    });
-
-    it("leaves an unquoted value untouched", () => {
-        expect.assertions(1);
-
-        expect(unquoteDevVariable("value")).toBe("value");
-    });
-
-    it("leaves mismatched quotes untouched", () => {
-        expect.assertions(2);
-
-        expect(unquoteDevVariable("'value\"")).toBe("'value\"");
-        expect(unquoteDevVariable("\"value'")).toBe("\"value'");
-    });
-
-    it("unwraps an empty quoted value to an empty string", () => {
-        expect.assertions(2);
-
-        expect(unquoteDevVariable('""')).toBe("");
-        expect(unquoteDevVariable("''")).toBe("");
-    });
-
-    it("does not treat a single quote character as a wrapper", () => {
-        expect.assertions(1);
-
-        // length < 2 → no stripping; a lone quote is the literal value.
-        expect(unquoteDevVariable('"')).toBe('"');
-    });
-
-    it("strips only the outermost layer of nested quotes", () => {
-        expect.assertions(1);
-
-        expect(unquoteDevVariable("\"'inner'\"")).toBe("'inner'");
-    });
-});
-
-describe("splitDevVariableLine", () => {
-    it("splits a simple KEY=value line", () => {
-        expect.assertions(1);
-
-        expect(splitDevVariableLine("KEY=value")).toStrictEqual({ key: "KEY", value: "value" });
-    });
-
-    it("trims surrounding whitespace around the key and value", () => {
-        expect.assertions(1);
-
-        expect(splitDevVariableLine("  KEY  =  value  ")).toStrictEqual({ key: "KEY", value: "value" });
-    });
-
-    it("keeps the value still-quoted (unquoting is a separate step)", () => {
-        expect.assertions(1);
-
-        expect(splitDevVariableLine('KEY="value"')).toStrictEqual({ key: "KEY", value: '"value"' });
+        expect(parseDevVariableLine("  KEY  =  value  ")).toStrictEqual({ key: "KEY", value: "value" });
+        expect(parseDevVariableLine('KEY="value"')).toStrictEqual({ key: "KEY", value: "value" });
+        expect(parseDevVariableLine("KEY='value'")).toStrictEqual({ key: "KEY", value: "value" });
     });
 
     it("splits only on the first equals, preserving = in the value", () => {
         expect.assertions(1);
 
-        expect(splitDevVariableLine("KEY=a=b=c")).toStrictEqual({ key: "KEY", value: "a=b=c" });
+        expect(parseDevVariableLine("KEY=a=b=c")).toStrictEqual({ key: "KEY", value: "a=b=c" });
     });
 
     it("returns an empty value for a trailing-equals line", () => {
         expect.assertions(1);
 
-        expect(splitDevVariableLine("KEY=")).toStrictEqual({ key: "KEY", value: "" });
+        expect(parseDevVariableLine("KEY=")).toStrictEqual({ key: "KEY", value: "" });
+    });
+
+    it("leaves an unmatched quote as the literal value", () => {
+        expect.assertions(2);
+
+        expect(parseDevVariableLine('KEY="')).toStrictEqual({ key: "KEY", value: '"' });
+        expect(parseDevVariableLine("KEY='value\"")).toStrictEqual({ key: "KEY", value: "'value\"" });
+    });
+
+    it("strips only the outermost layer of nested quotes", () => {
+        expect.assertions(1);
+
+        expect(parseDevVariableLine("KEY=\"'inner'\"")).toStrictEqual({ key: "KEY", value: "'inner'" });
     });
 
     it.each(["", "   ", "# comment", "  # indented comment", "# KEY=ignored"])("ignores the non-entry line %j", (line) => {
         expect.assertions(1);
 
-        expect(splitDevVariableLine(line)).toBeUndefined();
+        expect(parseDevVariableLine(line)).toBeUndefined();
     });
 
-    it("ignores a line whose left side is not a valid KEY", () => {
-        expect.assertions(2);
+    it("ignores a line with no key", () => {
+        expect.assertions(1);
 
-        expect(splitDevVariableLine("has-dash=value")).toBeUndefined();
-        expect(splitDevVariableLine("=value")).toBeUndefined();
+        expect(parseDevVariableLine("=value")).toBeUndefined();
+    });
+
+    it("uses the same grammar as the whole-file parse", () => {
+        expect.assertions(1);
+
+        // The line reader IS the file reader over one line — the scaffolder's
+        // line-oriented rewrite must not develop its own idea of the format.
+        expect(parseDevVariableLine("export KEY.SUB=value # note")).toStrictEqual(parseDevVariableEntries("export KEY.SUB=value # note")[0]);
     });
 });
 
