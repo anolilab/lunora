@@ -160,8 +160,51 @@ interface ListArgsSpec<TDocument, F, O extends string> {
  */
 const STRING_KINDS = new Set(["id", "storage", "string"]);
 
-/** Whether a filter column holds string values, unwrapping a leading `v.optional(...)`. */
-const isStringColumn = (validator: Validator): boolean => STRING_KINDS.has((optionalInner(validator) ?? validator).kind);
+/**
+ * Internal view of the validator internals this reads. `v.literal` stashes its
+ * value and `v.union` its members on `_meta`; `@lunora/values` exposes an
+ * accessor for `optional`'s inner validator but not for these, and `http.ts`
+ * already reads `_meta` the same way for search-param coercion.
+ */
+interface ValidatorInternals {
+    readonly _meta?: { readonly members?: ReadonlyArray<Validator>; readonly value?: unknown };
+}
+
+/**
+ * Whether a filter column holds string values, unwrapping a leading
+ * `v.optional(...)`.
+ *
+ * An enum column — `v.union(v.literal("open"), v.literal("closed"))`, kind
+ * `"union"` — is as string-typed as `v.string()` is, and a bare
+ * `v.literal("x")` likewise. Judging those by their own `kind` alone stripped
+ * `contains` from an enum filter, and because a stripped operator leaves an
+ * empty predicate behind, the request then returned the UNFILTERED set instead
+ * of failing. A union counts when every member is itself string-typed
+ * (`v.null()` members are transparent, so a nullable string union still
+ * qualifies) — a mixed union does not, since `contains` would then reach
+ * non-string values.
+ */
+const isStringColumn = (validator: Validator): boolean => {
+    const unwrapped = optionalInner(validator) ?? validator;
+
+    if (STRING_KINDS.has(unwrapped.kind)) {
+        return true;
+    }
+
+    const meta = (unwrapped as ValidatorInternals)._meta;
+
+    if (unwrapped.kind === "literal") {
+        return typeof meta?.value === "string";
+    }
+
+    if (unwrapped.kind !== "union" || meta?.members === undefined) {
+        return false;
+    }
+
+    const { members } = meta;
+
+    return members.some((member) => isStringColumn(member)) && members.every((member) => member.kind === "null" || isStringColumn(member));
+};
 
 /** Build the operator object accepted alongside a bare value for one filter column. */
 const operatorsValidator = (value: Validator, maxInValues: number): Validator => {

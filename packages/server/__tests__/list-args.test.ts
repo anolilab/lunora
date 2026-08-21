@@ -200,6 +200,47 @@ describe("defineListArgs — contains is string-only", () => {
         expect(parsed.where).toEqual({ nickname: { contains: "bob" } });
     });
 
+    it("accepts contains on an enum column (a union of string literals)", () => {
+        expect.assertions(2);
+
+        // Judged by `kind` alone a union reads as non-string, which stripped
+        // `contains` and — since an emptied predicate is dropped — silently
+        // returned the UNFILTERED set for `?where[status][contains]=ope`.
+        const enumSpec = defineListArgs<{ _creationTime: number; status: "closed" | "open" }>()({
+            filter: { status: v.union(v.literal("open"), v.literal("closed")) },
+            orderBy: [],
+        });
+        const parsed = parseValidatorMap(enumSpec.args as never, { where: { status: { contains: "ope" } } }, "args");
+
+        expect(parsed.where).toEqual({ status: { contains: "ope" } });
+        expect(enumSpec.toQueryArgs({ where: { status: { contains: "ope" } } }).where).toEqual({ status: { contains: "ope" } });
+    });
+
+    it("accepts contains on a bare string literal and a nullable string union", () => {
+        expect.assertions(2);
+
+        const literalSpec = defineListArgs<{ _creationTime: number; tier: "pro" }>()({ filter: { tier: v.literal("pro") }, orderBy: [] });
+        const nullableSpec = defineListArgs<{ _creationTime: number; note: null | string }>()({
+            filter: { note: v.union(v.string(), v.null()) },
+            orderBy: [],
+        });
+
+        expect(literalSpec.toQueryArgs({ where: { tier: { contains: "pr" } } }).where).toEqual({ tier: { contains: "pr" } });
+        expect(nullableSpec.toQueryArgs({ where: { note: { contains: "hi" } } }).where).toEqual({ note: { contains: "hi" } });
+    });
+
+    it("still refuses contains on a union that is not entirely string-typed", () => {
+        expect.assertions(1);
+
+        // A mixed union would let `contains` reach non-string values.
+        const mixedSpec = defineListArgs<{ _creationTime: number; ref: number | string }>()({
+            filter: { ref: v.union(v.string(), v.number()) },
+            orderBy: [],
+        });
+
+        expect(mixedSpec.toQueryArgs({ where: { ref: { contains: "4", eq: "x" } } }).where).toEqual({ ref: { eq: "x" } });
+    });
+
     it("strips contains from a non-string column's operator object, like any undeclared key", () => {
         expect.assertions(1);
 
