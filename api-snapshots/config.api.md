@@ -2231,6 +2231,12 @@ const applyStudioAssetCache: (request: IncomingMessage, response: ServerResponse
 const assetContentType: (fileName: string) => string;
 ```
 
+### `csrfRejectionReason` (const)
+
+```ts
+const csrfRejectionReason: (request: IncomingMessage) => string | undefined;
+```
+
 ### `handlePolicyScaffoldRequest` (const)
 
 ```ts

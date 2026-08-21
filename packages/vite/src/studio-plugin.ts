@@ -11,6 +11,7 @@ import type { LocalEndpointHandler, StudioAssets } from "@lunora/config/studio-h
 import {
     applyStudioAssetCache,
     assetContentType,
+    csrfRejectionReason,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
     handleSeedRequest,
@@ -48,74 +49,6 @@ const JSON_ENDPOINT_HANDLERS: Readonly<Record<string, LocalEndpointHandler>> = {
 
 /** The local-dev endpoints that perform state-changing side effects (source writes + codegen). */
 const STATE_CHANGING_ENDPOINTS = new Set<string>(Object.keys(JSON_ENDPOINT_HANDLERS));
-
-/**
- * Origin layer of the CSRF gate: prefer the unforgeable `Sec-Fetch-Site` header,
- * else fall back to comparing the `Origin` host:port against the request `Host`.
- * Returns a refusal reason or `undefined` when the origin is acceptable.
- */
-const originRejectionReason = (headers: IncomingMessage["headers"]): string | undefined => {
-    const secFetchSite = headerValue(headers["sec-fetch-site"]);
-
-    if (secFetchSite !== undefined) {
-        return secFetchSite === "same-origin" || secFetchSite === "same-site" || secFetchSite === "none" ? undefined : "cross-origin request rejected";
-    }
-
-    const origin = headerValue(headers.origin);
-
-    if (origin === undefined || origin === "null") {
-        return undefined;
-    }
-
-    let originHost: string | undefined;
-
-    try {
-        originHost = new URL(origin).host.toLowerCase();
-    } catch {
-        return "invalid origin header";
-    }
-
-    const host = headerValue(headers.host);
-
-    return host === undefined || originHost !== host ? "cross-origin request rejected" : undefined;
-};
-
-/**
- * Application-level CSRF defense for the state-changing local endpoints
- * (schema-edit / policy-scaffold / seed). The loopback bind alone does NOT stop
- * a cross-site page in the developer's OWN browser from POSTing a CORS "simple
- * request" whose side effects (source write + codegen) execute before the
- * browser blocks the *response* read. This middleware therefore defends
- * independently of `@lunora/config`'s serve-json-handler. Two layers, both must
- * pass; returns a refusal reason or `undefined`.
- *
- * 1. Origin (via {@link originRejectionReason}): prefer the unforgeable
- * `Sec-Fetch-Site` header; else compare the `Origin` host:port against `Host`.
- * 2. Content-Type: a state-changing request must be `application/json`, which a
- * cross-origin `fetch` cannot set without triggering a (then-blocked) preflight
- * — closing the simple-request bypass.
- */
-const csrfRejectionReason = (request: IncomingMessage): string | undefined => {
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
-    const headers = request.headers ?? {};
-    const originReason = originRejectionReason(headers);
-
-    if (originReason !== undefined) {
-        return originReason;
-    }
-
-    const method = (request.method ?? "GET").toUpperCase();
-
-    if (method !== "GET" && method !== "HEAD") {
-        const contentType = headerValue(headers["content-type"]);
-
-        if (!contentType?.startsWith("application/json")) {
-            return "content-type must be application/json";
-        }
-    }
-
-    return undefined;
-};
 
 /** Write a 200 response with the given body and content type. */
 const sendOk = (response: ServerResponse, body: Buffer | string, contentType: string): void => {
@@ -270,9 +203,10 @@ const createStudioHandler = (
         // CSRF defense for the state-changing endpoints (schema-edit /
         // policy-scaffold / seed): the loopback gate above does NOT stop a
         // cross-site page in the developer's own browser from driving these.
-        // Enforced here in the Vite middleware independently of
-        // `@lunora/config`'s serve-json-handler (which also guards), so the
-        // route defends even if that layer regresses.
+        // The shared `@lunora/config` gate is deliberately invoked here,
+        // BEFORE `serveJsonHandler` (which runs the same check again), so the
+        // route defends even if that layer regresses — belt and braces, but
+        // one implementation, so the two layers can never drift apart.
         if (STATE_CHANGING_ENDPOINTS.has(pathname)) {
             const csrf = csrfRejectionReason(request);
 
