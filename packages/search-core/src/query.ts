@@ -352,6 +352,13 @@ export const planSearchPage = (options: { cursor?: null | string; endCursor?: nu
         );
     }
 
+    if (!Number.isFinite(options.numItems)) {
+        // Math.floor(NaN) is NaN and NaN compares false against the cap, so a
+        // non-finite page size would sail past the boundary guard and come
+        // back as a bogus empty terminal page. Refuse it up front.
+        throw new LunoraError("BAD_REQUEST", `search pagination needs a finite numItems, got ${String(options.numItems)}`);
+    }
+
     const numberItems = Math.max(0, Math.floor(options.numItems));
     const offset = options.cursor ? parseSearchCursor(options.cursor) : 0;
 

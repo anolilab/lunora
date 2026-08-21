@@ -184,6 +184,12 @@ describe(planSearchPage, () => {
         expect(() => planSearchPage({ cursor: null, numItems: MAX_SEARCH_SCAN + 1 })).toThrow(LunoraError);
     });
 
+    it("rejects a NaN page size instead of letting it slide past the cap guard", () => {
+        expect.assertions(1);
+
+        expect(() => planSearchPage({ cursor: null, numItems: Number.NaN })).toThrow(LunoraError);
+    });
+
     it("rejects bounded (endCursor) pagination", () => {
         expect.assertions(1);
 
