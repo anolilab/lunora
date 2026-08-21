@@ -48,6 +48,13 @@ const CORPUS: ReadonlyArray<Record<string, unknown>> = [
     Object.assign(Object.create({ name: "inherited" }) as Record<string, unknown>, {}),
     // An own property under a prototype-member name must still parse normally.
     { toString: "x" },
+    // A null-prototype source: the prototype guard admits it (bare reads are
+    // own-only on it), so it must stay on the fast path and agree with the oracle.
+    Object.assign(Object.create(null) as Record<string, unknown>, { name: "ada" }),
+    // `JSON.parse` puts a wire `"__proto__"` key on as an OWN data property and
+    // leaves the prototype plain — the fast path must serve it like any other
+    // undeclared key (dropped), not treat the object as exotic.
+    JSON.parse('{"name":"ada","__proto__":{"injected":true}}') as Record<string, unknown>,
     [] as unknown as Record<string, unknown>,
     null as unknown as Record<string, unknown>,
 ];
@@ -126,6 +133,19 @@ describe("compileArgsValidator — modelled behaviour", () => {
 
         expect(compiled?.({})).toStrictEqual({});
         expect(compiled?.({ nick: "ada" })).toStrictEqual({ nick: "ada" });
+    });
+
+    it("keeps a null-prototype source on the fast path, and defers an exotic-prototype one", () => {
+        expect.assertions(2);
+
+        const compiled = compiledFromIr(irFromSnippet("{ name: v.string() }"));
+
+        // Bare reads are own-only on a null-prototype object, so the prototype
+        // guard admits it — parity alone can't prove this, since DEFER is always
+        // parity-safe and would silently cost the fast path instead.
+        expect(compiled?.(Object.assign(Object.create(null) as Record<string, unknown>, { name: "ada" }))).toStrictEqual({ name: "ada" });
+        // Anything else may carry inherited data properties: hand it to the oracle.
+        expect(compiled?.(Object.create({ name: "inherited" }) as Record<string, unknown>)).toBe(DEFER);
     });
 
     it("defers (returns the sentinel) on a type mismatch instead of throwing", () => {
