@@ -39,9 +39,24 @@ const MAX_QUEUE_DEPTH = 5;
  * instance terminated while parked leaves the thread pointing at a workflow that
  * will never resume — and nothing else would ever free it. The window is longer
  * than the loop's own dequeue timeout so a genuinely parked run is never
- * reclaimed out from under itself.
+ * reclaimed out from under itself. Applies to `"running"` threads only — an
+ * `"awaiting_input"` thread uses {@link ABANDONED_APPROVAL_MS}.
  */
 const ABANDONED_RUN_MS = 13 * 60 * 60 * 1000;
+
+/**
+ * The far longer staleness horizon for an `"awaiting_input"` thread.
+ *
+ * A HITL pause is a run hibernating on `step.waitForEvent`, and a slow human
+ * approval (overnight, a weekend) is its NORMAL case — so the 13h run horizon
+ * must not apply. Reclaiming re-stamps the thread's `instanceId`, after which
+ * `agentResolveApproval` FORBIDs the real approver forever. The loop's own
+ * approval wait timeout (default 3 days, configurable per agent) is what
+ * ordinarily frees the thread; this horizon exists only for an instance that
+ * died without ever timing out its wait, so it merely has to outlast any
+ * plausible approval timeout.
+ */
+const ABANDONED_APPROVAL_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
  * The agent thread tables, shipped as a schema extension so an app merges
@@ -382,9 +397,13 @@ export const agentComponent = (): AgentComponent => {
                 // Nothing else reaps that: under `"reject"` every later run
                 // CONFLICTs, and under `"queue"` every later run parks behind a
                 // corpse. A thread untouched for longer than any run could
-                // plausibly hold it is treated as free.
+                // plausibly hold it is treated as free — but an `awaiting_input`
+                // thread is measured against the far longer approval horizon,
+                // because its instance really is alive and hibernating on a slow
+                // human decision (see ABANDONED_APPROVAL_MS).
                 const updatedAt = typeof existing["updatedAt"] === "number" ? existing["updatedAt"] : 0;
-                const abandoned = now - updatedAt > ABANDONED_RUN_MS;
+                const staleAfter = existing["status"] === "awaiting_input" ? ABANDONED_APPROVAL_MS : ABANDONED_RUN_MS;
+                const abandoned = now - updatedAt > staleAfter;
                 const isConcurrentRun =
                     !abandoned &&
                     (existing["status"] === "running" || existing["status"] === "awaiting_input") &&
