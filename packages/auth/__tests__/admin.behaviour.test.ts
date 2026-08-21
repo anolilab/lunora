@@ -167,7 +167,7 @@ describe("createAuthAdmin", () => {
         const user = await adminApi.createUser({ email: "haspw@example.com", name: "HasPw", password: STRONG_PASSWORD });
         const before = credentialAccounts(user.id)[0]?.["password"];
 
-        await adminApi.setUserPassword({ newPassword: "another sound password", userId: user.id });
+        await adminApi.setUserPassword({ newPassword: "another sound password", userId: user.id }); // gitleaks:allow -- test fixture password, not a real secret
 
         const accounts = credentialAccounts(user.id);
 
