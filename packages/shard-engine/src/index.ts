@@ -55,6 +55,7 @@ export {
 export { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 export { appendCdcChange, bumpCdcEpoch, CDC_META_TABLE, migrateCdcLog, migrateCdcMeta, minCdcSeq, readCdcCursor, readCdcEpoch } from "./ctx-db-cdc";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
+export { allocateCommitSeq, COMMIT_SEQ_FIELD, COMMIT_SEQ_TABLE, migrateCommitSeq, readCommitSeq } from "./ctx-db-commit-seq";
 export type { CompanionSync, CompanionSyncDeps } from "./ctx-db-companions";
 export { createCompanionSync } from "./ctx-db-companions";
 export {

@@ -533,6 +533,7 @@ const parseGlobalBackend = (args: ReadonlyArray<Node>): TableIR["globalBackend"]
 
 /** Accumulator the builder-chain walk mutates as it unwinds a `defineTable(...)` chain. */
 interface TableBuilderAccumulator {
+    commitOrdered: boolean;
     externallyManaged: boolean;
     externalSource?: ExternalSourceIR;
     geoIndexes: GeoIndexIR[];
@@ -608,6 +609,17 @@ const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
 /** Apply one chained method call (`.index`, `.shardBy`, …) to the accumulator. */
 const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, args: ReadonlyArray<Node>, name: string): void => {
     switch (method) {
+        case "commitOrdered": {
+            // `.commitOrdered()` takes no arguments — its presence is the whole
+            // declaration. The `_commitSeq` field it adds is NOT injected into
+            // `shape`: like `_id`/`_creationTime` it is runtime-minted and
+            // rendered directly onto `Doc_*`, so a user column of that name would
+            // be a collision rather than a duplicate.
+            accumulator.commitOrdered = true;
+
+            break;
+        }
+
         case "externallyManaged": {
             accumulator.externallyManaged = true;
 
@@ -773,6 +785,7 @@ const assertNoFtsShadowCollision = (expression: Expression, table: string, searc
 
 const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     const accumulator: TableBuilderAccumulator = {
+        commitOrdered: false,
         externallyManaged: false,
         geoIndexes: [],
         indexes: [],
@@ -831,6 +844,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     assertNoFtsShadowCollision(expression, name, accumulator.searchIndexes);
 
     return {
+        commitOrdered: accumulator.commitOrdered,
         externallyManaged: accumulator.externallyManaged,
         externalSource: accumulator.externalSource,
         geoIndexes: accumulator.geoIndexes,

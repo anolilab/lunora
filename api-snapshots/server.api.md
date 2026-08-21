@@ -1942,6 +1942,7 @@ type SystemTableName = "_scheduled_functions" | "_storage";
 ```ts
 interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
+    commitOrdered: () => TableBuilder<Shape>;
     externallyManaged: () => TableBuilder<Shape>;
     geoIndex: (name: string, options: {
         field: keyof Shape & string;
@@ -1982,6 +1983,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
 ```ts
 interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
+    commitOrderedMode?: boolean;
     externalSource?: ExternalSourceDefinition;
     geoIndexes: ReadonlyArray<GeoIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;
@@ -4959,6 +4961,7 @@ type SystemTableName = "_scheduled_functions" | "_storage";
 ```ts
 interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
+    commitOrderedMode?: boolean;
     externalSource?: ExternalSourceDefinition;
     geoIndexes: ReadonlyArray<GeoIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;

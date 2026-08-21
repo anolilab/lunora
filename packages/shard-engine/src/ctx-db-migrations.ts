@@ -28,6 +28,7 @@ import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import { migrateCdcLog, migrateCdcMeta } from "./ctx-db-cdc";
 import { migrateClientWatermark } from "./ctx-db-client-watermark";
+import { migrateCommitSeq } from "./ctx-db-commit-seq";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
 import { migrateSearchState } from "./ctx-db-search-state";
@@ -263,6 +264,15 @@ export const runShardMigrations = (
         // cannot exist without CDC either — the durable poke-baseline cursor
         // rides the same gate as the log it indexes into.
         migrateShapePokeCursor(sql);
+    }
+
+    // Gated on the schema, not on a runtime flag: the `_commitSeq` counter is
+    // only allocated from by a `.commitOrdered()` table's write path, so a shard
+    // whose schema declares none never creates the table. `Object.values` over
+    // the table set is the whole probe — `.commitOrdered()` is a static schema
+    // fact, unlike CDC (a host option).
+    if (Object.values(schema.tables).some((table) => table.commitOrderedMode === true)) {
+        migrateCommitSeq(sql);
     }
 
     // Always present: the mutation-replay dedup table is independent of CDC and

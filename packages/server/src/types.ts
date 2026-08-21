@@ -326,6 +326,16 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
 
     /**
+     * Set by `.commitOrdered()` (named `commitOrderedMode`, not `commitOrdered`,
+     * so the data field doesn't collide with the fluent `.commitOrdered()`
+     * builder method — same convention as `shardBy()`/`shardMode`). When `true`,
+     * every write to a row stamps `_commitSeq`: a per-shard integer allocated
+     * once per mutation and strictly increasing in commit order. Absent/`false`
+     * ⇒ rows carry no `_commitSeq`, as before.
+     */
+    commitOrderedMode?: boolean;
+
+    /**
      * Set by `.source(...)` (named `externalSource`, not `source`, so the data
      * field doesn't collide with the fluent `.source()` builder method — same
      * convention as `shardBy()`/`shardMode`). When present, the table is
@@ -391,6 +401,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      */
     relationMap: Record<string, RelationDefinition>;
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;
+
     shape: Shape;
 
     shardMode: ShardMode;

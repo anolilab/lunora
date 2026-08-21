@@ -333,7 +333,12 @@ const emitDataModel = (schema: SchemaIR): string => {
                 .join("\n");
             const body = fields ? `\n${fields}\n` : "";
 
-            return `export interface Doc_${table.name} {\n    _id: Id<"${table.name}">;\n    _creationTime: number;${body}}`;
+            // `_commitSeq` is minted by the write path on a `.commitOrdered()`
+            // table only, so it is rendered per-table rather than alongside the
+            // two unconditional system fields.
+            const commitSeq = table.commitOrdered === true ? "\n    _commitSeq: number;" : "";
+
+            return `export interface Doc_${table.name} {\n    _id: Id<"${table.name}">;\n    _creationTime: number;${commitSeq}${body}}`;
         })
         .join("\n\n");
 
@@ -2850,6 +2855,9 @@ const buildTableColumns = (schema: SchemaIR): Record<string, EmittedColumn[]> =>
         const columns: EmittedColumn[] = [
             { name: "_id", optional: false, pk: true, type: "id" },
             { name: "_creationTime", optional: false, type: "number" },
+            // Runtime-minted like the two above, but only on a `.commitOrdered()`
+            // table — the diagram must not show a column the rows don't carry.
+            ...(table.commitOrdered === true ? [{ name: "_commitSeq", optional: false, type: "number" } satisfies EmittedColumn] : []),
         ];
 
         for (const [field, validator] of Object.entries(table.shape)) {

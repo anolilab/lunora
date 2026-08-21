@@ -300,6 +300,18 @@ const CDC_META_TABLE = "__cdc_meta";
 const CLIENT_WATERMARK_TABLE = "__client_watermark";
 ```
 
+### `COMMIT_SEQ_FIELD` (const)
+
+```ts
+const COMMIT_SEQ_FIELD = "_commitSeq";
+```
+
+### `COMMIT_SEQ_TABLE` (const)
+
+```ts
+const COMMIT_SEQ_TABLE = "__commit_seq";
+```
+
 ### `CacheEntry` (interface)
 
 ```ts
@@ -2708,6 +2720,7 @@ interface TableColumnsResult {
 ```ts
 interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
+    readonly commitOrderedMode?: boolean;
     readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly isPublic?: boolean;
@@ -3022,6 +3035,12 @@ const aggregateSqlFunction: (op: string) => string;
 
 ```ts
 const aggregateTableName: (table: string, indexName: string) => string;
+```
+
+### `allocateCommitSeq` (const)
+
+```ts
+const allocateCommitSeq: (sql: SqlExec) => number;
 ```
 
 ### `appendAuditEntry` (const)
@@ -3660,6 +3679,12 @@ const migrateCdcMeta: (sql: SqlExec) => void;
 const migrateClientWatermark: (sql: SqlExec) => void;
 ```
 
+### `migrateCommitSeq` (const)
+
+```ts
+const migrateCommitSeq: (sql: SqlExec) => void;
+```
+
 ### `migrateDurableStreams` (const)
 
 ```ts
@@ -3885,6 +3910,12 @@ const readCdcEpoch: (sql: SqlExec) => string;
 
 ```ts
 const readClientWatermark: (sql: SqlExec, identity: string, clientId: string) => number;
+```
+
+### `readCommitSeq` (const)
+
+```ts
+const readCommitSeq: (sql: SqlExec) => number;
 ```
 
 ### `readExternalSourceBaseline` (const)

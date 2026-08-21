@@ -112,6 +112,31 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
 
     /**
+     * Stamp every row with `_commitSeq` — a per-shard integer, allocated once
+     * per mutation and strictly increasing in **commit order**, refreshed on
+     * every write to the row (insert, patch, replace, and the marker flip a
+     * `.softDelete()` performs).
+     *
+     * `_creationTime` is wall-clock and therefore cannot order commits: the
+     * clock is read when the handler runs, the write lands when the transaction
+     * commits, and nothing ties those instants together. A changefeed paging on
+     * `_creationTime` can skip a row permanently. Paging on `_commitSeq`
+     * (`where: { _commitSeq: { gt: cursor } }, orderBy: ["_commitSeq"]`) cannot.
+     *
+     * Ordered, not contiguous — read a gap as "nothing to see", never as loss.
+     * Per-shard, not global: two shards allocate independently, so a cursor is
+     * only meaningful against the shard it came from. Rejected on `.global()`
+     * tables, which have no shard-local transaction to allocate inside.
+     *
+     * **A hard delete is invisible to the feed.** The sequence lives on the row,
+     * so a physically removed row takes it along: the row stops appearing, but
+     * no event says it went away. Pair `.commitOrdered()` with `.softDelete()`
+     * when the feed must observe deletes — the tombstone flip is an UPDATE, so
+     * it advances the sequence and pages through like any other change.
+     */
+    commitOrdered: () => TableBuilder<Shape>;
+
+    /**
      * Mark this table as written outside Lunora's discoverable insert path —
      * by an adapter, a migration, or framework middleware (e.g. `@lunora/auth`'s
      * better-auth tables, `@lunora/ratelimit`'s store). Advisor insert-path lints
@@ -315,6 +340,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     const triggerBuilder = createTriggerBuilder<Shape>();
     const vectorIndexes: TableVectorIndex[] = [];
     let shardMode: ShardMode = { kind: "root" };
+    let isCommitOrdered = false;
     let isExternallyManaged = false;
     let isPublic = false;
     let ownerField: string | undefined;
@@ -349,6 +375,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         },
         get externalSource() {
             return externalSource;
+        },
+        commitOrdered() {
+            isCommitOrdered = true;
+
+            return builder;
+        },
+        get commitOrderedMode() {
+            return isCommitOrdered;
         },
         externallyManaged() {
             isExternallyManaged = true;
@@ -858,7 +892,7 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
  * below (via `SYSTEM_INDEX_FIELDS_SET`) — declared once so the two can't
  * drift apart.
  */
-const SYSTEM_INDEX_FIELDS = ["_creationTime", "_id"] as const;
+const SYSTEM_INDEX_FIELDS = ["_commitSeq", "_creationTime", "_id"] as const;
 
 /**
  * Runtime lookup form of {@link SYSTEM_INDEX_FIELDS}. Typed `Set<string>`
@@ -1092,6 +1126,32 @@ const indexFieldsFromSchema = (schema: Schema): IndexFieldsByTable => {
     return result;
 };
 
+/**
+ * Reject `.commitOrdered()` on a `.global()` table.
+ *
+ * `_commitSeq` is allocated from the shard's `__commit_seq` counter inside the
+ * same `state.storage.transaction(...)` that writes the row — that shared
+ * boundary is the whole reason the value orders commits. A `.global()` table
+ * lives in D1 (or Hyperdrive), written through a different connection with no
+ * shard-local transaction to allocate inside, so the stamp would be a number
+ * with no ordering guarantee behind it. Failing here beats shipping a field
+ * whose contract silently does not hold.
+ *
+ * Enforced at `defineSchema` rather than in the builder because the chain order
+ * is arbitrary — `.global().commitOrdered()` and `.commitOrdered().global()`
+ * must both be caught, and only the assembled table knows both facts.
+ */
+const validateCommitOrdered = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.commitOrderedMode && table.shardMode.kind === "global") {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: table "${tableName}" is both .global() and .commitOrdered(). \`_commitSeq\` is allocated inside the shard's write transaction, which a global (D1/Hyperdrive) table does not share — so the stamp would carry no commit-ordering guarantee. Drop one of the two.`,
+            );
+        }
+    }
+};
+
 const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
@@ -1101,6 +1161,7 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     fillIndexTableNames(tables);
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
     validateExternalSources(tables);
+    validateCommitOrdered(tables);
     validateIndexFields(tables);
 
     return withExtend({ tables, vectorIndexes });

@@ -34,6 +34,21 @@ export interface PlatformCapabilities {
         browser?: Capability;
 
         /**
+         * `.commitOrdered()` tables — the `_commitSeq` system field: a per-shard
+         * integer allocated once per mutation and strictly increasing in commit
+         * order.
+         *
+         * Listed as a capability rather than assumed, because the ordering
+         * guarantee is not the engine's to give. It rests on two things the HOST
+         * provides: an atomic write boundary the counter bump shares with the
+         * rows it stamps, and serialized execution so two mutations cannot
+         * interleave their allocations. A host that offers neither can still
+         * create the counter and hand out increasing numbers — they just would
+         * not order commits, which is the whole contract.
+         */
+        commitOrderedTables?: Capability;
+
+        /**
          * Container execution (Cloudflare Containers / Fargate), including
          * `ctx.containers.<name>.exec`. Deliberately one rating rather than two:
          * `exec` is a method on the accessor this key already gates, not a
@@ -43,6 +58,7 @@ export interface PlatformCapabilities {
          * result back should say so in this note.
          */
         containers?: Capability;
+
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
 
@@ -54,6 +70,7 @@ export interface PlatformCapabilities {
         durableStreams?: Capability;
         /** Global (replicated) tables backed by a SQL store. */
         globalTables?: Capability;
+
         /** BYO database via connection pooling (Hyperdrive / RDS Proxy). */
         hyperdrive?: Capability;
 
@@ -146,6 +163,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         durableStreams: {
             level: "emulated",
             note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming",
+        },
+        commitOrderedTables: {
+            level: "native",
+            note: "`state.storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a Durable Object executes one event at a time — so the allocation order IS the commit order, with no lock of ours in the path",
         },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
         shardAlarms: { level: "native", note: "state.storage.setAlarm" },
@@ -248,6 +269,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         durableStreams: {
             level: "unsupported",
             note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it — a durable stream declared here would silently behave as an ephemeral one",
+        },
+        commitOrderedTables: {
+            level: "emulated",
+            note: "The sequence orders commits correctly, but the serialization it depends on is Lunora's per-shard write gate rather than a platform property — one process, one better-sqlite3 handle per shard key. Correct here; not something the host guarantees the way a Durable Object does",
         },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
         shardAlarms: {

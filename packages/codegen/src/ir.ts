@@ -180,6 +180,14 @@ export interface ExternalSourceIR {
 
 export interface TableIR {
     /**
+     * `true` when the table chain carried `.commitOrdered()` — every row carries
+     * `_commitSeq`, a per-shard integer allocated once per mutation and strictly
+     * increasing in commit order. Optional: hand-built IR and tables that never
+     * called `.commitOrdered()` default it to `false`.
+     */
+    commitOrdered?: boolean;
+
+    /**
      * The `defineSchemaExtension` key that contributed this table, set when it
      * arrived through `defineSchema(...).extend(...)`. Absent for a table the app
      * declared itself.

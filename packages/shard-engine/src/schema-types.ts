@@ -150,6 +150,7 @@ export interface SchemaLike {
 /** Structural mirror of `@lunora/server`'s `TableDefinition`. */
 export interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
+    readonly commitOrderedMode?: boolean;
     readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly isPublic?: boolean;

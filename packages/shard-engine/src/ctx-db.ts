@@ -58,6 +58,7 @@ import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIn
 import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
+import { allocateCommitSeq, COMMIT_SEQ_FIELD } from "./ctx-db-commit-seq";
 import { createCompanionSync } from "./ctx-db-companions";
 import type { RankPageDeps } from "./ctx-db-rank-page";
 import { computeRankPage } from "./ctx-db-rank-page";
@@ -1880,6 +1881,48 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const broadcast = options.broadcast ?? (() => undefined);
 
     /**
+     * This mutation's `_commitSeq`, allocated on first use and reused for every
+     * subsequent commit-ordered write.
+     *
+     * Closure-scoped to THIS writer instance, which is what makes the value a
+     * commit sequence rather than a row counter: every dispatch builds a fresh
+     * `createShardCtxDb(...)` (see the generated `buildCtx`), so the memo's
+     * lifetime is exactly one mutation and every row that mutation writes
+     * compares equal. Allocating per row instead would break the one property
+     * consumers depend on — that rows committed together sort together.
+     */
+    let commitSeq: number | undefined;
+
+    /**
+     * The `_commitSeq` entry to spread into a row image about to be written —
+     * empty for a table that did not declare `.commitOrdered()`.
+     *
+     * Returns a spreadable fragment rather than mutating the caller's object so
+     * the stamp lands where the image is CONSTRUCTED. Every write path builds
+     * its image in one expression (`documentWithMeta` / `merged` / `replaced`),
+     * and spreading here puts the field in front of everything downstream — the
+     * encoded blob, the companion sync, the CDC entry, the broadcast delta, the
+     * before/after triggers, and `onWrite` — so they all agree on what was
+     * persisted. Spread position matters on the update paths: it must come after
+     * `...existing` / `...patch` so the previous write's sequence is replaced
+     * rather than carried forward.
+     *
+     * Allocating this early means a `before` trigger that aborts the write has
+     * already burned a sequence — harmless, because the allocation and the abort
+     * sit inside the same `state.storage.transaction(...)` and the counter row
+     * rolls back with everything else.
+     */
+    const commitSeqFields = (tableName: string): Record<string, number> => {
+        if (schema.tables[tableName]?.commitOrderedMode !== true) {
+            return {};
+        }
+
+        commitSeq ??= allocateCommitSeq(sql);
+
+        return { [COMMIT_SEQ_FIELD]: commitSeq };
+    };
+
+    /**
      * The index positions a written row occupies, unioned across the images
      * supplied. Callers pass BOTH the before- and after-image of a patch: a
      * row that moves between slices must wake subscribers on the slice it left
@@ -2864,7 +2907,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // (its companion carries no marker column but the read filters on
                 // it); the aggregate companion instead drops the row below, since
                 // `syncAggregates` gates both sides on liveness.
-                const merged: Record<string, unknown> = { ...existing, [softField]: clock(), _id: id };
+                // A soft delete is mechanically an UPDATE, so it is a write to
+                // the row and advances `_commitSeq` like any other — otherwise a
+                // changefeed paging on the sequence would never observe the
+                // tombstone and would keep serving a row its source considers gone.
+                const merged: Record<string, unknown> = { ...existing, ...commitSeqFields(tableName), [softField]: clock(), _id: id };
 
                 runGuardedWrite(
                     sql,
@@ -3477,7 +3524,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // raw-forwarded client payload can't backdate/forward-date the row.
             const creationTime = insertOptions?.allowExplicitId && typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
-            const documentWithMeta: Record<string, unknown> = { ...withDefaults, _creationTime: creationTime, _id: id };
+            const documentWithMeta: Record<string, unknown> = { ...withDefaults, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
 
             // `before` sees a shallow copy so an abort-only handler can't reassign
             // the row's top-level fields before they persist. Nested values are
@@ -3577,7 +3624,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const creationTime =
                     batchOptions?.allowExplicitId === true && typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
-                return { creationTime, document: { ...withDefaults, _creationTime: creationTime, _id: id }, id };
+                const documentWithMeta: Record<string, unknown> = { ...withDefaults, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
+
+                return { creationTime, document: documentWithMeta, id };
             });
 
             // Charge the batch BEFORE it is written. `onWrite` fires per row
@@ -3726,7 +3775,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // would silently strip them, deleting the field instead of updating it.
             assertNoExplicitUndefined("patch", patch);
 
-            const merged = { ...existing, ...patch, _id: id };
+            const merged = { ...existing, ...patch, ...commitSeqFields(tableName), _id: id };
 
             applyOnUpdate(tableDefinition, patch, merged, auth);
 
@@ -4149,7 +4198,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mutation path mints from `clock()` so a forged document
             // `_creationTime` can't overwrite the persisted timestamp.
             const creationTime = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
-            const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
+            const replaced: Record<string, unknown> = { ...document, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
 
             applyOnUpdate(tableDefinition, document, replaced, auth);
 

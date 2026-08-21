@@ -253,6 +253,7 @@ interface PlatformCapabilities {
         ai?: Capability;
         analytics?: Capability;
         browser?: Capability;
+        commitOrderedTables?: Capability;
         containers?: Capability;
         crossShardFanout?: Capability;
         durableStreams?: Capability;

@@ -841,6 +841,7 @@ interface StorageRulesMetadataIR {
 
 ```ts
 interface TableIR {
+    commitOrdered?: boolean;
     extensionKey?: string;
     externallyManaged?: boolean;
     externalSource?: ExternalSourceIR;
