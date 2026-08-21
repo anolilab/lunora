@@ -2816,7 +2816,12 @@ const createConsentController = (context: ControllerContext, options: ConsentOpt
                 return;
             }
             store.update({ status: "success" });
-            navigateTo(context.nav, redirect);
+            if (isSafeRedirect(redirect)) {
+                context.nav.replace(redirect);
+            }
+            else {
+                globalThis.location.assign(redirect);
+            }
         }
         catch (error) {
             context.onError?.(error);
@@ -8110,7 +8115,12 @@ const createConsentController = (context: ControllerContext, options: ConsentOpt
                 return;
             }
             store.update({ status: "success" });
-            navigateTo(context.nav, redirect);
+            if (isSafeRedirect(redirect)) {
+                context.nav.replace(redirect);
+            }
+            else {
+                globalThis.location.assign(redirect);
+            }
         }
         catch (error) {
             context.onError?.(error);
