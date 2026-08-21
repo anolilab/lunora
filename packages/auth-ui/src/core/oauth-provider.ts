@@ -25,6 +25,7 @@ import type { ControllerContext } from "./config";
 import type { ResourceState } from "./create-resource-controller";
 import { createResourceController } from "./create-resource-controller";
 import { assertOk, mapAuthError } from "./map-error";
+import { navigateTo } from "./redirect-to";
 import { createStore } from "./store";
 import type { Controller, FlowStatus, OAuthConsent, OAuthPendingConsent } from "./types";
 
@@ -106,7 +107,10 @@ const createConsentController = (context: ControllerContext, options: ConsentOpt
             }
 
             store.update({ status: "success" });
-            context.nav.replace(redirect);
+            // The redirectURI is the third-party client's absolute callback URL
+            // (carrying the authorization code) — a framework router cannot
+            // navigate off-origin, so only an in-app path goes through it.
+            navigateTo(context.nav, redirect);
         } catch (error) {
             context.onError?.(error);
             store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), status: "error" });

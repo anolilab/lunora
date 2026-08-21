@@ -19,6 +19,7 @@
  */
 
 import { queryParameter } from "./browser-location";
+import type { NavAdapter } from "./config";
 
 /**
  * Control characters, which can smuggle a value (a newline, a tab) past a naive
@@ -48,6 +49,23 @@ const isSafeRedirect = (target: string): boolean => {
     }
 
     return !CONTROL_CHARACTERS.test(trimmed);
+};
+
+/**
+ * Navigate to `target` — through the app router when it is a same-origin path,
+ * else through the browser directly. A framework router (SvelteKit `goto`,
+ * vue-router, …) cannot perform an off-origin navigation — it either rejects
+ * the URL or resolves it as an in-app path — and some redirects (the OAuth
+ * consent `redirectURI`) are absolute third-party URLs by design.
+ */
+const navigateTo = (nav: NavAdapter, target: string): void => {
+    if (isSafeRedirect(target)) {
+        nav.replace(target);
+
+        return;
+    }
+
+    globalThis.location.assign(target);
 };
 
 /** Read `redirectTo` off the current URL, or undefined off the browser. */
@@ -116,4 +134,4 @@ const withRedirectTo = (path: string): string => {
     return mergeQuery(path, { redirectTo: target });
 };
 
-export { isSafeRedirect, mergeQuery, readRedirectTo, resolveAfterSignIn, withRedirectTo };
+export { isSafeRedirect, mergeQuery, navigateTo, readRedirectTo, resolveAfterSignIn, withRedirectTo };
