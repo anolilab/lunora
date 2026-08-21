@@ -181,6 +181,51 @@ describe("defineListArgs — no sortable columns declared", () => {
     });
 });
 
+describe("defineListArgs — contains is string-only", () => {
+    it("accepts contains on a string column", () => {
+        expect.assertions(1);
+
+        expect(parse({ where: { status: { contains: "ope" } } }).where).toEqual({ status: { contains: "ope" } });
+    });
+
+    it("accepts contains on a v.optional(v.string()) column, unwrapping the optional", () => {
+        expect.assertions(1);
+
+        const optionalSpec = defineListArgs<{ _creationTime: number; nickname?: string }>()({
+            filter: { nickname: v.optional(v.string()) },
+            orderBy: [],
+        });
+        const parsed = parseValidatorMap(optionalSpec.args as never, { where: { nickname: { contains: "bob" } } }, "args");
+
+        expect(parsed.where).toEqual({ nickname: { contains: "bob" } });
+    });
+
+    it("strips contains from a non-string column's operator object, like any undeclared key", () => {
+        expect.assertions(1);
+
+        // `score` is numeric: a substring test on it is semantically void and a
+        // non-sargable scan, so the operator object simply doesn't declare it.
+        expect(parse({ where: { score: { contains: "4", gte: 10 } } }).where).toEqual({ score: { gte: 10 } });
+    });
+
+    it("drops a contains-only predicate on a non-string column in toQueryArgs, bypassing the validator", () => {
+        expect.assertions(2);
+
+        const args = spec.toQueryArgs({ where: { score: { contains: "4" }, status: { contains: "ope" } } });
+
+        expect(args.where).toEqual({ status: { contains: "ope" } });
+        expect(args.where).not.toHaveProperty("score");
+    });
+
+    it("keeps the remaining operators when toQueryArgs drops contains on a non-string column", () => {
+        expect.assertions(1);
+
+        const args = spec.toQueryArgs({ where: { score: { contains: "4", gte: 10 } } });
+
+        expect(args.where).toEqual({ score: { gte: 10 } });
+    });
+});
+
 describe("defineListArgs — toQueryArgs hardening", () => {
     it("drops an undeclared field handed straight to toQueryArgs, bypassing the validator", () => {
         expect.assertions(2);

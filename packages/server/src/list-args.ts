@@ -33,7 +33,8 @@
  *
  *     Note what this does NOT promise: publishing only indexed columns bounds
  *     WHICH columns are reachable, not the cost of every predicate over them.
- *     `contains` compiles to a substring position test, and `ne` / `notIn` /
+ *     `contains` (offered on string-typed columns only) compiles to a substring
+ *     position test, and `ne` / `notIn` /
  *     `isNull: false` are likewise non-sargable — all of them scan whatever the
  *     column's index would otherwise have narrowed. `maxInValues` and `maxLimit`
  *     bound request size; they don't make a scan into a seek.
@@ -46,7 +47,7 @@
  * arguments are the same declaration.
  */
 import type { ColumnValidator, Infer, Validator } from "@lunora/values";
-import { v } from "@lunora/values";
+import { optionalInner, v } from "@lunora/values";
 
 import type { OrderBy, QueryArgs, WhereOperators } from "./data-model";
 
@@ -151,13 +152,26 @@ interface ListArgsSpec<TDocument, F, O extends string> {
     readonly toQueryArgs: (args: ListArgsValue<F, O>) => QueryArgs<TDocument>;
 }
 
+/**
+ * Validator kinds whose values are strings at the SQL layer — the only columns
+ * `contains` (a substring test) is meaningful on. On any other type the
+ * operator is semantically void AND a non-sargable scan, so it is simply not
+ * offered: the validator omits it and the sanitizer drops it.
+ */
+const STRING_KINDS = new Set(["id", "storage", "string"]);
+
+/** Whether a filter column holds string values, unwrapping a leading `v.optional(...)`. */
+const isStringColumn = (validator: Validator): boolean => STRING_KINDS.has((optionalInner(validator) ?? validator).kind);
+
 /** Build the operator object accepted alongside a bare value for one filter column. */
 const operatorsValidator = (value: Validator, maxInValues: number): Validator => {
     const bounded = (inner: Validator): Validator =>
         v.optional(v.array(inner).check((items) => items.length <= maxInValues, { message: `at most ${String(maxInValues)} values` }));
 
     return v.object({
-        contains: v.optional(v.string()),
+        // `contains` only exists on string-typed columns; `v.object` rejects it
+        // as an undeclared key everywhere else.
+        ...(isStringColumn(value) ? { contains: v.optional(v.string()) } : {}),
         eq: v.optional(value),
         gt: v.optional(value),
         gte: v.optional(value),
@@ -206,16 +220,28 @@ const OPERATOR_KEYS = new Set(["contains", "eq", "gt", "gte", "in", "isNull", "l
  * names no operator at all is left alone, so an object-valued column can still be
  * matched by equality.
  */
-const asOperators = (value: unknown, maxInValues: number): Record<string, unknown> | undefined => {
+const asOperators = (value: unknown, maxInValues: number, allowContains: boolean): Record<string, unknown> | undefined => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         return undefined;
     }
 
     const source = value as Record<string, unknown>;
     const operators: Record<string, unknown> = {};
+    let named = 0;
 
     for (const operator of OPERATOR_KEYS) {
         if (!Object.hasOwn(source, operator)) {
+            continue;
+        }
+
+        named += 1;
+
+        // `contains` is only offered on string columns (see `operatorsValidator`);
+        // dropping it here — while still COUNTING it as a named operator — keeps
+        // the programmatic path in step and stops `{ contains: … }` from falling
+        // through as a bare equality value the where-compiler would re-read as an
+        // operator object.
+        if (operator === "contains" && !allowContains) {
             continue;
         }
 
@@ -228,7 +254,7 @@ const asOperators = (value: unknown, maxInValues: number): Record<string, unknow
         operators[operator] = Array.isArray(operand) ? operand.slice(0, maxInValues) : operand;
     }
 
-    return Object.keys(operators).length === 0 ? undefined : operators;
+    return named === 0 ? undefined : operators;
 };
 
 /**
@@ -241,7 +267,12 @@ const asOperators = (value: unknown, maxInValues: number): Record<string, unknow
  * — including `__proto__` or `constructor` — has no path into the output at all,
  * and operator objects are reduced to recognised operators only.
  */
-const sanitizeWhere = (where: Record<string, unknown>, filterable: ReadonlySet<string>, maxInValues: number): Record<string, unknown> => {
+const sanitizeWhere = (
+    where: Record<string, unknown>,
+    filterable: ReadonlySet<string>,
+    stringFields: ReadonlySet<string>,
+    maxInValues: number,
+): Record<string, unknown> => {
     const out: Record<string, unknown> = {};
 
     for (const field of filterable) {
@@ -250,7 +281,13 @@ const sanitizeWhere = (where: Record<string, unknown>, filterable: ReadonlySet<s
         }
 
         const value = where[field];
-        const operators = asOperators(value, maxInValues);
+        const operators = asOperators(value, maxInValues, stringFields.has(field));
+
+        // A predicate reduced to nothing (e.g. `contains` alone on a non-string
+        // column) is dropped wholesale rather than passed on as `{}`.
+        if (operators !== undefined && Object.keys(operators).length === 0) {
+            continue;
+        }
 
         out[field] = operators ?? value;
     }
@@ -280,9 +317,14 @@ const defineListArgs =
         const maxOrderBy = normalizeBound(config.maxOrderBy, DEFAULT_MAX_ORDER_BY);
 
         const filterable = new Set(Object.keys(config.filter));
+        const stringFields = new Set<string>();
         const whereShape: Record<string, Validator> = {};
 
         for (const [field, validator] of Object.entries(config.filter) as [string, Validator][]) {
+            if (isStringColumn(validator)) {
+                stringFields.add(field);
+            }
+
             whereShape[field] = v.optional(v.union(validator, operatorsValidator(validator, maxInValues)));
         }
 
@@ -326,7 +368,8 @@ const defineListArgs =
 
             // Same reasoning as `orderBy` above: rebuilt from the allow-list rather
             // than trusted, because this function is reachable without the validator.
-            const where = value.where === undefined ? undefined : (sanitizeWhere(value.where, filterable, maxInValues) as QueryArgs<TDocument>["where"]);
+            const where =
+                value.where === undefined ? undefined : (sanitizeWhere(value.where, filterable, stringFields, maxInValues) as QueryArgs<TDocument>["where"]);
 
             return {
                 ...(value.cursor === undefined ? {} : { cursor: typeof value.cursor === "number" ? String(value.cursor) : value.cursor }),
