@@ -307,6 +307,7 @@ class LocalMirror {
     public close(): void {
         this.#db.close();
         this.#eventLog.clear();
+        this.#changeListeners.clear();
     }
 
     // ── Schema helpers ─────────────────────────────────────────────────

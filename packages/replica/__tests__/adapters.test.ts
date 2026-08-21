@@ -393,6 +393,24 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         expect(() => mirror.query("SELECT 1 AS one")).toThrow();
     });
 
+    // close() also drops change subscribers, so a closed-and-rebuilt mirror
+    // (schema reset, sign-out, HMR) does not keep the old listeners — and the
+    // component trees their closures capture — alive for the lifetime of the
+    // dead mirror object. Nothing observable exists post-close without
+    // reopening, so assert behaviorally: unsubscribing after close is safe.
+    it("close drops change subscribers; unsubscribe is safe to call after close", () => {
+        expect.assertions(1);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+        const unsubscribe = mirror.onChange(() => {});
+
+        mirror.close();
+
+        expect(() => {
+            unsubscribe();
+        }).not.toThrow();
+    });
+
     // REPLICA-06: maxEventLogEntries bounds the mirror's internal event log
     // — a long run of applied diffs does not grow it unboundedly.
     it("maxEventLogEntries caps the mirror's event log over a long run", () => {
