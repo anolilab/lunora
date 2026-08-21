@@ -15,6 +15,14 @@ import type { FlagsDefinition, LunoraFlags } from "./types";
  * `OpenFeature.getClient("lunora")` reader still sees the app's provider.
  * Additional pairs (a second definition, or a second env in tests) get
  * `lunora-2`, `lunora-3`, … — see {@link bindClient}.
+ *
+ * Which pair wins the unsuffixed name is therefore ALLOCATION-ORDER dependent:
+ * if a test seam or a second env binds first, the app's own definition lands on
+ * `lunora-2` and an external reader of `"lunora"` reads the wrong provider.
+ * Nothing in this repo reads the domain by name, and "first *definition* wins"
+ * would be just as order-dependent, so the order-dependence is documented
+ * rather than papered over. Code that must address a specific client should be
+ * handed the client, not look it up by domain.
  */
 const DEFAULT_DOMAIN = "lunora";
 
@@ -48,6 +56,21 @@ let clientCache = new WeakMap<FlagsDefinition, WeakMap<object, Binding>>();
 let boundCount = 0;
 
 /**
+ * Stand-in identity for an `env` carrying no bindings.
+ *
+ * Generated workers build their env as `this.env ?? {}`, so a nullish `env`
+ * yields a FRESH object on every context build. Keyed on that, each request
+ * would miss the cache and bind a new `lunora-N` domain — and OpenFeature's
+ * registry holds a STRONG reference to every provider it is given, so the
+ * WeakMap being weak would not release them. Two envs with no bindings are
+ * indistinguishable to any provider factory anyway, so they share one key.
+ */
+const EMPTY_ENV: Record<string, never> = {};
+
+/** The identity an env is memoized under (see {@link EMPTY_ENV}). */
+const envKeyFor = (env: object): object => (Object.keys(env).length === 0 ? EMPTY_ENV : env);
+
+/**
  * Bind (or reuse) the OpenFeature client for one (definition, env) pair.
  * `provider` resolves the provider to bind — the definition's own factory,
  * unless a caller overrode it.
@@ -57,7 +80,9 @@ let boundCount = 0;
  * renaming it (which would strand an external reader on a dead domain). Only
  * the client promise is dropped on rejection, so the next request re-attempts.
  */
-const bindClient = (definition: FlagsDefinition, env: object, provider: () => Provider): Promise<Client> => {
+const bindClient = (definition: FlagsDefinition, rawEnv: object, provider: () => Provider): Promise<Client> => {
+    const env = envKeyFor(rawEnv);
+
     let byEnv = clientCache.get(definition);
 
     if (byEnv === undefined) {

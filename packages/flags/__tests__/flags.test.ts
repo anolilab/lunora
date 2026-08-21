@@ -402,6 +402,22 @@ describe("keyed client memo", () => {
         expect(logger.error).not.toHaveBeenCalled();
     });
 
+    it("binds once across context builds that each pass a fresh empty env", async () => {
+        expect.assertions(1);
+
+        // Generated workers build `this.env ?? {}`, so a nullish env yields a
+        // NEW object per context build. Keyed on that, every request would bind
+        // a fresh OpenFeature domain and the registry — which holds providers
+        // strongly — would grow without bound.
+        const factory = vi.fn<() => Provider>(() => makeProvider({ "dark-mode": true }));
+        const definitionEmptyEnv = defineFlags({ provider: factory });
+
+        await createFlags(definitionEmptyEnv, {}).boolean("dark-mode", false);
+        await createFlags(definitionEmptyEnv, {}).boolean("dark-mode", false);
+
+        expect(factory).toHaveBeenCalledTimes(1);
+    });
+
     it("rebinds after resetFlags clears the cache", async () => {
         expect.assertions(1);
 
