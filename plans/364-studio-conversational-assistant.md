@@ -2,7 +2,7 @@
 
 **Baseline:** `3a2e83d89` (2026-08-19)
 **Status:** W1–W4 SHIPPED; W5 BLOCKED — see §8b. W6–W8 SHIPPED — see §10. W9–W10
-SHIPPED — see §11. The
+SHIPPED — see §11. W12 SHIPPED — see §14. The
 conversational assistant works end to end and is now reachable from the whole
 Studio rather than the SQL console; only token streaming is outstanding, and it
 needs a transport that does not exist yet.
@@ -488,5 +488,61 @@ say about the framework it was reading them in.
 sessions surviving navigation (which is what was actually missing) does not
 require surviving a reload. Inline diff-editing in the editor gutter — the SQL
 editor is a `<textarea>`, so that is an editor decision before it is an AI one.
-RLS policy authoring — a write tool, which hits the §8 STOP condition and stays
-its own plan. Token streaming remains W5, still blocked on a transport (§8b).
+Token streaming remains W5, still blocked on a transport (§8b). RLS policy
+authoring is no longer on this list — see §14 for what it turned out to be.
+
+## 14. W12 — access rules, and the write tool that turned out not to exist
+
+§4 said to revisit tool-calling's read-only rule "if and only if tool-calling
+grows a write tool", and §8 STOPs on "a tool gains a write". The approval
+machinery W10 shipped is exactly what that trade was waiting on, so RLS policy
+authoring was picked up against it — and on this framework's actual shape the
+answer is that there is nothing for it to gate.
+
+**What RLS is here.** Not DDL. A policy is `definePolicy({ table, on, when })`,
+collected by `definePolicies([...])` and attached to ONE procedure at a time with
+`.use(rls(policies, { roles }))`. The `when` predicate is a TypeScript closure
+returning a `WhereInput`, `true` or `false`; it is never serialised and never
+stored anywhere. Codegen statically discovers `(table, on, procedure, file)`
+triples plus role and permission names and serves those read-only at
+`__lunora_admin__:rlsPolicies` — which is all the Studio's inspector has ever
+had, because it is all there is.
+
+**So there is no write to gate.** Applying a policy means writing a `.ts` file
+under `lunora/` and rerunning codegen. The only thing in the product that does
+that is `/__lunora/policy-scaffold`, a Node handler the dev hosts mount on a
+loopback bind, carrying no admin token because it is unreachable from anywhere
+else. `aiChat` is served at the WORKER: no filesystem, no toolchain, no route to
+that host. A "write tool" here could only mean the browser applying an edit after
+a click — and a server-minted ticket proves nothing about an edit the server
+never performs, so the approval gate would be theatre bolted onto a confirm
+dialog. `TOOL_APPROVAL` records the decision as `false` with that reasoning
+beside it, rather than leaving it looking accidental.
+
+**What shipped instead: propose, and the operator applies.**
+
+- **`readPolicies`**, at the `schema` tier, over the inspector's existing op. The
+  model could not see coverage at all, so it guessed at it. Policy metadata is
+  names about the schema — no rows, no log lines — so it sits beside
+  `describeTables` and `readAdvisors`, and it needs no approval card: the request
+  names nothing, so every call returns the same deployment-wide answer and there
+  is no parameter for an operator to weigh.
+- **The authoring contract, in the SYSTEM prompt.** `loadKnowledge`'s digest
+  carries titles and headings and no code, and the prompt rule it introduced —
+  never state a Lunora API unless the digest showed it to you — correctly stopped
+  the model from writing a policy at all. Left to memory it answered with
+  Postgres `CREATE POLICY`: confident, and wrong in a way an operator could paste
+  into the console beside it. So the prompt states the shape, states that access
+  rules are never SQL, and states that the assistant cannot apply one.
+- **A way in.** The RLS inspector gained "Ask the assistant", seeded with the
+  coverage on screen (verbatim, for the same reason an advisor finding is) and
+  gated on the read having LANDED — building the seed mid-flight asked "you have
+  no policies at all" about a deployment that has plenty.
+
+**The boundary, stated plainly.** A proposal is prose. There is no editor on that
+page so no Insert button is offered, `sqlBlocks` only ever reads a `sql`-tagged
+fence so a `ts` block reaches nothing, and the operator applies the result by
+hand or through the Permissions page's scaffolder — which still refuses to author
+a `when` body itself (plan 025's own STOP). The runtime test asserts that the
+whole turn touches exactly one op and that it is the read one; that assertion is
+what fails the day someone wires a write.

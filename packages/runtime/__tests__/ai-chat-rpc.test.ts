@@ -1034,3 +1034,92 @@ describe("createWorker — aiChat knowledge tool", () => {
         expect(observed).toContain("concepts/indexes");
     });
 });
+
+/**
+ * The access-rule surface, and the reason it is a read.
+ *
+ * Lunora has no policy DDL. A policy is `definePolicy({ table, on, when })` in a
+ * TypeScript file under `lunora/`, wired per procedure with `.use(rls(...))`, and
+ * the `when` predicate is a closure nothing serialises — codegen discovers only
+ * `(table, on, procedure, file)` and serves that read-only. The one thing in the
+ * product that can WRITE a policy is the dev host's `/__lunora/policy-scaffold`
+ * endpoint, which runs on Node, is bound to loopback, and is not reachable from
+ * the Worker that serves this op (which has no filesystem either).
+ *
+ * So the assistant proposes source and the operator applies it. These cases pin
+ * that down from the outside: the turn reaches the metadata op and nothing else,
+ * and no reply — however confidently it proposes a policy — reaches a write.
+ */
+describe("createWorker — aiChat access-rule proposals", () => {
+    it("reads declared policies at the default level, with no approval card", async () => {
+        expect.hasAssertions();
+
+        const forwarded: string[] = [];
+        const body = await decoded(
+            await createWorker({
+                adminToken: ADMIN_TOKEN,
+                aiChatBinding: scriptedBinding(['```tool\n{"name":"readPolicies"}\n```', "Only `messages` is guarded."]),
+                shardDO: recordingShard(forwarded),
+            }).fetch(rpc({ prompt: "which tables are unguarded?" }), {}, fakeContext),
+        );
+
+        // The `schema` tier, unset — policy metadata is names about the schema
+        // (tables, operations, procedures, roles), never rows and never log lines,
+        // so it sits beside `describeTables` rather than above it.
+        expect(forwarded).toContain("__lunora_admin__:rlsPolicies");
+        // And no card: the request names nothing, so every call returns the same
+        // deployment-wide metadata and there is no parameter to weigh.
+        expect(body["pendingApproval"]).toBeUndefined();
+        expect(body["reply"]).toBe("Only `messages` is guarded.");
+    });
+
+    it("proposes policy source without reaching any op that could apply it", async () => {
+        expect.hasAssertions();
+
+        const proposal =
+            "Add this:\n\n```ts\nexport const messagePolicies = definePolicies([\n  definePolicy({ table: 'messages', on: 'read', when: ({ auth }) => ({ authorId: auth.userId }) }),\n]);\n```\n\nApply it with the Studio's policy scaffolder.";
+        const forwarded: string[] = [];
+        const body = await decoded(
+            await createWorker({
+                adminToken: ADMIN_TOKEN,
+                aiChatBinding: scriptedBinding(['```tool\n{"name":"readPolicies"}\n```', proposal]),
+                // The TOP tier, so nothing is withheld by the ladder and the only
+                // thing stopping a write is that there is no write to make.
+                aiOptInLevel: "schema_and_log_and_data",
+                shardDO: recordingShard(forwarded),
+            }).fetch(rpc({ prompt: "write me a policy for messages" }), {}, fakeContext),
+        );
+
+        // The whole turn touched exactly one op, and it is the read-only inspector's
+        // own. A proposal is prose: there is no tool, approved or otherwise, that
+        // turns it into a file, so plan 364 §8's "STOP if a tool gains a write" is
+        // not reached rather than argued around. This is the assertion that fails
+        // the day someone wires one.
+        expect(forwarded).toStrictEqual(["__lunora_admin__:rlsPolicies"]);
+        expect(body["reply"]).toContain("definePolicy");
+        expect(body["pendingApproval"]).toBeUndefined();
+    });
+
+    it("tells the model access rules are TypeScript, so it cannot answer with DDL", async () => {
+        expect.hasAssertions();
+
+        const binding = scriptedBinding(["Nothing to propose."]);
+
+        await createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: binding, shardDO: recordingShard([]) }).fetch(
+            rpc({ prompt: "how do I lock down messages?" }),
+            {},
+            fakeContext,
+        );
+
+        const call = (binding.run as unknown as { mock: { calls: [string, { messages: { content: string; role: string }[] }][] } }).mock.calls[0];
+        const system = call?.[1].messages.find((message) => message.role === "system")?.content ?? "";
+
+        // Without this the model answers an access-rule question from memory, which
+        // means Postgres `CREATE POLICY` — confident, and wrong in a way an operator
+        // could paste into the console next to it.
+        expect(system).toContain("definePolicy");
+        expect(system).toContain("never SQL and never DDL");
+        // And it is told who applies it, since it cannot.
+        expect(system).toContain("policy scaffolder");
+    });
+});

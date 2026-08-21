@@ -44,6 +44,7 @@ const TOOL_RESULTS: Readonly<Record<ChatToolCall["name"], unknown>> = {
     describeTables: { columnsByTable: { messages: ["id", "body", "authorId"], users: ["id", "email"] } },
     readAdvisors: { advisories: [] },
     readLogs: { entries: [] },
+    readPolicies: { policies: [{ file: "messages", on: "read", procedure: "listMessages", table: "messages" }], roles: [] },
     runSql: { rows: [] },
 };
 

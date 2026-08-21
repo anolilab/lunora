@@ -36,7 +36,7 @@ export interface ChatTurn {
 }
 
 /** The read-only tools a chat turn may ask for. Nothing here has no existing admin op behind it. */
-export type ChatToolName = "describeTables" | "loadKnowledge" | "readAdvisors" | "readLogs" | "runSql";
+export type ChatToolName = "describeTables" | "loadKnowledge" | "readAdvisors" | "readLogs" | "readPolicies" | "runSql";
 
 /**
  * The tools served by forwarding to an existing admin op.
@@ -98,6 +98,14 @@ const TOOL_LEVEL: Readonly<Record<ChatToolName, AiOptInLevel>> = {
     // rule, and carries no rows and no log lines. Same tier as reading the schema.
     readAdvisors: "schema",
     readLogs: "schema_and_log",
+    /*
+     * Access-rule metadata: which `(table, operation)` pairs a `definePolicy`
+     * guards, the procedure and source file that declared it, and the role and
+     * permission NAMES. Never a `when` predicate — that is a closure codegen
+     * cannot serialise — and never a row. Names about the schema, so the same
+     * tier as reading the schema.
+     */
+    readPolicies: "schema",
     runSql: "schema_and_log_and_data",
 };
 
@@ -128,6 +136,20 @@ const TOOL_APPROVAL: Readonly<Record<ChatToolName, boolean>> = {
     loadKnowledge: false,
     readAdvisors: false,
     readLogs: false,
+    /*
+     * No row values, and no parameter: the request names nothing, so every call
+     * returns the same deployment-wide metadata. A card here would say the same
+     * thing every turn — the click-through this record's docblock argues against.
+     *
+     * It is also, deliberately, not a write. Lunora has no policy DDL: a policy is
+     * TypeScript on the developer's disk, applied by the loopback-only dev-host
+     * scaffolder, which the Worker serving this op cannot reach and has no
+     * filesystem to reach it with. So the assistant PROPOSES policy source in its
+     * reply and the operator applies it through the Studio's existing scaffolder.
+     * Nothing here dispatches a write, which is why plan 364 §8's "STOP if a tool
+     * gains a write" is untouched rather than argued around.
+     */
+    readPolicies: false,
     runSql: true,
 };
 
@@ -513,7 +535,14 @@ const validateTool = (raw: string, level: AiOptInLevel): ChatToolCall | ToolRefu
 
     const { name, sql } = parsed as { name?: unknown; sql?: unknown };
 
-    if (name !== "describeTables" && name !== "loadKnowledge" && name !== "readAdvisors" && name !== "readLogs" && name !== "runSql") {
+    if (
+        name !== "describeTables" &&
+        name !== "loadKnowledge" &&
+        name !== "readAdvisors" &&
+        name !== "readLogs" &&
+        name !== "readPolicies" &&
+        name !== "runSql"
+    ) {
         return { refused: `there is no tool named ${typeof name === "string" ? capped(name, 40) : "(unnamed)"}` };
     }
 
@@ -534,7 +563,7 @@ const validateTool = (raw: string, level: AiOptInLevel): ChatToolCall | ToolRefu
         return topic === "" ? { name, refused: "loadKnowledge needs a `topic` string" } : { name, topic };
     }
 
-    if (name === "describeTables" || name === "readAdvisors" || name === "readLogs") {
+    if (name === "describeTables" || name === "readAdvisors" || name === "readLogs" || name === "readPolicies") {
         return { name };
     }
 
@@ -615,6 +644,7 @@ const TOOL_OFFER: Readonly<Record<ChatToolName, string>> = {
     loadKnowledge: '{"name":"loadKnowledge","topic":"indexes"} for what the Lunora documentation says about a topic',
     readAdvisors: '{"name":"readAdvisors"} for the advisor\'s current findings about this app',
     readLogs: '{"name":"readLogs"} for recent log lines',
+    readPolicies: '{"name":"readPolicies"} for the access rules (row-level-security policies and roles) this app already declares',
     runSql: '{"name":"runSql","sql":"SELECT ..."} to read rows — the operator is shown the statement and must approve it before it runs',
 };
 
@@ -637,6 +667,18 @@ const chatSystemPrompt = (level: AiOptInLevel): string => {
         "Use ONLY the tables and columns listed as available; never invent names. " +
         (allowsTool(level, "loadKnowledge")
             ? "Lunora is the framework this app runs on; you do not know its API from memory. Never state a Lunora function, table helper, config key or CLI flag unless loadKnowledge showed it to you — when it did not, say you are not sure and cite the closest documentation URL it returned. "
+            : "") +
+        /*
+         * Access rules are the one thing this console can be asked about that has
+         * no SQL form at all. Without this the model answered from memory, which
+         * meant Postgres `CREATE POLICY` — confident, and wrong in a way an
+         * operator could paste. Stated in the SYSTEM prompt rather than left to
+         * `loadKnowledge`, whose digest carries titles and headings and no code, so
+         * the "never state a Lunora API unless loadKnowledge showed it to you" rule
+         * above would otherwise (correctly) stop it from writing a policy at all.
+         */
+        (allowsTool(level, "readPolicies")
+            ? "Access rules in this framework are TypeScript, never SQL and never DDL: `definePolicy({ table, on, when })`, collected by `definePolicies([...])` and attached to ONE procedure at a time with `.use(rls(policies))`. `on` is read, insert, update or delete; `when` is given `{ auth, ctx, row }` and returns a where-object to filter rows, `true` to allow, or `false` to deny. Propose one in a ```ts block and name the procedures that need wiring; you cannot apply it yourself, so tell the operator to apply it with the Studio's policy scaffolder. Never answer an access-rule question with CREATE POLICY or any other SQL. "
             : "") +
         (offers.length === 0
             ? "You have no tools; answer from the schema listed above and say so when you cannot. "

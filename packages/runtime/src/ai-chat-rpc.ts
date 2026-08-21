@@ -142,6 +142,12 @@ const TOOL_OPS: Readonly<Record<ForwardedToolName, string>> = {
     describeTables: "__lunora_admin__:describeTables",
     readAdvisors: "__lunora_admin__:getAdvisories",
     readLogs: "__lunora_admin__:getLogs",
+    // The read-only RLS inspector's own op: codegen-discovered `(table, on,
+    // procedure, file)` triples plus role/permission names, and never a `when`
+    // predicate. There is no write sibling to name here — a policy is TypeScript
+    // on the developer's disk, not DDL — so the assistant proposes one in prose
+    // and the operator applies it with the dev host's policy scaffolder.
+    readPolicies: "__lunora_admin__:rlsPolicies",
     runSql: "__lunora_admin__:runSql",
 };
 
