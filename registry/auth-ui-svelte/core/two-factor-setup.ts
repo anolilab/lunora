@@ -69,7 +69,10 @@ const createTwoFactorSetupController = (context: ControllerContext): TwoFactorSe
         try {
             const { data } = assertOk(await context.authClient.twoFactor.enable({ password: state.password.value }));
 
-            store.update({ backupCodes: data?.backupCodes ?? [], status: "idle", step: "verify", totpUri: data?.totpURI });
+            // `password: emptyField()`: the password was typed to *enable*. Kept
+            // in state it would pre-satisfy the disable form's password gate —
+            // "Disable 2FA" one click after enrolling, with no re-authentication.
+            store.update({ backupCodes: data?.backupCodes ?? [], password: emptyField(), status: "idle", step: "verify", totpUri: data?.totpURI });
         } catch (error_) {
             fail(error_, context.localization.genericError);
         }
@@ -89,7 +92,10 @@ const createTwoFactorSetupController = (context: ControllerContext): TwoFactorSe
 
         try {
             assertOk(await context.authClient.twoFactor.verifyTotp({ code: state.code.value.trim() }));
-            store.update({ status: "success", step: "enabled" });
+            // The code is spent and the TOTP secret has served its purpose once
+            // verified — neither belongs in live state (or a bound DOM input)
+            // afterwards. `backupCodes` stay: the user still has to save them.
+            store.update({ code: emptyField(), status: "success", step: "enabled", totpUri: undefined });
         } catch (error_) {
             fail(error_, context.localization.twoFactorFailed);
         }
