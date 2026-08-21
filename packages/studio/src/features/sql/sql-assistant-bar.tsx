@@ -4,18 +4,9 @@ import { useState } from "react";
 import { Input } from "../../components/ui/input";
 import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
-import type { GenerateSqlDegradedReason } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
-
-/** Operator-facing copy per failure reason. `no-ai-binding` never reaches here — the bar is hidden. */
-const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof useT>): string => {
-    if (reason === "unsafe-response") {
-        return t("The model returned a statement that is not read-only, so it was discarded.");
-    }
-
-    return reason === "empty-response" ? t("The model returned nothing usable.") : t("The model could not be reached.");
-};
+import assistantReasonMessage from "./assistant-reason";
 
 /**
  * Natural-language prompt bar above the SQL editor.
@@ -119,7 +110,7 @@ const SqlAssistantBar = ({
             </div>
             {reason !== undefined && (
                 <p className="text-[11px] text-muted-foreground" data-testid="sql-assistant-reason" role="status">
-                    {reasonMessage(reason, t)}
+                    {assistantReasonMessage(reason, t)}
                 </p>
             )}
         </div>

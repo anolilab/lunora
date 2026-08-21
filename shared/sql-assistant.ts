@@ -1,8 +1,9 @@
 /**
  * Engine for the one-shot AI-assistant admin RPCs — `aiGenerateSql` (the SQL
- * editor's "describe the query you want" and its "fix this" follow-up),
- * `aiTableFilter`, `aiChartConfig`, `aiNameQuery` (a title and description for a
- * saved query) and `aiCronExpression` (a schedule from plain English).
+ * editor's "describe the query you want", its "fix this" follow-up, and its
+ * in-place "edit this with AI" rewrite), `aiTableFilter`, `aiChartConfig`,
+ * `aiNameQuery` (a title and description for a saved query) and
+ * `aiCronExpression` (a schedule from plain English).
  *
  * Several RPCs, but ONE inference primitive (`runPrompt`) and ONE retry policy
  * (`attempt`). The caps, the untrusted fence, the deadline, and the two degrade
@@ -68,6 +69,14 @@ const DESCRIPTION_CAP = 160;
 
 /** Parsed `aiGenerateSql` payload. */
 export interface GenerateSqlArgs {
+    /**
+     * The statement to REWRITE, when the operator is editing one they already
+     * have rather than asking for a fresh draft. Distinct from `failedSql`: that
+     * one says "this broke, fix it", this one says "this works, change it like
+     * so" — and a repair prompt applied to a working statement invites the model
+     * to invent a fault it can be seen to fix.
+     */
+    editSql?: string;
     /** The error the failing statement produced. Only meaningful with `failedSql`. */
     failedError?: string;
     /** The failing statement, when asking for a repair rather than a fresh draft. */
@@ -229,6 +238,16 @@ const systemPrompt = (): string =>
 const userPrompt = (args: GenerateSqlArgs, schema: ReadonlyArray<SchemaFact>): string => {
     const parts = [groundingBlock(schema), "", UNTRUSTED_BEGIN, `Request: ${capped(args.prompt, PROMPT_CAP)}`];
 
+    const editSql = capped(args.editSql, STATEMENT_CAP);
+
+    if (editSql !== "") {
+        parts.push(
+            "",
+            "Rewrite this statement so it satisfies the request, changing only what the request asks for. Return the COMPLETE rewritten statement:",
+            editSql,
+        );
+    }
+
     const failedSql = capped(args.failedSql, STATEMENT_CAP);
 
     if (failedSql !== "") {
@@ -265,7 +284,7 @@ const structuredUserPrompt = (facts: string, prompt: string): string =>
     [facts, "", UNTRUSTED_BEGIN, `Request: ${capped(prompt, PROMPT_CAP)}`, UNTRUSTED_END].join("\n");
 
 /**
- * Generate (or repair) a read-only statement for the Studio SQL editor.
+ * Generate, repair, or rewrite a read-only statement for the Studio SQL editor.
  *
  * A response that fails the read-only gate is retried once and then DISCARDED —
  * returning unvalidated SQL, even labelled, would put model output inside a
@@ -273,6 +292,7 @@ const structuredUserPrompt = (facts: string, prompt: string): string =>
  */
 const generateSql = async (binding: unknown, rawArgs: Record<string, unknown>, schema: ReadonlyArray<SchemaFact>): Promise<GenerateSqlResult> => {
     const args: GenerateSqlArgs = {
+        editSql: capped(rawArgs.editSql, STATEMENT_CAP),
         failedError: capped(rawArgs.failedError, ERROR_CAP),
         failedSql: capped(rawArgs.failedSql, STATEMENT_CAP),
         prompt: capped(rawArgs.prompt, PROMPT_CAP),

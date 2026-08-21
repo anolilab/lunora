@@ -304,6 +304,10 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     };
 
     const surface = useSqlEditorSurface({
+        // The chord is inert on a deployment that cannot run the assistant —
+        // swallowing ⌘I to open a panel that renders nothing is worse than
+        // leaving the key to the browser.
+        inlineEditEnabled: !rpc.unavailable,
         onSubmit: () => {
             fireAndForget(run(output.pane));
         },
@@ -311,7 +315,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         schema,
         setDraft,
     });
-    const { closeAutocomplete } = surface;
+    const { closeAutocomplete, closeInlineEdit } = surface;
 
     // Pretty-print the current draft in place (auto-saving the active query too).
     const formatDraft = (): void => {
@@ -320,6 +324,9 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     const selectTab = (id: string): void => {
         closeAutocomplete();
+        // Same reason the editor drops it on a keystroke: the armed span indexes
+        // into THIS tab's draft, and the next tab holds a different statement.
+        closeInlineEdit();
         setActiveTabId(id);
     };
 
@@ -478,7 +485,10 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         failed={failedRun}
                         gutterRef={surface.gutterRef}
                         handlers={surface.handlers}
+                        inlineEdit={surface.inlineEdit}
                         listboxId={surface.listboxId}
+                        onAcceptInlineEdit={surface.acceptInlineEdit}
+                        onCancelInlineEdit={surface.closeInlineEdit}
                         onGenerated={setDraft}
                         onPickSuggestion={surface.onPickSuggestion}
                         onRevealDiagnostic={surface.revealDiagnostic}

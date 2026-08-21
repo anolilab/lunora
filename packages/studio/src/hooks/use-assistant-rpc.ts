@@ -100,6 +100,18 @@ interface AssistantRpc {
     readonly reason: (task: AssistantTaskKey) => GenerateSqlDegradedReason | undefined;
 
     /**
+     * Rewrite an existing statement under an instruction ("add a limit and order
+     * by created_at"), returning the model's proposal for the operator to accept
+     * or reject.
+     *
+     * The same op as `generate` and the same read-only gate — a rewrite is
+     * a draft with a starting point, not a new trust boundary. Shares the `"sql"`
+     * task key, so the prompt bar and the inline editor cannot both be in flight
+     * with one spinner between them.
+     */
+    readonly rewrite: (instruction: string, sql: string) => Promise<string | undefined>;
+
+    /**
      * Translate a described schedule into a Cloudflare Cron Trigger expression.
      * Already validated against the deployable 5-field grammar server-side, so an
      * expression `wrangler deploy` would reject degrades instead of arriving.
@@ -170,11 +182,12 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
         }
     };
 
-    const generate = async (prompt: string, failed?: { error: string; sql: string }): Promise<string | undefined> => {
+    /** The one `aiGenerateSql` round-trip — draft, repair and rewrite differ only in what they send. */
+    const askForSql = async (args: { editSql?: string; failedError?: string; failedSql?: string; prompt: string }): Promise<string | undefined> => {
         begin("sql");
 
         try {
-            const { result } = (await client.query(AI_GENERATE_SQL, { failedError: failed?.error, failedSql: failed?.sql, prompt }, callOptions(shardKey))) as {
+            const { result } = (await client.query(AI_GENERATE_SQL, args, callOptions(shardKey))) as {
                 result: GenerateSqlResult;
             };
 
@@ -187,6 +200,11 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
             return undefined;
         }
     };
+
+    const generate = async (prompt: string, failed?: { error: string; sql: string }): Promise<string | undefined> =>
+        askForSql({ failedError: failed?.error, failedSql: failed?.sql, prompt });
+
+    const rewrite = async (instruction: string, sql: string): Promise<string | undefined> => askForSql({ editSql: sql, prompt: instruction });
 
     const chat: AssistantRpc["chat"] = async (prompt, transcript, schema, approval, onEvent) => {
         begin("chat");
@@ -316,7 +334,7 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
     const pending = (task: AssistantTaskKey): boolean => pendingByTask[task] === true;
     const reason = (task: AssistantTaskKey): GenerateSqlDegradedReason | undefined => reasonByTask[task];
 
-    return { chat, generate, inferChart, level: availability.data?.level, nameQuery, pending, reason, suggestCron, suggestFilter, unavailable };
+    return { chat, generate, inferChart, level: availability.data?.level, nameQuery, pending, reason, rewrite, suggestCron, suggestFilter, unavailable };
 };
 
 export { useAssistantRpc };
