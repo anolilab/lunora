@@ -648,6 +648,39 @@ describe("dispatchQueueBatch — poison message isolation (deterministic dispatc
         });
     });
 
+    it("re-dispatches a redelivered message with the same `id`, so the receiver can dedup the replayed mutation", async () => {
+        expect.assertions(3);
+
+        const bodies: { id?: string }[] = [];
+        const fetchImpl = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+            bodies.push(JSON.parse((init?.body ?? "{}") as string) as { id?: string });
+
+            return Response.json({ ok: true });
+        }) as typeof fetch;
+
+        // The at-least-once shape: the handler's `message.run(...)` mutation
+        // succeeds, then the handler throws, so the broker redelivers the same
+        // message and the mutation runs again.
+        const queue = defineQueue({
+            handler: async (_context, b) => {
+                await b.messages[0]!.run({ __lunoraRef: "fn" });
+                throw new Error("batch failed after the mutation");
+            },
+        });
+        const registry = { q: { definition: queue, exportName: "q" } };
+
+        const first = captureMessage({ id: "m1" }, { id: "m1" });
+
+        await expect(dispatchQueueBatch(batch("q", [first]), registry, { env: DISPATCH_ENV, fetchImpl })).rejects.toThrow(/batch failed/);
+
+        // Redelivery: same message id, higher attempt count.
+        const redelivered = captureMessage({ id: "m1" }, { attempts: 2, id: "m1" });
+
+        await expect(dispatchQueueBatch(batch("q", [redelivered]), registry, { env: DISPATCH_ENV, fetchImpl })).rejects.toThrow(/batch failed/);
+
+        expect(bodies.map((body) => body.id)).toStrictEqual(["m1", "m1"]);
+    });
+
     it("still rethrows when the handler throws undefined (not a LunoraError, so never attributable)", async () => {
         expect.assertions(1);
 

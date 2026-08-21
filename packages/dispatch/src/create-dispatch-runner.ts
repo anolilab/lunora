@@ -255,7 +255,12 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
 
         try {
             response = await fetchImpl(url, {
-                body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
+                // `id` is the receiver's at-least-once dedup key: the worker's
+                // dispatch endpoint forwards it to the shard as the replay-dedup
+                // `mutationId`, so a redelivered queue message re-running the same
+                // `ctx.run` mutation is applied once. `JSON.stringify` omits the
+                // key when the caller supplied no `messageId`.
+                body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, id: runOptions.messageId, shardKey: runOptions.shardKey }),
                 headers,
                 method: "POST",
                 // `AbortSignal.timeout`'s internal timer is unref'd, so it never

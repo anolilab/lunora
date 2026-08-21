@@ -24,6 +24,22 @@ describe("createDispatchRunner", () => {
         expect(JSON.parse(init.body as string)).toEqual({ args: { to: "a" }, functionPath: "messages:send", shardKey: "s1" });
     });
 
+    it("forwards messageId as the body's `id` (the receiver's dedup key) and omits the key when unset", async () => {
+        expect.assertions(2);
+
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: 1 }, { status: 200 }));
+        const run = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" });
+
+        await run(REF, { to: "a" }, { messageId: "msg-1" });
+        await run(REF, { to: "a" });
+
+        const bodyOf = (index: number): unknown => JSON.parse((fetchImpl.mock.calls[index] as unknown as [string, RequestInit])[1].body as string);
+
+        expect(bodyOf(0)).toEqual({ args: { to: "a" }, functionPath: "messages:send", id: "msg-1" });
+        // `toEqual` fails on any extra defined property, so this also proves `id` is absent.
+        expect(bodyOf(1)).toEqual({ args: { to: "a" }, functionPath: "messages:send" });
+    });
+
     it("resolves undefined for an empty body", async () => {
         expect.assertions(1);
 
