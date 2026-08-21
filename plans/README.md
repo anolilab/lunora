@@ -1762,3 +1762,25 @@ produce design docs, not code PRs.
 | 443 | Key the flags OpenFeature client memo by definition and env | P2 | bug | improve/wave22-flags | PR [#463](https://github.com/anolilab/lunora/pull/463) — gates green |
 | 444 | Hash the inbound-channel dedup instance id instead of truncating it | P2 | bug | improve/wave22-agent | PR [#438](https://github.com/anolilab/lunora/pull/438) — gates green |
 | 445 | [Spike] Design a pending-approvals listing for the HITL surface | P2 | direction | — (design doc) | DONE — design doc at 445-*-design.md |
+
+## Wave 22 follow-ups
+
+Six findings surfaced during wave-22 review that were deferred out of their
+originating PR rather than folded into it — each needs a decision or a change
+that does not belong in the PR that uncovered it. Three are pre-existing bugs
+in packages the sweep was reading for another reason (446, 450, 451); one is a
+behaviour change whose options need weighing before code is written (449); one
+is a CI-gate blind spot that let a public-surface narrowing ship unguarded
+(448); and one is a probe that is too coarse for every capability, not just the
+one that exposed it (447). Each plan is self-contained and re-verified against
+live source at commit `1699f4317`, including corrections to the evidence as
+originally reported.
+
+| Plan | Title                                                                       | Pri | Cat       | Status |
+| ---- | --------------------------------------------------------------------------- | --- | --------- | ------ |
+| 446  | Stop `parseObjectShape` silently dropping computed property keys            | P1  | bug       | TODO   |
+| 447  | Split the capability probe into "module imported" vs "ctx surface read"     | P2  | tech-debt | TODO   |
+| 448  | Enrol `@lunora/x402` in the API-snapshot guard at the experimental tier     | P2  | dx        | TODO   |
+| 449  | Decide how the offline mutation outbox serializes caller args               | P2  | bug       | TODO   |
+| 450  | Remove the `workflow_duplicate_step_name` lint — its premise is false       | P2  | bug       | TODO   |
+| 451  | Make private packages use `workspace:*` for intra-repo deps, and enforce it | P2  | release   | TODO   |
