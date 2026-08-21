@@ -48,9 +48,16 @@ interface SseFrame {
     event: string;
 }
 
-/** The untyped producer side of the stream queue the pump writes into. */
+/**
+ * The untyped producer side of a stream the pump writes into.
+ *
+ * `complete` is handed the terminal frame's raw `data:` payload. {@link httpStream}
+ * ignores it — a route's chunks are its data and the sentinel carries nothing —
+ * but `LunoraClient.streamRpc` reads its result out of exactly that frame, and a
+ * pump that dropped it would force a second parser for one field.
+ */
 interface UntypedHandle {
-    complete: () => void;
+    complete: (data: string) => void;
     fail: (error: Error) => void;
     push: (value: unknown) => void;
 }
@@ -134,7 +141,7 @@ const buildHttpStreamUrl = (route: HttpStreamRef, args: HttpStreamCallArgsShape,
  */
 const handleSseFrame = (frame: SseFrame, handle: UntypedHandle): boolean => {
     if (frame.event === "complete") {
-        handle.complete();
+        handle.complete(frame.data);
 
         return true;
     }
@@ -358,5 +365,5 @@ const httpStream = <Ref extends HttpStreamRef>(
     return iterable;
 };
 
-export type { HttpStreamOptions };
-export { httpStream };
+export type { HttpStreamOptions, UntypedHandle };
+export { httpStream, pumpSseBody };

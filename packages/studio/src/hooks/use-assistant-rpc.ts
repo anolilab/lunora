@@ -8,6 +8,8 @@ import type {
     ChatApproval,
     ChatPendingApproval,
     ChatResult,
+    ChatStreamEvent,
+    ChatToolReport,
     ChatTurn,
     FilterClause,
     GenerateChartResult,
@@ -41,19 +43,28 @@ interface AssistantRpc {
      * One conversational turn. `transcript` is the prior turns, client-held and
      * re-sent; the server caps and fences it, so a long conversation degrades by
      * losing its oldest turns rather than by failing.
+     *
+     * The op streams, and `onEvent` sees the turn narrate itself — text as the
+     * model produces it, and a marker each time a round asked for a tool instead
+     * of answering. **Only the resolved value is the turn.** Narration is for
+     * showing an answer arriving; a caller that passes no `onEvent` gets exactly
+     * the behaviour this had before it streamed, and a caller that renders the
+     * narration must still commit nothing until this promise resolves — which is
+     * what keeps an interrupted turn out of the transcript.
      */
     readonly chat: (
         prompt: string,
         transcript: ReadonlyArray<ChatTurn>,
         schema: ReadonlyArray<SchemaFact>,
         approval?: ChatApproval,
+        onEvent?: (event: ChatStreamEvent) => void,
     ) => Promise<
         | undefined
         | {
               partial: boolean;
               pendingApproval?: ChatPendingApproval;
               reply: string;
-              toolCalls: ReadonlyArray<{ name?: string; needs?: AiOptInLevel; refused?: string; sql?: string }>;
+              toolCalls: ReadonlyArray<ChatToolReport>;
               truncated: boolean;
           }
     >;
@@ -177,7 +188,7 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
         }
     };
 
-    const chat: AssistantRpc["chat"] = async (prompt, transcript, schema, approval) => {
+    const chat: AssistantRpc["chat"] = async (prompt, transcript, schema, approval, onEvent) => {
         begin("chat");
 
         try {
@@ -199,7 +210,25 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
              * for next. So this hook cannot approve anything the server did not
              * propose, however the call site is written.
              */
-            const result = (await client.query(AI_CHAT, { approval, prompt, schema, shardKey, transcript })) as ChatResult;
+            /*
+             * `streamRpc`, not `query`: the op answers `text/event-stream`.
+             *
+             * It is the same envelope over the same `/_lunora/rpc` POST with the
+             * same admin bearer — what changes is that the reply arrives in pieces
+             * and this resolves with the terminal one. A body that ends without
+             * that frame REJECTS, so an interrupted turn lands in the catch below
+             * and leaves the transcript untouched rather than committing a
+             * half-answer.
+             */
+            const result = (await client.streamRpc(
+                AI_CHAT,
+                { approval, prompt, schema, shardKey, transcript },
+                {
+                    onFrame: (frame: unknown) => {
+                        onEvent?.(frame as ChatStreamEvent);
+                    },
+                },
+            )) as ChatResult;
 
             finish("chat", result.degraded ? result.reason : undefined);
 

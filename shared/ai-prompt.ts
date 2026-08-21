@@ -169,6 +169,94 @@ const groundingBlock = (schema: ReadonlyArray<SchemaFact>): string => {
     return lines.length === 0 ? "No schema information is available." : `Tables and columns in this database:\n${lines.join("\n")}`;
 };
 
+/** Read the `response` text off a whole (non-streamed) `binding.run` result, or `undefined`. */
+const responseText = (result: unknown): string | undefined =>
+    typeof result === "object" && result !== null && typeof (result as { response?: unknown }).response === "string"
+        ? (result as { response: string }).response
+        : undefined;
+
+/**
+ * Consume the SSE body Workers AI answers with under `stream: true`, feeding each
+ * token to `onToken` and returning the whole text.
+ *
+ * The binding's stream framing is ordinary SSE — `data: {"response":"tok"}` frames
+ * terminated by a `data: [DONE]` sentinel — so this is the same shape
+ * `shared/sse.ts` writes and `@lunora/client` reads, in the other direction. It is
+ * parsed here rather than reusing that reader because that one is a package's
+ * consumer API over a `StreamIterable`, and this needs eight lines and no queue.
+ *
+ * A frame that is not JSON, or carries no string `response`, is SKIPPED rather
+ * than failing the generation: the binding also emits usage/telemetry frames, and
+ * a model that ends a turn with an odd trailing frame should not lose the answer
+ * it already streamed.
+ */
+const readTokenStream = async (body: ReadableStream<Uint8Array>, onToken: (token: string) => void): Promise<string> => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+
+    /** Drain every complete frame in the buffer. */
+    const drain = (): void => {
+        let at = buffer.indexOf("\n\n");
+
+        while (at !== -1) {
+            for (const line of buffer.slice(0, at).split("\n")) {
+                if (!line.startsWith("data:")) {
+                    continue;
+                }
+
+                const payload = line.slice("data:".length).trim();
+
+                if (payload === "" || payload === "[DONE]") {
+                    continue;
+                }
+
+                let token: string | undefined;
+
+                try {
+                    token = responseText(JSON.parse(payload));
+                } catch {
+                    // Not JSON — a keepalive or a framing artefact, not an answer.
+                    continue;
+                }
+
+                if (token !== undefined && token !== "") {
+                    text += token;
+                    onToken(token);
+                }
+            }
+
+            buffer = buffer.slice(at + 2);
+            at = buffer.indexOf("\n\n");
+        }
+    };
+
+    try {
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- one body, read sequentially; each read depends on the previous one resolving
+            const { done, value } = await reader.read();
+
+            if (done) {
+                break;
+            }
+
+            buffer += decoder.decode(value, { stream: true }).replaceAll("\r\n", "\n");
+            drain();
+        }
+
+        // A body that ends without its final blank line still holds one frame.
+        buffer += `${decoder.decode()}\n\n`;
+        drain();
+    } finally {
+        await reader.cancel().catch(() => {
+            /* the body is being torn down anyway */
+        });
+    }
+
+    return text;
+};
+
 /**
  * Run one inference against a deadline, returning the raw text or `undefined`.
  *
@@ -176,32 +264,59 @@ const groundingBlock = (schema: ReadonlyArray<SchemaFact>): string => {
  * Every task routes through here — a second copy of this race is a second place
  * for the deadline to go missing, and the deadline is what keeps a hung model
  * from pinning the DO's single-threaded admin dispatch.
+ *
+ * **`onToken` asks for the answer as it is produced.** With it the binding is
+ * called with `stream: true`, which is real token-by-token streaming from Workers
+ * AI, and the ONE deadline covers the whole generation rather than just the
+ * handshake — otherwise a model that opened a stream and then hung would never be
+ * cut off. A binding that answers with a whole object anyway (an older binding,
+ * or a test double) degrades to one call of `onToken` carrying the entire reply:
+ * the granularity is whatever the binding genuinely offers, never faked.
  */
-const runPrompt = async (binding: AiRunBinding, model: string, system: string, user: string): Promise<string | undefined> => {
+const runPrompt = async (
+    binding: AiRunBinding,
+    model: string,
+    system: string,
+    user: string,
+    onToken?: (token: string) => void,
+): Promise<string | undefined> => {
     let deadline: ReturnType<typeof setTimeout> | undefined;
 
-    const result = await Promise.race([
-        binding.run(model, {
-            max_tokens: 300,
-            messages: [
-                { content: system, role: "system" },
-                { content: user, role: "user" },
-            ],
-        }),
-        new Promise<never>((_resolve, reject) => {
-            deadline = setTimeout(() => {
-                reject(new Error("sql-assistant: inference timed out"));
-            }, SQL_ASSISTANT_TIMEOUT_MS);
-        }),
-    ]).finally(() => {
-        clearTimeout(deadline);
+    // ONE timer for the call, raced against both the handshake and (when
+    // streaming) the read: two timers would be two deadlines.
+    const expired = new Promise<never>((_resolve, reject) => {
+        deadline = setTimeout(() => {
+            reject(new Error("sql-assistant: inference timed out"));
+        }, SQL_ASSISTANT_TIMEOUT_MS);
     });
 
-    if (typeof result === "object" && result !== null && typeof (result as { response?: unknown }).response === "string") {
-        return (result as { response: string }).response;
-    }
+    try {
+        const result = await Promise.race([
+            binding.run(model, {
+                max_tokens: 300,
+                messages: [
+                    { content: system, role: "system" },
+                    { content: user, role: "user" },
+                ],
+                ...(onToken === undefined ? {} : { stream: true }),
+            }),
+            expired,
+        ]);
 
-    return undefined;
+        if (onToken !== undefined && result instanceof ReadableStream) {
+            return await Promise.race([readTokenStream(result as ReadableStream<Uint8Array>, onToken), expired]);
+        }
+
+        const whole = responseText(result);
+
+        if (onToken !== undefined && whole !== undefined && whole !== "") {
+            onToken(whole);
+        }
+
+        return whole;
+    } finally {
+        clearTimeout(deadline);
+    }
 };
 
 /**

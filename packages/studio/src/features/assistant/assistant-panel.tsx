@@ -7,7 +7,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
-import type { AiOptInLevel, ChatApproval, ChatPendingApproval, ChatTurn, GenerateSqlDegradedReason } from "../../lib/admin";
+import type { AiOptInLevel, ChatApproval, ChatPendingApproval, ChatStreamEvent, ChatTurn, GenerateSqlDegradedReason } from "../../lib/admin";
 import { copyToClipboard, fireAndForget } from "../../lib/internal";
 import sqlBlocks from "../../lib/sql-blocks";
 
@@ -325,6 +325,22 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
     const ops = useAssistantRpc(session?.shardKey ?? "");
 
     const [draft, setDraft] = useState("");
+
+    /**
+     * The answer as it arrives, and the session it belongs to.
+     *
+     * Held apart from `session.turns` on purpose, and that separation is the whole
+     * safety property: a turn joins the transcript only when the promise resolves
+     * with a whole answer, so an interrupted stream — a closed tab, a dropped
+     * connection, a body that ends without its terminal frame — leaves this state
+     * discarded and the transcript exactly as it was. Nothing here is ever
+     * committed, copied, branched from, or re-sent as history.
+     *
+     * Scoped by session for the same reason `truncatedFor` is: `pending` is
+     * per-hook, so without the id the tokens of a turn started in one chat would
+     * paint into whichever chat the operator switched to.
+     */
+    const [live, setLive] = useState<{ sessionId: string; text: string } | undefined>(undefined);
     const [truncated, setTruncated] = useState(false);
     // Which session `truncated` describes. It is a fact about one answered turn,
     // and without this it followed the operator into a session that never
@@ -372,6 +388,7 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
         const asked: SessionTurn[] = [...sent, { role: "user", text: prompt }];
 
         setTurns(session.id, asked);
+        setLive({ sessionId: session.id, text: "" });
 
         fireAndForget(
             ops
@@ -385,6 +402,21 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                     }),
                     session.schema,
                     approval,
+                    /*
+                     * A round that asks for a tool streams its preamble and then
+                     * stops — that prose is the turn thinking, not the turn's
+                     * answer, and the engine discards it. So a `tool` event RESETS
+                     * the live text rather than appending to it; otherwise the
+                     * next round's answer would be pasted onto the end of a
+                     * sentence the operator is never shown again.
+                     */
+                    (event: ChatStreamEvent) => {
+                        setLive((current) =>
+                            current?.sessionId === session.id
+                                ? { sessionId: session.id, text: event.type === "delta" ? `${current.text}${event.text}` : "" }
+                                : current,
+                        );
+                    },
                 )
                 .then((answer) => {
                     // A degraded turn adds nothing to the transcript — the reason is
@@ -409,6 +441,12 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                     }
 
                     return answer;
+                })
+                .finally(() => {
+                    // Whatever happened — answered, degraded, or interrupted — the
+                    // live text has served its purpose and is not part of the
+                    // transcript.
+                    setLive(undefined);
                 }),
         );
     };
@@ -596,6 +634,21 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
                         turn={turn}
                     />
                 ))}
+                {/*
+                 * The turn in flight, rendered but not a turn: it carries no copy /
+                 * branch / insert affordance because there is nothing yet to act on,
+                 * and it is replaced wholesale by the answer the moment one lands.
+                 * `Streamdown` over the raw text because half a markdown document is
+                 * exactly what it is built to render.
+                 */}
+                {live !== undefined && live.sessionId === sessionId && live.text !== "" && (
+                    <li className="flex flex-col gap-1 border-b border-border px-3 py-2 last:border-b-0" data-testid="assistant-turn-live">
+                        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{t("Assistant")}</span>
+                        <div className="prose-sm max-w-none text-xs" data-testid="assistant-turn-body">
+                            <Streamdown components={REPLY_COMPONENTS}>{live.text}</Streamdown>
+                        </div>
+                    </li>
+                )}
             </ul>
 
             {truncated && truncatedFor === sessionId && (

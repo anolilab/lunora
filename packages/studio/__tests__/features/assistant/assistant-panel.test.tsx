@@ -132,6 +132,100 @@ describe("assistantPanel", () => {
         });
     });
 
+    it("paints the answer as it streams, then replaces it with the finished turn", async () => {
+        expect.hasAssertions();
+
+        // The frames a turn narrates itself with (plan 364 W5). They are rendered
+        // as a LIVE row, never as a transcript turn — nothing here is committed.
+        // Held open between the deltas and the answer, so the live row is genuinely
+        // observed mid-turn. Without the pause both would land in one React batch
+        // and the assertion below would pass on a panel that never painted at all.
+        let answer: (() => void) | undefined;
+        const held = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+
+        const mock = createMockClient({
+            query: (reference): unknown => (reference === ADMIN_FUNCTIONS.aiAvailable ? { available: true } : { columns: [], rowCount: 0, rows: [] }),
+            streamRpc: async (reference, _args, options): Promise<unknown> => {
+                if (reference !== ADMIN_FUNCTIONS.aiChat) {
+                    return { available: true };
+                }
+
+                const { onFrame } = options as { onFrame: (frame: unknown) => void };
+
+                onFrame({ text: "Two", type: "delta" });
+                onFrame({ text: " rows.", type: "delta" });
+
+                await held;
+
+                return { degraded: false, partial: false, reply: "Two rows.", toolCalls: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("how many messages?");
+
+        // Mid-turn: the tokens are on screen, and they are NOT a transcript turn.
+        const live = await screen.findByTestId("assistant-turn-live");
+
+        expect(live.textContent).toContain("Two rows.");
+        expect(screen.queryByTestId("assistant-turn-assistant")).toBeNull();
+
+        answer?.();
+
+        // The finished turn is what survives, and the live row is gone with it —
+        // an answer must never be able to appear twice.
+        await screen.findByTestId("assistant-turn-assistant");
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("assistant-turn-live")).toBeNull();
+        });
+
+        expect(screen.getAllByTestId("assistant-turn-assistant")).toHaveLength(1);
+    });
+
+    it("leaves no partial turn in the transcript when the stream is interrupted", async () => {
+        expect.hasAssertions();
+
+        /*
+         * Plan 364's W5 gate.
+         *
+         * The turn streams half an answer and then the connection dies — which is
+         * what `streamRpc` reports by REJECTING rather than resolving with what
+         * arrived. The half-answer was painted; it must not be kept. What the
+         * operator is left with is their own question, the failure notice, and a
+         * transcript that can be re-sent without a fabricated assistant turn in it.
+         */
+        const mock = createMockClient({
+            query: (reference): unknown => (reference === ADMIN_FUNCTIONS.aiAvailable ? { available: true } : { columns: [], rowCount: 0, rows: [] }),
+            streamRpc: (reference, _args, options): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.aiChat) {
+                    return { available: true };
+                }
+
+                (options as { onFrame: (frame: unknown) => void }).onFrame({ text: "Two ro", type: "delta" });
+
+                throw new Error("stream ended without a complete frame");
+            },
+        });
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("how many messages?");
+
+        // The failure is reported…
+        await screen.findByTestId("assistant-error");
+
+        // …and nothing the stream painted became a turn.
+        expect(screen.queryByTestId("assistant-turn-live")).toBeNull();
+        expect(screen.queryByTestId("assistant-turn-assistant")).toBeNull();
+        expect(screen.getAllByTestId("assistant-turn-user")).toHaveLength(1);
+    });
+
     it("offers a reply's SQL for insertion, and never runs it", async () => {
         expect.hasAssertions();
 
@@ -175,7 +269,7 @@ describe("assistantPanel", () => {
         expect(within(card).getByTestId("assistant-approval-sql").textContent).toBe("SELECT * FROM messages");
 
         // Nothing has gone out beyond the single turn that proposed it.
-        expect(mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toHaveLength(1);
+        expect(mock.streamRpc.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toHaveLength(1);
     });
 
     it("carries the server's own ticket back when the operator allows the read", async () => {
@@ -190,7 +284,7 @@ describe("assistantPanel", () => {
         fireEvent.click(await screen.findByTestId("assistant-approval-allow"));
 
         await waitFor(() => {
-            const chats = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat);
+            const chats = mock.streamRpc.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat);
 
             expect(chats).toHaveLength(2);
 
@@ -226,7 +320,7 @@ describe("assistantPanel", () => {
         fireEvent.click(await screen.findByTestId("assistant-approval-deny"));
 
         await waitFor(() => {
-            const chats = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat);
+            const chats = mock.streamRpc.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat);
             const second = chats[1]?.[1] as { approval: { allow: boolean } };
 
             // A deny is an answer the model is told about, not a local dismissal —
@@ -264,7 +358,7 @@ describe("assistantPanel", () => {
         ask("second question");
 
         await waitFor(() => {
-            const chats = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat);
+            const chats = mock.streamRpc.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat);
 
             expect(chats).toHaveLength(2);
 
@@ -287,7 +381,7 @@ describe("assistantPanel", () => {
         ask("what tables do I have?");
 
         await waitFor(() => {
-            const [, args] = mock.query.mock.calls.find((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat) ?? [];
+            const [, args] = mock.streamRpc.mock.calls.find((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat) ?? [];
 
             // Both were missing: `schema: []` was hardcoded and `shardKey` never
             // left the client, so the model was told to use only listed tables and
@@ -466,7 +560,7 @@ describe("assistantPanel", () => {
 
         // Both turns reach the server — the seeded one is held, not swallowed.
         await waitFor(() => {
-            expect(mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toHaveLength(2);
+            expect(mock.streamRpc.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toHaveLength(2);
         });
     });
 
@@ -487,7 +581,7 @@ describe("assistantPanel", () => {
         });
 
         expect(screen.queryByTestId("sql-explain-query")).toBeNull();
-        expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toBe(false);
+        expect(mock.streamRpc.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat)).toBe(false);
     });
 
     it("renders a reply as markdown but shows the operator's own words verbatim", async () => {

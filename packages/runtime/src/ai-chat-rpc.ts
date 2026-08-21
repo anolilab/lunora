@@ -23,12 +23,14 @@ import type {
     AiRunBinding,
     ChatArgs,
     ChatResult,
+    ChatStreamEvent,
     ChatToolRunner,
     ForwardedToolCall,
     ForwardedToolName,
     SchemaFact,
 } from "../../../shared/ai-chat";
 import { generateChat } from "../../../shared/ai-chat";
+import { SSE_HEADERS, sseFrame } from "../../../shared/sse";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 
 /**
@@ -188,9 +190,22 @@ const chatToolRunner =
 /**
  * Build the `__lunora_admin__:aiChat` handler.
  *
- * Admin-gated FIRST, before the not-configured check, so an unauthenticated
- * caller cannot probe whether the feature is wired — the same ordering, for the
- * same reason, as `buildGetAuthAuditLog`.
+ * Admin-gated FIRST, before anything else this handler does, so an
+ * unauthenticated caller cannot probe whether the feature is wired — the same
+ * ordering, for the same reason, as `buildGetAuthAuditLog`. It runs before the
+ * stream is constructed, so a refused caller still gets an ordinary JSON error
+ * response rather than an event stream carrying a refusal.
+ *
+ * **Answers `text/event-stream`, always** (plan 364 W5). One transport, not two:
+ * a streaming op beside a whole-answer one would be two places for the admin
+ * gate, the data-sharing level and the approval ticket to drift, and this repo is
+ * pre-1.0 so the old path is gone rather than deprecated. Nothing is lost by it —
+ * the terminal `event: complete` frame carries the same whole {@link ChatResult}
+ * the op used to answer with, in the same wire envelope, so a reader that only
+ * waits for that frame behaves exactly as before. The `data:` frames in front of
+ * it are narration (see `ChatStreamEvent`) and carry nothing a caller must act
+ * on, which is what makes an interrupted stream safe: a turn that never reaches
+ * its terminal frame has produced nothing to commit.
  *
  * Never throws for a model failure: `generateChat` returns a degraded result
  * carrying a reason the UI renders, which is the contract every other assistant
@@ -227,23 +242,16 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
             : [];
 
         /*
-         * A missing binding degrades rather than throwing a 400.
-         *
-         * The panel's visibility latch is driven by `no-ai-binding`, and it is
-         * sticky — so answering that way is what makes the surface disappear on an
-         * app with no `AI` binding. A 400 left the panel rendered and every send
-         * failing with a generic "could not be reached", which is the exact
-         * failure mode the latch exists to prevent.
+         * A missing binding is not an error here, and is not special-cased here
+         * either: `generateChat` answers `no-ai-binding` for it. The panel's
+         * visibility latch keys on that reason and is sticky, so it is what makes
+         * the surface disappear on an app with no `AI` binding — a 400 left the
+         * panel rendered and every send failing with a generic "could not be
+         * reached", which is the exact failure the latch exists to prevent. The
+         * only thing skipped is resolving a tool runner no turn will reach.
          */
-        if (binding === undefined) {
-            return Response.json(
-                { result: encodeWire({ degraded: true, reason: "no-ai-binding" } satisfies ChatResult) },
-                { headers: { "content-type": "application/json" }, status: 200 },
-            );
-        }
-
         const runner =
-            deps.forwardToShard === undefined
+            binding === undefined || deps.forwardToShard === undefined
                 ? undefined
                 : await (async (): Promise<ChatToolRunner> => {
                       const { forward, headers } = await (deps.forwardToShard as NonNullable<AiChatRpcDeps["forwardToShard"]>)(request);
@@ -264,11 +272,69 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
                       return chatToolRunner(forward, shardKey, headers, request);
                   })();
 
-        const result: ChatResult = await generateChat(binding, chatArgs, schema, deps.optInLevel(), runner);
+        const level = deps.optInLevel();
+        const encoder = new TextEncoder();
 
-        // The RPC envelope, not a bare body — `client.query()` reads
-        // `decodeWire(body.result)`, and a bare body decodes to `undefined`.
-        return Response.json({ result: encodeWire(result) }, { headers: { "content-type": "application/json" }, status: 200 });
+        const body = new ReadableStream<Uint8Array>({
+            async start(controller) {
+                let open = true;
+
+                /*
+                 * Best-effort, by design. A frame written after the operator closed
+                 * the panel throws on an already-closed controller, and narration is
+                 * not worth failing a turn over — the terminal frame is the only one
+                 * that carries anything, and if nobody is listening it carries it to
+                 * nobody.
+                 */
+                const send = (frame: unknown, event?: "complete" | "error"): void => {
+                    if (!open) {
+                        return;
+                    }
+
+                    try {
+                        controller.enqueue(encoder.encode(sseFrame(frame, event)));
+                    } catch {
+                        open = false;
+                    }
+                };
+
+                try {
+                    /*
+                     * The terminal frame carries the SAME `{ result: encodeWire(...) }`
+                     * payload the op answered with before it streamed, so the client
+                     * decodes it exactly as it decodes any other worker-served op —
+                     * one envelope contract, not a second one for streams.
+                     */
+                    const result: ChatResult = await generateChat(binding, chatArgs, schema, level, runner, (event: ChatStreamEvent) => {
+                        send(event);
+                    });
+
+                    send({ result: encodeWire(result) }, "complete");
+                } catch {
+                    /*
+                     * Unreachable through `generateChat`, which degrades rather than
+                     * throwing — this is the transport's own failure arm, and it is
+                     * deliberately terse: a turn's internals must not be echoed to a
+                     * browser, and the reader turns any error frame into the same
+                     * "could not be reached" the degrade arms produce.
+                     */
+                    send({ code: "AI_CHAT_FAILED", message: "the assistant turn failed" }, "error");
+                } finally {
+                    if (open) {
+                        controller.close();
+                    }
+                }
+            },
+        });
+
+        /*
+         * ponytail: a turn whose reader disconnects still runs to completion
+         * server-side — bounded by `MAX_TOOL_CALLS` + 1 inferences, each under the
+         * engine's single deadline, and on Workers the invocation is usually torn
+         * down with the connection anyway. Thread a cancellation signal into the
+         * engine only if a real deployment shows abandoned turns costing anything.
+         */
+        return new Response(body, { headers: SSE_HEADERS, status: 200 });
     };
 
     return handle;

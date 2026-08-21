@@ -346,25 +346,63 @@ export interface ChatArgs {
     readonly transcript?: unknown;
 }
 
+/**
+ * One entry in a turn's record of what it did — a tool it ran, or a request it
+ * refused.
+ *
+ * Named rather than inlined into {@link ChatOk.toolCalls} because the stream
+ * reports each one as it happens ({@link ChatStreamEvent}) and the result reports
+ * all of them at the end; the two must be the same shape or the panel would have
+ * to reconcile them.
+ */
+export interface ChatToolReport {
+    /**
+     * Absent on a refusal that named no valid tool — malformed JSON or an unknown
+     * tool name request nothing, and reporting them as `runSql` would describe a
+     * call that was never made.
+     */
+    readonly name?: ChatToolName;
+    /**
+     * Present ONLY on a refusal for being above the deployment's data-sharing
+     * level, and carries the tier that would have allowed it. A structured field
+     * rather than the operator parsing {@link ChatToolReport.refused}: that string
+     * is written for the MODEL, in English, and the studio has to tell a level
+     * refusal (fixable by editing one wrangler var) apart from a malformed request
+     * (not fixable at all).
+     */
+    readonly needs?: AiOptInLevel;
+    readonly refused?: string;
+    readonly sql?: string;
+}
+
+/**
+ * What a turn reports WHILE it runs, over the SSE transport.
+ *
+ * Deliberately tiny, and deliberately not authoritative. Everything the caller
+ * has to act on — the reply, the tool log, `partial`, `truncated`,
+ * `pendingApproval`, every degrade reason — rides the terminal frame as a whole
+ * {@link ChatResult}, exactly as it did when this op answered in one piece. These
+ * events only let a surface show the answer arriving; a client that ignored every
+ * one of them would still be correct, which is the property that makes an
+ * interrupted stream safe: there is nothing to commit until the result lands.
+ *
+ * - `delta` — text of the round now generating. A round that turns out to be a
+ *   tool request emits its prose and then stops (the ```tool block itself is
+ *   never streamed), so the machinery never reaches the operator's screen.
+ * - `tool` — that round asked for a tool; whatever prose it streamed was
+ *   preamble the turn discards, so a reader clears its draft here.
+ */
+export type ChatStreamEvent = { readonly call: ChatToolReport; readonly type: "tool" } | { readonly text: string; readonly type: "delta" };
+
+/** Sink for {@link ChatStreamEvent}s. Synchronous and best-effort: a turn never waits on its own narration. */
+export type ChatStreamEmit = (event: ChatStreamEvent) => void;
+
 export interface ChatOk {
     readonly degraded: false;
     /** True when the turn hit the tool-call cap and answered with what it had. */
     readonly partial: boolean;
-    /**
-     * What this turn did, so the reply is never ambiguous about what it read.
-     *
-     * `name` is absent on a refusal that named no valid tool — malformed JSON or
-     * an unknown tool name request nothing, and reporting them as `runSql` would
-     * describe a call that was never made.
-     *
-     * `needs` is present ONLY on a refusal for being above the deployment's
-     * data-sharing level, and carries the tier that would have allowed it. A
-     * structured field rather than the operator parsing {@link ChatOk.toolCalls}'
-     * `refused` prose: that string is written for the MODEL, in English, and the
-     * studio has to tell a level refusal (fixable by editing one wrangler var)
-     * apart from a malformed request (not fixable at all).
-     */
-    readonly toolCalls: ReadonlyArray<{ name?: ChatToolName; needs?: AiOptInLevel; refused?: string; sql?: string }>;
+    /** What this turn did, so the reply is never ambiguous about what it read. */
+    readonly toolCalls: ReadonlyArray<ChatToolReport>;
 
     /**
      * A tool the turn STOPPED at rather than ran, awaiting the operator.
@@ -496,6 +534,59 @@ const withoutToolBlock = (reply: string): string => {
     const end = reply.indexOf(CODE_FENCE, at + TOOL_FENCE.length);
 
     return `${reply.slice(0, at)}${end === -1 ? "" : reply.slice(end + CODE_FENCE.length)}`.trim();
+};
+
+/**
+ * How many trailing characters a round holds back while streaming.
+ *
+ * One less than the tool fence, which is the longest prefix of it that could
+ * still turn out to BE it. Without the hold-back a reply that opens a tool
+ * request token by token — "``", then "`tool" — has already pushed "``" to the
+ * operator's screen by the time the fence is recognisable, which is the
+ * machinery leaking into the conversation that {@link withoutToolBlock} exists to
+ * prevent on the other path.
+ */
+const FENCE_HOLDBACK = TOOL_FENCE.length - 1;
+
+/**
+ * Narrate one round's tokens, stopping at the tool fence.
+ *
+ * Text is emitted in order and exactly once: everything up to the fence, nothing
+ * from it onwards. {@link StreamNarrator.flush} releases the held tail and is
+ * called only by a round that finished with no tool block — a round that has one
+ * ends with its tail deliberately unsent.
+ */
+interface StreamNarrator {
+    /** Release the held-back tail. Only safe once the round is known to carry no tool block. */
+    readonly flush: () => void;
+    /** Feed one token from the model. */
+    readonly token: (token: string) => void;
+}
+
+const streamNarrator = (emit: ChatStreamEmit): StreamNarrator => {
+    let seen = "";
+    let sent = 0;
+
+    /** Emit up to `upto`, which never moves backwards — see the index argument in the docblock above. */
+    const advance = (upto: number): void => {
+        if (upto > sent) {
+            emit({ text: seen.slice(sent, upto), type: "delta" });
+            sent = upto;
+        }
+    };
+
+    return {
+        flush: () => {
+            advance(seen.length);
+        },
+        token: (token: string) => {
+            seen += token;
+
+            const fence = seen.indexOf(TOOL_FENCE);
+
+            advance(fence === -1 ? Math.max(0, seen.length - FENCE_HOLDBACK) : fence);
+        },
+    };
 };
 
 /** A refusal to feed back into the loop, phrased for the model. */
@@ -729,6 +820,12 @@ const generateChat = async (
      */
     level: AiOptInLevel,
     runTool?: ChatToolRunner,
+    /*
+     * Where the turn narrates itself. Optional because narration is not the
+     * answer: without it the turn runs exactly as before and `runPrompt` does not
+     * ask the binding to stream at all.
+     */
+    emit?: ChatStreamEmit,
 ): Promise<ChatResult> => {
     if (binding === undefined) {
         return degraded("no-ai-binding");
@@ -754,7 +851,13 @@ const generateChat = async (
     const model = modelFor(rawArgs.model);
     const system = chatSystemPrompt(level);
     const approval = chatApproval(rawArgs.approval);
-    const toolCalls: { name?: ChatToolName; needs?: AiOptInLevel; refused?: string; sql?: string }[] = [];
+    const toolCalls: ChatToolReport[] = [];
+
+    /** Record a tool outcome once, for both the running narration and the final result. */
+    const report = (call: ChatToolReport): void => {
+        toolCalls.push(call);
+        emit?.({ call, type: "tool" });
+    };
 
     let user = chatUserPrompt(turns, prompt, schema);
 
@@ -765,10 +868,11 @@ const generateChat = async (
      */
     for (let round = 0; round <= MAX_TOOL_CALLS; round += 1) {
         let raw: string | undefined;
+        const narrator = emit === undefined ? undefined : streamNarrator(emit);
 
         try {
             // eslint-disable-next-line no-await-in-loop -- inherently sequential: each round's prompt contains the previous round's result
-            raw = await runPrompt(binding, model, system, user);
+            raw = await runPrompt(binding, model, system, user, narrator?.token);
         } catch {
             // `runPrompt` rejects on its deadline and on any binding failure. The
             // one-shot entry points get this from `attempt`; this loop has no
@@ -790,6 +894,12 @@ const generateChat = async (
 
         const request = toolRequest(reply);
 
+        // Nothing more is coming this round, and no tool block turned up — release
+        // the tail the narrator was holding back in case one did.
+        if (request === undefined) {
+            narrator?.flush();
+        }
+
         // Either the model answered, or it wants a tool it can no longer have:
         // the last round must answer with what it has. A partial answer that says
         // it is partial beats erroring away the work already done. Its tool block
@@ -804,7 +914,7 @@ const generateChat = async (
         if ("refused" in call) {
             // No `name` unless the request named a real tool: three of the four
             // refusal arms (bad JSON, non-object, unknown tool) named none.
-            toolCalls.push({
+            report({
                 ...(call.name === undefined ? {} : { name: call.name }),
                 ...(call.needs === undefined ? {} : { needs: call.needs }),
                 refused: call.refused,
@@ -833,7 +943,7 @@ const generateChat = async (
             if (answered && !approval.allow) {
                 const refused = "the operator declined to run that statement";
 
-                toolCalls.push({ name: call.name, refused, sql: call.sql });
+                report({ name: call.name, refused, sql: call.sql });
                 user = `${user}\n${observation(`refused — ${refused}`)}`;
 
                 continue;
@@ -860,13 +970,13 @@ const generateChat = async (
         if (call.name !== "loadKnowledge" && runTool === undefined) {
             const refused = "no tools are available in this deployment";
 
-            toolCalls.push({ name: call.name, refused });
+            report({ name: call.name, refused });
             user = `${user}\n${observation(`refused — ${refused}`)}`;
 
             continue;
         }
 
-        toolCalls.push({ name: call.name, ...(call.sql === undefined ? {} : { sql: call.sql }) });
+        report({ name: call.name, ...(call.sql === undefined ? {} : { sql: call.sql }) });
 
         let result: string;
 
