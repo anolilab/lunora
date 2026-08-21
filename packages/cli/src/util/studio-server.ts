@@ -20,6 +20,7 @@ import type { Duplex } from "node:stream";
 import { detectAgentRules } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
+    applyStudioAssetCache,
     assetContentType,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
@@ -32,10 +33,8 @@ import {
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
     SEED_ENDPOINT,
+    sendStudioDocument,
     serveJsonHandler,
-    STUDIO_ASSET_CACHE_CONTROL,
-    STUDIO_DOCUMENT_CACHE_CONTROL,
-    studioAssetRevalidation,
     studioAssetsStamp,
     transportRejectionReason,
 } from "@lunora/config/studio-host";
@@ -154,25 +153,13 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     });
 
     const sendAsset = (request: IncomingMessage, response: ServerResponse, body: Buffer, contentType: string, fileName: string): void => {
-        // The entry + stylesheet sit at stable, unhashed URLs, so without these
+        // The entry + stylesheet sit at stable, unhashed URLs, so without cache
         // headers the browser heuristically caches them and serves a rebuilt
-        // `@lunora/studio` stale until a hard reload. The revalidation decision
-        // is the shared one (`@lunora/config/studio-host`), so this host and the
-        // Vite route answer identically: `no-cache` + a stamp-keyed weak ETag,
-        // `304` on a match.
-        const { etag, notModified } = studioAssetRevalidation(fileName, assetsStamp, request.headers["if-none-match"]);
-
-        response.setHeader("Cache-Control", STUDIO_ASSET_CACHE_CONTROL);
-
-        if (etag !== undefined) {
-            response.setHeader("ETag", etag);
-
-            if (notModified) {
-                response.statusCode = 304;
-                response.end();
-
-                return;
-            }
+        // `@lunora/studio` stale until a hard reload. Shared with the Vite route
+        // (`@lunora/config/studio-host`) so the two hosts answer identically; it
+        // sends the `304` itself when the client already holds this version.
+        if (applyStudioAssetCache(request, response, fileName, assetsStamp)) {
+            return;
         }
 
         response.statusCode = 200;
@@ -327,14 +314,8 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         }
 
         // Everything else is an SPA route → serve the document (history fallback),
-        // so a hard load of a deep link like `/data` boots the router there. The
-        // document embeds the admin token on loopback binds: `no-store` keeps it
-        // out of the browser's disk cache, and it never carries an ETag (a cached
-        // `304` for a token-bearing document would be its own bug).
-        response.statusCode = 200;
-        response.setHeader("Cache-Control", STUDIO_DOCUMENT_CACHE_CONTROL);
-        response.setHeader("Content-Type", "text/html; charset=utf-8");
-        response.end(document);
+        // so a hard load of a deep link like `/data` boots the router there.
+        sendStudioDocument(response, document);
     });
 
     server.on("upgrade", (request, socket, head) => {

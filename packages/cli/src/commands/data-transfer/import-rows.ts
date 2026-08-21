@@ -10,6 +10,18 @@ import { LunoraError } from "@lunora/errors";
 import type { StorageRemapReport } from "./storage-remap";
 import { remapStorageReferences } from "./storage-remap";
 
+/**
+ * A validated `{ table, doc }` import envelope. `table` is `string` because
+ * {@link createRowTransformer}'s parser has already thrown for anything else —
+ * carrying that proof in the type is what keeps the rewrite half from
+ * re-checking it.
+ */
+interface ImportEnvelope {
+    [key: string]: unknown;
+    doc?: unknown;
+    table: string;
+}
+
 interface RowTransformConfig {
     /**
      * A foreign source's path rewrite, applied to the same parsed document as
@@ -57,7 +69,7 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
         return JSON.stringify({ doc: parsedDocument, table });
     };
 
-    const parseEnvelope = (trimmed: string, lineNumber: number): Record<string, unknown> => {
+    const parseEnvelope = (trimmed: string, lineNumber: number): ImportEnvelope => {
         let parsed: Record<string, unknown>;
 
         try {
@@ -79,15 +91,15 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
             throw new LunoraError("INTERNAL", `line ${String(lineNumber)}: import envelope is missing a string \`table\``);
         }
 
-        return parsed;
+        return parsed as ImportEnvelope;
     };
 
-    const remapEnvelope = (parsed: Record<string, unknown>): string => {
-        if (typeof parsed["table"] === "string" && parsed["doc"] !== null && typeof parsed["doc"] === "object" && !Array.isArray(parsed["doc"])) {
-            let document = parsed["doc"] as Record<string, unknown>;
+    const remapEnvelope = (parsed: ImportEnvelope): string => {
+        if (parsed.doc !== null && typeof parsed.doc === "object" && !Array.isArray(parsed.doc)) {
+            let document = parsed.doc as Record<string, unknown>;
 
             if (storageIdMap !== undefined) {
-                const remap = remapStorageReferences(document, storageIdMap, parsed["table"], storageColumns);
+                const remap = remapStorageReferences(document, storageIdMap, parsed.table, storageColumns);
 
                 document = remap.document;
                 report.rewritten += remap.rewritten;
@@ -97,9 +109,11 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
 
             // Rebuild from the parsed envelope so any field beyond
             // `{ table, doc }` survives the rewrite.
-            return JSON.stringify({ ...parsed, doc: remapDocument === undefined ? document : remapDocument(document, parsed["table"]) });
+            return JSON.stringify({ ...parsed, doc: remapDocument === undefined ? document : remapDocument(document, parsed.table) });
         }
 
+        // Reached when `doc` is absent, null or an array: nothing to rewrite,
+        // but this is the remap path, which re-serialises either way.
         return JSON.stringify(parsed);
     };
 

@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { detectAgentRules } from "@lunora/config";
 import type { LocalEndpointHandler, StudioAssets } from "@lunora/config/studio-host";
 import {
+    applyStudioAssetCache,
     assetContentType,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
@@ -22,9 +23,8 @@ import {
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
     SEED_ENDPOINT,
+    sendStudioDocument,
     serveJsonHandler,
-    STUDIO_ASSET_CACHE_CONTROL,
-    studioAssetRevalidation,
     studioAssetsStamp,
     transportRejectionReason,
 } from "@lunora/config/studio-host";
@@ -211,20 +211,11 @@ const createStudioHandler = (
         // Key the ETag on the requested file (not just its kind) so each chunk
         // revalidates independently; the rebuild stamp busts them all at once.
         const fileName = pathname.slice(pathname.lastIndexOf("/") + 1);
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
-        const { etag, notModified } = studioAssetRevalidation(fileName, stamp, request.headers?.["if-none-match"]);
 
-        response.setHeader("Cache-Control", STUDIO_ASSET_CACHE_CONTROL);
-
-        if (etag !== undefined) {
-            response.setHeader("ETag", etag);
-
-            if (notModified) {
-                response.statusCode = 304;
-                response.end();
-
-                return;
-            }
+        // Shared with the CLI host (`@lunora/config/studio-host`) so the two
+        // cannot drift; it sends the `304` itself on a match.
+        if (applyStudioAssetCache(request, response, fileName, stamp)) {
+            return;
         }
 
         if (isStyle) {
@@ -335,7 +326,9 @@ const createStudioHandler = (
             styleHref: STUDIO_STYLE_PATH,
         });
 
-        sendOk(response, html, "text/html; charset=utf-8");
+        // The document embeds the admin token, so it is `no-store` and never
+        // carries an ETag — same helper the CLI host serves its document with.
+        sendStudioDocument(response, html);
     };
 };
 
