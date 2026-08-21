@@ -98,6 +98,13 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
     const runtimeSockets = new Map<string, NodeSocket>();
     const handleIds = new WeakMap<SocketHandle, string>();
 
+    // O(1) raw → state for `handleFor`, which the engine calls per inbound
+    // frame — a linear scan of `runtimeSockets` here is O(live sockets) per
+    // message. Every raw enters via `accept` (no foreign sockets reach this
+    // host), so no negative cache is needed. Reassigned on `simulateRecycle`
+    // because a WeakMap cannot be cleared.
+    let byRaw = new WeakMap<object, NodeSocket>();
+
     /**
      * Every durable write is guarded on `database.open`. A socket handle can
      * outlive the connection — a caller that closes the platform still holds
@@ -127,6 +134,10 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
             close: (_code, _reason) => {
                 state.closed = true;
                 runtimeSockets.delete(state.id);
+
+                if (state.raw !== undefined) {
+                    byRaw.delete(state.raw as object);
+                }
 
                 // A closed socket is never restored, so its durable row is
                 // garbage the moment it closes. Cloudflare drops the socket from
@@ -173,6 +184,7 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
             };
 
             runtimeSockets.set(id, state);
+            byRaw.set(raw as object, state);
 
             // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
             upsertRow.run(id, attachment === undefined ? null : serialize(attachment), JSON.stringify([...tagSet]));
@@ -185,7 +197,9 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
             return filtered.map((state) => state.handle);
         },
-        handleFor: (raw) => [...runtimeSockets.values()].find((state) => state.raw === raw)?.handle,
+        // Explicit `undefined` guard: a restored socket's `raw` is `undefined`,
+        // and without the guard a `handleFor(undefined)` lookup could match one.
+        handleFor: (raw) => (raw === undefined ? undefined : byRaw.get(raw as object)?.handle),
         idFor: (handle) => {
             const id = handleIds.get(handle);
 
@@ -255,10 +269,20 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
             runtimeSockets.set(id, state);
 
+            // A restored-but-previously-unknown id has no durable row, and
+            // `persistAttachment`/`persistTags` are UPDATE-only — without this
+            // upsert a later `serializeAttachment` on the restored handle would
+            // silently write nothing, violating SocketHost guarantee 2.
+            if (database.open) {
+                // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
+                upsertRow.run(id, state.attachment === undefined ? null : serialize(state.attachment), JSON.stringify([...state.tags]));
+            }
+
             return createHandle(state);
         },
         simulateRecycle: () => {
             runtimeSockets.clear();
+            byRaw = new WeakMap();
         },
         socket,
     };

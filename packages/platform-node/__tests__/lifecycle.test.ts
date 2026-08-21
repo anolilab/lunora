@@ -244,6 +244,52 @@ describe("lifecycle disposers", () => {
 
             second.dispose();
         });
+
+        it("persists attachments written on a restored socket that never had a durable row", () => {
+            expect.assertions(1);
+
+            const path = join(workdir, "socket-restore-upsert.sqlite3");
+            const first = createNodeShardHost({ path });
+            const firstSockets = createNodeSocketHost(first.database);
+
+            // A synthetic id this host never durably tracked: restore must
+            // create the row, or the later write silently updates nothing.
+            const restored = firstSockets.restoreSocket("id-x", { seed: true });
+
+            restored.serializeAttachment({ roomId: "room-9" });
+
+            first.dispose();
+
+            const second = createNodeShardHost({ path });
+            const secondSockets = createNodeSocketHost(second.database);
+
+            expect(secondSockets.restoreSocket("id-x", undefined).deserializeAttachment()).toStrictEqual({ roomId: "room-9" });
+
+            second.dispose();
+        });
+
+        it("handleFor resolves each raw to its own handle and never matches a restored socket via undefined", () => {
+            expect.assertions(4);
+
+            const path = join(workdir, "socket-handle-for.sqlite3");
+            const host = createNodeShardHost({ path });
+            const sockets = createNodeSocketHost(host.database);
+
+            const raws = [{}, {}, {}];
+            const handles = raws.map((raw) => sockets.socket.accept(raw, undefined, []));
+
+            // A restored socket has `raw: undefined`; `handleFor(undefined)`
+            // must not resolve to it.
+            sockets.restoreSocket("restored-id", undefined);
+
+            for (const [index, raw] of raws.entries()) {
+                expect(sockets.socket.handleFor(raw)).toBe(handles[index]);
+            }
+
+            expect(sockets.socket.handleFor(undefined)).toBeUndefined();
+
+            host.dispose();
+        });
     });
 
     describe("close()", () => {
