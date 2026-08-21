@@ -1061,8 +1061,28 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 await context_.adapter.delete({ model: "member", where: [{ field: "id", value: memberId }] });
             }),
 
+        // `internalAdapter.deleteUser` removes only `session`/`account`/`user` rows.
+        // FK cascade may be off (D1), so unwind the user-keyed plugin tables
+        // explicitly — orphaned `twoFactor` rows would retain the TOTP secret and
+        // backup codes of a deleted account. Audit log rows survive by design
+        // (forensics), as do invitations addressed to the user's email (email-keyed).
         removeUser: ({ userId }) =>
             withContext(async (context_) => {
+                const tables = getAuthTables(context_.options);
+                const userKeyedModels = ["member", "teamMember", "passkey", "twoFactor"] as const;
+
+                for (const model of userKeyedModels) {
+                    if (tables[model]) {
+                        // eslint-disable-next-line no-await-in-loop -- sequential per-table cascade; table count is small and fixed
+                        await context_.adapter.deleteMany({ model, where: [{ field: "userId", value: userId }] });
+                    }
+                }
+
+                if (tables["invitation"]) {
+                    // Invitations the user *sent*; ones addressed to them are email-keyed and stay.
+                    await context_.adapter.deleteMany({ model: "invitation", where: [{ field: "inviterId", value: userId }] });
+                }
+
                 await context_.internalAdapter.deleteUserSessions(userId);
                 await context_.internalAdapter.deleteUser(userId);
             }),

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { createAuthAdmin } from "../src/admin";
 import { createAuth } from "../src/create-auth";
-import { admin } from "../src/plugins";
+import { admin, organization, twoFactor } from "../src/plugins";
 
 /**
  * Round-trip behaviour for `createAuthAdmin`, exercised against the real
@@ -229,6 +229,64 @@ describe("createAuthAdmin", () => {
         await adminApi.removeUser({ userId: user.id });
 
         expect(userRow(user.id)).toBeUndefined();
+    });
+
+    it("removes a user cleanly when no plugin tables exist", async () => {
+        expect.assertions(1);
+
+        // The default harness has no organization/two-factor/passkey plugins,
+        // so every cascade gate must skip rather than throw.
+        const user = await adminApi.createUser({ email: "noplugins@example.com", name: "NoPlugins" });
+
+        await expect(adminApi.removeUser({ userId: user.id })).resolves.toBeUndefined();
+    });
+
+    it("cascades removeUser over user-keyed plugin tables", async () => {
+        expect.assertions(5);
+
+        const pluginDatabase: Record<string, unknown[]> = {
+            ...seedMemoryDatabase(),
+            invitation: [],
+            member: [],
+            organization: [],
+            team: [],
+            teamMember: [],
+            twoFactor: [],
+        };
+        const pluginAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(pluginDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), organization({ teams: { enabled: true } }), twoFactor()],
+            secret: SECRET,
+        });
+        const pluginAdmin = createAuthAdmin(pluginAuth);
+
+        const user = await pluginAdmin.createUser({ email: "cascade@example.com", name: "Cascade" });
+        const survivor = await pluginAdmin.createUser({ email: "stays@example.com", name: "Stays" });
+
+        const org = await pluginAdmin.createOrganization({ name: "Cascade Org", ownerId: user.id });
+
+        await pluginAdmin.addMember({ organizationId: org.id, userId: survivor.id });
+        await pluginAdmin.inviteMember({ email: "guest@example.com", inviterId: user.id, organizationId: org.id });
+
+        // The harness has no endpoint-level 2FA/team enrolment; seed the
+        // user-keyed rows directly — the cascade only cares about the rows.
+        pluginDatabase["twoFactor"]?.push({ backupCodes: "codes", id: "tf1", secret: "totp-secret", userId: user.id });
+        pluginDatabase["teamMember"]?.push({ createdAt: new Date(), id: "tm1", teamId: "team1", userId: user.id });
+
+        await pluginAdmin.removeUser({ userId: user.id });
+
+        const rowsFor = (model: string, field: string): unknown[] =>
+            (pluginDatabase[model] ?? []).filter((row) => (row as Record<string, unknown>)[field] === user.id);
+
+        expect(rowsFor("member", "userId")).toHaveLength(0);
+        expect(rowsFor("teamMember", "userId")).toHaveLength(0);
+        expect(rowsFor("twoFactor", "userId")).toHaveLength(0);
+        expect(rowsFor("invitation", "inviterId")).toHaveLength(0);
+
+        // Scoped strictly to the removed user: the survivor's membership stays.
+        expect((pluginDatabase["member"] ?? []).filter((row) => (row as Record<string, unknown>)["userId"] === survivor.id)).toHaveLength(1);
     });
 
     it("reports capabilities from the enabled plugins", async () => {
