@@ -118,7 +118,6 @@
         "@better-auth/passkey": "catalog:auth",
         "@better-auth/scim": "catalog:auth",
         "@lunora/errors": "1.0.0-alpha.22",
-        "@lunora/server": "1.0.0-alpha.80",
         "@lunora/values": "1.0.0-alpha.27",
         "@visulima/disposable-email-domains": "catalog:email",
         "@visulima/email-verifier": "catalog:email",
@@ -130,6 +129,7 @@
         "@better-auth/sso": "catalog:auth",
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/server": "1.0.0-alpha.80",
         "@types/better-sqlite3": "catalog:tooling",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -146,6 +146,7 @@
     "peerDependencies": {
         "@better-auth/core": ">=1.7.1 <2.0.0-0",
         "@better-auth/sso": ">=1.7.1 <2.0.0-0",
+        "@lunora/server": ">=1.0.0-alpha.24 <2.0.0-0",
         "better-auth": ">=1.7.1 <2.0.0-0"
     },
     "peerDependenciesMeta": {
