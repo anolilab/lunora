@@ -573,6 +573,57 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
 
             expect(mirror.query<{ id: string }>("SELECT id FROM events")).toStrictEqual([{ id: "keep-1" }]);
         });
+
+        // Schema version 3: the primary key's affinity is inferred from the
+        // first observed id too — a version-2 mirror declared it TEXT and
+        // sorted/range-filtered numeric ids lexicographically.
+        it("declares a numeric primary key with numeric affinity so ORDER BY id sorts numerically", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("items", [
+                    { data: { id: 1 }, type: "insert" },
+                    { data: { id: 2 }, type: "insert" },
+                    { data: { id: 9 }, type: "insert" },
+                    { data: { id: 10 }, type: "insert" },
+                ]),
+            );
+
+            // A version-2 (TEXT pk) mirror returned 1, 10, 2, 9.
+            expect(mirror.query<{ id: number }>("SELECT id FROM items ORDER BY id")).toStrictEqual([{ id: 1 }, { id: 2 }, { id: 9 }, { id: 10 }]);
+        });
+
+        it("compares a numeric primary key numerically in WHERE", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("items", [
+                    { data: { id: 1 }, type: "insert" },
+                    { data: { id: 2 }, type: "insert" },
+                    { data: { id: 9 }, type: "insert" },
+                    { data: { id: 10 }, type: "insert" },
+                ]),
+            );
+
+            // Lexicographically "10" < "5" — only numeric affinity gets {9, 10}.
+            expect(mirror.query<{ id: number }>("SELECT id FROM items WHERE id > ? ORDER BY id", [5])).toStrictEqual([{ id: 9 }, { id: 10 }]);
+        });
+
+        it("still declares a string primary key TEXT", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(createTableDiff("named", [{ data: { id: "a" }, type: "insert" }]));
+
+            const [row] = mirror.query<{ type: string }>("SELECT type FROM pragma_table_info('named') WHERE name = 'id'");
+
+            expect(row?.type).toBe("TEXT");
+        });
     });
 
     // Plan 218: mirror schema version — a mirror created before column

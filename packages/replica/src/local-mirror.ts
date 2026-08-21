@@ -75,8 +75,14 @@ const SCHEMA_VERSION_META_KEY = "schema_version";
  * when the stored version doesn't match this constant, so a stale mirror
  * re-seeds itself (with correct affinities) from the next `applyDiff`
  * instead of staying wrong forever.
+ *
+ * Version 3: the primary-key column's affinity is now inferred from the
+ * first observed id too, instead of always being declared TEXT. A version-2
+ * mirror with a numeric primary key sorted and range-filtered it
+ * lexicographically (`ORDER BY id` put 10 before 9, `WHERE id > 5` compared
+ * strings), so older mirrors re-seed once on next open.
  */
-const MIRROR_SCHEMA_VERSION = 2;
+const MIRROR_SCHEMA_VERSION = 3;
 
 /** SQLite column type affinity declared for a mirrored table's column. */
 type ColumnAffinity = "INTEGER" | "REAL" | "TEXT";
@@ -441,6 +447,25 @@ class LocalMirror {
     }
 
     /**
+     * Infer the affinity to declare for the primary-key column from the
+     * first non-null id observed in the diff (`data[pk]` on insert/update,
+     * `change.id` on delete/update). A diff that never carries an id (e.g.
+     * empty data) falls back to `TEXT` — same first-observed-value trade-off
+     * as {@link LocalMirror.#inferColumnAffinities}.
+     */
+    static #inferPkAffinity(diff: TableDiff, pk: string): ColumnAffinity {
+        for (const change of diff.changes) {
+            const value: unknown = ("data" in change ? change.data[pk] : undefined) ?? ("id" in change ? change.id : undefined);
+
+            if (value !== null && value !== undefined) {
+                return inferColumnAffinity(value);
+            }
+        }
+
+        return "TEXT";
+    }
+
+    /**
      * Ensure the target table exists with all columns needed by the diff.
      *
      * - If the table doesn't exist yet, CREATE it with columns derived from the diff data (PK + every non-delete column), each declared with the affinity inferred from its first observed value.
@@ -457,8 +482,13 @@ class LocalMirror {
         const existing = this.#db.query<{ name: string }>(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, [diff.table]);
 
         if (existing.length === 0) {
-            // Create the table with all required columns
-            let columnDefs = `${escapeIdentifier_(pk)} TEXT PRIMARY KEY NOT NULL`;
+            // Create the table with all required columns. A pk declared
+            // exactly `INTEGER PRIMARY KEY` becomes SQLite's rowid alias —
+            // acceptable here (tables are re-created from scratch and only
+            // ever bind the server-provided id), but it changes
+            // `PRAGMA table_info` output.
+            const pkAffinity = LocalMirror.#inferPkAffinity(diff, pk);
+            let columnDefs = `${escapeIdentifier_(pk)} ${pkAffinity} PRIMARY KEY NOT NULL`;
 
             for (const key of requiredColumns) {
                 columnDefs += `, ${escapeIdentifier_(key)} ${affinities.get(key) ?? "TEXT"}`;
