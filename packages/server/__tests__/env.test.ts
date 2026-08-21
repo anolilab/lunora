@@ -260,14 +260,17 @@ describe("redactSecrets", () => {
         expect(redactSecrets("Api_Key=abc")).toBe("Api_Key=[redacted]");
     });
 
-    it('does not treat ordinary words ending in "key" as secret keys', () => {
+    it("over-redacts ordinary words ending in a secret suffix, by design", () => {
         expect.assertions(3);
 
-        // `MONKEY` and `APIKEY` are structurally identical, so the exclusion is
-        // a word list rather than a boundary rule — see shared/secret-key.ts.
-        expect(redactSecrets("MONKEY=banana")).toBe("MONKEY=banana");
-        expect(redactSecrets("monkey: banana")).toBe("monkey: banana");
-        expect(redactSecrets("donkey=grey")).toBe("donkey=grey");
+        // `MONKEY` and `APIKEY` are structurally identical — all-caps compound,
+        // suffix at the end, no separator — so no rule can mask one and not the
+        // other. Masking `MONKEY` costs a confusing log line; missing `APITOKEN`
+        // costs the credential, so redaction fails toward masking. See
+        // shared/secret-key.ts.
+        expect(redactSecrets("MONKEY=banana")).toBe("MONKEY=[redacted]");
+        expect(redactSecrets("monkey: banana")).toBe("monkey=[redacted]");
+        expect(redactSecrets("sortKey=created_at")).toBe("sortKey=[redacted]");
     });
 
     it("masks bare high-entropy >=24-char tokens", () => {
