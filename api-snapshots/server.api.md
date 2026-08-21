@@ -304,6 +304,7 @@ interface DefinePolicyInput<Context = unknown> {
 ```ts
 interface DefinePresenceOptions {
     disconnectGraceMs?: number;
+    maxMembers?: number;
     ttlMs?: number;
 }
 ```
