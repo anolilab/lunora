@@ -2,7 +2,7 @@
 import { computed, ref, useId } from "vue";
 
 import { isFlowEnabled } from "../core/flow-gate";
-import { ROLE_OPTIONS, rowActionLabel } from "../core/labels";
+import { firstLabel, rowActionLabel, ROLE_OPTIONS } from "../core/labels";
 import { createMembersController } from "../core/members";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
@@ -55,13 +55,13 @@ const onCancelInvitation = (id: string): void => {
         <p v-if="state.loading" class="lunora-auth-card__description" role="status">{{ t.loading }}</p>
         <ul v-else class="lunora-auth-list">
             <li v-for="member in state.members" :key="member.id ?? member.userId ?? member.user?.email" class="lunora-auth-list__item">
-                <span class="lunora-auth-list__label">{{ member.user?.email ?? member.user?.name ?? member.userId }} · {{ member.role }}</span>
+                <span class="lunora-auth-list__label">{{ firstLabel(member.user?.email, member.user?.name, member.userId) }} · {{ member.role }}</span>
                 <button
                     v-if="member.id !== undefined"
                     class="lunora-auth-link"
                     type="button"
                     :disabled="state.busy"
-                    :aria-label="rowActionLabel(t.remove, member.user?.email ?? member.user?.name ?? member.userId)"
+                    :aria-label="rowActionLabel(t.remove, firstLabel(member.user?.email, member.user?.name, member.userId))"
                     @click="onRemoveMember(member.id)"
                 >
                     {{ t.remove }}

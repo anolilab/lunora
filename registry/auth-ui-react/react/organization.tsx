@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { useId, useState } from "react";
 
 import { isFlowEnabled } from "../core/flow-gate";
-import { ROLE_OPTIONS, rowActionLabel, slugify } from "../core/labels";
+import { firstLabel, ROLE_OPTIONS, rowActionLabel, slugify } from "../core/labels";
 import { createMembersController } from "../core/members";
 import { createOrganizationsController } from "../core/organization-list";
 import { createOrganizationSettingsController } from "../core/organization-settings";
@@ -71,12 +71,12 @@ const OrganizationsCard = (): ReactElement | null => {
 
                     return (
                         <li className="lunora-auth-list__item" key={id ?? organization.slug ?? organization.name}>
-                            <span className="lunora-auth-list__label">{organization.name ?? organization.slug}</span>
+                            <span className="lunora-auth-list__label">{firstLabel(organization.name, organization.slug)}</span>
                             <span className="lunora-auth-list__actions">
                                 {id === undefined ? null : (
                                     <>
                                         <button
-                                            aria-label={rowActionLabel(t.switchOrganization, organization.name ?? organization.slug)}
+                                            aria-label={rowActionLabel(t.switchOrganization, firstLabel(organization.name, organization.slug))}
                                             className="lunora-auth-link"
                                             disabled={state.busy}
                                             onClick={() => {
@@ -87,7 +87,7 @@ const OrganizationsCard = (): ReactElement | null => {
                                             {t.switchOrganization}
                                         </button>
                                         <button
-                                            aria-label={rowActionLabel(t.remove, organization.name ?? organization.slug)}
+                                            aria-label={rowActionLabel(t.remove, firstLabel(organization.name, organization.slug))}
                                             className="lunora-auth-link"
                                             disabled={state.busy}
                                             onClick={() => {
@@ -173,11 +173,11 @@ const MembersCard = (): ReactElement | null => {
                         return (
                             <li className="lunora-auth-list__item" key={memberId ?? member.userId ?? member.user?.email}>
                                 <span className="lunora-auth-list__label">
-                                    {member.user?.email ?? member.user?.name ?? member.userId} · {member.role}
+                                    {firstLabel(member.user?.email, member.user?.name, member.userId)} · {member.role}
                                 </span>
                                 {memberId === undefined ? null : (
                                     <button
-                                        aria-label={rowActionLabel(t.remove, member.user?.email ?? member.user?.name ?? member.userId)}
+                                        aria-label={rowActionLabel(t.remove, firstLabel(member.user?.email, member.user?.name, member.userId))}
                                         className="lunora-auth-link"
                                         disabled={state.busy}
                                         onClick={() => {

@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 
 import { queryParameter } from "../core/browser-location";
 import { isFlowEnabled } from "../core/flow-gate";
-import { rowActionLabel } from "../core/labels";
+import { firstLabel, rowActionLabel } from "../core/labels";
 import { createAuthorizedAppsController, createConsentController, scopeLabels } from "../core/oauth-provider";
 import { AuthCard, FormBanner, Skeleton } from "./primitives";
 import { useAuthUI } from "./provider";
@@ -112,9 +112,9 @@ const AuthorizedAppsCard = (): ReactElement | null => {
                 <ul className="lunora-auth-list">
                     {state.items.map((consent) => (
                         <li className="lunora-auth-list__item" key={consent.id}>
-                            <span className="lunora-auth-list__label">{consent.clientName ?? consent.clientId}</span>
+                            <span className="lunora-auth-list__label">{firstLabel(consent.clientName, consent.clientId)}</span>
                             <button
-                                aria-label={rowActionLabel(t.revokeAccess, consent.clientName ?? consent.clientId)}
+                                aria-label={rowActionLabel(t.revokeAccess, firstLabel(consent.clientName, consent.clientId))}
                                 className="lunora-auth-button lunora-auth-button--danger"
                                 disabled={state.busy}
                                 onClick={() => {

@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 
 import { queryParameter } from "../core/browser-location";
 import { createAcceptInvitationController, createUserInvitationsController } from "../core/invitations";
-import { rowActionLabel } from "../core/labels";
+import { firstLabel, rowActionLabel } from "../core/labels";
 import { createResendVerificationController, createVerifyEmailController } from "../core/verify-email";
 import { FormField } from "./form";
 import { onSubmit } from "./on-submit";
@@ -129,10 +129,10 @@ const UserInvitationsCard = (): ReactElement => {
                 <ul className="lunora-auth-list">
                     {state.items.map((invitation) => (
                         <li className="lunora-auth-list__item" key={invitation.id}>
-                            <span className="lunora-auth-list__label">{invitation.organizationName ?? invitation.email}</span>
+                            <span className="lunora-auth-list__label">{firstLabel(invitation.organizationName, invitation.email)}</span>
                             <span className="lunora-auth-list__actions">
                                 <button
-                                    aria-label={rowActionLabel(t.invitationAccept, invitation.organizationName ?? invitation.email)}
+                                    aria-label={rowActionLabel(t.invitationAccept, firstLabel(invitation.organizationName, invitation.email))}
                                     className="lunora-auth-button"
                                     disabled={state.busy}
                                     onClick={() => {
@@ -143,7 +143,7 @@ const UserInvitationsCard = (): ReactElement => {
                                     {t.invitationAccept}
                                 </button>
                                 <button
-                                    aria-label={rowActionLabel(t.invitationReject, invitation.organizationName ?? invitation.email)}
+                                    aria-label={rowActionLabel(t.invitationReject, firstLabel(invitation.organizationName, invitation.email))}
                                     className="lunora-auth-button lunora-auth-button--secondary"
                                     disabled={state.busy}
                                     onClick={() => {

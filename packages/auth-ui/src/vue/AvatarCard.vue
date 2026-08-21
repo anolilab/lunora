@@ -2,7 +2,7 @@
 // Avatar upload. Rendered only when the app configured an `avatar.upload`
 // handler — without one there is nowhere to put the bytes, and <ProfileCard>'s
 // URL field is the honest fallback.
-import { useTemplateRef } from "vue";
+import { useId } from "vue";
 
 import { ACCEPT_ATTRIBUTE, createAvatarUploadController } from "../core/avatar";
 import AuthCard from "./AuthCard.vue";
@@ -16,7 +16,7 @@ import UserAvatar from "./UserAvatar.vue";
 const context = useAuthUIContextRef();
 const t = context.value.localization;
 const { actions, state } = useController(createAvatarUploadController);
-const picker = useTemplateRef<HTMLInputElement>("picker");
+const pickerId = useId();
 
 const onPick = (event: Event): void => {
     const input = event.target as HTMLInputElement;
@@ -31,10 +31,6 @@ const onPick = (event: Event): void => {
     }
 };
 
-const onBrowse = (): void => {
-    picker.value?.click();
-};
-
 const onRemove = (): void => {
     void actions.remove();
 };
@@ -46,16 +42,25 @@ const onRemove = (): void => {
         <div class="lunora-auth-avatar-row">
             <UserAvatar :size="64" :user="{ image: state.imageUrl }" />
             <div class="lunora-auth-avatar-row__actions">
-                <input
-                    ref="picker"
-                    class="lunora-auth-visually-hidden"
-                    type="file"
-                    tabindex="-1"
-                    aria-hidden="true"
-                    :accept="ACCEPT_ATTRIBUTE"
-                    @change="onPick"
-                />
-                <button class="lunora-auth-button" type="button" :disabled="state.status === 'submitting'" @click="onBrowse">{{ t.avatarUpload }}</button>
+                <!--
+                    A label wrapping the input, not a button that clicks it: the
+                    input is the only control, so there is one tab stop, the label
+                    text is its accessible name, and Enter or Space opens the
+                    picker natively. The input stays focusable and out of the ARIA
+                    tree's way — `aria-hidden` on something focusable is what
+                    leaves focus with no accessible target.
+                -->
+                <label class="lunora-auth-button" :for="pickerId">
+                    <input
+                        :id="pickerId"
+                        class="lunora-auth-visually-hidden"
+                        type="file"
+                        :accept="ACCEPT_ATTRIBUTE"
+                        :disabled="state.status === 'submitting'"
+                        @change="onPick"
+                    />
+                    {{ t.avatarUpload }}
+                </label>
                 <button
                     v-if="state.imageUrl !== undefined && state.imageUrl !== ''"
                     class="lunora-auth-button lunora-auth-button--danger"

@@ -18,7 +18,7 @@
     const t = context.localization;
     const { actions, state: logo } = controllerStore((context_) => createOrganizationLogoController(context_, { organizationId }));
 
-    let picker = $state<HTMLInputElement | undefined>(undefined);
+    const pickerId = `lunora-auth-picker-${crypto.randomUUID()}`;
 </script>
 
 {#if context.avatar.upload !== undefined && context.plugins.organization}
@@ -31,36 +31,29 @@
                 <img alt="" class="lunora-auth-avatar" src={$logo.logoUrl} />
             {/if}
             <div class="lunora-auth-avatar-row__actions">
-                <input
-                    accept={ACCEPT_ATTRIBUTE}
-                    aria-hidden="true"
-                    bind:this={picker}
-                    class="lunora-auth-visually-hidden"
-                    onchange={(event) => {
-                        const file = event.currentTarget.files?.[0];
+                <!-- A label wrapping the input — see AvatarCard.svelte. -->
+                <label class="lunora-auth-button" for={pickerId}>
+                    <input
+                        accept={ACCEPT_ATTRIBUTE}
+                        id={pickerId}
+                        class="lunora-auth-visually-hidden"
+                        disabled={$logo.status === "submitting"}
+                        onchange={(event) => {
+                            const file = event.currentTarget.files?.[0];
 
-                        // Clear the input so re-picking the same file after a
-                        // failure still fires `change` — browsers suppress it when
-                        // the value is unchanged.
-                        event.currentTarget.value = "";
+                            // Clear the input so re-picking the same file after a
+                            // failure still fires `change` — browsers suppress it when
+                            // the value is unchanged.
+                            event.currentTarget.value = "";
 
-                        if (file) {
-                            void actions.upload(file);
-                        }
-                    }}
-                    tabindex={-1}
-                    type="file"
-                />
-                <button
-                    class="lunora-auth-button"
-                    disabled={$logo.status === "submitting"}
-                    onclick={() => {
-                        picker?.click();
-                    }}
-                    type="button"
-                >
+                            if (file) {
+                                void actions.upload(file);
+                            }
+                        }}
+                        type="file"
+                    />
                     {t.avatarUpload}
-                </button>
+                </label>
                 {#if $logo.logoUrl !== undefined && $logo.logoUrl !== ""}
                     <button
                         class="lunora-auth-button lunora-auth-button--danger"

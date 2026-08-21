@@ -4244,6 +4244,12 @@ const email = (value: string, localization: Localization): string | undefined =>
 };
 ```
 
+### `firstLabel` (const)
+
+```ts
+const firstLabel = (...candidates: ReadonlyArray<string | undefined>): string | undefined => candidates.find((candidate) => candidate !== undefined && candidate.trim() !== "");
+```
+
 ### `getToasts` (const)
 
 ```ts
@@ -4648,7 +4654,10 @@ const resolveThemeVariables = (theme?: (defaults: ThemeTokens) => ThemeTokens): 
 ### `rowActionLabel` (const)
 
 ```ts
-const rowActionLabel = (action: string, subject: string | undefined): string => (subject === undefined || subject === "" ? action : `${action}: ${subject}`);
+const rowActionLabel = (action: string, subject: string | undefined): string => {
+    const trimmed = subject?.trim();
+    return trimmed === undefined || trimmed === "" ? action : `${action}: ${trimmed}`;
+};
 ```
 
 ### `scopeLabels` (const)
@@ -9529,6 +9538,12 @@ const email = (value: string, localization: Localization): string | undefined =>
 };
 ```
 
+### `firstLabel` (const)
+
+```ts
+const firstLabel = (...candidates: ReadonlyArray<string | undefined>): string | undefined => candidates.find((candidate) => candidate !== undefined && candidate.trim() !== "");
+```
+
 ### `getToasts` (const)
 
 ```ts
@@ -9933,7 +9948,10 @@ const resolveThemeVariables = (theme?: (defaults: ThemeTokens) => ThemeTokens): 
 ### `rowActionLabel` (const)
 
 ```ts
-const rowActionLabel = (action: string, subject: string | undefined): string => (subject === undefined || subject === "" ? action : `${action}: ${subject}`);
+const rowActionLabel = (action: string, subject: string | undefined): string => {
+    const trimmed = subject?.trim();
+    return trimmed === undefined || trimmed === "" ? action : `${action}: ${trimmed}`;
+};
 ```
 
 ### `scopeLabels` (const)

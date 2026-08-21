@@ -9,7 +9,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, Injector, input }
 import { queryParameter } from "../core/browser-location";
 import type { ResourceState } from "../core/create-resource-controller";
 import { isFlowEnabled } from "../core/flow-gate";
-import { rowActionLabel } from "../core/labels";
+import { firstLabel, rowActionLabel } from "../core/labels";
 import type { AuthorizedAppsActions, ConsentActions, ConsentState } from "../core/oauth-provider";
 import { createAuthorizedAppsController, createConsentController, scopeLabels } from "../core/oauth-provider";
 import type { OAuthConsent } from "../core/types";
@@ -124,12 +124,12 @@ class ConsentCardComponent implements OnInit {
                     <ul class="lunora-auth-list">
                         @for (consent of state().items; track consent.id) {
                             <li class="lunora-auth-list__item">
-                                <span class="lunora-auth-list__label">{{ consent.clientName ?? consent.clientId }}</span>
+                                <span class="lunora-auth-list__label">{{ firstLabel(consent.clientName, consent.clientId) }}</span>
                                 <button
                                     class="lunora-auth-button lunora-auth-button--danger"
                                     type="button"
                                     [disabled]="state().busy"
-                                    [attr.aria-label]="rowActionLabel(t.revokeAccess, consent.clientName ?? consent.clientId)"
+                                    [attr.aria-label]="rowActionLabel(t.revokeAccess, firstLabel(consent.clientName, consent.clientId))"
                                     (click)="revoke(consent.id ?? '')"
                                 >
                                     {{ t.revokeAccess }}
@@ -146,6 +146,9 @@ class ConsentCardComponent implements OnInit {
     `,
 })
 class AuthorizedAppsCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly firstLabel = firstLabel;
+
     /** Delegates to the shared helper — Angular templates can only call members. */
     protected readonly rowActionLabel = rowActionLabel;
     private readonly context = injectAuthUIContext();

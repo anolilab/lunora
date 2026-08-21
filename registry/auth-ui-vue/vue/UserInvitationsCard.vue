@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Every invitation waiting for the signed-in user, decidable in place.
 import { createUserInvitationsController } from "../core/invitations";
-import { rowActionLabel } from "../core/labels";
+import { firstLabel, rowActionLabel } from "../core/labels";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";
@@ -28,13 +28,13 @@ const onReject = (id?: string): void => {
         <Skeleton v-if="state.loading" :rows="2" />
         <ul v-else class="lunora-auth-list">
             <li v-for="invitation in state.items" :key="invitation.id" class="lunora-auth-list__item">
-                <span class="lunora-auth-list__label">{{ invitation.organizationName ?? invitation.email }}</span>
+                <span class="lunora-auth-list__label">{{ firstLabel(invitation.organizationName, invitation.email) }}</span>
                 <span class="lunora-auth-list__actions">
                     <button
                         class="lunora-auth-button"
                         type="button"
                         :disabled="state.busy"
-                        :aria-label="rowActionLabel(t.invitationAccept, invitation.organizationName ?? invitation.email)"
+                        :aria-label="rowActionLabel(t.invitationAccept, firstLabel(invitation.organizationName, invitation.email))"
                         @click="onAccept(invitation.id)"
                     >
                         {{ t.invitationAccept }}
@@ -43,7 +43,7 @@ const onReject = (id?: string): void => {
                         class="lunora-auth-button lunora-auth-button--secondary"
                         type="button"
                         :disabled="state.busy"
-                        :aria-label="rowActionLabel(t.invitationReject, invitation.organizationName ?? invitation.email)"
+                        :aria-label="rowActionLabel(t.invitationReject, firstLabel(invitation.organizationName, invitation.email))"
                         @click="onReject(invitation.id)"
                     >
                         {{ t.invitationReject }}

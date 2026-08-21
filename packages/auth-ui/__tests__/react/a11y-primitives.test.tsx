@@ -5,14 +5,14 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AuthClient } from "../../src/core";
-import { AppearanceCard, AuthDivider, AuthUIProvider, TwoFactorCard } from "../../src/react";
+import type { AuthClient, AuthUIConfig } from "../../src/core";
+import { AppearanceCard, AuthDivider, AuthUIProvider, AvatarCard, TwoFactorCard } from "../../src/react";
 
 const stubClient = (): AuthClient => ({ getSession: vi.fn(() => Promise.resolve({ data: null, error: null })) }) as unknown as AuthClient;
 
-const renderWith = (node: ReactElement): ReturnType<typeof render> =>
+const renderWith = (node: ReactElement, config: Partial<AuthUIConfig> = {}): ReturnType<typeof render> =>
     render(
-        <AuthUIProvider authClient={stubClient()} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }}>
+        <AuthUIProvider authClient={stubClient()} avatar={config.avatar} discover={false} nav={{ navigate: vi.fn(), replace: vi.fn() }}>
             {node}
         </AuthUIProvider>,
     );
@@ -107,5 +107,26 @@ describe("focus ring", () => {
                 "lunora-auth-userbutton__trigger",
             ].filter((cls) => !ringed.has(cls)),
         ).toStrictEqual([]);
+    });
+});
+
+describe("avatar upload control", () => {
+    it("is one labelled control, not a button plus a hidden input", () => {
+        expect.assertions(5);
+
+        // The old shape was a clipped `tabindex="-1"` input plus a button that
+        // called `.click()` on it: two DOM controls for one action, and
+        // `aria-hidden` on something still focusable — which is exactly the
+        // combination that leaves focus with no accessible target.
+        const { container } = renderWith(<AvatarCard />, { avatar: { upload: async () => "https://cdn.example.test/a.png" } });
+
+        const picker = container.querySelector<HTMLInputElement>('input[type="file"]');
+        const label = container.querySelector("label.lunora-auth-button");
+
+        expect(picker?.hasAttribute("aria-hidden")).toBe(false);
+        expect(picker?.hasAttribute("tabindex")).toBe(false);
+        expect(label?.getAttribute("for")).toBe(picker?.id);
+        expect(screen.getByLabelText("Upload photo")).toBe(picker);
+        expect(screen.queryByRole("button", { name: "Upload photo" })).toBeNull();
     });
 });

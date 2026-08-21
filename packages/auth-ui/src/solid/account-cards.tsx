@@ -1,5 +1,5 @@
 import type { JSX } from "solid-js";
-import { For, Show } from "solid-js";
+import { createUniqueId, For, Show } from "solid-js";
 
 import { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "../core/accounts";
 import { ACCEPT_ATTRIBUTE, createAvatarUploadController } from "../core/avatar";
@@ -100,6 +100,7 @@ const AvatarCard = (): JSX.Element => {
     // assignment is compiler-generated and invisible to static analysis, which
     // then reads the variable as never assigned.
     let input: HTMLInputElement | undefined;
+    const pickerId = createUniqueId();
 
     if (context.avatar.upload === undefined) {
         return null;
@@ -126,27 +127,28 @@ const AvatarCard = (): JSX.Element => {
             <div class="lunora-auth-avatar-row">
                 <UserAvatar size={64} user={{ image: state.imageUrl }} />
                 <div class="lunora-auth-avatar-row__actions">
-                    <input
-                        accept={ACCEPT_ATTRIBUTE}
-                        aria-hidden="true"
-                        class="lunora-auth-visually-hidden"
-                        onChange={onPick}
-                        ref={(element) => {
-                            input = element;
-                        }}
-                        tabIndex={-1}
-                        type="file"
-                    />
-                    <button
-                        class="lunora-auth-button"
-                        disabled={state.status === "submitting"}
-                        onClick={() => {
-                            input?.click();
-                        }}
-                        type="button"
-                    >
+                    {/*
+                     * A label wrapping the input, not a button that clicks it:
+                     * the input is the only control, so there is one tab stop,
+                     * the label text is its accessible name, and Enter or Space
+                     * opens the picker natively. The input stays focusable and
+                     * out of the ARIA tree's way — `aria-hidden` on something
+                     * focusable is what leaves focus with no accessible target.
+                     */}
+                    <label class="lunora-auth-button" for={pickerId}>
+                        <input
+                            accept={ACCEPT_ATTRIBUTE}
+                            class="lunora-auth-visually-hidden"
+                            disabled={state.status === "submitting"}
+                            id={pickerId}
+                            onChange={onPick}
+                            ref={(element) => {
+                                input = element;
+                            }}
+                            type="file"
+                        />
                         {t.avatarUpload}
-                    </button>
+                    </label>
                     <Show when={state.imageUrl !== undefined && state.imageUrl !== ""}>
                         <button
                             class="lunora-auth-button lunora-auth-button--danger"

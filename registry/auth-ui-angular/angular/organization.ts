@@ -9,7 +9,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, Injector, input, 
 
 import type { ResourceState } from "../core/create-resource-controller";
 import { isFlowEnabled } from "../core/flow-gate";
-import { ROLE_OPTIONS, rowActionLabel, slugify } from "../core/labels";
+import { firstLabel, ROLE_OPTIONS, rowActionLabel, slugify } from "../core/labels";
 import type { MembersActions, MembersState } from "../core/members";
 import { createMembersController } from "../core/members";
 import type { OrganizationsActions } from "../core/organization-list";
@@ -47,14 +47,14 @@ const nextId = (prefix: string): string => {
                     <ul class="lunora-auth-list">
                         @for (organization of state().items; track organization.id ?? organization.slug ?? organization.name) {
                             <li class="lunora-auth-list__item">
-                                <span class="lunora-auth-list__label">{{ organization.name ?? organization.slug }}</span>
+                                <span class="lunora-auth-list__label">{{ firstLabel(organization.name, organization.slug) }}</span>
                                 <span class="lunora-auth-list__actions">
                                     @if (organization.id !== undefined) {
                                         <button
                                             class="lunora-auth-link"
                                             type="button"
                                             [disabled]="state().busy"
-                                            [attr.aria-label]="rowActionLabel(t.switchOrganization, organization.name ?? organization.slug)"
+                                            [attr.aria-label]="rowActionLabel(t.switchOrganization, firstLabel(organization.name, organization.slug))"
                                             (click)="actions.setActive(organization.id!)"
                                         >
                                             {{ t.switchOrganization }}
@@ -63,7 +63,7 @@ const nextId = (prefix: string): string => {
                                             class="lunora-auth-link"
                                             type="button"
                                             [disabled]="state().busy"
-                                            [attr.aria-label]="rowActionLabel(t.remove, organization.name ?? organization.slug)"
+                                            [attr.aria-label]="rowActionLabel(t.remove, firstLabel(organization.name, organization.slug))"
                                             (click)="actions.remove(organization.id!)"
                                         >
                                             {{ t.remove }}
@@ -96,6 +96,9 @@ const nextId = (prefix: string): string => {
     `,
 })
 class OrganizationsCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly firstLabel = firstLabel;
+
     /** Delegates to the shared helper — Angular templates can only call members. */
     protected readonly rowActionLabel = rowActionLabel;
     // Per-instance ids: two cards on one page must not collide.
@@ -144,14 +147,14 @@ class OrganizationsCardComponent {
                         @for (member of state().members; track member.id ?? member.userId ?? member.user?.email) {
                             <li class="lunora-auth-list__item">
                                 <span class="lunora-auth-list__label">
-                                    {{ member.user?.email ?? member.user?.name ?? member.userId }} · {{ member.role }}
+                                    {{ firstLabel(member.user?.email, member.user?.name, member.userId) }} · {{ member.role }}
                                 </span>
                                 @if (member.id !== undefined) {
                                     <button
                                         class="lunora-auth-link"
                                         type="button"
                                         [disabled]="state().busy"
-                                        [attr.aria-label]="rowActionLabel(t.remove, member.user?.email ?? member.user?.name ?? member.userId)"
+                                        [attr.aria-label]="rowActionLabel(t.remove, firstLabel(member.user?.email, member.user?.name, member.userId))"
                                         (click)="actions.removeMember(member.id!)"
                                     >
                                         {{ t.remove }}
@@ -215,6 +218,9 @@ class OrganizationsCardComponent {
     `,
 })
 class MembersCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly firstLabel = firstLabel;
+
     /** Delegates to the shared helper — Angular templates can only call members. */
     protected readonly rowActionLabel = rowActionLabel;
     // Per-instance ids: two cards on one page must not collide.

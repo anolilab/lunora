@@ -5,7 +5,7 @@
 
 <script lang="ts">
     import { isFlowEnabled } from "../core/flow-gate";
-    import { ROLE_OPTIONS, rowActionLabel } from "../core/labels";
+    import { firstLabel, rowActionLabel, ROLE_OPTIONS } from "../core/labels";
     import { createMembersController } from "../core/members";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
@@ -45,11 +45,11 @@
                     {@const memberId = member.id}
                     <li class="lunora-auth-list__item">
                         <span class="lunora-auth-list__label">
-                            {member.user?.email ?? member.user?.name ?? member.userId} · {member.role}
+                            {firstLabel(member.user?.email, member.user?.name, member.userId)} · {member.role}
                         </span>
                         {#if memberId !== undefined}
                             <button
-                                aria-label={rowActionLabel(t.remove, member.user?.email ?? member.user?.name ?? member.userId)}
+                                aria-label={rowActionLabel(t.remove, firstLabel(member.user?.email, member.user?.name, member.userId))}
                                 class="lunora-auth-link"
                                 disabled={$res.busy}
                                 onclick={() => {

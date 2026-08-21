@@ -1,7 +1,7 @@
 /* eslint-disable no-secrets/no-secrets -- JSDoc names the `<OrganizationSettingsCard>` component, not a credential. */
 
 import type { JSX } from "solid-js";
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, createUniqueId, For, onCleanup, onMount, Show } from "solid-js";
 
 import { ACCEPT_ATTRIBUTE } from "../core/avatar";
 import type { CaptchaProvider } from "../core/captcha";
@@ -163,6 +163,7 @@ const OrganizationLogoCard = (props: OrganizationLogoCardProps = {}): JSX.Elemen
     // invisible to static analysis, which then reads the `if (input)` guard
     // below as dead code.
     let input: HTMLInputElement | undefined;
+    const pickerId = createUniqueId();
 
     if (context.avatar.upload === undefined || !context.plugins.organization) {
         return null;
@@ -193,27 +194,21 @@ const OrganizationLogoCard = (props: OrganizationLogoCardProps = {}): JSX.Elemen
                     <img alt="" class="lunora-auth-avatar" src={state.logoUrl} />
                 </Show>
                 <div class="lunora-auth-avatar-row__actions">
-                    <input
-                        accept={ACCEPT_ATTRIBUTE}
-                        aria-hidden="true"
-                        class="lunora-auth-visually-hidden"
-                        onChange={onPick}
-                        ref={(element) => {
-                            input = element;
-                        }}
-                        tabIndex={-1}
-                        type="file"
-                    />
-                    <button
-                        class="lunora-auth-button"
-                        disabled={state.status === "submitting"}
-                        onClick={() => {
-                            input?.click();
-                        }}
-                        type="button"
-                    >
+                    {/* A label wrapping the input — see <AvatarCard>. */}
+                    <label class="lunora-auth-button" for={pickerId}>
+                        <input
+                            accept={ACCEPT_ATTRIBUTE}
+                            class="lunora-auth-visually-hidden"
+                            disabled={state.status === "submitting"}
+                            id={pickerId}
+                            onChange={onPick}
+                            ref={(element) => {
+                                input = element;
+                            }}
+                            type="file"
+                        />
                         {t.avatarUpload}
-                    </button>
+                    </label>
                     <Show when={state.logoUrl !== undefined && state.logoUrl !== ""}>
                         <button
                             class="lunora-auth-button lunora-auth-button--danger"

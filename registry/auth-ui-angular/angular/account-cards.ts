@@ -32,6 +32,15 @@ import {
 import { injectAuthUIContext } from "./provider";
 import { UserAvatarComponent } from "./user-button";
 
+let pickerIdCounter = 0;
+
+/** A DOM id per instance. Hoisted out of the template literal so the increment is a statement, not an expression buried in a string. */
+const nextId = (prefix: string): string => {
+    pickerIdCounter += 1;
+
+    return `${prefix}${String(pickerIdCounter)}`;
+};
+
 /**
  * Which OAuth providers are attached, with link/unlink.
  *
@@ -135,18 +144,25 @@ class LinkedAccountsCardComponent {
                 <div class="lunora-auth-avatar-row">
                     <lunora-user-avatar [size]="64" [user]="{ image: state().imageUrl }" />
                     <div class="lunora-auth-avatar-row__actions">
-                        <input
-                            class="lunora-auth-visually-hidden"
-                            type="file"
-                            tabindex="-1"
-                            aria-hidden="true"
-                            #picker
-                            [attr.accept]="accept"
-                            (change)="pick($event)"
-                        />
-                        <button class="lunora-auth-button" type="button" [disabled]="state().status === 'submitting'" (click)="picker.click()">
+                        <!--
+                          A label wrapping the input, not a button that clicks it:
+                          the input is the only control, so there is one tab stop,
+                          the label text is its accessible name, and Enter or Space
+                          opens the picker natively. The input stays focusable and
+                          out of the ARIA tree's way — aria-hidden on something
+                          focusable is what leaves focus with no accessible target.
+                        -->
+                        <label class="lunora-auth-button" [attr.for]="pickerId">
+                            <input
+                                class="lunora-auth-visually-hidden"
+                                type="file"
+                                [id]="pickerId"
+                                [attr.accept]="accept"
+                                [disabled]="state().status === 'submitting'"
+                                (change)="pick($event)"
+                            />
                             {{ t.avatarUpload }}
-                        </button>
+                        </label>
                         @if (state().imageUrl !== undefined && state().imageUrl !== "") {
                             <button
                                 class="lunora-auth-button lunora-auth-button--danger"
@@ -164,6 +180,8 @@ class LinkedAccountsCardComponent {
     `,
 })
 class AvatarCardComponent {
+    protected readonly pickerId = nextId("lunora-auth-picker-");
+
     private readonly context = injectAuthUIContext();
     /** Config, not discovery — but derived anyway so every gate reads the same way. */
     protected readonly enabled = computed(() => this.context().avatar.upload !== undefined);

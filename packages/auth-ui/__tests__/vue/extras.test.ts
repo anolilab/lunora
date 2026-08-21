@@ -61,7 +61,7 @@ describe("vue ErrorToaster", () => {
 
 describe("vue extras", () => {
     it("renders the captcha host, prompts One Tap once, and tears the widget down on unmount", async () => {
-        expect.assertions(7);
+        expect.assertions(8);
 
         const teardown = vi.fn();
         const renderSpy = vi.spyOn(captchaModule, "renderCaptcha").mockReturnValue(teardown);
@@ -91,14 +91,16 @@ describe("vue extras", () => {
         expect(renderSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ provider: "hcaptcha", siteKey: "abc" }));
         expect(promptSpy).toHaveBeenCalledTimes(1);
 
-        // The visible button is the only control: the file input behind it is
-        // out of the tab order and out of the accessibility tree, so it is not
-        // a second, invisibly-focused stop on the way past.
+        // One control, not two: the file input is the only focusable thing, and
+        // the label wrapping it supplies both the visible button and the input's
+        // accessible name. A separate button that clicks a hidden input is a
+        // second tab stop with no visible focus ring.
         const picker = container.querySelector<HTMLInputElement>('input[type="file"]');
 
-        expect(picker?.getAttribute("tabindex")).toBe("-1");
-        expect(picker?.getAttribute("aria-hidden")).toBe("true");
-        expect(screen.getByRole("button", { name: "Upload photo" })).toBeDefined();
+        expect(picker?.hasAttribute("aria-hidden")).toBe(false);
+        expect(picker?.hasAttribute("tabindex")).toBe(false);
+        expect(container.querySelector("label.lunora-auth-button")?.getAttribute("for")).toBe(picker?.id);
+        expect(screen.getByLabelText("Upload photo")).toBe(picker);
 
         unmount();
 

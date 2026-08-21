@@ -1,7 +1,7 @@
 "use client";
 
 import type { ChangeEvent, ReactElement } from "react";
-import { useRef } from "react";
+import { useId, useRef } from "react";
 
 import { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "../core/accounts";
 import { ACCEPT_ATTRIBUTE, createAvatarUploadController } from "../core/avatar";
@@ -95,6 +95,7 @@ const AvatarCard = (): ReactElement | null => {
     const { localization: t } = context;
     const [state, actions] = useController(createAvatarUploadController);
     const inputRef = useRef<HTMLInputElement | null>(null);
+    const pickerId = useId();
 
     if (context.avatar.upload === undefined) {
         return null;
@@ -122,25 +123,26 @@ const AvatarCard = (): ReactElement | null => {
             <div className="lunora-auth-avatar-row">
                 <UserAvatar size={64} user={{ image: state.imageUrl }} />
                 <div className="lunora-auth-avatar-row__actions">
-                    <input
-                        accept={ACCEPT_ATTRIBUTE}
-                        aria-hidden="true"
-                        className="lunora-auth-visually-hidden"
-                        onChange={onPick}
-                        ref={inputRef}
-                        tabIndex={-1}
-                        type="file"
-                    />
-                    <button
-                        className="lunora-auth-button"
-                        disabled={state.status === "submitting"}
-                        onClick={() => {
-                            inputRef.current?.click();
-                        }}
-                        type="button"
-                    >
+                    {/*
+                     * A label wrapping the input, not a button that clicks it:
+                     * the input is the only control, so there is one tab stop,
+                     * the label text is its accessible name, and Enter or Space
+                     * opens the picker natively. The input stays focusable and
+                     * out of the ARIA tree's way — `aria-hidden` on something
+                     * focusable is what leaves focus with no accessible target.
+                     */}
+                    <label className="lunora-auth-button" htmlFor={pickerId}>
+                        <input
+                            accept={ACCEPT_ATTRIBUTE}
+                            className="lunora-auth-visually-hidden"
+                            disabled={state.status === "submitting"}
+                            id={pickerId}
+                            onChange={onPick}
+                            ref={inputRef}
+                            type="file"
+                        />
                         {t.avatarUpload}
-                    </button>
+                    </label>
                     {state.imageUrl === undefined || state.imageUrl === "" ? null : (
                         <button
                             className="lunora-auth-button lunora-auth-button--danger"

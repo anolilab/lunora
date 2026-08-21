@@ -19,6 +19,15 @@ import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, FormBannerComponent } from "./primitives";
 import { injectAuthUI, injectAuthUIContext } from "./provider";
 
+let pickerIdCounter = 0;
+
+/** A DOM id per instance. Hoisted out of the template literal so the increment is a statement, not an expression buried in a string. */
+const nextId = (prefix: string): string => {
+    pickerIdCounter += 1;
+
+    return `${prefix}${String(pickerIdCounter)}`;
+};
+
 /**
  * Renders the errors that have no card to land in — a failed social redirect, a
  * failed unlink, a sign-out that didn't. Mount it once in your app shell.
@@ -187,18 +196,18 @@ class OneTapComponent {
                         <span class="lunora-auth-avatar lunora-auth-avatar--initials" aria-hidden="true"></span>
                     }
                     <div class="lunora-auth-avatar-row__actions">
-                        <input
-                            class="lunora-auth-visually-hidden"
-                            type="file"
-                            tabindex="-1"
-                            aria-hidden="true"
-                            #picker
-                            [attr.accept]="accept"
-                            (change)="pick($event)"
-                        />
-                        <button class="lunora-auth-button" type="button" [disabled]="state().status === 'submitting'" (click)="picker.click()">
+                        <!-- A label wrapping the input — see the avatar card. -->
+                        <label class="lunora-auth-button" [attr.for]="pickerId">
+                            <input
+                                class="lunora-auth-visually-hidden"
+                                type="file"
+                                [id]="pickerId"
+                                [attr.accept]="accept"
+                                [disabled]="state().status === 'submitting'"
+                                (change)="pick($event)"
+                            />
                             {{ t.avatarUpload }}
-                        </button>
+                        </label>
                         @if (state().logoUrl !== undefined && state().logoUrl !== "") {
                             <button
                                 class="lunora-auth-button lunora-auth-button--danger"
@@ -216,6 +225,8 @@ class OneTapComponent {
     `,
 })
 class OrganizationLogoCardComponent implements OnInit {
+    protected readonly pickerId = nextId("lunora-auth-picker-");
+
     /** Defaults to the user's active organization. */
     readonly organizationId = input<string>();
 

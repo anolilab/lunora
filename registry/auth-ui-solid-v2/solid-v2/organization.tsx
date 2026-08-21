@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createSignal, createUniqueId, For, Show } from "solid-js";
 
 import { isFlowEnabled } from "../core/flow-gate";
-import { ROLE_OPTIONS, rowActionLabel, slugify } from "../core/labels";
+import { firstLabel, ROLE_OPTIONS, rowActionLabel, slugify } from "../core/labels";
 import { createMembersController } from "../core/members";
 import { createOrganizationsController } from "../core/organization-list";
 import { createOrganizationSettingsController } from "../core/organization-settings";
@@ -48,14 +48,14 @@ const OrganizationsCard = (): JSX.Element => {
                             <For each={state.items}>
                                 {(organization) => (
                                     <li class="lunora-auth-list__item">
-                                        <span class="lunora-auth-list__label">{organization.name ?? organization.slug}</span>
+                                        <span class="lunora-auth-list__label">{firstLabel(organization.name, organization.slug)}</span>
                                         <span class="lunora-auth-list__actions">
                                             <Show when={organization.id}>
                                                 {/* `Show` hands the narrowed id to the callback — no cast needed. */}
                                                 {(id) => (
                                                     <>
                                                         <button
-                                                            aria-label={rowActionLabel(t.switchOrganization, organization.name ?? organization.slug)}
+                                                            aria-label={rowActionLabel(t.switchOrganization, firstLabel(organization.name, organization.slug))}
                                                             class="lunora-auth-link"
                                                             disabled={state.busy}
                                                             onClick={() => {
@@ -66,7 +66,7 @@ const OrganizationsCard = (): JSX.Element => {
                                                             {t.switchOrganization}
                                                         </button>
                                                         <button
-                                                            aria-label={rowActionLabel(t.remove, organization.name ?? organization.slug)}
+                                                            aria-label={rowActionLabel(t.remove, firstLabel(organization.name, organization.slug))}
                                                             class="lunora-auth-link"
                                                             disabled={state.busy}
                                                             onClick={() => {
@@ -161,13 +161,13 @@ const MembersCard = (): JSX.Element => {
                             {(member) => (
                                 <li class="lunora-auth-list__item">
                                     <span class="lunora-auth-list__label">
-                                        {member.user?.email ?? member.user?.name ?? member.userId} · {member.role}
+                                        {firstLabel(member.user?.email, member.user?.name, member.userId)} · {member.role}
                                     </span>
                                     <Show when={member.id}>
                                         {/* `Show` hands the narrowed value to the callback — no cast needed. */}
                                         {(id) => (
                                             <button
-                                                aria-label={rowActionLabel(t.remove, member.user?.email ?? member.user?.name ?? member.userId)}
+                                                aria-label={rowActionLabel(t.remove, firstLabel(member.user?.email, member.user?.name, member.userId))}
                                                 class="lunora-auth-link"
                                                 disabled={state.busy}
                                                 onClick={() => {

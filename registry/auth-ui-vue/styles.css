@@ -34,6 +34,7 @@
  * — which left buttons and links on whatever the browser happened to draw.
  */
 .lunora-auth-button:focus-visible,
+.lunora-auth-button:focus-within,
 .lunora-auth-field__input:focus-visible,
 .lunora-auth-link:focus-visible,
 .lunora-auth-segmented__option:focus-visible,
@@ -125,11 +126,12 @@
     transition: opacity 0.15s ease;
 }
 
-.lunora-auth-button:hover:not(:disabled) {
+.lunora-auth-button:hover:not(:disabled, :has(> input:disabled)) {
     opacity: 0.9;
 }
 
-.lunora-auth-button:disabled {
+.lunora-auth-button:disabled,
+.lunora-auth-button:has(> input:disabled) {
     opacity: 0.6;
     cursor: default;
 }
@@ -538,12 +540,13 @@
 }
 
 /*
- * Off-screen but still laid out — used for the avatar file input, which is
- * driven by a styled button beside it and carries `tabindex="-1"` +
- * `aria-hidden`, so the button is the only control anyone sees or tabs to.
- * A focusable clipped input would be a second tab stop whose focus ring lands
- * on a 1px box (WCAG 2.4.7); `display: none` is avoided because some browsers
- * refuse a programmatic `.click()` on it.
+ * Off-screen but still laid out and still focusable — used for the avatar file
+ * input, which is wrapped in a `.lunora-auth-button` label that supplies its
+ * visible appearance and its accessible name. The input is the real control, so
+ * it keeps focus; `:focus-within` above draws the ring on the label, which is
+ * the part anyone can actually see. `display: none` would take the control out
+ * of the tab order entirely, and `aria-hidden` on a focusable element is what
+ * leaves focus with no accessible target.
  */
 .lunora-auth-visually-hidden {
     position: absolute;

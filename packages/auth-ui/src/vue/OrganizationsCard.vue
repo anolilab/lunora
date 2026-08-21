@@ -2,7 +2,7 @@
 import { computed, ref, useId } from "vue";
 
 import { isFlowEnabled } from "../core/flow-gate";
-import { rowActionLabel, slugify } from "../core/labels";
+import { firstLabel, rowActionLabel, slugify } from "../core/labels";
 import { createOrganizationsController } from "../core/organization-list";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
@@ -60,13 +60,13 @@ const onRemove = (id?: string): void => {
         <p v-else-if="state.items.length === 0" class="lunora-auth-card__description">{{ t.noOrganizations }}</p>
         <ul v-else class="lunora-auth-list">
             <li v-for="organization in state.items" :key="organization.id ?? organization.slug ?? organization.name" class="lunora-auth-list__item">
-                <span class="lunora-auth-list__label">{{ organization.name ?? organization.slug }}</span>
+                <span class="lunora-auth-list__label">{{ firstLabel(organization.name, organization.slug) }}</span>
                 <span v-if="organization.id !== undefined" class="lunora-auth-list__actions">
                     <button
                         class="lunora-auth-link"
                         type="button"
                         :disabled="state.busy"
-                        :aria-label="rowActionLabel(t.switchOrganization, organization.name ?? organization.slug)"
+                        :aria-label="rowActionLabel(t.switchOrganization, firstLabel(organization.name, organization.slug))"
                         @click="onSetActive(organization.id)"
                     >
                         {{ t.switchOrganization }}
@@ -75,7 +75,7 @@ const onRemove = (id?: string): void => {
                         class="lunora-auth-link"
                         type="button"
                         :disabled="state.busy"
-                        :aria-label="rowActionLabel(t.remove, organization.name ?? organization.slug)"
+                        :aria-label="rowActionLabel(t.remove, firstLabel(organization.name, organization.slug))"
                         @click="onRemove(organization.id)"
                     >
                         {{ t.remove }}
