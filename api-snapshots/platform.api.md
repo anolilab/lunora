@@ -260,6 +260,7 @@ interface PlatformCapabilities {
         globalTables?: Capability;
         hyperdrive?: Capability;
         identityProxy?: Capability;
+        images?: Capability;
         keyValueStore?: Capability;
         localSql?: Capability;
         mail?: Capability;
