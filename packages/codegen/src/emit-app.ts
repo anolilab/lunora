@@ -322,6 +322,7 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     ...(options.hasAccess ? [`    private accessSelector?: Selector<Env, CreateAccessResolverOptions | undefined>;`] : []),
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
+    `    private cdcEnabled = false;`,
     `    private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];`,
     ...(options.hasGlobal ? [`    private globalDeclaration?: GlobalDeclaration<Env>;`] : []),
     ...(options.hasHyperdriveGlobal ? [`    private hyperdriveGlobalDeclaration?: HyperdriveGlobalDeclaration<Env>;`] : []),
@@ -359,6 +360,12 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
     `    /** Bearer token gating the \`/_lunora/admin/*\` endpoints the studio calls. */
     public admin(selector: Selector<Env, string>): this {
         this.adminToken = selector;
+
+        return this;
+    }`,
+    `    /** Opt into change-data-capture: every write records a post-image to \`__cdc_log\` — on this shard AND, when the app has \`.global()\` tables, on the global backend. Backs streaming export, replay-PITR, and the \`.global()\` half of \`defineShape\` replication (whose poll tick asks the global changelog which tables moved). Off by default: it costs a changelog row per write, which an app using none of the above should not pay. */
+    public cdc(enabled = true): this {
+        this.cdcEnabled = enabled;
 
         return this;
     }`,
@@ -482,6 +489,13 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
             : "";
 
     const entries = [
+        // The ONE switch behind both changelogs — the shard forwards it to the
+        // global writer's `request.cdc`. Nothing else on the builder can set it,
+        // so without this line `config.cdc` is permanently `undefined` for every
+        // `defineApp()` project (which is every template), the global `__cdc_log`
+        // is never written, and the `.global()` shape poll's changed-tables fast
+        // path is unreachable while looking, from the shard, like CDC-off.
+        `            cdc: this.cdcEnabled,`,
         ...(options.hasGlobal
             ? [
                   `            ...(this.globalDeclaration
