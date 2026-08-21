@@ -69,6 +69,37 @@ describe("sdk vendor — refuses to copy a transport symlink", () => {
         expect(existsSync(join(outputDirectory, "lunora", "config.py"))).toBe(false);
     });
 
+    it("writes nothing at all when it refuses, rather than leaving a partial transport", async () => {
+        expect.assertions(2);
+
+        const linkTarget = join(scratchDir, "target.txt");
+
+        writeFileSync(linkTarget, "scratch-marker\n", "utf8");
+        // The link sorts AFTER the regular file, so a guard that refused mid-copy
+        // (from inside `cpSync`'s filter) would already have written client.py.
+        symlinkSync(linkTarget, join(transportRoot, "python", "lunora", "zz-last.py"));
+
+        await expect(vendorTransport(vendorOptions())).rejects.toThrow("refusing to vendor");
+
+        expect(existsSync(join(outputDirectory, "lunora"))).toBe(false);
+    });
+
+    it("does not abort over a symlink the copy would have excluded anyway", async () => {
+        // A test file is never vendored, so it must not be able to fail the
+        // vendoring — only a link that would actually land in the project does.
+        expect.assertions(2);
+
+        const linkTarget = join(scratchDir, "target.txt");
+
+        writeFileSync(linkTarget, "scratch-marker\n", "utf8");
+        symlinkSync(linkTarget, join(transportRoot, "python", "lunora", "test_client.py"));
+
+        const result = await vendorTransport(vendorOptions());
+
+        expect(result.files).toStrictEqual(["lunora/client.py"]);
+        expect(existsSync(join(outputDirectory, "lunora", "test_client.py"))).toBe(false);
+    });
+
     it("a symlink-free transport still vendors correctly (regression guard)", async () => {
         expect.assertions(2);
 

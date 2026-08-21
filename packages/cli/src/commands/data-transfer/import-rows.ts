@@ -70,10 +70,13 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
     };
 
     const parseEnvelope = (trimmed: string, lineNumber: number): ImportEnvelope => {
-        let parsed: Record<string, unknown>;
+        // Deliberately `unknown`: `JSON.parse` returns any JSON value, and typing
+        // it as an object up front is what let a `null` line reach a property
+        // read and throw a bare TypeError.
+        let parsed: unknown;
 
         try {
-            parsed = JSON.parse(trimmed) as Record<string, unknown>;
+            parsed = JSON.parse(trimmed);
         } catch (error: unknown) {
             // Without this the operator gets a bare `Unexpected token …` with no
             // way to find the offending line in a multi-GB NDJSON file, while
@@ -87,11 +90,19 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
             );
         }
 
-        if (typeof parsed["table"] !== "string") {
+        // The shape check comes first because `JSON.parse("null")` is a
+        // SUCCESSFUL parse, and reading `["table"]` off `null` is the one input
+        // that throws a bare TypeError with no line number — the failure this
+        // whole path exists to remove. Scalars and arrays read as `undefined`
+        // and would reach the same error anyway; they are grouped here so one
+        // message covers every "not an envelope" line.
+        const envelope = parsed === null || typeof parsed !== "object" || Array.isArray(parsed) ? undefined : (parsed as Record<string, unknown>);
+
+        if (envelope === undefined || typeof envelope["table"] !== "string") {
             throw new LunoraError("INTERNAL", `line ${String(lineNumber)}: import envelope is missing a string \`table\``);
         }
 
-        return parsed as ImportEnvelope;
+        return envelope as ImportEnvelope;
     };
 
     const remapEnvelope = (parsed: ImportEnvelope): string => {

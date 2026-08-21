@@ -33,6 +33,21 @@ describe("import row transform — envelope validation without a remap", () => {
         expect(() => transform('{"doc":{}}', 7)).toThrow("line 7: import envelope is missing a string `table`");
     });
 
+    it.each([
+        ["null", "null"],
+        ["a scalar", "42"],
+        ["an array", "[]"],
+    ])("names the line for %s line rather than throwing a bare TypeError", (_label, line) => {
+        expect.assertions(1);
+
+        const transform = createRowTransformer({ report: emptyReport() });
+
+        // `JSON.parse("null")` is a successful parse, so a `null` line used to
+        // reach a property read and throw an uncaught TypeError with no line
+        // number — the exact failure this validation exists to remove.
+        expect(() => transform(line, 4)).toThrow("line 4: import envelope is missing a string `table`");
+    });
+
     it("forwards a valid envelope as the identical original string, not a re-serialisation", () => {
         expect.assertions(1);
 
