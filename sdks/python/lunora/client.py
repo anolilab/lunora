@@ -54,6 +54,14 @@ WS_PATH = "/_lunora/ws"
 # `LunoraClient(..., timeout=...)` for a longer-running one.
 DEFAULT_HTTP_TIMEOUT = 30.0
 
+# How many un-applied poke buffers to retain before evicting the oldest. A poke
+# is only removed at its ``pokeEnd``; a socket that drops mid-poke leaves its
+# buffer behind with no ``pokeEnd`` ever coming, so without a bound they
+# accumulate for the life of the client — one per reconnect, and one per poke a
+# hostile peer opens and never closes. Concurrent in-flight pokes number in the
+# low single digits, so this is far above any legitimate working set.
+MAX_PENDING_POKES = 64
+
 # A WS token provider: a value, a callable returning a value, or an async callable.
 WsToken = Union[str, Callable[[], Union[str, Awaitable[Optional[str]], None]], None]
 
@@ -642,6 +650,11 @@ class LunoraClient:
             return desc
 
         if kind == "pokeStart":
+            # Evict oldest-first at the cap. ``dict`` preserves insertion order,
+            # so the first key is the oldest buffer; one that old is no longer
+            # going to see its ``pokeEnd``.
+            while len(self._poke_buffers) >= MAX_PENDING_POKES:
+                self._poke_buffers.pop(next(iter(self._poke_buffers)))
             self._poke_buffers[frame["pokeId"]] = {
                 "baseCheckpoint": frame.get("baseCheckpoint"),
                 "epoch": frame.get("epoch"),

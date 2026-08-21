@@ -122,8 +122,12 @@ type Client struct {
 	subscriptions map[string]*subscription
 	shapes        map[string]*shapeSubscription
 	pokes         map[string]*pokeBuffer
-	nextID        int
-	nextShapeID   int
+	// pokeOrder is the insertion order of pokes, oldest first — Go maps have no
+	// order of their own, so the eviction in HandleFrame needs it to know which
+	// buffer is oldest.
+	pokeOrder   []string
+	nextID      int
+	nextShapeID int
 
 	// offline holds the writes made while send was nil. Guarded by mu, which is
 	// why OfflineQueue carries no lock of its own.
@@ -160,6 +164,14 @@ type pokeBuffer struct {
 	// splits a seed across several parts still replaces rather than merges.
 	resets map[string]bool
 }
+
+// MaxPendingPokes bounds the un-applied poke buffers a client retains. A buffer
+// is only released at its pokeEnd; a socket that drops mid-poke never sends one,
+// so without a bound the abandoned buffers accumulate for the life of the client
+// — one per reconnect, and unbounded against a peer that opens pokes it never
+// closes. Concurrent in-flight pokes number in the low single digits, so this is
+// far above any legitimate working set.
+const MaxPendingPokes = 64
 
 type subscription struct {
 	id           string
@@ -974,7 +986,19 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			c.pokes = map[string]*pokeBuffer{}
 		}
 
+		if _, exists := c.pokes[pokeID]; !exists {
+			c.pokeOrder = append(c.pokeOrder, pokeID)
+		}
+
 		c.pokes[pokeID] = &pokeBuffer{parts: map[string][]map[string]any{}, resets: map[string]bool{}}
+
+		// Evict oldest-first at the cap; a poke that old is no longer going to
+		// see its pokeEnd.
+		for len(c.pokeOrder) > MaxPendingPokes {
+			delete(c.pokes, c.pokeOrder[0])
+			c.pokeOrder = c.pokeOrder[1:]
+		}
+
 		c.mu.Unlock()
 
 		return kind, nil
@@ -1021,6 +1045,19 @@ func (c *Client) bufferPokePart(frame map[string]any) {
 	}
 }
 
+// forgetPokeOrder drops one id from the eviction order. Called when a buffer
+// leaves c.pokes by any route other than eviction, so the order list tracks the
+// map rather than growing a stale entry per completed poke. Caller holds c.mu.
+func (c *Client) forgetPokeOrder(pokeID string) {
+	for index, candidate := range c.pokeOrder {
+		if candidate == pokeID {
+			c.pokeOrder = append(c.pokeOrder[:index], c.pokeOrder[index+1:]...)
+
+			return
+		}
+	}
+}
+
 // applyPoke applies a whole poke in one step and fires each touched shape's
 // callback with the resulting view.
 func (c *Client) applyPoke(frame map[string]any) error {
@@ -1029,6 +1066,7 @@ func (c *Client) applyPoke(frame map[string]any) error {
 	c.mu.Lock()
 	buffer := c.pokes[pokeID]
 	delete(c.pokes, pokeID)
+	c.forgetPokeOrder(pokeID)
 
 	if buffer == nil {
 		c.mu.Unlock()

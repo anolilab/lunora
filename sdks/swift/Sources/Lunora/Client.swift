@@ -9,6 +9,15 @@ public let lunoraRPCBatchPath = "/_lunora/rpc-batch"
 /// The live-subscription endpoint.
 public let lunoraWSPath = "/_lunora/ws"
 
+/// How many un-applied poke buffers a client retains before evicting the oldest.
+///
+/// A buffer is only released at its `pokeEnd`; a socket that drops mid-poke never
+/// sends one, so without a bound the abandoned buffers accumulate for the life of
+/// the client — one per reconnect, and unbounded against a peer that opens pokes
+/// it never closes. Concurrent in-flight pokes number in the low single digits,
+/// so this is far above any legitimate working set.
+public let lunoraMaxPendingPokes = 64
+
 /// Which RPC method a call dispatches to. Generated code emits these cases
 /// rather than raw strings, so a typo in a target template is a compile error
 /// instead of a read silently sent over the write path.
@@ -70,6 +79,11 @@ public final class LunoraClient {
     var subscriptions: [String: Subscription] = [:]
     private var shapes: [String: ShapeSubscription] = [:]
     private var pokes: [String: PokeBuffer] = [:]
+
+    /// Insertion order of `pokes`, oldest first — a Swift `Dictionary` has no
+    /// order of its own, so the eviction in `handleFrame` needs this to know
+    /// which buffer is the oldest.
+    private var pokeOrder: [String] = []
     private var nextID = 0
     private var nextShapeID = 0
 
@@ -791,7 +805,17 @@ public final class LunoraClient {
             return kind
         case "pokeStart":
             withLock {
-                if let pokeID = frame["pokeId"] as? String { pokes[pokeID] = PokeBuffer() }
+                if let pokeID = frame["pokeId"] as? String {
+                    if pokes[pokeID] == nil { pokeOrder.append(pokeID) }
+
+                    pokes[pokeID] = PokeBuffer()
+
+                    // Evict oldest-first at the cap; a poke that old is no
+                    // longer going to see its `pokeEnd`.
+                    while pokeOrder.count > lunoraMaxPendingPokes {
+                        pokes.removeValue(forKey: pokeOrder.removeFirst())
+                    }
+                }
             }
 
             return kind
@@ -839,6 +863,10 @@ public final class LunoraClient {
         // one consistent poke even if the next one lands mid-delivery.
         let deliveries = try withLock { () -> [(([Any]) -> Void, [Any])] in
             guard let pokeID = frame["pokeId"] as? String, let buffer = pokes.removeValue(forKey: pokeID) else { return [] }
+
+            // Drop it from the eviction order too, or that array grows a stale
+            // entry per completed poke and stops tracking the map.
+            pokeOrder.removeAll { $0 == pokeID }
 
             var deliveries: [(([Any]) -> Void, [Any])] = []
 

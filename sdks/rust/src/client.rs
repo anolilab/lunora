@@ -338,7 +338,7 @@ struct ShapePart {
 /// oldest. Concurrent in-flight pokes number in the low single digits, so this
 /// is far above any legitimate working set; it exists purely to bound the
 /// buffers a failed decode intentionally leaves behind.
-const MAX_PENDING_POKES: usize = 64;
+pub const MAX_PENDING_POKES: usize = 64;
 
 pub struct Client {
     base_url: String,

@@ -359,11 +359,24 @@ The view's checkpoint advances to `pokeEnd.checkpoint`. A socket that drops
 mid-poke discards the buffer and re-seeds on reconnect (no torn view). An
 `epoch` mismatch or a `baseCheckpoint` gap forces a full re-seed.
 
+A buffer is released at `pokeEnd`, and a poke abandoned mid-flight never sends
+one — so a client MUST bound its pending buffers and evict oldest-first, rather
+than let them accumulate for its lifetime. This is not only a leak: `pokeId`
+resets when the DO is evicted, so a stale buffer can be reached by a LATER
+poke's `pokeEnd` and apply rows the client should never have seen.
+
 **`pokeId` is unique per shard socket, not per client.** It comes from a per-DO
 counter that also resets when the DO is evicted, so a client holding one socket
 per shard MUST key its poke buffers by `(connection, pokeId)`. Keying by `pokeId`
 alone merges two shards' concurrent `poke-1` frames into one buffer: one shape
 applies the other's epoch and the other's parts find no buffer at all.
+
+A client that holds a SINGLE socket satisfies this by construction — its buffer
+map is already per-connection, and the frames carry no shard identity for it to
+key on anyway. The requirement binds only a client that multiplexes several
+shard sockets, and such a client must model the connection throughout (its
+subscription registry and resend path too), not just in the buffer map. All
+eight non-JS SDKs are single-socket today; see `sdks/README.md`.
 
 **`pokePart.reset: true`** means `rowsPatch` is the shape's COMPLETE membership,
 not a diff. The client MUST drop its current view for that `shapeId` before

@@ -133,9 +133,66 @@ void casePokeSequenceMaterialisesRows() {
   equals(canonical(delivered.last), canonical(shape['expectedRows']), 'materialised rows');
 }
 
-/// No `covers` call: protocol/conformance-cases.json lists the cases EVERY
-/// language must have, and it carries no name for this one yet — the fixture
-/// arrived with the TypeScript fix. Give it one once all eight ports assert it.
+/// A manifest case: every port asserts it against the shared fixture's
+/// `resetPokeSequence`. It starts from the cold-seed state on purpose — a re-seed
+/// is inserts-only, so `m1` leaves the shape with no delete op behind it, and a
+/// client that merges renders it for the rest of its life.
+/// A buffer is only released at its `pokeEnd`. A socket that drops mid-poke never
+/// sends one, so its buffer would be retained for the life of the client — one
+/// leak per reconnect, and unbounded against a peer that opens pokes it never
+/// closes.
+///
+/// Asserted black-box: an evicted poke behaves exactly like one that was never
+/// opened, which is the only form of this all eight ports can share.
+void casePendingPokeBuffersAreBounded() {
+  covers('pending_poke_buffers_are_bounded');
+
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  final delivered = <List<Object?>>[];
+
+  client.subscribeShape('roomMessages', args: <String, Object?>{'room': 'general'}, onRows: delivered.add);
+
+  // A poke opened, part-filled, then abandoned when the socket dropped.
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'pokeStart', 'pokeId': 'stale'}));
+  client.handleFrame(
+    jsonEncode(<String, Object?>{
+      'type': 'pokePart',
+      'pokeId': 'stale',
+      'shapeId': 'shape_1',
+      'rowsPatch': <Object?>[
+        <String, Object?>{'op': 'insert', 'key': 'ghost', 'value': 'ghost-row'},
+      ],
+    }),
+  );
+
+  for (var index = 0; index < maxPendingPokes; index++) {
+    client.handleFrame(jsonEncode(<String, Object?>{'type': 'pokeStart', 'pokeId': 'filler-$index'}));
+  }
+
+  // The abandoned buffer is gone, so its late pokeEnd is a no-op.
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'pokeEnd', 'pokeId': 'stale'}));
+
+  equals(delivered.length, 0, 'the ghost row of an evicted poke must never reach the view');
+
+  // ...and eviction is oldest-first, not a blanket drop: a live poke still applies.
+  final newest = 'filler-${maxPendingPokes - 1}';
+
+  client.handleFrame(
+    jsonEncode(<String, Object?>{
+      'type': 'pokePart',
+      'pokeId': newest,
+      'shapeId': 'shape_1',
+      'rowsPatch': <Object?>[
+        <String, Object?>{'op': 'insert', 'key': 'm1', 'value': 'kept'},
+      ],
+    }),
+  );
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'pokeEnd', 'pokeId': newest}));
+
+  equals(delivered.length, 1, 'the newest buffer must survive and apply');
+  equals(canonical(delivered.last), canonical(<Object?>['kept']), 'the surviving poke applies its rows');
+}
+
 void caseResetPokeReplacesTheView() {
   covers('shape_reset_poke_replaces_membership');
 

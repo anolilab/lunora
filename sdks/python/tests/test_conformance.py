@@ -12,6 +12,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lunora.client import (
+    MAX_PENDING_POKES,
     LunoraClient,
     LunoraError,
     build_connect_frame,
@@ -180,9 +181,10 @@ class TestWsFrameConsumer(unittest.TestCase):
         self.assertTrue(rows_seen, "on_rows should fire at pokeEnd")
         self.assertEqual(rows_seen[-1], shape["expectedRows"])
 
-    # No ``covers()`` call: protocol/conformance-cases.json lists the cases EVERY
-    # language must have, and it carries no name for this one yet — the fixture
-    # arrived with the TypeScript fix. Give it one once all eight ports assert it.
+    # A manifest case: every port asserts it against the shared fixture's
+    # ``resetPokeSequence``. It starts from the cold-seed state on purpose — a
+    # re-seed is inserts-only, so ``m1`` leaves the shape with no delete op behind
+    # it, and a client that merges renders it for the rest of its life.
     def test_reset_poke_replaces_the_view(self):
         covers("shape_reset_poke_replaces_membership")
         shape = load("ws-frames.json")["shape"]
@@ -202,6 +204,55 @@ class TestWsFrameConsumer(unittest.TestCase):
         # m1 left the shape while this client was away and the re-seed says so by
         # omission — it carries no delete, only the rows that are still members.
         self.assertEqual(rows_seen[-1], shape["resetExpectedRows"])
+
+    def test_pending_poke_buffers_are_bounded(self):
+        covers("pending_poke_buffers_are_bounded")
+
+        # A buffer is only released at its ``pokeEnd``. A socket that drops
+        # mid-poke never sends one, so its buffer would otherwise be retained for
+        # the life of the client — one leak per reconnect, and unbounded against
+        # a peer that opens pokes it never closes.
+        client = LunoraClient("https://app.example")
+        client._send = lambda _frame: None
+        rows_seen: list = []
+        client.subscribe_shape("roomMessages", {"room": "general"}, rows_seen.append)
+        shape_id = "shape_1"  # the first shape on a fresh client, as every fixture assumes
+
+        # A poke opened, part-filled, and then abandoned when the socket dropped.
+        client.handle_frame({"type": "pokeStart", "pokeId": "stale"})
+        client.handle_frame(
+            {
+                "type": "pokePart",
+                "pokeId": "stale",
+                "shapeId": shape_id,
+                "rowsPatch": [{"op": "insert", "key": "ghost", "value": "ghost-row"}],
+            }
+        )
+
+        # Enough fresh pokes to push it past the cap.
+        for index in range(MAX_PENDING_POKES):
+            client.handle_frame({"type": "pokeStart", "pokeId": f"filler-{index}"})
+
+        # The abandoned buffer is gone, so its late pokeEnd is a no-op: an evicted
+        # poke behaves exactly like one that was never opened.
+        descriptor = client.handle_frame({"type": "pokeEnd", "pokeId": "stale"})
+
+        self.assertEqual(descriptor["shapes"], [], "the evicted buffer must touch no shape")
+        self.assertEqual(rows_seen, [], "the ghost row must never reach the view")
+
+        # ...and eviction is oldest-first, not a blanket drop: a live poke still applies.
+        newest = f"filler-{MAX_PENDING_POKES - 1}"
+        client.handle_frame(
+            {
+                "type": "pokePart",
+                "pokeId": newest,
+                "shapeId": shape_id,
+                "rowsPatch": [{"op": "insert", "key": "m1", "value": "kept"}],
+            }
+        )
+        client.handle_frame({"type": "pokeEnd", "pokeId": newest})
+
+        self.assertEqual(rows_seen, [["kept"]], "the newest buffer must survive and apply")
 
 
 if __name__ == "__main__":

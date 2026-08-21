@@ -53,6 +53,7 @@ public final class ConformanceTest {
         pokeSequenceMaterialisesRows();
         pokePartsDoNotApplyBeforePokeEnd();
         resetPokeReplacesShapeMembership();
+        pendingPokeBuffersAreBounded();
         concurrentSubscribeAndHandleFrame();
 
         // The optimistic-layer and offline-queue cases, in their own file so this one
@@ -606,10 +607,10 @@ public final class ConformanceTest {
      * A {@code reset} part carries the shape's COMPLETE membership, so the view has to be dropped
      * before the ops are applied.
      *
-     * <p>Not a manifest case — the shared manifest does not name one — but the shared fixture
-     * carries the sequence, so this is the same assertion every port makes. It starts from the
-     * cold-seed state on purpose: a re-seed is inserts-only, so {@code m1} leaves the shape with no
-     * delete op behind it, and a client that merges renders it for the rest of its life.
+     * <p>A manifest case, asserted by every port against the shared fixture's {@code
+     * resetPokeSequence}. It starts from the cold-seed state on purpose: a re-seed is inserts-only,
+     * so {@code m1} leaves the shape with no delete op behind it, and a client that merges renders
+     * it for the rest of its life.
      */
     @SuppressWarnings("unchecked")
     private static void resetPokeReplacesShapeMembership() throws IOException {
@@ -643,6 +644,58 @@ public final class ConformanceTest {
                 canonical(delivered.get(delivered.size() - 1))
                         .equals(canonical(shape.get("resetExpectedRows"))),
                 "a reset poke replaces the shape's membership rather than merging into it");
+    }
+
+    /**
+     * A buffer is only released at its {@code pokeEnd}. A socket that drops mid-poke never sends
+     * one, so its buffer would be retained for the life of the client — one leak per reconnect, and
+     * unbounded against a peer that opens pokes it never closes.
+     *
+     * <p>Asserted black-box: an evicted poke behaves exactly like one that was never opened, which
+     * is the only form of this assertion all eight ports can share.
+     */
+    private static void pendingPokeBuffersAreBounded() {
+        covers("pending_poke_buffers_are_bounded");
+
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+
+        List<List<Object>> delivered = new ArrayList<>();
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("room", "general");
+        client.subscribeShape("roomMessages", args, delivered::add, null);
+
+        // A poke opened, part-filled, then abandoned when the socket dropped.
+        client.handleFrame("{\"type\":\"pokeStart\",\"pokeId\":\"stale\"}");
+        client.handleFrame(
+                "{\"type\":\"pokePart\",\"pokeId\":\"stale\",\"shapeId\":\"shape_1\","
+                    + "\"rowsPatch\":[{\"op\":\"insert\",\"key\":\"ghost\",\"value\":\"ghost-row\"}]}");
+
+        for (int index = 0; index < Client.MAX_PENDING_POKES; index++) {
+            client.handleFrame("{\"type\":\"pokeStart\",\"pokeId\":\"filler-" + index + "\"}");
+        }
+
+        // The abandoned buffer is gone, so its late pokeEnd is a no-op.
+        client.handleFrame("{\"type\":\"pokeEnd\",\"pokeId\":\"stale\"}");
+
+        check(delivered.isEmpty(), "the ghost row of an evicted poke must never reach the view");
+
+        // ...and eviction is oldest-first, not a blanket drop: a live poke still applies.
+        String newest = "filler-" + (Client.MAX_PENDING_POKES - 1);
+
+        client.handleFrame(
+                "{\"type\":\"pokePart\",\"pokeId\":\""
+                        + newest
+                        + "\",\"shapeId\":\"shape_1\","
+                        + "\"rowsPatch\":[{\"op\":\"insert\",\"key\":\"m1\",\"value\":\"kept\"}]}");
+        client.handleFrame("{\"type\":\"pokeEnd\",\"pokeId\":\"" + newest + "\"}");
+
+        check(delivered.size() == 1, "the newest buffer must survive and apply");
+        check(
+                canonical(delivered.get(0)).equals(canonical(List.of("kept"))),
+                "the surviving poke applies its rows");
     }
 
     /**

@@ -6,6 +6,7 @@ package lunora
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -662,5 +663,70 @@ func TestResetPokeReplacesTheView(t *testing.T) {
 
 	if got, want := canonical(t, delivered[1]), canonical(t, shape["resetExpectedRows"]); got != want {
 		t.Errorf("rows after the reset poke mismatch\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// TestPendingPokeBuffersAreBounded: a buffer is only released at its pokeEnd. A
+// socket that drops mid-poke never sends one, so its buffer would be retained
+// for the life of the client — one leak per reconnect, and unbounded against a
+// peer that opens pokes it never closes.
+func TestPendingPokeBuffersAreBounded(t *testing.T) {
+	covers("pending_poke_buffers_are_bounded")
+
+	client := NewClient("https://app.example", nil)
+
+	var delivered [][]any
+
+	client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func(rows []any) {
+		delivered = append(delivered, rows)
+	}, nil)
+
+	handle := func(raw string) {
+		t.Helper()
+
+		if _, err := client.HandleFrame([]byte(raw)); err != nil {
+			t.Fatalf("handle: %v", err)
+		}
+	}
+
+	// A poke opened, part-filled, then abandoned when the socket dropped.
+	handle(`{"type":"pokeStart","pokeId":"stale"}`)
+	handle(`{"type":"pokePart","pokeId":"stale","shapeId":"shape_1","rowsPatch":[{"op":"insert","key":"ghost","value":"ghost-row"}]}`)
+
+	for index := 0; index < MaxPendingPokes; index++ {
+		handle(fmt.Sprintf(`{"type":"pokeStart","pokeId":"filler-%d"}`, index))
+	}
+
+	// The abandoned buffer is gone, so its late pokeEnd is a no-op: an evicted
+	// poke behaves exactly like one that was never opened.
+	handle(`{"type":"pokeEnd","pokeId":"stale"}`)
+
+	if len(delivered) != 0 {
+		t.Fatalf("onRows fired %d times for an evicted poke — the ghost row reached the view", len(delivered))
+	}
+
+	// ...and eviction is oldest-first, not a blanket drop: a live poke still applies.
+	newest := fmt.Sprintf("filler-%d", MaxPendingPokes-1)
+	handle(fmt.Sprintf(`{"type":"pokePart","pokeId":"%s","shapeId":"shape_1","rowsPatch":[{"op":"insert","key":"m1","value":"kept"}]}`, newest))
+	handle(fmt.Sprintf(`{"type":"pokeEnd","pokeId":"%s"}`, newest))
+
+	if len(delivered) != 1 {
+		t.Fatalf("onRows fired %d times for the newest poke, want 1 — it must survive", len(delivered))
+	}
+
+	if got, want := canonical(t, delivered[0]), canonical(t, []any{"kept"}); got != want {
+		t.Errorf("rows mismatch\n got: %s\nwant: %s", got, want)
+	}
+
+	// A completed poke must leave the order list too, or it grows a stale entry
+	// per poke and the cap stops tracking the map.
+	if _, present := client.pokes[newest]; present {
+		t.Error("the applied buffer was not released")
+	}
+
+	for _, candidate := range client.pokeOrder {
+		if candidate == newest {
+			t.Error("the eviction order kept a stale id for an applied poke")
+		}
 	}
 }

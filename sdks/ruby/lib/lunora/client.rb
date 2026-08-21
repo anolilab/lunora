@@ -21,6 +21,14 @@ module Lunora
   # of thousands of dispatches. A flush with a larger backlog chunks itself.
   MAX_BATCH_ENTRIES = 500
 
+  # How many un-applied poke buffers to retain before evicting the oldest. A
+  # buffer is only released at its +pokeEnd+; a socket that drops mid-poke never
+  # sends one, so without a bound the abandoned buffers accumulate for the life
+  # of the client — one per reconnect, and unbounded against a peer that opens
+  # pokes it never closes. Concurrent in-flight pokes number in the low single
+  # digits, so this is far above any legitimate working set.
+  MAX_PENDING_POKES = 64
+
   # A coded error from an RPC error envelope.
   class ApiError < StandardError
     attr_reader :code, :data
@@ -551,6 +559,10 @@ module Lunora
         @subscriptions.delete(frame["id"])
         kind
       when "pokeStart"
+        # Evict oldest-first at the cap. A Hash preserves insertion order, so
+        # the first key is the oldest buffer; one that old is no longer going to
+        # see its +pokeEnd+.
+        @pokes.shift while @pokes.size >= MAX_PENDING_POKES
         @pokes[frame["pokeId"]] = { parts: {}, resets: [] }
         kind
       when "pokePart" then buffer_poke_part(frame)

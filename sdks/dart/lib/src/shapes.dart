@@ -46,6 +46,14 @@ class _Poke {
   final Set<String> resets = <String>{};
 }
 
+/// How many un-applied poke buffers a registry retains before evicting the
+/// oldest. A buffer is only released at its `pokeEnd`; a socket that drops
+/// mid-poke never sends one, so without a bound the abandoned buffers accumulate
+/// for the life of the client — one per reconnect, and unbounded against a peer
+/// that opens pokes it never closes. Concurrent in-flight pokes number in the
+/// low single digits, so this is far above any legitimate working set.
+const int maxPendingPokes = 64;
+
 /// The open shape views and the pokes in flight against them.
 class ShapeRegistry {
   final Map<String, _ShapeSubscription> _shapes = <String, _ShapeSubscription>{};
@@ -107,6 +115,13 @@ class ShapeRegistry {
     final pokeId = frame['pokeId'];
 
     if (pokeId is String) {
+      // Evict oldest-first at the cap. A Dart Map iterates in insertion order,
+      // so the first key is the oldest buffer; one that old is no longer going
+      // to see its `pokeEnd`.
+      while (_pokes.length >= maxPendingPokes) {
+        _pokes.remove(_pokes.keys.first);
+      }
+
       _pokes[pokeId] = _Poke();
     }
   }

@@ -18,6 +18,16 @@ const val RPC_BATCH_PATH: String = "/_lunora/rpc-batch"
 const val WS_PATH: String = "/_lunora/ws"
 
 /**
+ * How many un-applied poke buffers to retain before evicting the oldest. A
+ * buffer is only released at its `pokeEnd`; a socket that drops mid-poke never
+ * sends one, so without a bound the abandoned buffers accumulate for the life of
+ * the client — one per reconnect, and unbounded against a peer that opens pokes
+ * it never closes. Concurrent in-flight pokes number in the low single digits,
+ * so this is far above any legitimate working set.
+ */
+const val MAX_PENDING_POKES: Int = 64
+
+/**
  * Which RPC method a call dispatches to. Generated code emits these entries
  * rather than raw strings, so a typo in a target template is a compile error
  * instead of a read silently sent over the write path.
@@ -696,7 +706,19 @@ class Client(
                 for (handler in handlers) handler(error)
             }
             "complete" -> synchronized(lock) { subscriptions.remove(id) }
-            "pokeStart" -> synchronized(lock) { pokes[frame["pokeId"].toString()] = PokeBuffer() }
+            "pokeStart" -> synchronized(lock) {
+                // Evict oldest-first at the cap. A LinkedHashMap iterates in
+                // insertion order, so the first key is the oldest buffer; one
+                // that old is no longer going to see its pokeEnd.
+                val oldest = pokes.keys.iterator()
+
+                while (pokes.size >= MAX_PENDING_POKES && oldest.hasNext()) {
+                    oldest.next()
+                    oldest.remove()
+                }
+
+                pokes[frame["pokeId"].toString()] = PokeBuffer()
+            }
             "pokePart" -> bufferPokePart(frame)
             "pokeEnd" -> applyPoke(frame)
         }

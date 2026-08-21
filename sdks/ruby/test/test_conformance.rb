@@ -224,10 +224,10 @@ class TestWsFrames < Minitest::Test
     assert_equal canonical(shape["expectedRows"]), canonical(delivered.last)
   end
 
-  # No +ConformanceManifest.covers+ call: protocol/conformance-cases.json lists
-  # the cases EVERY language must have, and it carries no name for this one yet —
-  # the fixture arrived with the TypeScript fix. Give it one once all eight ports
-  # assert it.
+  # A manifest case: every port asserts it against the shared fixture's
+  # +resetPokeSequence+. It starts from the cold-seed state on purpose — a re-seed
+  # is inserts-only, so +m1+ leaves the shape with no delete op behind it, and a
+  # client that merges renders it for the rest of its life.
   def test_reset_poke_replaces_the_view
     ConformanceManifest.covers("shape_reset_poke_replaces_membership")
     shape = fixture("ws-frames.json")["shape"]
@@ -259,6 +259,42 @@ class TestWsFrames < Minitest::Test
     shape["pokeSequence"][0...-1].each { |frame| client.handle_frame(JSON.generate(frame)) }
 
     assert_equal 0, fired, "the view would be torn if parts applied before pokeEnd"
+  end
+
+  # A buffer is only released at its pokeEnd. A socket that drops mid-poke never
+  # sends one, so its buffer would be retained for the life of the client — one
+  # leak per reconnect, and unbounded against a peer that opens pokes it never
+  # closes.
+  def test_pending_poke_buffers_are_bounded
+    ConformanceManifest.covers("pending_poke_buffers_are_bounded")
+
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    delivered = []
+    client.subscribe_shape("roomMessages", { "room" => "general" }, ->(rows) { delivered << rows })
+
+    # A poke opened, part-filled, then abandoned when the socket dropped.
+    client.handle_frame(JSON.generate({ "type" => "pokeStart", "pokeId" => "stale" }))
+    client.handle_frame(JSON.generate({ "type" => "pokePart", "pokeId" => "stale", "shapeId" => "shape_1",
+                                        "rowsPatch" => [{ "op" => "insert", "key" => "ghost", "value" => "ghost-row" }] }))
+
+    Lunora::MAX_PENDING_POKES.times do |index|
+      client.handle_frame(JSON.generate({ "type" => "pokeStart", "pokeId" => "filler-#{index}" }))
+    end
+
+    # The abandoned buffer is gone, so its late pokeEnd is a no-op: an evicted
+    # poke behaves exactly like one that was never opened.
+    client.handle_frame(JSON.generate({ "type" => "pokeEnd", "pokeId" => "stale" }))
+
+    assert_empty delivered, "the ghost row must never reach the view"
+
+    # ...and eviction is oldest-first, not a blanket drop: a live poke still applies.
+    newest = "filler-#{Lunora::MAX_PENDING_POKES - 1}"
+    client.handle_frame(JSON.generate({ "type" => "pokePart", "pokeId" => newest, "shapeId" => "shape_1",
+                                        "rowsPatch" => [{ "op" => "insert", "key" => "m1", "value" => "kept" }] }))
+    client.handle_frame(JSON.generate({ "type" => "pokeEnd", "pokeId" => newest }))
+
+    assert_equal [["kept"]], delivered, "the newest buffer must survive and apply"
   end
 end
 
