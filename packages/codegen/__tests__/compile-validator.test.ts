@@ -42,6 +42,12 @@ const CORPUS: ReadonlyArray<Record<string, unknown>> = [
     { kind: "b" },
     { items: [{ id: "x" }, { id: "y" }] },
     { items: [{ id: 1 }] },
+    // A declared field carried by the PROTOTYPE, not as an own property: the
+    // oracle reads own keys only (`Object.hasOwn`), so `name` must read as
+    // absent — a compiled path that sees the inherited value is unsound.
+    Object.assign(Object.create({ name: "inherited" }) as Record<string, unknown>, {}),
+    // An own property under a prototype-member name must still parse normally.
+    { toString: "x" },
     [] as unknown as Record<string, unknown>,
     null as unknown as Record<string, unknown>,
 ];
@@ -91,6 +97,10 @@ describe("compileArgsValidator — differential parity vs interpreted oracle", (
         "{ kind: v.literal('a') }",
         "{ id: v.id('users') }",
         "{ anything: v.any() }",
+        // `v.any()` under a prototype-member name: on a plain `{}` source the
+        // own key is absent, so the oracle yields `undefined` — a bare index
+        // read would commit the inherited `Object.prototype.toString` instead.
+        "{ toString: v.any() }",
         "{ name: v.string(), nested: v.object({ x: v.number() }), tags: v.array(v.number()) }",
     ];
 
