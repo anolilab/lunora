@@ -31,6 +31,38 @@ interface OperationRun {
 const OperationRunContext = createContext<null | OperationRun>(null);
 
 /**
+ * Dispatch a plain REST route (an `httpRouter()` operation, no `functionPath`)
+ * to the worker origin with the admin bearer. A same-origin fetch would be
+ * answered by the studio's own server — under `lunora dev` the SPA fallback
+ * returns the studio document as a 200 for any non-`/_lunora/*` path — so the
+ * request must target the worker explicitly. When `origin` is empty the path
+ * is fetched same-origin as before. Exported for tests.
+ */
+const restDispatch = async (operation: ApiOperation, parsedArgs: unknown, origin: string, adminToken: null | string): Promise<unknown> => {
+    const hasBody = operation.method !== "GET" && operation.method !== "HEAD";
+    const url = origin === "" ? operation.httpPath : new URL(operation.httpPath, origin).toString();
+
+    const fetchResponse = await fetch(url, {
+        body: hasBody ? JSON.stringify(parsedArgs) : undefined,
+        headers: {
+            ...(hasBody ? { "content-type": "application/json" } : {}),
+            ...(adminToken === null || adminToken === "" ? {} : { authorization: `Bearer ${adminToken}` }),
+        },
+        method: operation.method,
+    });
+
+    // Read the body once, then parse — a Response stream can't be read
+    // twice, so `.json().catch(() => .text())` would throw on a non-JSON body.
+    const text = await fetchResponse.text();
+
+    try {
+        return JSON.parse(text) as unknown;
+    } catch {
+        return text;
+    }
+};
+
+/**
  * Read the current operation's live run state. Must be used inside an
  * {@link OperationRunProvider} (the reference view wraps the centre + right rail
  * in one, so the request console and the response panel share a single run).
@@ -92,29 +124,9 @@ const OperationRunProvider = ({ children, operation }: OperationRunProviderProps
         const startedAt = performance.now();
 
         try {
-            let value: unknown;
-
-            if (operation.functionPath === undefined) {
-                // Plain REST route: best-effort fetch of the path with a JSON body.
-                const hasBody = operation.method !== "GET" && operation.method !== "HEAD";
-                const fetchResponse = await fetch(operation.httpPath, {
-                    body: hasBody ? JSON.stringify(parsedArgs) : undefined,
-                    headers: hasBody ? { "content-type": "application/json" } : undefined,
-                    method: operation.method,
-                });
-
-                // Read the body once, then parse — a Response stream can't be read
-                // twice, so `.json().catch(() => .text())` would throw on a non-JSON body.
-                const text = await fetchResponse.text();
-
-                try {
-                    value = JSON.parse(text);
-                } catch {
-                    value = text;
-                }
-            } else {
-                value = await dispatchByKind(client, operation.kind, adminRef(operation.functionPath), parsedArgs, callOptions(shardKey));
-            }
+            const value: unknown = await (operation.functionPath === undefined
+                ? restDispatch(operation, parsedArgs, client.url, client.getAuthToken())
+                : dispatchByKind(client, operation.kind, adminRef(operation.functionPath), parsedArgs, callOptions(shardKey)));
 
             setResponse(value);
             setDurationMs(Math.round(performance.now() - startedAt));
@@ -136,4 +148,4 @@ const OperationRunProvider = ({ children, operation }: OperationRunProviderProps
     return <OperationRunContext value={value}>{children}</OperationRunContext>;
 };
 
-export { OperationRunProvider, useOperationRun };
+export { OperationRunProvider, restDispatch, useOperationRun };
