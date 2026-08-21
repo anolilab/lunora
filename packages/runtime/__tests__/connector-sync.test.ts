@@ -316,8 +316,9 @@ describe("toFivetranResponse", () => {
 
         const out = toFivetranResponse(page);
 
-        // Safe-range bigint → number; beyond-safe → decimal string; bytes → base64 string.
-        expect(out.insert["rows"]).toEqual([{ _id: "r1", blob: "AQID", count: 42, huge: "9007199254740993" }]);
+        // Every bigint is a decimal string (one stable JSON type per column,
+        // whichever side of 2^53 a row falls on); bytes become a base64 string.
+        expect(out.insert["rows"]).toEqual([{ _id: "r1", blob: "AQID", count: "42", huge: "9007199254740993" }]);
         expect(JSON.stringify(out.insert["rows"])).not.toContain("$lunora.wire$");
     });
 
@@ -383,12 +384,12 @@ describe("toAirbyteMessages", () => {
         const messages = toAirbyteMessages(page, 1000);
 
         expect(messages[0]).toEqual({
-            record: { data: { _id: "r1", blob: "AQID", count: 42, huge: "9007199254740993" }, emitted_at: 1000, stream: "rows" },
+            record: { data: { _id: "r1", blob: "AQID", count: "42", huge: "9007199254740993" }, emitted_at: 1000, stream: "rows" },
             type: "RECORD",
         });
         // The delete marker spreads over the decoded doc, not the wire form.
         expect(messages[1]).toEqual({
-            record: { data: { _id: "r2", _lunora_deleted: true, count: 7 }, emitted_at: 1000, stream: "rows" },
+            record: { data: { _id: "r2", _lunora_deleted: true, count: "7" }, emitted_at: 1000, stream: "rows" },
             type: "RECORD",
         });
         expect(JSON.stringify(messages)).not.toContain("$lunora.wire$");

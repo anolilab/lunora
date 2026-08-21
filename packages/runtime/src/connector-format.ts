@@ -21,8 +21,7 @@
  * JSON before it reaches third-party output — see {@link toPortableDocument}.
  */
 
-import { toBase64 } from "../../../shared/base64";
-import { decodeWire, isPlainObject } from "../../../shared/wire-codec";
+import { toPortableDocument } from "./portable-json";
 
 /**
  * One change record in a {@link ConnectorSyncPage}. Mirrors a row of the CDC log
@@ -85,57 +84,6 @@ type AirbyteMessage =
 
 /** Default primary-key column for Lunora documents. */
 const DEFAULT_PRIMARY_KEY = "_id";
-
-/**
- * Map a decoded value to warehouse-portable JSON: a `bigint` becomes a number
- * when it fits the safe-integer range (else its decimal string), bytes become
- * a base64 string, containers recurse, pure JSON passes through unchanged.
- */
-const toPortableJson = (value: unknown): unknown => {
-    if (typeof value === "bigint") {
-        return value >= Number.MIN_SAFE_INTEGER && value <= Number.MAX_SAFE_INTEGER ? Number(value) : value.toString();
-    }
-
-    if (value instanceof ArrayBuffer) {
-        return toBase64(new Uint8Array(value));
-    }
-
-    if (ArrayBuffer.isView(value)) {
-        return toBase64(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
-    }
-
-    if (Array.isArray(value)) {
-        return value.map((item) => toPortableJson(item));
-    }
-
-    if (isPlainObject(value)) {
-        const result: Record<string, unknown> = {};
-
-        for (const key of Object.keys(value)) {
-            const mapped = toPortableJson(value[key]);
-
-            if (key === "__proto__") {
-                // A plain assignment for a literal `__proto__` field fires the
-                // prototype setter instead of creating an own property (see the
-                // same handling in shared/wire-codec) — install it explicitly.
-                Object.defineProperty(result, key, { configurable: true, enumerable: true, value: mapped, writable: true });
-            } else {
-                result[key] = mapped;
-            }
-        }
-
-        return result;
-    }
-
-    return value;
-};
-
-/**
- * Decode a wire-form doc (as shard admin RPCs return it) and map every
- * non-JSON leaf to a warehouse-portable value. Identity for pure-JSON docs.
- */
-const toPortableDocument = (wireDocument: Record<string, unknown>): Record<string, unknown> =>
-    toPortableJson(decodeWire(wireDocument)) as Record<string, unknown>;
 
 /**
  * Format a {@link ConnectorSyncPage} as a Fivetran connector-function response.
