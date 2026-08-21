@@ -253,6 +253,37 @@ describe("createPayment", () => {
         expect(session?.capturedAmount.minorUnits).toBe(1000n);
     });
 
+    it("returns non-2xx for an orphaned subscription.updated so the provider retries", async () => {
+        expect.assertions(2);
+
+        const action: WebhookAction = {
+            eventId: "evt_orphan",
+            priceId: "price_2",
+            provider: "stripe",
+            subscriptionId: "sub_absent",
+            type: "subscription.updated",
+        };
+        const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), store: new MemoryPaymentStore() });
+
+        const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
+
+        // The row this event patches doesn't exist yet — the provider must retry it.
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toEqual({ applied: false, reason: "orphaned" });
+    });
+
+    it("still acknowledges a genuinely unhandled event with 200", async () => {
+        expect.assertions(2);
+
+        const action: WebhookAction = { eventId: "evt_noop", provider: "stripe", type: "unhandled" };
+        const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), store: new MemoryPaymentStore() });
+
+        const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ applied: false, reason: "unhandled" });
+    });
+
     it("returns the error status when webhook verification fails", async () => {
         expect.assertions(2);
 

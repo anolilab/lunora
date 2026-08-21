@@ -148,8 +148,11 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
 
     // A pure metadata change (price / quantity / cancel-at-period-end) with no state transition.
     if (action.type === "subscription.updated") {
+        // Out-of-order delivery: the row this event patches doesn't exist yet. Surface a distinct
+        // reason so the caller releases the event claim and the provider retries after the create
+        // event lands — dropping it as `unhandled` would burn the event id and lose the update.
         if (!existing) {
-            return { applied: false, reason: "unhandled" };
+            return { applied: false, reason: "orphaned" };
         }
 
         await store.upsertSubscription({
@@ -255,6 +258,13 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, ob
         await store.releaseEvent(action.provider, action.eventId);
 
         throw error;
+    }
+
+    if (result.reason === "orphaned") {
+        // The row this event patches doesn't exist yet (out-of-order delivery).
+        // Release the claim so the provider's retry re-processes it after the
+        // create event lands — otherwise the id is burned and the update is lost.
+        await store.releaseEvent(action.provider, action.eventId);
     }
 
     notifyObserver(observer, { action: action.type, eventId: action.eventId, provider: action.provider, reason: result.reason, type: "webhook.applied" });

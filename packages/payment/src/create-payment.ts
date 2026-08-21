@@ -331,6 +331,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // treating a 400 as "stop retrying". Do not wrap this call in the parseWebhook try/catch.
             const result = await applyWebhookAction(store, action, options.observability);
 
+            // Deliberate non-200: the row this event patches hasn't been created yet (out-of-order
+            // delivery), and its claim was released — the provider must retry so the update applies
+            // once the create event lands. Only `orphaned` gets this; genuinely unhandleable events
+            // keep the always-200 contract below.
+            if (result.reason === "orphaned") {
+                return jsonResponse({ applied: result.applied, reason: result.reason }, 500);
+            }
+
             // Acknowledge once verified so the provider stops retrying — a no-op is still a 200.
             return jsonResponse({ applied: result.applied, reason: result.reason }, 200);
         },

@@ -313,6 +313,91 @@ describe("applyWebhookAction", () => {
         await expect(store.listSubscriptionsByReference("user_1")).resolves.toHaveLength(1);
     });
 
+    it("releases the claim on an orphaned subscription.updated so the retry is not a duplicate", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        const updated: WebhookAction = {
+            eventId: "evt_upd",
+            priceId: "price_2",
+            provider: "stripe",
+            subscriptionId: "sub_1",
+            type: "subscription.updated",
+        };
+
+        // No row exists yet (out-of-order delivery) — the event is orphaned, not consumed.
+        await expect(applyWebhookAction(store, updated)).resolves.toEqual({ applied: false, reason: "orphaned" });
+
+        // The claim was released: replaying the SAME event id is not a duplicate.
+        await expect(applyWebhookAction(store, updated)).resolves.toEqual({ applied: false, reason: "orphaned" });
+    });
+
+    it("applies an out-of-order subscription.updated once the create event lands (ordering repair)", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        const updated: WebhookAction = {
+            eventId: "evt_upd",
+            priceId: "price_2",
+            provider: "stripe",
+            quantity: 3,
+            subscriptionId: "sub_1",
+            type: "subscription.updated",
+        };
+
+        // The update arrives before the subscription exists — orphaned, claim released.
+        await expect(applyWebhookAction(store, updated)).resolves.toEqual({ applied: false, reason: "orphaned" });
+
+        // The create event lands, then the provider's retry of the update applies it.
+        await applyWebhookAction(store, {
+            eventId: "evt_create",
+            priceId: "price_1",
+            provider: "stripe",
+            quantity: 1,
+            referenceId: "user_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        });
+
+        await expect(applyWebhookAction(store, updated)).resolves.toEqual({ applied: true, reason: "ok" });
+
+        const subscription = await store.getSubscription("stripe", "sub_1");
+
+        expect(subscription).toMatchObject({ priceId: "price_2", quantity: 3, state: "active" });
+    });
+
+    it("applies a subscription.updated normally when the row exists", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, {
+            eventId: "e1",
+            priceId: "price_1",
+            provider: "stripe",
+            quantity: 1,
+            referenceId: "user_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        });
+
+        await expect(
+            applyWebhookAction(store, {
+                cancelAtPeriodEnd: true,
+                eventId: "e2",
+                provider: "stripe",
+                subscriptionId: "sub_1",
+                type: "subscription.updated",
+            }),
+        ).resolves.toEqual({ applied: true, reason: "ok" });
+
+        const subscription = await store.getSubscription("stripe", "sub_1");
+
+        expect(subscription?.cancelAtPeriodEnd).toBe(true);
+    });
+
     it("absorbs an out-of-order refund-before-capture without losing the later capture", async () => {
         expect.assertions(4);
 
