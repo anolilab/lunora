@@ -1666,3 +1666,99 @@ REMOVED note above); its open follow-ups live in 314 and 315.
 - Never mix a default export with named exports; named-only when a file has >1 export.
 - Shared dep versions come from pnpm catalogs (`catalog:*`) — never hardcode a version.
 - Enforced commit types differ from `CLAUDE.md` — see the Wave 3 note above.
+
+## Wave 22 — all-package sweep (baseline `207be1b63`, 2026-08-21)
+
+Deep audit of all 56 packages (8 domain clusters, 81 raw findings, 80 vetted
+into plans — every finding survived source vetting; two fix-shapes were
+corrected during planning: 427 decodes at the connector boundary, not the
+coordinator, and 428 threads the generation stamp through chunk frames).
+Plan 431 was deliberately not filed: the orphaned `packages/platform-celld/`
+directory + stale `feat/platform-celld` branch is a merge-or-close decision
+for the maintainer (the spike lives uncommitted in a separate worktree).
+Executed via per-package worktree subagents, one PR per branch
+(`improve/wave22-<pkg>`) targeting `alpha`; spikes (386, 395, 435, 445)
+produce design docs, not code PRs.
+
+| Plan | Title | Pri | Cat | Branch | Status |
+|------|-------|-----|-----|--------|--------|
+| 365 | Map unknown provider subscription statuses to non-entitling `past_due` in the Stripe and Polar adapters | P1 | security | improve/wave22-payment | PR [#435](https://github.com/anolilab/lunora/pull/435) — gates green |
+| 366 | Make `money()` reject fractional and non-finite amounts instead of silently truncating | P1 | bug | improve/wave22-payment | PR [#435](https://github.com/anolilab/lunora/pull/435) — gates green |
+| 367 | Release the webhook event claim when `subscription.updated` finds no subscription row | P1 | bug | improve/wave22-payment | PR [#435](https://github.com/anolilab/lunora/pull/435) — gates green |
+| 368 | Key customer upserts identically in the memory and database payment stores | P1 | bug | improve/wave22-payment | PR [#435](https://github.com/anolilab/lunora/pull/435) — gates green |
+| 369 | Put refund, capture, and cancel-payment behind the `LunoraPayment` facade | P2 | tech-debt | improve/wave22-payment | PR [#435](https://github.com/anolilab/lunora/pull/435) — gates green |
+| 370 | Batch the per-feature usage scans in `listBalances` | P2 | perf | improve/wave22-payment | PR [#435](https://github.com/anolilab/lunora/pull/435) — gates green |
+| 371 | Stop Stripe async payments from creating two session rows for one payment | P2 | bug | improve/wave22-payment | PR [#435](https://github.com/anolilab/lunora/pull/435) — gates green |
+| 372 | Make read-only-store misuse fail loud through the ratelimit middleware | P1 | bug | improve/wave22-ratelimit | PR [#446](https://github.com/anolilab/lunora/pull/446) — gates green |
+| 373 | Restore coverage thresholds in `@lunora/x402`'s vitest config | P2 | tests | improve/wave22-x402 | PR [#436](https://github.com/anolilab/lunora/pull/436) — gates green |
+| 374 | Parse the released amount in `releaseSpendOnFailure` with `parseAtomicAmount` | P2 | bug | improve/wave22-x402 | PR [#436](https://github.com/anolilab/lunora/pull/436) — gates green |
+| 375 | Make the EVM and SVM toolchains optional peers of `@lunora/x402` | P2 | deps | improve/wave22-x402 | PR [#436](https://github.com/anolilab/lunora/pull/436) — gates green |
+| 376 | Derive the umbrella parity test's package list from disk, with reasoned opt-outs | P2 | tests | improve/wave22-lunorash | PR [#445](https://github.com/anolilab/lunora/pull/445) — gates green |
+| 377 | Forward `messageId` as the dispatch idempotency id so at-least-once redelivery stops re-applying mutations | P1 | bug | improve/wave22-dispatch | PR [#455](https://github.com/anolilab/lunora/pull/455) — gates green |
+| 378 | Route the scheduler's queue-workpool dispatcher through `createDispatchRunner` | P2 | bug | improve/wave22-scheduler | PR [#454](https://github.com/anolilab/lunora/pull/454) — gates green |
+| 379 | Replace `AbortSignal.timeout` with a strongly-held deadline at the Worker-runtime call sites | P1 | bug | improve/wave22-dispatch | PR [#455](https://github.com/anolilab/lunora/pull/455) — gates green |
+| 380 | Fail loud when repeated `ctx.runStep`/`ctx.waitForEvent` calls collide on one durable step name | P1 | bug | improve/wave22-workflow | PR [#447](https://github.com/anolilab/lunora/pull/447) — gates green |
+| 381 | Rate `ctx.images` in the platform capability matrix so non-Cloudflare targets get a diagnostic instead of a runtime failure | P1 | bug | improve/wave22-bindings | PR [#448](https://github.com/anolilab/lunora/pull/448) — gates green |
+| 382 | Bound the R2 SQL and Analytics Engine HTTP clients with a configurable timeout | P2 | bug | improve/wave22-bindings | PR [#448](https://github.com/anolilab/lunora/pull/448) — gates green |
+| 383 | Export `parseSignedTransform` so verified image-transform strings round-trip to `TransformOptions` | P2 | bug | improve/wave22-bindings | PR [#448](https://github.com/anolilab/lunora/pull/448) — gates green |
+| 384 | Align TTL and base-path validation across the three URL-signing helpers | P2 | bug | improve/wave22-storage | PR [#449](https://github.com/anolilab/lunora/pull/449) — gates green |
+| 385 | Consolidate `@lunora/browser`'s split test suites into `__tests__/` | P3 | tests | improve/wave22-browser | PR [#458](https://github.com/anolilab/lunora/pull/458) — gates green |
+| 386 | [Spike] Design the observability story for the Queues-backed workpool | P3 | direction | — (design doc) | DONE — design doc at 386-*-design.md |
+| 387 | Re-tag `.output()` validation failures as internal errors on the RPC path | P1 | security | improve/wave22-server | PR [#441](https://github.com/anolilab/lunora/pull/441) — gates green |
+| 388 | Reserve the Dart target's `watchX` member names in the SDK collision guard | P2 | bug | improve/wave22-codegen | PR [#437](https://github.com/anolilab/lunora/pull/437) — 388 + 389 (proto-guard shape, absolute-budget gate) — gates green |
+| 389 | Make the compiled validator read fields with `Object.hasOwn`, matching the interpreted oracle | P2 | bug | improve/wave22-codegen | PR [#437](https://github.com/anolilab/lunora/pull/437) — 388 + 389 (proto-guard shape, absolute-budget gate) — gates green |
+| 390 | Bound `listPresent`'s per-room read and make presence self-reaping | P2 | perf | improve/wave22-server | PR [#441](https://github.com/anolilab/lunora/pull/441) — gates green |
+| 391 | Clamp the fingerprint stacktrace parser like the message paths already are | P2 | perf | improve/wave22-fingerprint | PR [#453](https://github.com/anolilab/lunora/pull/453) — gates green |
+| 392 | Offer the `contains` operator only on string-typed filter columns in `defineListArgs` | P2 | bug | improve/wave22-server | PR [#441](https://github.com/anolilab/lunora/pull/441) — gates green |
+| 393 | Make `redactSecrets`' key heuristic match camelCase and lowercase secret keys | P2 | security | improve/wave22-server | PR [#441](https://github.com/anolilab/lunora/pull/441) — gates green |
+| 394 | Document and pin `storageRules`' one synchronous guarded method (`getUrl`) | P3 | docs | improve/wave22-server | PR [#441](https://github.com/anolilab/lunora/pull/441) — gates green |
+| 395 | [Spike] Design stream/observable subscription forms for the non-Dart SDK targets | P3 | direction | — (design doc) | DONE — design doc at 395-*-design.md |
+| 396 | Scope the shared CheckpointRegistry by identity so a user switch cannot release overlays against the previous user's watermark | P1 | bug | improve/wave22-db | PR [#434](https://github.com/anolilab/lunora/pull/434) — gates green |
+| 397 | Make the in-memory persistence adapter's clone structural so it stops dropping `clientId` and `version` | P1 | bug | improve/wave22-client | PR [#440](https://github.com/anolilab/lunora/pull/440) — gates green |
+| 398 | Make the persistence contract suite assert the full `PersistedMutation` shape | P2 | tests | improve/wave22-client | PR [#440](https://github.com/anolilab/lunora/pull/440) — gates green |
+| 399 | Infer the primary-key column's affinity in LocalMirror so numeric ids stop sorting lexicographically | P1 | bug | improve/wave22-replica | PR [#444](https://github.com/anolilab/lunora/pull/444) — gates green |
+| 400 | Drop the phantom `@lunora/runtime` dependency from `@lunora/vue` and `@lunora/svelte` | P2 | deps | improve/wave22-adapters | PR [#467](https://github.com/anolilab/lunora/pull/467) — gates green |
+| 401 | Give `@lunora/svelte`'s query primitives the reactive-args form every other adapter has | P2 | tech-debt | improve/wave22-adapters | PR [#467](https://github.com/anolilab/lunora/pull/467) — gates green |
+| 402 | Normalize the row id in diff-applier binds like every other bound value | P2 | bug | improve/wave22-replica | PR [#444](https://github.com/anolilab/lunora/pull/444) — gates green |
+| 403 | Ship an AsyncStorage-backed QueryCacheAdapter so React Native gets durable reads, not just durable writes | P2 | direction | improve/wave22-client | PR [#440](https://github.com/anolilab/lunora/pull/440) — gates green |
+| 404 | Keep one throwing queryCache.put from dropping the whole coalesced cache batch | P2 | bug | improve/wave22-client | PR [#440](https://github.com/anolilab/lunora/pull/440) — gates green |
+| 405 | Replace OfflineQueue.hydrate's O(n²) dedupe scan with a Set | P3 | perf | improve/wave22-client | PR [#440](https://github.com/anolilab/lunora/pull/440) — gates green |
+| 406 | Clear LocalMirror's change subscribers on close | P2 | bug | improve/wave22-replica | PR [#444](https://github.com/anolilab/lunora/pull/444) — gates green |
+| 407 | Make the `.dev.vars` reader parse what wrangler's dotenv parser parses | P1 | security | improve/wave22-config | PR [#461](https://github.com/anolilab/lunora/pull/461) — gates green |
+| 408 | Teach the seeder about `.unique()` columns so bounded generators stop colliding | P2 | bug | improve/wave22-seed | PR [#457](https://github.com/anolilab/lunora/pull/457) — gates green |
+| 409 | Send the studio try-it REST request to the worker origin with the admin bearer | P2 | bug | improve/wave22-studio | PR [#466](https://github.com/anolilab/lunora/pull/466) — gates green |
+| 410 | Refuse symlinks when vendoring an SDK transport | P2 | security | improve/wave22-cli | PR [#443](https://github.com/anolilab/lunora/pull/443) — gates green |
+| 411 | Put a first test suite under `lunora sdk generate` | P2 | tests | improve/wave22-cli | PR [#443](https://github.com/anolilab/lunora/pull/443) — gates green |
+| 412 | Share the studio asset cache-header logic between the Vite and CLI hosts | P2 | bug | improve/wave22-cli | PR [#443](https://github.com/anolilab/lunora/pull/443) — gates green |
+| 413 | Restore a coverage floor over the studio's node-testable half | P2 | tests | improve/wave22-studio | PR [#466](https://github.com/anolilab/lunora/pull/466) — gates green |
+| 414 | Collapse the Vite host's hand-copied CSRF gate onto the shared studio-host implementation | P2 | tech-debt | improve/wave22-config | PR [#461](https://github.com/anolilab/lunora/pull/461) — gates green |
+| 415 | Validate every import envelope with its line number, not only when a remap is configured | P2 | bug | improve/wave22-cli | PR [#443](https://github.com/anolilab/lunora/pull/443) — gates green |
+| 416 | Make `setUserPassword` create the credential account when the user has none, and 404 unknown users | P1 | bug | improve/wave22-auth | PR [#442](https://github.com/anolilab/lunora/pull/442) — gates green |
+| 417 | Make `withAuthAudit` forward the caller's `hooks.after` return value | P1 | bug | improve/wave22-auth | PR [#442](https://github.com/anolilab/lunora/pull/442) — gates green |
+| 418 | Run the auth-audit DDL once per executor, not before every append/read | P2 | perf | improve/wave22-auth | PR [#442](https://github.com/anolilab/lunora/pull/442) — gates green |
+| 419 | Share the auth base-path boundary predicate so DO mode stops swallowing `/api/authorize` | P1 | bug | improve/wave22-auth | PR [#442](https://github.com/anolilab/lunora/pull/442) — gates green |
+| 420 | Treat an errored `getSession()` as an error in auth-ui, not as "signed out" | P1 | bug | improve/wave22-auth-ui | PR [#439](https://github.com/anolilab/lunora/pull/439) — gates green |
+| 421 | Clear 2FA credential fields on step transitions so the enable password cannot pre-satisfy disable | P1 | security | improve/wave22-auth-ui | PR [#439](https://github.com/anolilab/lunora/pull/439) — gates green |
+| 422 | Move `@lunora/server` from `@lunora/auth`'s exact-pinned dependencies to a peer range + dev pin | P2 | deps | improve/wave22-auth | PR [#442](https://github.com/anolilab/lunora/pull/442) — gates green |
+| 423 | Cascade `removeUser` over plugin tables the way `deleteOrganization` already does | P1 | bug | improve/wave22-auth | PR [#442](https://github.com/anolilab/lunora/pull/442) — gates green |
+| 424 | Route the OAuth consent redirect through the browser, not the framework router | P2 | bug | improve/wave22-auth-ui | PR [#439](https://github.com/anolilab/lunora/pull/439) — gates green |
+| 425 | Settle the debounced `setSearch` promise when superseded or destroyed | P2 | bug | improve/wave22-auth-ui | PR [#439](https://github.com/anolilab/lunora/pull/439) — gates green |
+| 426 | Degrade one malformed audit `detail` cell to one incomplete entry, not an empty page | P2 | bug | improve/wave22-auth | PR [#442](https://github.com/anolilab/lunora/pull/442) — gates green |
+| 427 | Decode wire-tagged values before they reach warehouse connectors | P1 | bug | improve/wave22-runtime | PR [#452](https://github.com/anolilab/lunora/pull/452) — gates green |
+| 428 | Refuse to splice a durable-stream resume onto a different generation's transcript |  |  | improve/wave22-shard-engine | PR [#462](https://github.com/anolilab/lunora/pull/462) — gates green |
+| 429 | Put coverage floors on `@lunora/do` and first tests on the durable-stream runner | P2 | tests | improve/wave22-shard-engine | PR [#462](https://github.com/anolilab/lunora/pull/462) — gates green |
+| 430 | Make the Node socket host's per-frame lookup O(1) and its restore path persistable | P2 | bug | improve/wave22-platform-node | PR [#465](https://github.com/anolilab/lunora/pull/465) — gates green |
+| 432 | Refuse the search page that lands exactly on the scan cap instead of faking `isDone` | P2 | bug | improve/wave22-search-core | PR [#464](https://github.com/anolilab/lunora/pull/464) — gates green |
+| 433 | Guarantee `webSocketClose`'s durable cleanup runs even when lifecycle dispatch fails | P2 | bug | improve/wave22-do | PR [#451](https://github.com/anolilab/lunora/pull/451) — gates green |
+| 434 | Bring `@lunora/search-core`'s manifest onto the cluster's conventions | P3 | tech-debt | improve/wave22-search-core | PR [#464](https://github.com/anolilab/lunora/pull/464) — gates green |
+| 435 | [Spike] Design the portability-budget leg of the platform conformance TCK | P2 | direction | — (design doc) | DONE — design doc at 435-*-design.md |
+| 436 | Stop the abandoned-run reclaim from stranding pending HITL approvals | P1 | bug | improve/wave22-agent | PR [#438](https://github.com/anolilab/lunora/pull/438) — gates green |
+| 437 | Reject percent-encoded dot segments in the MCP docs `url` argument | P1 | security | improve/wave22-mcp | PR [#459](https://github.com/anolilab/lunora/pull/459) — gates green |
+| 438 | Throttle the function- and auth-metrics bucket prunes to once per window | P2 | perf | improve/wave22-observability | PR [#456](https://github.com/anolilab/lunora/pull/456) — gates green |
+| 439 | Route each push target by its own kind in the composite push provider | P2 | bug | improve/wave22-notify | PR [#450](https://github.com/anolilab/lunora/pull/450) — gates green |
+| 440 | Refuse `__proto__` as an object key when resolving code-tool step inputs | P1 | security | improve/wave22-agent | PR [#438](https://github.com/anolilab/lunora/pull/438) — gates green |
+| 441 | Cover `compileAgentWorkflow` and `withAutoOtlpTelemetry` with characterization tests | P2 | tests | improve/wave22-agent | PR [#438](https://github.com/anolilab/lunora/pull/438) — gates green |
+| 442 | Route `@lunora/mail`'s inbound base64 through `shared/base64.ts` | P3 | tech-debt | improve/wave22-mail | PR [#460](https://github.com/anolilab/lunora/pull/460) — gates green |
+| 443 | Key the flags OpenFeature client memo by definition and env | P2 | bug | improve/wave22-flags | PR [#463](https://github.com/anolilab/lunora/pull/463) — gates green |
+| 444 | Hash the inbound-channel dedup instance id instead of truncating it | P2 | bug | improve/wave22-agent | PR [#438](https://github.com/anolilab/lunora/pull/438) — gates green |
+| 445 | [Spike] Design a pending-approvals listing for the HITL surface | P2 | direction | — (design doc) | DONE — design doc at 445-*-design.md |
