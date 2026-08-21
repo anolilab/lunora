@@ -1,4 +1,22 @@
 /**
+ * Resolve `httpPath` against `origin`, refusing a result that lands on a
+ * different origin. `httpPath` is normally a relative path, but an absolute URL
+ * in the OpenAPI document would make `new URL` ignore the base and send the
+ * request — carrying the admin bearer — to whatever host it names. The document
+ * is the developer's own, so this is a backstop rather than a trust boundary,
+ * but the bearer is the reason to keep it.
+ */
+const resolveAgainstOrigin = (httpPath: string, origin: string): string => {
+    const resolved = new URL(httpPath, origin);
+
+    if (resolved.origin !== new URL(origin).origin) {
+        throw new Error(`restDispatch: refusing to send the admin token off-origin (${resolved.origin} is not ${origin})`);
+    }
+
+    return resolved.toString();
+};
+
+/**
  * Dispatch a plain REST route (an `httpRouter()` operation, no `functionPath`)
  * to the worker origin with the admin bearer, and parse the response body.
  *
@@ -14,7 +32,7 @@
  */
 const restDispatch = async (operation: { httpPath: string; method: string }, args: unknown, origin: string, adminToken: null | string): Promise<unknown> => {
     const hasBody = operation.method !== "GET" && operation.method !== "HEAD";
-    const url = origin === "" ? operation.httpPath : new URL(operation.httpPath, origin).toString();
+    const url = origin === "" ? operation.httpPath : resolveAgainstOrigin(operation.httpPath, origin);
 
     const fetchResponse = await fetch(url, {
         body: hasBody ? JSON.stringify(args) : undefined,

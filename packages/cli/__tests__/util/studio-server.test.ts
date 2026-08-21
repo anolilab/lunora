@@ -344,6 +344,53 @@ describe("startStudioServer", () => {
         }
     });
 
+    it("proxies a non-navigation request for an unknown path to the worker instead of the SPA document", async () => {
+        expect.assertions(3);
+
+        // Fails against pre-fix code: the history fallback answered every
+        // unknown path, so the studio's own `fetch()` for an app REST route
+        // (the API console's "try it") got the studio HTML back as a 200.
+        const worker = await startStubWorker();
+        const port = await getFreePort();
+        const studio = await startStudioServer({ cwd: "/tmp", port, workerOrigin: worker.url });
+
+        try {
+            const response = await requestStudioWithHeaders(port, "/api/health", {
+                "sec-fetch-mode": "cors",
+                host: `127.0.0.1:${String(port)}`,
+            });
+
+            expect(response.statusCode).toBe(200);
+            expect(response.body).not.toContain("<!doctype html>");
+            expect(worker.hits).toStrictEqual(["/api/health"]);
+        } finally {
+            await studio.close();
+            await worker.close();
+        }
+    });
+
+    it("still serves the SPA document for a deep-link navigation, without contacting the worker", async () => {
+        expect.assertions(3);
+
+        const worker = await startStubWorker();
+        const port = await getFreePort();
+        const studio = await startStudioServer({ cwd: "/tmp", port, workerOrigin: worker.url });
+
+        try {
+            const response = await requestStudioWithHeaders(port, "/data", {
+                "sec-fetch-mode": "navigate",
+                host: `127.0.0.1:${String(port)}`,
+            });
+
+            expect(response.statusCode).toBe(200);
+            expect(response.body).toContain("<!doctype html>");
+            expect(worker.hits).toStrictEqual([]);
+        } finally {
+            await studio.close();
+            await worker.close();
+        }
+    });
+
     it("destroys a WS upgrade carrying a forwarding header on a loopback peer", async () => {
         expect.assertions(1);
 

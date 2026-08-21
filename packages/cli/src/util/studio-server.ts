@@ -6,7 +6,9 @@
  * - serves the prebuilt static `@lunora/studio` bundle (with the admin token
  * and basepath injected, via the shared `@lunora/config/studio-host` helpers), and
  * - reverse-proxies `/_lunora/*` — both HTTP and the WebSocket upgrade — to the
- * `wrangler dev` worker.
+ * `wrangler dev` worker, plus any non-navigation request to a path it doesn't
+ * serve itself (so a `fetch()` for an app REST route reaches the worker rather
+ * than collecting the SPA history fallback).
  *
  * Because the studio and its API are then same-origin (this server), the
  * studio auto-connects with no CORS and no worker changes — the same
@@ -310,6 +312,28 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         }
 
         if (serveStaticAsset(pathname, request, response)) {
+            return;
+        }
+
+        // A programmatic request (a `fetch()`/XHR from the studio bundle) to an
+        // unknown path is never an SPA deep link, so the history fallback below
+        // must not answer it: doing so hands the caller the studio's own HTML
+        // as a 200. The API console's "try it" sends exactly that for a plain
+        // `httpRouter()` route, which is why pressing Send rendered the studio
+        // document as a successful response. Forward those to the worker so it
+        // answers — with the route's real response, or its own 404.
+        //
+        // `Sec-Fetch-Mode` is what separates the two: browsers send `navigate`
+        // for a document load and `cors`/`same-origin`/`no-cors` for a script's
+        // fetch. A client that sends no such header (curl, an older browser)
+        // keeps the fallback, so this only ever narrows what the shell answers.
+        // Loopback-only, mirroring the `/_lunora` proxy branch above: off
+        // loopback the studio stays a read-only shell that never proxies.
+        const fetchMode = request.headers["sec-fetch-mode"];
+
+        if (isLoopback && typeof fetchMode === "string" && fetchMode !== "navigate") {
+            proxyHttp(request, response, worker);
+
             return;
         }
 
