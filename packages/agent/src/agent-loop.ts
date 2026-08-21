@@ -1,6 +1,6 @@
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
-import { definedColumns } from "./component-shared";
+import { APPROVAL_TIMEOUT_MAX_MS, definedColumns } from "./component-shared";
 import { resolveAgentModel } from "./generate";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
 import { buildModelMessages } from "./model-messages";
@@ -196,16 +196,74 @@ const resolveNeedsApproval = async (
 };
 
 /**
+ * Cloudflare Workflows raises an elapsed `waitForEvent` as an `Error` named
+ * `WorkflowTimeoutError` (message `"Execution timed out after <n>ms"`). Matched
+ * by NAME rather than `instanceof`: the constructor lives in the host's own
+ * `workflows-shared` module, which we neither import nor can identity-compare
+ * across the RPC boundary. Same shape as `channels.ts`'s duplicate-instance
+ * check, and deliberately narrow — every OTHER rejection (a binding failure, a
+ * payload that will not deserialize, a host bug) must NOT be silently recorded
+ * as a human decision.
+ */
+const WORKFLOW_TIMEOUT_ERROR_NAME = "WorkflowTimeoutError";
+
+/** True only for the host's elapsed-`waitForEvent` rejection — see {@link WORKFLOW_TIMEOUT_ERROR_NAME}. */
+const isWaitTimeoutError = (error: unknown): boolean => error instanceof Error && error.name === WORKFLOW_TIMEOUT_ERROR_NAME;
+
+/**
  * How long a HITL approval wait hibernates before it gives up (overridable per
  * agent via `approvalTimeout`). A slow approver is the NORMAL case — overnight
  * or over a weekend — so the default is generous; but with no bound at all a
  * never-answered approval hibernates the instance forever, and once the
  * thread's staleness horizon passes, its pending approval can never be
- * resolved again. Must stay well under `component.ts`'s
- * `ABANDONED_APPROVAL_MS` so the wait always times out before the thread is
- * reclaimed out from under it.
+ * resolved again. The reclaim horizon is derived from
+ * `APPROVAL_TIMEOUT_MAX_MS`, so the wait always fires first by construction.
  */
-const DEFAULT_APPROVAL_TIMEOUT = "3 days";
+const DEFAULT_APPROVAL_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000;
+
+/** Milliseconds per unit of the host's duration grammar (`"3 days"`); month/year are nominal. */
+const DURATION_UNIT_MS: Record<string, number> = {
+    day: 86_400_000,
+    hour: 3_600_000,
+    minute: 60_000,
+    month: 30 * 86_400_000,
+    second: 1000,
+    week: 7 * 86_400_000,
+    year: 365 * 86_400_000,
+};
+
+/** The host's `"<n> <unit>[s]"` duration grammar (hoisted, avoids recompilation). */
+const DURATION_PATTERN = /^(\d+(?:\.\d+)?) (day|hour|minute|month|second|week|year)s?$/u;
+
+/**
+ * Resolve the agent's configured approval timeout to a bounded number of
+ * milliseconds.
+ *
+ * Returns ms (which `waitForEvent` accepts natively) rather than passing the
+ * configured value through, because the bound is the point: a value above
+ * {@link APPROVAL_TIMEOUT_MAX_MS} would let the thread be reclaimed out from
+ * under a still-pending approval. An unparseable string cannot reach here from
+ * TypeScript (the property's type is the host's closed grammar) but can from
+ * plain JS — it falls back to the default rather than handing the host a
+ * duration it will reject mid-run.
+ */
+const approvalTimeoutMs = (configured: number | string | undefined): number => {
+    if (configured === undefined) {
+        return DEFAULT_APPROVAL_TIMEOUT_MS;
+    }
+
+    if (typeof configured === "number") {
+        return Math.min(configured, APPROVAL_TIMEOUT_MAX_MS);
+    }
+
+    const match = DURATION_PATTERN.exec(configured);
+
+    if (match === null) {
+        return DEFAULT_APPROVAL_TIMEOUT_MS;
+    }
+
+    return Math.min(Number(match[1]) * (DURATION_UNIT_MS[match[2] as string] as number), APPROVAL_TIMEOUT_MAX_MS);
+};
 
 /**
  * Pause the run on a human-in-the-loop tool approval: persist an
@@ -215,9 +273,10 @@ const DEFAULT_APPROVAL_TIMEOUT = "3 days";
  * replay memoizes the resolved wait, so the run resumes with the recorded
  * decision without pausing (or re-persisting) again. Named ONLY from the
  * replay-stable `call.id`. The wait carries a timeout (default
- * {@link DEFAULT_APPROVAL_TIMEOUT}, configurable via the agent's
- * `approvalTimeout`) so a never-answered approval ends as a rejection instead
- * of hibernating the run forever.
+ * {@link DEFAULT_APPROVAL_TIMEOUT_MS}, configurable via the agent's
+ * `approvalTimeout` and bounded by {@link approvalTimeoutMs}) so a
+ * never-answered approval ends as a rejection instead of hibernating the run
+ * forever.
  *
  * The wait's match `type` is scoped to THIS call (`agent-approval:<call.id>`,
  * the same format `component.ts`'s `agentResolveApproval` sends) — native CF
@@ -238,24 +297,30 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
     });
     await patchThread({ status: "awaiting_input" });
 
-    let decision: ApprovalDecision;
-
-    try {
-        const event = await step.waitForEvent<ApprovalDecision>(`approval:${call.id}`, {
-            timeout: agent.approvalTimeout ?? DEFAULT_APPROVAL_TIMEOUT,
+    const decision = await step
+        .waitForEvent<ApprovalDecision>(`approval:${call.id}`, {
+            timeout: approvalTimeoutMs(agent.approvalTimeout),
             type: `agent-approval:${call.id}`,
-        });
+        })
+        .then((event): ApprovalDecision => {
+            return { decision: event.payload.decision, ...(event.payload.note === undefined ? {} : { note: event.payload.note }) };
+        })
+        .catch((error: unknown): ApprovalDecision => {
+            // ONLY an elapsed timeout becomes a decision. Without it the run
+            // hibernates forever and, once the thread's staleness horizon
+            // passes, the pending approval is permanently unresolvable — so a
+            // timeout is recorded as a rejection and the loop continues down
+            // the existing rejection path. Any OTHER rejection (binding
+            // failure, undeserializable payload, host bug) is rethrown: writing
+            // a rejection into the durable record when nobody was asked would
+            // be a worse lie than a failed run, and the sibling `awaitDequeue`
+            // propagates host errors for the same reason.
+            if (!isWaitTimeoutError(error)) {
+                throw error;
+            }
 
-        decision = { decision: event.payload.decision, ...(event.payload.note === undefined ? {} : { note: event.payload.note }) };
-    } catch {
-        // The wait's timeout elapsed — the host surfaces it as a rejection of the
-        // `waitForEvent` promise (the same shape the dequeue wait and the fan-out
-        // join already treat as their timeout). Without this the run hibernates
-        // forever and, once the thread's staleness horizon passes, the pending
-        // approval becomes permanently unresolvable. Treat it as a rejection so
-        // the loop records why and continues down the existing rejection path.
-        decision = { decision: "reject", note: "approval timed out" };
-    }
+            return { decision: "reject", note: "approval timed out" };
+        });
 
     // Resume: back to running before we act on the decision.
     await patchThread({ status: "running" });

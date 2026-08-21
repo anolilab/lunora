@@ -4,7 +4,7 @@ import { defineSchemaExtension, defineTable, initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
 import type { AgentRegisteredFunction } from "./component-shared";
-import { AGENT_EXTENSION_KEY, asInternal, definedColumns } from "./component-shared";
+import { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, asInternal, definedColumns } from "./component-shared";
 import { episodeTables, episodicComponent } from "./episodic-component";
 import { graphComponent, graphTables } from "./graph-component";
 import type { EnsureThreadOutcome } from "./types";
@@ -43,20 +43,6 @@ const MAX_QUEUE_DEPTH = 5;
  * `"awaiting_input"` thread uses {@link ABANDONED_APPROVAL_MS}.
  */
 const ABANDONED_RUN_MS = 13 * 60 * 60 * 1000;
-
-/**
- * The far longer staleness horizon for an `"awaiting_input"` thread.
- *
- * A HITL pause is a run hibernating on `step.waitForEvent`, and a slow human
- * approval (overnight, a weekend) is its NORMAL case — so the 13h run horizon
- * must not apply. Reclaiming re-stamps the thread's `instanceId`, after which
- * `agentResolveApproval` FORBIDs the real approver forever. The loop's own
- * approval wait timeout (default 3 days, configurable per agent) is what
- * ordinarily frees the thread; this horizon exists only for an instance that
- * died without ever timing out its wait, so it merely has to outlast any
- * plausible approval timeout.
- */
-const ABANDONED_APPROVAL_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
  * The agent thread tables, shipped as a schema extension so an app merges

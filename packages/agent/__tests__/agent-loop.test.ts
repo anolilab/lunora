@@ -22,6 +22,7 @@ import type {
 import { memoryRuntime } from "./loop-harness";
 
 const IN_FLIGHT_PATTERN = /already has a run in flight/u;
+const TRANSIENT_WAIT_FAILURE_PATTERN = /temporarily unavailable/u;
 
 /**
  * A token sink that captures only token deltas, narrowing off the ephemeral
@@ -1232,7 +1233,13 @@ describe(runAgentLoop, () => {
             waitForEvent: async <T>(name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: T; type: string }> => {
                 if (name.startsWith("approval:")) {
                     waitOptions.push(options);
-                    throw new Error("waitForEvent timed out");
+
+                    // The host's real elapsed-wait signal: an Error NAMED
+                    // `WorkflowTimeoutError` (Cloudflare's workflows-shared).
+                    const timeoutError = new Error("Execution timed out after 3600000ms");
+
+                    timeoutError.name = "WorkflowTimeoutError";
+                    throw timeoutError;
                 }
 
                 return journal.waitForEvent<T>(name, options);
@@ -1247,8 +1254,8 @@ describe(runAgentLoop, () => {
         expect(toolRuns).toBe(0);
         expect(journal.invoked).not.toContain("tool:charge:call_1");
 
-        // The wait carried the agent's configured timeout.
-        expect(waitOptions).toStrictEqual([{ timeout: "1 hour", type: "agent-approval:call_1" }]);
+        // The wait carried the agent's configured timeout, resolved to ms.
+        expect(waitOptions).toStrictEqual([{ timeout: 3_600_000, type: "agent-approval:call_1" }]);
 
         // A terminal rejected record explains why, and the thread is released.
         const rejected = [...runtime.messages.values()].find((message) => message.status === "rejected");
@@ -1279,7 +1286,75 @@ describe(runAgentLoop, () => {
 
         await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
-        expect(journal.resolvedWaitOptions.get("approval:call_1")?.timeout).toBe("3 days");
+        expect(journal.resolvedWaitOptions.get("approval:call_1")?.timeout).toBe(3 * 24 * 60 * 60 * 1000);
+    });
+
+    it("propagates a NON-timeout wait failure instead of recording it as a human rejection", async () => {
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => "charged",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: true,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        // A host/binding failure — NOT an elapsed timeout. Recording this as
+        // "rejected by the user" would durably assert that a human declined the
+        // charge when nobody was ever asked, so it must surface as a failed run.
+        const step = {
+            do: async <T>(name: string, callback: () => Promise<T>): Promise<T> => journal.do(name, callback),
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- mirrors AgentStepLike.waitForEvent's generic host signature so the mock stays assignable
+            waitForEvent: async <T>(name: string, options: { timeout?: number | string; type: string }): Promise<{ payload: T; type: string }> => {
+                if (name.startsWith("approval:")) {
+                    throw new Error("workflows service temporarily unavailable");
+                }
+
+                return journal.waitForEvent<T>(name, options);
+            },
+        };
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", { amount: 100 }, "charging…"), finalTurn("done")]);
+
+        await expect(runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step }))).rejects.toThrow(TRANSIENT_WAIT_FAILURE_PATTERN);
+
+        // No decision was invented: nothing was recorded as rejected/approved.
+        expect([...runtime.messages.values()].some((message) => message.status === "rejected")).toBe(false);
+        expect([...runtime.messages.values()].some((message) => message.status === "approved")).toBe(false);
+    });
+
+    it("clamps a configured approval timeout to one week so it cannot outlive the thread's reclaim horizon", async () => {
+        const agent = defineAgent({
+            // 30 days would let the reclaim take the thread while the approval is
+            // still pending — reconstructing the stranding bug the timeout prevents.
+            approvalTimeout: "30 days",
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => "charged",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: true,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        journal.events.set("approval:call_1", { decision: "approve" });
+
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", {}, ""), finalTurn("done")]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        // Clamped to APPROVAL_TIMEOUT_MAX_MS — half of the 14-day horizon the
+        // reclaim derives from it, so the wait always fires first.
+        expect(journal.resolvedWaitOptions.get("approval:call_1")?.timeout).toBe(7 * 24 * 60 * 60 * 1000);
     });
 
     it("memoizes a function needsApproval gate in its own durable step — it resolves once, not once per replay", async () => {
