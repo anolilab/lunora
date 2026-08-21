@@ -349,6 +349,30 @@ describe("seedPlan — unique columns", () => {
         expect(run).toThrow(/only 3 possible values/);
     });
 
+    it("refuses a second indexOffset batch the unique domain cannot cover", () => {
+        expect.hasAssertions();
+
+        // Values are dealt by ABSOLUTE index, so two batches of 2 over a 3-value
+        // domain would wrap index 3 back onto index 0 and duplicate a value.
+        const batch = (offset: number): unknown =>
+            seedPlan(enumSchema, { counts: { tags: 2 }, indexOffset: { tags: offset }, now: 1_700_000_000_000, seed: 1 });
+
+        expect(batch(0)).toHaveLength(1);
+        expect(() => batch(2)).toThrow(/cannot seed 4 rows into "tags"/);
+        expect(() => batch(2)).toThrow('unique column "color"');
+    });
+
+    it("deals distinct values across indexOffset batches that fit the domain", () => {
+        expect.hasAssertions();
+
+        const colorAt = (offset: number): unknown =>
+            seedPlan(enumSchema, { counts: { tags: 1 }, indexOffset: { tags: offset }, now: 1_700_000_000_000, seed: 1 }).find(
+                (entry) => entry.table === "tags",
+            )!.rows[0]!.color;
+
+        expect(new Set([colorAt(0), colorAt(1), colorAt(2)])).toStrictEqual(new Set(["blue", "green", "red"]));
+    });
+
     it("keeps non-unique generation byte-identical (pinned pre-change output)", () => {
         expect.hasAssertions();
 

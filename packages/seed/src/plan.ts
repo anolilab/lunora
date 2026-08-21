@@ -182,17 +182,29 @@ const uniquifyString = (value: string, index: number): string => {
     return at > 0 ? `${value.slice(0, at)}+${String(index)}${value.slice(at)}` : `${value}-${String(index)}`;
 };
 
+/** Everything one cell's generation depends on beyond the column itself. */
+interface RowContext {
+    /** Ids that already exist in the target store, keyed by table. */
+    existingIds: Readonly<Record<string, ReadonlyArray<string>>>;
+    /** Ids generated so far this run, keyed by table. */
+    idsByTable: ReadonlyMap<string, ReadonlyArray<string>>;
+    /** The row's ABSOLUTE index — the `indexOffset` base plus its position in this batch. */
+    index: number;
+    /** The copycat hash seed for this cell (see {@link cellInput}). */
+    input: ReadonlyArray<unknown>;
+    /** The row's position WITHIN this call, independent of any offset. */
+    localIndex: number;
+    /** Wall-clock reference for time-valued columns. */
+    now: number;
+    table: string;
+    /** Pre-shuffled deal order per unique bounded-domain column, keyed by column name (see {@link planUniqueDomains}). */
+    uniqueDomains: ReadonlyMap<string, ReadonlyArray<unknown>>;
+}
+
 /** Generate a single column value, resolving foreign keys against seeded and pre-existing parents. */
-const generateField = (
-    field: FieldSpec,
-    table: string,
-    input: ReadonlyArray<unknown>,
-    index: number,
-    localIndex: number,
-    idsByTable: ReadonlyMap<string, ReadonlyArray<string>>,
-    existingIds: Readonly<Record<string, ReadonlyArray<string>>>,
-    now: number,
-): unknown => {
+const generateField = (field: FieldSpec, context: RowContext): unknown => {
+    const { existingIds, idsByTable, index, input, localIndex, now, table, uniqueDomains } = context;
+
     if (field.fkTable !== undefined) {
         const pool = fkPool(field, table, localIndex, idsByTable, existingIds);
 
@@ -212,13 +224,13 @@ const generateField = (
     }
 
     if (field.unique) {
-        const domain = uniqueDomain(field);
+        const deal = uniqueDomains.get(field.name);
 
-        // Deal without replacement: the plan layer has already verified the
-        // count fits the domain, and a contiguous index range no longer than
-        // the domain stays injective under the modulo.
-        if (domain !== undefined) {
-            return shuffledDomain(domain, table, field.name)[index % domain.length];
+        // Deal without replacement from the domain shuffled once per table:
+        // `planUniqueDomains` has already proven it covers every absolute index
+        // this batch reaches, so the modulo stays injective.
+        if (deal !== undefined) {
+            return deal[index % deal.length];
         }
 
         const value = generateValue(field.validator, field.name, input, now);
@@ -230,26 +242,55 @@ const generateField = (
 };
 
 /**
- * Fail fast when a unique column's finite domain cannot cover the batch —
- * otherwise the collision only surfaces later as a raw UNIQUE-constraint error
- * with no attribution to the column. Overridden, FK, and server-defaulted
- * columns are skipped: their values do not come from the generator.
+ * Fix the deal order for every unique bounded-domain column of one table, and
+ * fail fast when a domain cannot cover the rows asked of it — otherwise the
+ * collision only surfaces later as a raw UNIQUE-constraint error with no
+ * attribution to the column.
+ *
+ * Coverage is checked against `offset + count`, NOT `count`: values are dealt by
+ * ABSOLUTE row index, and `indexOffset` exists precisely so one table can be
+ * seeded across several calls. Checking the batch size alone would let two
+ * batches of 2 over a 3-value domain pass and then collide (index 3 wraps onto
+ * index 0), which is the exact scenario the offset feature enables.
+ *
+ * FK and server-defaulted columns are skipped entirely (their values never come
+ * from the generator). An overridden column still gets a deal order — an
+ * override may resolve to `undefined` and defer back to the generator — but is
+ * not asserted, since the caller supplying the values decides their uniqueness.
  */
-const assertUniqueDomainsCover = (fields: ReadonlyArray<FieldSpec>, table: string, count: number, tableOverrides: Record<string, unknown>): void => {
+const planUniqueDomains = (
+    fields: ReadonlyArray<FieldSpec>,
+    table: string,
+    count: number,
+    offset: number,
+    tableOverrides: Record<string, unknown>,
+): ReadonlyMap<string, ReadonlyArray<unknown>> => {
+    const deals = new Map<string, ReadonlyArray<unknown>>();
+
     for (const field of fields) {
-        if (!field.unique || field.fkTable !== undefined || field.hasServerDefault || Object.hasOwn(tableOverrides, field.name)) {
+        if (!field.unique || field.fkTable !== undefined || field.hasServerDefault) {
             continue;
         }
 
         const domain = uniqueDomain(field);
 
-        if (domain !== undefined && count > domain.length) {
+        if (domain === undefined) {
+            continue;
+        }
+
+        const required = offset + count;
+
+        if (required > domain.length && !Object.hasOwn(tableOverrides, field.name)) {
             throw new LunoraError(
                 "BAD_REQUEST",
-                `cannot seed ${String(count)} rows into "${table}": unique column "${field.name}" has only ${String(domain.length)} possible values`,
+                `cannot seed ${String(required)} rows into "${table}": unique column "${field.name}" has only ${String(domain.length)} possible values`,
             );
         }
+
+        deals.set(field.name, shuffledDomain(domain, table, field.name));
     }
+
+    return deals;
 };
 
 /**
@@ -311,7 +352,7 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
         // Absolute index base — lets a client seed the same table across calls
         // without colliding ids (each id/value hashes from the absolute index).
         const offset = indexOffset[table] ?? 0;
-        assertUniqueDomainsCover(spec.fields, table, count, tableOverrides);
+        const uniqueDomains = planUniqueDomains(spec.fields, table, count, offset, tableOverrides);
 
         const ids: string[] = [];
         idsByTable.set(table, ids);
@@ -348,7 +389,16 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
 
             for (const field of spec.fields) {
                 apply(field.name, () =>
-                    generateField(field, table, cellInput(seed, table, index, field.name), index, localIndex, idsByTable, existingIds, now),
+                    generateField(field, {
+                        existingIds,
+                        idsByTable,
+                        index,
+                        input: cellInput(seed, table, index, field.name),
+                        localIndex,
+                        now,
+                        table,
+                        uniqueDomains,
+                    }),
                 );
             }
 
