@@ -613,6 +613,32 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
             expect(mirror.query<{ id: number }>("SELECT id FROM items WHERE id > ? ORDER BY id", [5])).toStrictEqual([{ id: 9 }, { id: 10 }]);
         });
 
+        it("infers the pk affinity from change.id when the first diff carries only deletes", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            // A delete-only diff still creates the (pk-only) table; the id on
+            // the delete is the only observable pk value.
+            mirror.applyDiff(createTableDiff("gone", [{ id: 7 as never, type: "delete" }]));
+
+            const [row] = mirror.query<{ type: string }>("SELECT type FROM pragma_table_info('gone') WHERE name = 'id'");
+
+            expect(row?.type).toBe("INTEGER");
+        });
+
+        it("falls back to change.id when an update's data does not carry the pk", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(createTableDiff("notes", [{ data: { body: "x" }, id: "n1", type: "update" }]));
+
+            const [row] = mirror.query<{ type: string }>("SELECT type FROM pragma_table_info('notes') WHERE name = 'id'");
+
+            expect(row?.type).toBe("TEXT");
+        });
+
         it("still declares a string primary key TEXT", () => {
             expect.assertions(1);
 
