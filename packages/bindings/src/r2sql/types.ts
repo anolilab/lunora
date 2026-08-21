@@ -43,6 +43,14 @@ export interface R2SqlConfig {
      * so a query never touches the network.
      */
     fetch?: typeof globalThis.fetch;
+
+    /**
+     * Milliseconds before an in-flight query (the fetch AND its body read) is
+     * aborted and surfaced as an `R2SqlError` with status 504. Defaults to
+     * 60_000 — analytical scans legitimately run tens of seconds. `undefined`
+     * means the default, not unbounded.
+     */
+    timeoutMs?: number;
 }
 
 /**

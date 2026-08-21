@@ -50,6 +50,7 @@ interface AnalyticsSqlConfig {
     accountId: string;
     apiToken: string;
     fetch?: typeof globalThis.fetch;
+    timeoutMs?: number;
 }
 ```
 
@@ -611,6 +612,7 @@ interface R2SqlConfig {
     bucket: string;
     endpoint?: string;
     fetch?: typeof globalThis.fetch;
+    timeoutMs?: number;
 }
 ```
 
