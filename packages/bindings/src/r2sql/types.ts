@@ -49,6 +49,9 @@ export interface R2SqlConfig {
      * aborted and surfaced as an `R2SqlError` with status 504. Defaults to
      * 60_000 — analytical scans legitimately run tens of seconds. `undefined`
      * means the default, not unbounded.
+     *
+     * The deadline is carried by the request's `signal`, so a custom `fetch`
+     * (above) that ignores `signal` leaves the query unbounded.
      */
     timeoutMs?: number;
 }

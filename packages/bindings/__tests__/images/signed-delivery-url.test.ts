@@ -317,6 +317,45 @@ describe("parseSignedTransform", () => {
         expect(() => parseSignedTransform("wdith=256")).toThrow(/unknown transform key "wdith"/);
     });
 
+    it("keeps a literal '&' inside a value, splitting only where a known key starts", async () => {
+        expect.assertions(2);
+
+        // The encoder does not escape values and `&` is its separator, so a draw
+        // overlay URL with two query params puts a `&` inside the JSON. The
+        // encoding is the signature canonical and cannot change; the split has
+        // to tolerate it.
+        const transform: TransformOptions = { draw: [{ url: "https://assets.acme.test/logo.png?v=2&w=64" }], width: 256 };
+
+        const url = await buildSignedImageUrl({ baseUrl: BASE, key: "a.png", secret: SECRET, transform });
+        const result = await verifySignedImageUrl(url, SECRET);
+
+        expect(result.valid).toBe(true);
+        expect(result.transformOptions).toStrictEqual(transform);
+    });
+
+    it("leaves transformOptions undefined instead of throwing when a verified transform is unreadable", async () => {
+        expect.assertions(3);
+
+        // A signed URL outlives a deploy: an old-but-genuine URL can carry a key
+        // this build no longer knows (renamed, or minted by a newer version).
+        // The encoder signs whatever keys the object carries, so an extra key
+        // reproduces that URL exactly. The request must stay valid, with the raw
+        // string still returned, rather than throwing out of the request path.
+        const url = await buildSignedImageUrl({
+            baseUrl: BASE,
+            key: "a.png",
+            secret: SECRET,
+            transform: { legacyFit: "cover", width: 256 } as unknown as TransformOptions,
+        });
+
+        const result = await verifySignedImageUrl(url, SECRET);
+
+        expect(result.valid).toBe(true);
+        expect(result.transformOptions).toBeUndefined();
+        // eslint-disable-next-line no-secrets/no-secrets -- a deterministic serialized transform, not a credential
+        expect(result.transform).toBe("legacyFit=cover&width=256");
+    });
+
     it("throws on an uncoercible value for a number-typed key", () => {
         expect.assertions(1);
 

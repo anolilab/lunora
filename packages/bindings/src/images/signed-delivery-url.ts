@@ -69,6 +69,35 @@ const TRANSFORM_KEY_KINDS = {
 /** String-keyed view of {@link TRANSFORM_KEY_KINDS} for lookups from parsed input. */
 const KIND_BY_KEY: ReadonlyMap<string, TransformValueKind> = new Map(Object.entries(TRANSFORM_KEY_KINDS));
 
+/**
+ * Split a serialized transform into `key=value` segments.
+ *
+ * `serializeTransform` joins with `&` and does NOT escape values, so a naive
+ * `split("&")` truncates any value that contains one — a `draw` overlay whose
+ * `url` carries two query params (`?v=2&w=64`) is the common case. The encoding
+ * is the signature canonical and cannot change without invalidating every
+ * outstanding signed URL, so the split is disambiguated on the read side
+ * instead: an `&` starts a new segment only when what follows begins a key this
+ * version knows; otherwise it is a literal `&` inside the current value.
+ */
+const splitTransformSegments = (t: string): string[] => {
+    const segments: string[] = [];
+
+    for (const part of t.split("&")) {
+        const eq = part.indexOf("=");
+        const startsKnownKey = eq !== -1 && KIND_BY_KEY.has(part.slice(0, eq));
+        const previous = segments.at(-1);
+
+        if (startsKnownKey || previous === undefined) {
+            segments.push(part);
+        } else {
+            segments[segments.length - 1] = `${previous}&${part}`;
+        }
+    }
+
+    return segments;
+};
+
 /** Coerce one serialized transform value back to its declared type; throws `TypeError` naming the key on drift. */
 const coerceTransformValue = (key: string, kind: TransformValueKind, raw: string): unknown => {
     if (kind === "string" || (kind === "string-or-json" && !raw.startsWith("{"))) {
@@ -125,7 +154,7 @@ export const parseSignedTransform = (t: string): TransformOptions => {
 
     const options: Record<string, unknown> = {};
 
-    for (const part of t.split("&")) {
+    for (const part of splitTransformSegments(t)) {
         const eq = part.indexOf("=");
 
         if (eq === -1) {
@@ -244,7 +273,10 @@ export interface VerifyImageResult {
     /**
      * The verified transform decoded back into the options object to pass to
      * `ctx.images.transform(...)` — {@link parseSignedTransform} applied to
-     * `transform`. Present exactly when `transform` is.
+     * `transform`. Left `undefined` when `transform` is absent, and also when a
+     * genuinely signed transform carries a key this build does not know (an
+     * old URL minted before a key was renamed): the request stays `valid`, the
+     * raw `transform` is still returned, and the caller decides.
      */
     transformOptions?: TransformOptions;
     valid: boolean;
@@ -302,8 +334,24 @@ export const verifySignedImageUrl = async (input: string | URL, secret: string, 
         return { reason: "bad_signature", valid: false };
     }
 
-    // A parse failure here throws rather than returning `valid: false`: the
-    // signature was genuine, so an unparseable transform means the library's
-    // encoder and decoder drifted — see `parseSignedTransform`.
-    return transform === "" ? { key, valid: true } : { key, transform, transformOptions: parseSignedTransform(transform), valid: true };
+    if (transform === "") {
+        return { key, valid: true };
+    }
+
+    // A verified-but-unparseable transform must NOT throw out of the request
+    // path: a signed URL outlives a deploy, so a rolling deploy or a renamed
+    // `TransformOptions` key leaves genuine URLs whose transform this build
+    // cannot read. Degrade to the pre-`transformOptions` behaviour — the raw
+    // verified string, no decoded object — instead of turning a valid request
+    // into an unhandled 500. Callers that want the parse error can call
+    // `parseSignedTransform` on `transform` themselves.
+    let transformOptions: TransformOptions | undefined;
+
+    try {
+        transformOptions = parseSignedTransform(transform);
+    } catch {
+        transformOptions = undefined;
+    }
+
+    return { key, transform, transformOptions, valid: true };
 };

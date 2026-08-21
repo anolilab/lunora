@@ -224,4 +224,37 @@ describe("timeout", () => {
         await expect(client.query("SELECT 1")).resolves.toBeDefined();
         expect(vi.getTimerCount()).toBe(0);
     });
+
+    it("keeps the real status when the deadline fires while reading an error body", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        // A 403 whose body never arrives: the status is the diagnosis, so it
+        // must not be masked as a 504 "timed out".
+        const fetchImpl = vi.fn<typeof globalThis.fetch>(
+            async (_url, init) =>
+                ({
+                    ok: false,
+                    status: 403,
+                    // Headers arrived, the body never does — the real runtime
+                    // rejects the pending read once the signal aborts.
+                    text: async () =>
+                        new Promise<string>((_resolve, reject) => {
+                            init?.signal?.addEventListener("abort", () => {
+                                reject(new DOMException("The operation was aborted.", "AbortError"));
+                            });
+                        }),
+                }) as unknown as Response,
+        );
+        const client = createR2Sql({ accountId: "a", apiToken: "bad", bucket: "b", fetch: fetchImpl, timeoutMs: 5 });
+        const caught = client.query("SELECT 1").catch((error_: unknown) => error_);
+
+        await vi.advanceTimersByTimeAsync(5);
+
+        const error = await caught;
+
+        expect((error as R2SqlError).status).toBe(403);
+        expect(String(error)).not.toMatch(/timed out/);
+    });
 });

@@ -132,7 +132,13 @@ export const createR2Sql = (config: R2SqlConfig): R2SqlClient => {
             });
 
             if (!response.ok) {
-                throw new R2SqlError(response.status, await response.text());
+                // The status is the diagnosis (401/403/429); the body is detail.
+                // If the deadline fires mid-read, keep the status-derived error
+                // rather than letting the outer handler mask it as a 504.
+                throw new R2SqlError(
+                    response.status,
+                    await response.text().catch(() => "<error body unavailable: the request deadline fired before it was read>"),
+                );
             }
 
             let raw: unknown;

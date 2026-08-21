@@ -50,6 +50,9 @@ export interface AnalyticsSqlConfig {
      * aborted and surfaced as an `AnalyticsSqlError` with status 504. Defaults
      * to 60_000 — analytical scans legitimately run tens of seconds.
      * `undefined` means the default, not unbounded.
+     *
+     * The deadline is carried by the request's `signal`, so a custom `fetch`
+     * (above) that ignores `signal` leaves the query unbounded.
      */
     timeoutMs?: number;
 }
@@ -121,7 +124,13 @@ export const createAnalyticsSqlClient = (config: AnalyticsSqlConfig): AnalyticsS
             });
 
             if (!response.ok) {
-                throw new AnalyticsSqlError(response.status, await response.text());
+                // The status is the diagnosis (401/403/429); the body is detail.
+                // If the deadline fires mid-read, keep the status-derived error
+                // rather than letting the outer handler mask it as a 504.
+                throw new AnalyticsSqlError(
+                    response.status,
+                    await response.text().catch(() => "<error body unavailable: the request deadline fired before it was read>"),
+                );
             }
 
             let raw: unknown;
