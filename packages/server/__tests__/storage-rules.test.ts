@@ -122,6 +122,25 @@ describe("storageRules — read path", () => {
         expect(fake.calls).toEqual([]);
     });
 
+    it("returns getUrl's value synchronously — the one non-Promise guarded method", async () => {
+        expect.assertions(2);
+
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", when: ({ key }) => key.startsWith("public/") });
+
+        const fake = createFakeStorage();
+        // Pin: `getUrl` is the only sync member of the guarded surface. If the
+        // wrapping loop is ever made async, the wrapped call would hand back a
+        // thenable instead of the string — this test exists to fail loudly then.
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => {
+            const result: unknown = ctx.storage.getUrl("public/logo.png");
+
+            expect(typeof result).toBe("string");
+            expect((result as { then?: unknown }).then).toBeUndefined();
+        });
+
+        await handler.handler(makeContext(fake, "u1"), {});
+    });
+
     it("leaves an operation with no rules unrestricted (opt-in)", async () => {
         expect.assertions(1);
 
