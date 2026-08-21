@@ -36,7 +36,7 @@ client.mutation(api.payments.charge, { amount: 1n });
 
 hits `JSON.stringify(1n)`, which **throws** `TypeError: Do not know how to serialize a
 BigInt`. The rejection surfaces via `onPersistenceError` with `operation: "append"`,
-and the documented consequence (`packages/client/src/types.ts:121-123`) is:
+and the documented consequence (`packages/client/src/types.ts:121-126`) is:
 
 > Note: a failed `append` means the write is queued in memory but NOT durable — it
 > will not survive a reload.
@@ -120,7 +120,7 @@ the seam this plan should reuse, whichever option is chosen.
 
 ### The decisive fact: the flush path **already** rejects the same values
 
-`packages/client/src/lunora-client.ts:5896-5919`:
+`packages/client/src/lunora-client.ts:5897-5920`:
 
 ```ts
 /**
@@ -169,7 +169,7 @@ is the bug, stated without reference to any single value type.
 - **`async-storage-query-cache.ts`'s encode-at-the-adapter pattern** — the exact shape
   to copy. Do **not** push encoding down into `singleBlobStore`; it is shared, and the
   cache adapter would then double-encode.
-- **`encodeCallArgs`** (`lunora-client.ts:668-681`) — wraps a codec failure with the
+- **`encodeCallArgs`** (`lunora-client.ts:660-677`) — wraps a codec failure with the
   call it came from ("cannot encode args for 'messages:send' — …"). If the chosen
   option encodes, reuse this labelling rather than surfacing a bare codec error. It is
   currently `private`/module-scoped; check before assuming it can be imported.

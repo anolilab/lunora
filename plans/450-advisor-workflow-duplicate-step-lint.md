@@ -41,7 +41,7 @@ when multiple steps share the same name and type (for example, inside a loop)".
 `instance.restart({ from: { name, count } })` only has meaning under those semantics —
 if a name identified one step there would be nothing for `count` to index.
 
-This repo's own vendored type says the same. `packages/workflow/src/types.ts:206-207`:
+This repo's own vendored type says the same. `packages/workflow/src/types.ts:207-208`:
 
 ```ts
     /** The durable step's identity (name + invocation count). */
@@ -80,7 +80,7 @@ is an `ERROR` in the Studio's Advisors pages telling users to break working code
  * defect in the workflow's own code, not a runtime-data nit.
 ```
 
-Its severity and remediation (`:24-32`):
+Its severity and remediation (`:26-31`):
 
 ```ts
     facing: "INTERNAL",
@@ -122,7 +122,7 @@ Verified: `WorkflowIR.steps` has **no other consumer**
 — `workflow-unknown-target.ts` and `workflow-unused.ts` use `exportName` alone.
 
 `AdvisorWorkflow.steps`' own docblock repeats the false premise
-(`packages/advisor/src/workflows.ts:31-33`): "Cloudflare memoizes a step by its name, so
+(`packages/advisor/src/workflows.ts:32-34`): "Cloudflare memoizes a step by its name, so
 a name used twice makes the second call silently return the first's cached result."
 
 ## Existing seams (do not reinvent)
@@ -197,7 +197,7 @@ so semantic-release records the break.
 - `packages/advisor/src/workflows.ts` — drop `AdvisorWorkflowStep` and
   `AdvisorWorkflow.steps`
 - `packages/advisor/__tests__/workflow-lints.test.ts` — drop the
-  `describe("workflow_duplicate_step_name")` block (`:110-191`) and the import (`:7`)
+  `describe("workflow_duplicate_step_name")` block (`:110-193`) and the import (`:7`)
 - `packages/advisor/docs/index.mdx:169` — drop the rule-table row
 - `packages/codegen/src/discover-workflows.ts` — drop `stepsFromHandler` and the
   `steps:` field it feeds
@@ -242,7 +242,7 @@ the three references in `packages/advisor/src/index.ts`.
 
 ### Step 3: Remove the test block and the docs row
 
-Drop `describe("workflow_duplicate_step_name")` (`workflow-lints.test.ts:110-191`) and
+Drop `describe("workflow_duplicate_step_name")` (`workflow-lints.test.ts:110-193`) and
 its import at `:7`. Drop the `packages/advisor/docs/index.mdx:169` table row.
 
 Leave the other two describes in `workflow-lints.test.ts` untouched — the file is

@@ -115,7 +115,7 @@ the swap to first happen: mid-release, after merge, in a non-cancellable job.
 `scripts/check-sibling-peer-ranges.js` runs in the root `postinstall`. It has two arms:
 a hard-failing one for exact sibling **peerDependencies**, and a **report-only** one for
 exact sibling **dependencies** that have drifted. Its docblock already names this exact
-case (`check-sibling-peer-ranges.js:29-40`):
+case (`check-sibling-peer-ranges.js:29-39`):
 
 > Exact-pinned regular dependencies are this repo's _deliberate_ lockstep convention …
 > But a consumer with no triggering commits since its dependency's last release keeps

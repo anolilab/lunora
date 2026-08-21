@@ -71,7 +71,7 @@ for (const capability of CAPABILITIES) {
 is `true`, flips it off and pushes an `error`-level diagnostic when the target's matrix
 rates the feature `unsupported` (or omits it → `platform_undeclared_feature`).
 
-`CAPABILITY_TO_FEATURE` (`platform-target.ts:176-188`) is the gated set:
+`CAPABILITY_TO_FEATURE` (`platform-target.ts:175-188`) is the gated set:
 
 ```ts
 const CAPABILITY_TO_FEATURE: Partial<Record<CapabilityKey, PlatformFeatureKey>> = {
@@ -167,7 +167,7 @@ the third state. A second parallel record is the smaller diff and keeps
 `gateAgainstMatrix` takes the ctx-read set. `emitApp`/`emitServer`'s `has*` flags keep
 reading the import-inclusive set. Chosen over "gate on the OR and downgrade the
 diagnostic to `warn`": a warning still tells the user something false, and the whole
-point of the error level (per the `PlatformDiagnostic.level` doc, `platform-target.ts:196`)
+point of the error level (per the `PlatformDiagnostic.level` doc, `platform-target.ts:194`)
 is that "All three names are errors — each drops or misdirects an emitted surface". A
 capability the app never reads through `ctx` has no surface to drop.
 
