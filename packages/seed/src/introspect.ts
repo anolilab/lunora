@@ -45,6 +45,8 @@ interface FieldSpec {
     nullable: boolean;
     /** True when the column is wrapped in `v.optional(...)`. */
     optional: boolean;
+    /** True when the column carries `.unique()` — generated values must not collide across rows. */
+    unique: boolean;
     /** The validator to generate a value from (the inner one when optional). */
     validator: Validator;
 }
@@ -85,6 +87,7 @@ const describeField = (name: string, validator: Validator): FieldSpec => {
         // mirrors codegen's own `isNullable` (`column?.notNull === false`).
         nullable: meta.column?.notNull === false,
         optional: validator.kind === "optional",
+        unique: meta.column?.unique === true,
         validator: inner,
     };
 };

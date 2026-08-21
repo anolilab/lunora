@@ -4,7 +4,7 @@ import type { Schema } from "@lunora/server";
 import { copycat, setHashKey } from "./copycat";
 import { generateValue } from "./generate-value";
 import type { FieldSpec } from "./introspect";
-import { fkParentClosure, introspectSchema, orderTables } from "./introspect";
+import { fkParentClosure, introspectSchema, metaOf, orderTables } from "./introspect";
 
 /**
  * The pure, I/O-free core of seeding. {@link seedPlan} introspects a schema,
@@ -136,11 +136,58 @@ const fkPool = (
  */
 const cellInput = (seed: number, table: string, index: number, column: string): ReadonlyArray<unknown> => [seed, table, index, column];
 
+/**
+ * The finite value domain of a unique column, or `undefined` when the domain is
+ * unbounded (a plain string/number can always be made row-unique instead).
+ */
+const uniqueDomain = (field: FieldSpec): ReadonlyArray<unknown> | undefined => {
+    if (field.kind === "boolean") {
+        return [false, true];
+    }
+
+    const enumValues = metaOf(field.validator).constraints?.enum;
+
+    return Array.isArray(enumValues) && enumValues.length > 0 ? enumValues : undefined;
+};
+
+/**
+ * Deterministically shuffle a unique column's finite domain so dealt values are
+ * not simply the declaration order. Hashed per (table, column); variance across
+ * seeds comes from the global hash salt {@link setHashKey} sets, like every
+ * other generated value.
+ */
+const shuffledDomain = (domain: ReadonlyArray<unknown>, table: string, column: string): ReadonlyArray<unknown> => {
+    const out = [...domain];
+
+    for (let index = out.length - 1; index > 0; index -= 1) {
+        const swap = copycat.int([table, column, "unique-deal", index], { max: index, min: 0 });
+        const held = out[index];
+
+        out[index] = out[swap];
+        out[swap] = held;
+    }
+
+    return out;
+};
+
+/**
+ * Make a generated string row-unique while keeping its shape: an email keeps
+ * its address form via a plus-tag (`local+3@domain`), anything else gets an
+ * index suffix. The absolute row index is unique per (table, row), so the
+ * result is collision-free and stays deterministic.
+ */
+const uniquifyString = (value: string, index: number): string => {
+    const at = value.indexOf("@");
+
+    return at > 0 ? `${value.slice(0, at)}+${String(index)}${value.slice(at)}` : `${value}-${String(index)}`;
+};
+
 /** Generate a single column value, resolving foreign keys against seeded and pre-existing parents. */
 const generateField = (
     field: FieldSpec,
     table: string,
     input: ReadonlyArray<unknown>,
+    index: number,
     localIndex: number,
     idsByTable: ReadonlyMap<string, ReadonlyArray<string>>,
     existingIds: Readonly<Record<string, ReadonlyArray<string>>>,
@@ -164,7 +211,45 @@ const generateField = (
         return undefined;
     }
 
+    if (field.unique) {
+        const domain = uniqueDomain(field);
+
+        // Deal without replacement: the plan layer has already verified the
+        // count fits the domain, and a contiguous index range no longer than
+        // the domain stays injective under the modulo.
+        if (domain !== undefined) {
+            return shuffledDomain(domain, table, field.name)[index % domain.length];
+        }
+
+        const value = generateValue(field.validator, field.name, input, now);
+
+        return typeof value === "string" ? uniquifyString(value, index) : value;
+    }
+
     return generateValue(field.validator, field.name, input, now);
+};
+
+/**
+ * Fail fast when a unique column's finite domain cannot cover the batch —
+ * otherwise the collision only surfaces later as a raw UNIQUE-constraint error
+ * with no attribution to the column. Overridden, FK, and server-defaulted
+ * columns are skipped: their values do not come from the generator.
+ */
+const assertUniqueDomainsCover = (fields: ReadonlyArray<FieldSpec>, table: string, count: number, tableOverrides: Record<string, unknown>): void => {
+    for (const field of fields) {
+        if (!field.unique || field.fkTable !== undefined || field.hasServerDefault || Object.hasOwn(tableOverrides, field.name)) {
+            continue;
+        }
+
+        const domain = uniqueDomain(field);
+
+        if (domain !== undefined && count > domain.length) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `cannot seed ${String(count)} rows into "${table}": unique column "${field.name}" has only ${String(domain.length)} possible values`,
+            );
+        }
+    }
 };
 
 /**
@@ -226,6 +311,8 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
         // Absolute index base — lets a client seed the same table across calls
         // without colliding ids (each id/value hashes from the absolute index).
         const offset = indexOffset[table] ?? 0;
+        assertUniqueDomainsCover(spec.fields, table, count, tableOverrides);
+
         const ids: string[] = [];
         idsByTable.set(table, ids);
         const rows: Record<string, unknown>[] = [];
@@ -260,7 +347,9 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
             ids.push(row._id as string);
 
             for (const field of spec.fields) {
-                apply(field.name, () => generateField(field, table, cellInput(seed, table, index, field.name), localIndex, idsByTable, existingIds, now));
+                apply(field.name, () =>
+                    generateField(field, table, cellInput(seed, table, index, field.name), index, localIndex, idsByTable, existingIds, now),
+                );
             }
 
             rows.push(row);

@@ -299,3 +299,70 @@ describe("seedPlan — reproducibility", () => {
         expect(JSON.stringify(late)).not.toBe(JSON.stringify(early));
     });
 });
+
+describe("seedPlan — unique columns", () => {
+    const enumSchema = defineSchema({
+        tags: defineTable({
+            color: v
+                .string()
+                .meta({ schema: { enum: ["blue", "green", "red"] } })
+                .unique(),
+        }),
+    });
+
+    it("generates 200 distinct values for unique string columns, deterministically", () => {
+        expect.hasAssertions();
+
+        const uniqueSchema = defineSchema({
+            accounts: defineTable({
+                email: v.string().unique(),
+                handle: v.string().unique(),
+            }),
+        });
+
+        const first = seedPlan(uniqueSchema, { counts: { accounts: 200 }, now: 1_700_000_000_000, seed: 1 });
+        const second = seedPlan(uniqueSchema, { counts: { accounts: 200 }, now: 1_700_000_000_000, seed: 1 });
+        const { rows } = first.find((entry) => entry.table === "accounts")!;
+
+        expect(new Set(rows.map((row) => row.email)).size).toBe(200);
+        expect(new Set(rows.map((row) => row.handle)).size).toBe(200);
+        // The email heuristic survives uniquification — still an address shape.
+        expect(rows.every((row) => typeof row.email === "string" && row.email.includes("@"))).toBe(true);
+        expect(second).toStrictEqual(first);
+    });
+
+    it("deals a unique enum column without replacement when the count fits the domain", () => {
+        expect.hasAssertions();
+
+        const { rows } = seedPlan(enumSchema, { counts: { tags: 3 }, now: 1_700_000_000_000, seed: 1 }).find((entry) => entry.table === "tags")!;
+
+        expect(new Set(rows.map((row) => row.color))).toStrictEqual(new Set(["blue", "green", "red"]));
+    });
+
+    it("fails fast, naming table, column, and counts, when the count exceeds a unique domain", () => {
+        expect.hasAssertions();
+
+        const run = (): unknown => seedPlan(enumSchema, { counts: { tags: 10 }, now: 1_700_000_000_000, seed: 1 });
+
+        expect(run).toThrow('unique column "color"');
+        expect(run).toThrow(/10 rows into "tags"/);
+        expect(run).toThrow(/only 3 possible values/);
+    });
+
+    it("keeps non-unique generation byte-identical (pinned pre-change output)", () => {
+        expect.hasAssertions();
+
+        const plainSchema = defineSchema({
+            users: defineTable({
+                age: v.number(),
+                email: v.string(),
+                name: v.string(),
+            }),
+        });
+
+        const { rows } = seedPlan(plainSchema, { counts: { users: 2 }, now: 1_700_000_000_000, seed: 7 }).find((entry) => entry.table === "users")!;
+
+        expect(rows[0]).toStrictEqual({ _id: "d84cf143-978e-4b60-9832-481cdfa76ce2", age: 460, email: "bryan79@hotmail.com", name: "Ada Fritsch DVM" });
+        expect(rows[1]).toStrictEqual({ _id: "730f300b-1bf5-4730-9340-429bb785ee9b", age: 509, email: "courtney51@hotmail.com", name: "Griffin Towne" });
+    });
+});
