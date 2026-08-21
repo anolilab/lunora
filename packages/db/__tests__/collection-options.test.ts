@@ -244,6 +244,35 @@ describe("getShardCheckpoints (identity scope)", () => {
 
         await expect(firstAck).resolves.toBeUndefined();
     });
+
+    it("advances the post-switch registry from a collection created before the switch", async () => {
+        const { client, setIdentity } = makeClient();
+
+        setIdentity("user-a");
+
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const preSwitch = options.checkpoints;
+
+        // Mount the collection's subscription under identity A.
+        syncStarterOf(options.config)(recordingWriter().writer as never);
+
+        const { onCheckpoint } = subscribeMock.mock.calls[0]?.[3] as { onCheckpoint: (watermark: { mutationId?: number }) => void };
+
+        setIdentity("user-b");
+
+        // The switch mints a fresh registry; the still-mounted collection's
+        // callbacks must advance THAT one, not the retired capture.
+        const fresh = getShardCheckpoints(client);
+
+        expect(fresh).not.toBe(preSwitch);
+
+        const waiter = fresh.awaitMutationId(1);
+
+        onCheckpoint({ mutationId: 1 });
+
+        await expect(waiter).resolves.toBeUndefined();
+    });
 });
 
 /**

@@ -524,12 +524,25 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     const getKey = options.getKey ?? ((row: TRow) => row._id);
     // Shared per-shard by default — a per-collection registry hangs any shard with
     // more than one collection (see `getShardCheckpoints`). A `shape` carries its
-    // own shard key; the `list` path uses the top-level one.
-    const checkpoints = options.checkpoints ?? getShardCheckpoints(options.client, options.shape?.shardKey ?? options.shardKey);
+    // own shard key; the `list` path uses the top-level one. Resolved LAZILY at
+    // each callback use site rather than captured once: an identity switch
+    // retires the derived registry and mints a fresh one, and a still-mounted
+    // collection's frames must advance the replacement — a captured registry
+    // would leave the fresh one unattached and never authoritatively advanced,
+    // so post-switch overlays would drop ungated (or wait out the fallback).
+    const resolveCheckpoints = (): CheckpointRegistry => {
+        const registry = options.checkpoints ?? getShardCheckpoints(options.client, options.shape?.shardKey ?? options.shardKey);
 
-    // This collection's subscription is what advances the registry — record that so
-    // `bindMutators` knows gating an overlay on it will actually settle.
-    markCheckpointsAttached(checkpoints);
+        // This collection's subscription is what advances the registry — record
+        // that so `bindMutators` knows gating an overlay on it will actually
+        // settle. Re-marked on every resolve so a post-switch replacement
+        // registry is covered too (a WeakSet add is idempotent).
+        markCheckpointsAttached(registry);
+
+        return registry;
+    };
+
+    const checkpoints = resolveCheckpoints();
     // JSON-serialized form of each last-synced row, keyed by row id — the
     // `makeDiffEmit` base for one sync session. Owned outside `sync.sync` only so
     // `scope(...)` can reach the live `emit`; it is CLEARED in the sync cleanup
@@ -606,7 +619,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             // threshold is reached instead of `awaitMutationId` hanging
             // forever after the write is accepted.
             if (options.shape === undefined) {
-                checkpoints.resolve({ mutationId: pendingFrameWatermark ?? options.client.confirmedMutationWatermark(options.shardKey) });
+                resolveCheckpoints().resolve({ mutationId: pendingFrameWatermark ?? options.client.confirmedMutationWatermark(options.shardKey) });
                 pendingFrameWatermark = undefined;
             }
         };
@@ -622,7 +635,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
                 pendingFrameWatermark = watermark.mutationId;
             }
 
-            checkpoints.resolve(watermark);
+            resolveCheckpoints().resolve(watermark);
         };
 
         if (options.shape !== undefined) {
