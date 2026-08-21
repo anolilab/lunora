@@ -9,6 +9,7 @@
 import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import { parseValidatorMap } from "@lunora/values";
 
+import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
 import { convertNonRetryableError, raiseNonRetryable } from "./errors";
 import type {
@@ -60,6 +61,19 @@ const createRunStep =
     (deps: RunStepDeps): WorkflowRunStepFunction =>
     async <A extends StepArgsValidator, Result>(step: StepDefinition<A, Result>, args: InferStepArgs<A>, options?: RunStepOptions): Promise<Result> => {
         const config = options?.config ?? step.config;
+        const stepName = options?.name ?? step.name;
+
+        // The step-name namespace is reserved alongside the event-type namespace:
+        // `lunora:*` steps belong to the fan-out protocol, and a user step that
+        // borrowed one would collide with it. Checked on the RESOLVED name, so a
+        // `defineStep("lunora:spawn:x", …)` cannot slip past by omitting `name`.
+        if (stepName.startsWith(RESERVED_EVENT_TYPE_PREFIX)) {
+            return raiseNonRetryable(
+                `@lunora/workflow: ctx.runStep step name "${stepName}" is reserved — the "${RESERVED_EVENT_TYPE_PREFIX}" prefix is used by the framework's own steps`,
+                undefined,
+                deps.nonRetryableErrorClass,
+            );
+        }
 
         // Validate once, here, and close over the result — the body and the
         // rollback (a separate durable replay) both run with the same validated
@@ -134,7 +148,7 @@ const createRunStep =
               }
             : undefined;
 
-        return config === undefined ? deps.step.do(step.name, callback, rollbackOptions) : deps.step.do(step.name, config, callback, rollbackOptions);
+        return config === undefined ? deps.step.do(stepName, callback, rollbackOptions) : deps.step.do(stepName, config, callback, rollbackOptions);
     };
 
 export { createRunStep, validateStepArgs };
