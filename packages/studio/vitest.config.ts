@@ -89,10 +89,11 @@ export default getVitestConfig(
             ],
         },
     },
-    // ratchet: studio is excluded from the coverage vis queries
-    // (`project!=studio` in `test:coverage` / `test:affected:coverage`; the
-    // plain `test` scripts run it), because a full component run under v8
-    // coverage stalls. The suite is green and fast without coverage. Zeroed
-    // until it can finish under coverage.
-    { branches: 0, functions: 0, lines: 0, statements: 0 },
+    // ratchet: the jsdom `component` project is deliberately ungated — a full
+    // component run under v8 coverage stalls, so `test:coverage` runs
+    // `--project unit` only and these floors are the unit project's measured
+    // coverage (2026-08-21, rounded down; coverage counts all of `src`, so the
+    // component-only files sit at 0%). Raise when unit tests are added; never
+    // lower to admit a regression.
+    { branches: 9, functions: 7, lines: 11, statements: 10 },
 );

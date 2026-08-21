@@ -65,7 +65,7 @@
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage",
+        "test:coverage": "vitest run --project unit --coverage",
         "test:unit": "vitest run --project unit",
         "fallow:audit": "fallow audit",
         "fallow:dead-code": "fallow dead-code",
