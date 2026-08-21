@@ -2823,14 +2823,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         // than paging.
                         //
                         // Paging here could not terminate honestly. A page is
-                        // capped at `MAX_SEARCH_SCAN` and `planSearchPage`
-                        // refuses any page reaching past it, so a first page
-                        // sized to the cap comes back full with `isDone: true`
-                        // whether there were exactly that many matches or ten
-                        // times as many — the probe row that distinguishes them
-                        // cannot be fetched. `for await` would then stop at the
-                        // cap and look complete, while `.collect()` on the same
-                        // query throws. Same query, same data, two answers.
+                        // capped at `MAX_SEARCH_SCAN`, and a page sized to the
+                        // cap cannot fetch the probe row that tells "exactly
+                        // that many matches" from "ten times as many" — so
+                        // `planSearchPage` refuses it rather than reporting a
+                        // false `isDone`. A `for await` built on paging would
+                        // therefore die at the cap with a `BAD_REQUEST` it
+                        // cannot act on, while `.collect()` on the same query
+                        // raises the cap error. The unbounded read gives one
+                        // answer for both.
                         //
                         // Nothing is given up: the page size was the cap, so
                         // the old loop already read the whole window in one
