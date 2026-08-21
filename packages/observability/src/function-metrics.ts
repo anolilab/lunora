@@ -52,6 +52,7 @@
 
 import type { FunctionCallStat, FunctionScanAttribution, SqlExec } from "@lunora/shard-engine";
 
+import { shouldPrune } from "./prune-marker";
 import { runSql } from "./run-sql";
 
 /** Reserved per-function accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -201,24 +202,6 @@ interface RecordFunctionMetricInput {
 
 /** Floor `ts` to the start of its history bucket. */
 const bucketFloor = (ts: number): number => Math.floor(ts / FUNCTION_METRICS_BUCKET_MS) * FUNCTION_METRICS_BUCKET_MS;
-
-/**
- * The bucket most recently pruned PER SHARD, so the retention delete runs once
- * per window instead of once per dispatch.
- *
- * Keyed by the storage handle rather than a module-level scalar: workerd hosts
- * several Durable Object instances of the same class in one isolate, so a shared
- * scalar lets a busy shard claim the window and every other shard on that
- * isolate skip its prune entirely — the retention bound would then not hold,
- * which is the one thing this marker exists to guarantee. A `WeakMap` means an
- * evicted DO's entry is collected with it.
- *
- * The delete itself is per-`path` while the marker is per handle: the winning
- * call prunes only the path it wrote, and a path not written in that window is
- * pruned by its own next write in a later window — retention is delayed by at
- * most one window per path, never unbounded.
- */
-const lastPrunedBucket = new WeakMap<object, number>();
 
 /** Collapse a dispatch's index hits to one entry per distinct `(table, index)` so each counts as one read. */
 const dedupeIndexHits = (hits: ReadonlyArray<IndexHit>): IndexHit[] => {
@@ -487,10 +470,13 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
     );
 
     // Bounded retention: keep only the most recent buckets for this path — run
-    // once per window (see `lastPrunedBucket`) instead of on every dispatch.
-    if (lastPrunedBucket.get(sql) !== bucket) {
-        lastPrunedBucket.set(sql, bucket);
-
+    // once per window instead of on every dispatch. The marker is scoped to
+    // `input.path` because the delete below is too: a handle-wide marker would
+    // let the window's first writer claim it for every path while pruning only
+    // its own, and a path that never lands a window's first write would then
+    // never be pruned at all. `admitPath` above caps the distinct paths, so the
+    // marker's key space is bounded by that cap.
+    if (shouldPrune(sql, bucket, input.path)) {
         runSql(
             sql,
             `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"

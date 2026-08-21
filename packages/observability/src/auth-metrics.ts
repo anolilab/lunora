@@ -30,6 +30,7 @@
 
 import type { SqlExec } from "@lunora/shard-engine";
 
+import { shouldPrune } from "./prune-marker";
 import { runSql } from "./run-sql";
 
 /** Reserved single-row auth accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -100,19 +101,6 @@ interface RecordAuthEventInput {
 
 /** Floor `ts` to the start of its history bucket. */
 const bucketFloor = (ts: number): number => Math.floor(ts / AUTH_METRICS_BUCKET_MS) * AUTH_METRICS_BUCKET_MS;
-
-/**
- * The bucket most recently pruned PER SHARD, so the retention delete runs once
- * per window instead of once per recorded attempt.
- *
- * Keyed by the storage handle rather than a module-level scalar: workerd hosts
- * several Durable Object instances of the same class in one isolate, so a shared
- * scalar lets a busy shard claim the window and every other shard on that
- * isolate skip its prune entirely — the retention bound would then not hold,
- * which is the one thing this marker exists to guarantee. A `WeakMap` means an
- * evicted DO's entry is collected with it.
- */
-const lastPrunedBucket = new WeakMap<object, number>();
 
 /**
  * Create the two reserved auth-metrics tables. Idempotent, so the read and write
@@ -187,10 +175,9 @@ const recordAuthEvent = (sql: SqlExec, input: RecordAuthEventInput): void => {
     );
 
     // Bounded retention: keep only the most recent buckets — run once per
-    // window (see `lastPrunedBucket`) instead of on every recorded attempt.
-    if (lastPrunedBucket.get(sql) !== bucket) {
-        lastPrunedBucket.set(sql, bucket);
-
+    // window instead of on every recorded attempt. The delete is table-wide, so
+    // the default (unscoped) marker key covers exactly what it prunes.
+    if (shouldPrune(sql, bucket)) {
         runSql(
             sql,
             `DELETE FROM "${AUTH_METRICS_BUCKETS_TABLE}"
