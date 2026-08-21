@@ -624,7 +624,29 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
 
             const [row] = mirror.query<{ type: string }>("SELECT type FROM pragma_table_info('gone') WHERE name = 'id'");
 
-            expect(row?.type).toBe("INTEGER");
+            // `INT`, not `INTEGER` — see the rowid-alias note in
+            // #ensureTableSchema; both carry INTEGER affinity.
+            expect(row?.type).toBe("INT");
+        });
+
+        // A numeric-pk table must still accept a later non-numeric id. Under
+        // the rowid-alias form (`INTEGER PRIMARY KEY`) SQLite rejects one with
+        // `datatype mismatch`, aborting the transaction and rolling back the
+        // whole diff — unrelated rows included.
+        it("a numeric-pk table still accepts a later non-numeric id without aborting the batch", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(createTableDiff("mixed", [{ data: { id: 1 }, type: "insert" }]));
+            mirror.applyDiff(
+                createTableDiff("mixed", [
+                    { data: { id: "abc" }, type: "insert" },
+                    { data: { id: 2 }, type: "insert" },
+                ]),
+            );
+
+            expect(mirror.query<{ id: number | string }>("SELECT id FROM mixed ORDER BY id")).toStrictEqual([{ id: 1 }, { id: 2 }, { id: "abc" }]);
         });
 
         it("falls back to change.id when an update's data does not carry the pk", () => {

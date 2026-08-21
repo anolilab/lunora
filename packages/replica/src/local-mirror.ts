@@ -487,13 +487,17 @@ class LocalMirror {
         const existing = this.#db.query<{ name: string }>(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, [diff.table]);
 
         if (existing.length === 0) {
-            // Create the table with all required columns. A pk declared
-            // exactly `INTEGER PRIMARY KEY` becomes SQLite's rowid alias —
-            // acceptable here (tables are re-created from scratch and only
-            // ever bind the server-provided id), but it changes
-            // `PRAGMA table_info` output.
+            // Create the table with all required columns. The pk's numeric
+            // affinity is declared `INT`, not `INTEGER`: a column typed
+            // exactly `INTEGER PRIMARY KEY` becomes SQLite's rowid alias,
+            // which accepts integers ONLY — a later non-numeric id for the
+            // same table would then raise `datatype mismatch` inside
+            // `applyDiffToDatabase`'s transaction and roll back the whole
+            // diff, unrelated rows included. `INT` carries the same INTEGER
+            // affinity (so ORDER BY/comparisons stay numeric) while still
+            // accepting a heterogeneous id.
             const pkAffinity = LocalMirror.#inferPkAffinity(diff, pk);
-            let columnDefs = `${escapeIdentifier_(pk)} ${pkAffinity} PRIMARY KEY NOT NULL`;
+            let columnDefs = `${escapeIdentifier_(pk)} ${pkAffinity === "INTEGER" ? "INT" : pkAffinity} PRIMARY KEY NOT NULL`;
 
             for (const key of requiredColumns) {
                 columnDefs += `, ${escapeIdentifier_(key)} ${affinities.get(key) ?? "TEXT"}`;
