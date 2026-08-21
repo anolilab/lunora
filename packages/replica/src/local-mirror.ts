@@ -455,10 +455,15 @@ class LocalMirror {
      */
     static #inferPkAffinity(diff: TableDiff, pk: string): ColumnAffinity {
         for (const change of diff.changes) {
-            const value: unknown = ("data" in change ? change.data[pk] : undefined) ?? ("id" in change ? change.id : undefined);
+            const value: unknown = change.type === "delete" ? change.id : change.data[pk];
 
             if (value !== null && value !== undefined) {
                 return inferColumnAffinity(value);
+            }
+
+            if (change.type === "update") {
+                // data[pk] was absent — the update's own id is the observed pk value.
+                return inferColumnAffinity(change.id);
             }
         }
 
