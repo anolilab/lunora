@@ -98,7 +98,7 @@ Re-exported from `@openfeature/server-sdk` — signature tracked at its source.
 ### `createFlags` (const)
 
 ```ts
-const createFlags: (options: CreateFlagsOptions) => LunoraFlags;
+const createFlags: (definition: FlagsDefinition, env: Record<string, unknown>, options: CreateFlagsOptions) => LunoraFlags;
 ```
 
 ### `defineFlags` (const)

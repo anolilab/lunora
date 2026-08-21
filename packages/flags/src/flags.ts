@@ -6,7 +6,7 @@ import { ErrorCode, OpenFeature } from "@openfeature/server-sdk";
 // code-point-stable, recursively-sorted cache-key encoder, so the flags memo
 // keys match the client/react/do dedup semantics.
 import { stableStringify } from "../../../shared/stable-key";
-import type { LunoraFlags } from "./types";
+import type { FlagsDefinition, LunoraFlags } from "./types";
 
 /**
  * OpenFeature domain the Lunora flags client is bound under. A dedicated domain
@@ -16,12 +16,26 @@ import type { LunoraFlags } from "./types";
 const DOMAIN = "lunora";
 
 /**
- * Per-isolate memo of the bound OpenFeature client. The provider is set +
- * initialized exactly once per DO isolate (not per request); subsequent requests
- * reuse this promise. A rejected bind (e.g. a provider whose `initialize` throws)
- * is cleared so the next request retries rather than failing forever.
+ * Per-isolate memo of bound OpenFeature clients, keyed on the
+ * {@link FlagsDefinition} identity (a module singleton — the `lunora/flags.ts`
+ * default export) then the Worker `env`, both stable for the isolate's
+ * lifetime. `WeakMap`s so a torn-down definition/env is collectable and tests
+ * using fresh objects never leak state into each other (mirrors
+ * `@lunora/notify`'s runtime cache). A rejected bind (e.g. a provider whose
+ * `initialize` throws) is deleted so the next request retries rather than
+ * failing forever.
+ *
+ * NOTE: OpenFeature's provider registry is still global under the single
+ * {@link DOMAIN} — this memo prevents a later definition/env's provider,
+ * logger, and hooks from being silently discarded, not the registry collision
+ * itself. Binding a second distinct definition in one isolate re-runs
+ * `setProviderAndWait` on the same domain (last writer wins in the registry);
+ * `lastBoundDefinition` makes that collision loud instead of silent.
  */
-let clientBinding: Promise<Client> | undefined;
+let clientCache = new WeakMap<FlagsDefinition, WeakMap<object, Promise<Client>>>();
+
+/** The definition most recently bound — exists only for the collision warning above. */
+let lastBoundDefinition: FlagsDefinition | undefined;
 
 interface BindOptions {
     hooks?: Hook[];
@@ -29,40 +43,67 @@ interface BindOptions {
     provider: () => Provider;
 }
 
-const bindClient = ({ hooks, logger, provider }: BindOptions): Promise<Client> => {
-    if (clientBinding === undefined) {
-        clientBinding = (async (): Promise<Client> => {
-            await OpenFeature.setProviderAndWait(DOMAIN, provider());
+const bindClient = (definition: FlagsDefinition, env: object, { hooks, logger, provider }: BindOptions): Promise<Client> => {
+    let byEnv = clientCache.get(definition);
 
-            const client = OpenFeature.getClient(DOMAIN);
-
-            if (logger) {
-                client.setLogger(logger);
-            }
-
-            if (hooks && hooks.length > 0) {
-                client.addHooks(...hooks);
-            }
-
-            return client;
-        })();
-
-        // Don't memoize a failed bind — let the next request re-attempt.
-        clientBinding.catch(() => {
-            clientBinding = undefined;
-        });
+    if (byEnv === undefined) {
+        byEnv = new WeakMap<object, Promise<Client>>();
+        clientCache.set(definition, byEnv);
     }
 
-    return clientBinding;
+    const existing = byEnv.get(env);
+
+    if (existing !== undefined) {
+        return existing;
+    }
+
+    if (lastBoundDefinition !== undefined && lastBoundDefinition !== definition) {
+        // eslint-disable-next-line no-console -- surfaces the registry last-writer-wins collision (see the cache docstring)
+        console.warn(
+            "@lunora/flags: binding a second flags definition in this isolate — OpenFeature's registry is global under one domain, so the last bound provider wins for every client.",
+        );
+    }
+
+    lastBoundDefinition = definition;
+
+    const scopedByEnv = byEnv;
+    const binding = (async (): Promise<Client> => {
+        await OpenFeature.setProviderAndWait(DOMAIN, provider());
+
+        const client = OpenFeature.getClient(DOMAIN);
+
+        if (logger) {
+            client.setLogger(logger);
+        }
+
+        if (hooks && hooks.length > 0) {
+            client.addHooks(...hooks);
+        }
+
+        return client;
+    })();
+
+    scopedByEnv.set(env, binding);
+
+    // Don't memoize a failed bind — let the next request re-attempt. Guarded on
+    // identity so a reset-then-rebind is never clobbered by a stale rejection.
+    binding.catch(() => {
+        if (scopedByEnv.get(env) === binding) {
+            scopedByEnv.delete(env);
+        }
+    });
+
+    return binding;
 };
 
 /**
- * Drops the per-isolate client binding and clears OpenFeature's provider
- * registry. Test-only — production code never needs to unbind (the isolate owns
- * a single, static provider for its lifetime).
+ * Drops every memoized client binding and clears OpenFeature's provider
+ * registry. Test-only — production code never needs to unbind (a definition and
+ * env live as long as their isolate).
  */
 const resetFlags = async (): Promise<void> => {
-    clientBinding = undefined;
+    clientCache = new WeakMap();
+    lastBoundDefinition = undefined;
 
     await OpenFeature.clearProviders();
 };
@@ -141,14 +182,18 @@ const resolveDetails = (
 };
 
 /**
- * Builds the `ctx.flags` facade for a single request. Evaluations resolve
- * through the OpenFeature client (the SDK applies hooks and never throws —
- * provider errors surface as the default value with an `errorCode`). The default
- * `targetingKey` is merged under any per-call context, and identical evaluations
- * within the request are memoized so repeated reads of the same flag are
- * internally consistent and hit the provider once.
+ * Builds the `ctx.flags` facade for a single request. The client bind is
+ * memoized per (`definition`, `env`) pair — both stable object identities for
+ * the isolate's lifetime — so each definition/env combination gets the
+ * provider, logger, and hooks it was configured with instead of silently
+ * reusing whichever bind happened first. Evaluations resolve through the
+ * OpenFeature client (the SDK applies hooks and never throws — provider errors
+ * surface as the default value with an `errorCode`). The default `targetingKey`
+ * is merged under any per-call context, and identical evaluations within the
+ * request are memoized so repeated reads of the same flag are internally
+ * consistent and hit the provider once.
  */
-const createFlags = (options: CreateFlagsOptions): LunoraFlags => {
+const createFlags = (definition: FlagsDefinition, env: Record<string, unknown>, options: CreateFlagsOptions): LunoraFlags => {
     const { hooks, logger, provider, targetingKey } = options;
 
     // Resolve the default targetingKey once. A user-supplied `identify` thunk
@@ -181,7 +226,7 @@ const createFlags = (options: CreateFlagsOptions): LunoraFlags => {
         };
 
         const run = (): Promise<EvaluationDetails<FlagValue>> =>
-            bindClient({ hooks, logger, provider })
+            bindClient(definition, env, { hooks, logger, provider })
                 .then((client) => resolveDetails(client, type, flagKey, defaultValue, merged))
                 .catch(failClosed);
 

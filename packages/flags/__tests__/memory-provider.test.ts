@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { defineFlags } from "../src/define-flags";
 import { createFlags, resetFlags } from "../src/flags";
 import type { MemoryFlagValue } from "../src/providers/memory";
 import { memoryProvider } from "../src/providers/memory";
@@ -9,7 +10,7 @@ import { memoryProvider } from "../src/providers/memory";
 const flagsFor = (map: Record<string, MemoryFlagValue>) => {
     const factory = memoryProvider(map);
 
-    return createFlags({ provider: () => factory({}) });
+    return createFlags(defineFlags({ provider: factory }), {}, { provider: () => factory({}) });
 };
 
 describe("memoryProvider", () => {
