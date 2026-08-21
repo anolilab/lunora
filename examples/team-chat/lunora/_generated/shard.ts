@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, RunShardApplyCdcArgs, RunShardExportArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SearchBackfillProgress, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike, TelemetrySink } from "lunorash/do";
-import { applyCdcChanges, backfillSearchIndexes, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "lunorash/do";
+import { applyCdcChanges, backfillSearchIndexes, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "lunorash/do";
 import { asBucketStorage, createSecrets, LunoraError } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
 
@@ -1369,12 +1369,29 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const secrets = createSecrets(env);
 
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            // `list`/`get` are the two methods `ctx.db.system.query("_scheduled_functions")`
+            // reaches through, and pending jobs live in the SchedulerDO — nothing the
+            // CDC changelog records — so reading them must forfeit a delta resume.
+            // The scheduler's own `runAfter`/`runAt`/`cancel` are writes and stay unstamped.
+            const scheduler = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally
             // (its `list`/`getMetadata` throw the "no storage configured" error).
-            const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
+            //
+            // Wrapped BEFORE the split so both consumers share one stamping facade.
+            // Only the methods that actually reach R2 are stamped: `getUrl` and
+            // `getSignedUrl` build a URL from the configured base (and an HMAC) and
+            // read nothing, and they are what handlers overwhelmingly call — stamping
+            // them would forfeit resumes for a dependency that cannot move the result.
+            // `bucket` IS stamped: it hands back a sub-facade this wrapper does not
+            // reach, so the selection is the last point at which the read can be seen.
+            const storage = markUnvouchableReads(asBucketStorage(config.storage?.(env) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
+                "bucket",
+                "download",
+                "getMetadata",
+                "list",
+            ]);
             // `ctx.log`: the DO base builds the attributed logger (structured
             // fields + `.with(...)` child + trace correlation) and routes each call
             // to the optional `observability` sink. It also buffers the line (studio

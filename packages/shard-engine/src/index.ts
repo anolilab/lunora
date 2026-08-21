@@ -268,7 +268,7 @@ export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from 
 export type { ReactorDispatchResult, ReactorState, ReactorStats } from "./reactor-state";
 export { listReactorStates, migrateReactorState, REACTOR_STATE_TABLE, reactorNeedsRun, readReactorState, writeReactorState } from "./reactor-state";
 export type { ReadFootprint } from "./read-footprint";
-export { createReadFootprint } from "./read-footprint";
+export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "./read-footprint";
 export type { IndexKeyEntry, KeyRange } from "./read-write-set";
 export { buildIndexRange, indexKeysForRow, keysTouchRanges } from "./read-write-set";
 export type { RelationExistsMarker, ResolveRelationPredicatesOptions } from "./relation-predicates";

@@ -3240,7 +3240,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // deployment's default bucket, so a non-default one never previewed.
             expect(output).toContain('"bucket": "media"');
             // `v.storage()` with no argument names none, which IS the default bucket.
-            expect(output.match(/"bucket"/gu)).toHaveLength(1);
+            // Anchored on the JSON key (`"bucket":`) rather than the bare word: the
+            // emitted module also carries `"bucket"` as a plain string in the
+            // eslint-disable-next-line no-secrets/no-secrets -- an emitted identifier, not a credential
+            // `markUnvouchableReads` method allowlist for `ctx.storage`, which is
+            // unrelated to column metadata and would otherwise inflate this count.
+            expect(output.match(/"bucket":/gu)).toHaveLength(1);
         });
 
         it("omits enumValues for a union with a non-literal member", () => {

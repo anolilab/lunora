@@ -1,4 +1,10 @@
-import { createShardCtxDb as createShardContextDatabase, readCdcEpoch, runShardMigrations } from "@lunora/shard-engine";
+import {
+    createReadFootprint,
+    createShardCtxDb as createShardContextDatabase,
+    markUnvouchableReads,
+    readCdcEpoch,
+    runShardMigrations,
+} from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
@@ -247,5 +253,38 @@ describe("shardDO.evaluateResume", () => {
         // The verdict is still a real intersection, not a blanket yes: a query
         // that DOES read the written table must re-snapshot.
         expect(shard.probe(0, new Set(["messages"]), currentEpoch()).resumable).toBe(false);
+    });
+
+    it("refuses a resume to a query that also read an unvouchable ctx surface", async () => {
+        expect.assertions(3);
+
+        // The regression this guards. `cdcCanVouchFor` can only act on
+        // dependencies that REACH the read-set, and `ctx.kv` / `ctx.storage` /
+        // `ctx.vectors` / `ctx.flags` / `ctx.db.system` used to stamp nothing at
+        // all. So a query reading a local table AND one of them arrived here with
+        // a read-set of `{roomMembers}` — fully vouchable, nothing changed — and
+        // was told `resumable: true` while the KV value it returned had moved. The
+        // client then held the stale value until some unrelated shard-local table
+        // in its read-set happened to change.
+        const shard = buildShard();
+
+        // Baseline: the shard-local half of the read on its own IS resumable.
+        // This is the state the bug left the whole query in.
+        const localOnly = createReadFootprint();
+
+        localOnly.onRead("roomMembers", "*scan");
+
+        expect(shard.probe(0, localOnly.tables, currentEpoch()).resumable).toBe(true);
+
+        // The same query, now also reading KV through the ctx facade the
+        // generated `buildCtx` hands the handler.
+        const footprint = createReadFootprint();
+        const kv = markUnvouchableReads({ get: async (key: string) => `value:${key}` }, footprint.onRead, ["get"]);
+
+        footprint.onRead("roomMembers", "*scan");
+
+        await expect(kv.get("feature-copy")).resolves.toBe("value:feature-copy");
+
+        expect(shard.probe(0, footprint.tables, currentEpoch()).resumable).toBe(false);
     });
 });

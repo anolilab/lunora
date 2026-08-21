@@ -69,5 +69,87 @@ const createReadFootprint = (): ReadFootprint => {
     };
 };
 
-export { createReadFootprint };
+/**
+ * The dependency name stamped for a read the CDC changelog can never speak for.
+ *
+ * `__cdc_log` records writes to THIS shard's own SQLite tables and nothing else,
+ * so `cdcCanVouchFor` (see `ctx-db-cdc.ts`) defines the vouchable set positively:
+ * a dependency is vouchable iff a table of that name exists in this DO's SQLite.
+ * Everything else falls to "cannot vouch", and a read-set that cannot be vouched
+ * for forces a re-snapshot instead of a resume.
+ *
+ * That rule is only as good as what reaches the read-set. `ctx.kv`, `ctx.storage`,
+ * `ctx.vectors`, `ctx.flags` and `ctx.db.system` all read state that lives outside
+ * this shard's SQLite and none of them stamped anything, so a query reading a
+ * local table AND one of them arrived with a read-set of `{table}` — fully
+ * vouchable — and was told `resumable: true` while the KV/R2/Vectorize value it
+ * returned had since moved. This sentinel is the missing stamp: it is a name no
+ * table can carry, so it can only ever fall to "cannot vouch".
+ *
+ * Deliberately NOT `"*"` (the admin wildcard in `shard-do.ts`). That one has a
+ * second meaning — `refreshSubscriptions` re-runs a memo carrying it on EVERY
+ * write-flush — and a query that reads KV has no need of that: it still re-runs
+ * exactly when one of its real tables moves. Reusing `"*"` would have turned an
+ * honest "cannot prove this is current on reconnect" into a permanent per-write
+ * re-execution tax. A distinct name never appears in the written-table set, so
+ * `setsIntersect` / `writeTouchesMemo` skip past it and the live path is unchanged.
+ *
+ * The `!` prefix is the same trick `"*"` uses: no `defineTable` name can produce
+ * it, so `cdcCanVouchFor`'s `sqlite_master` lookup can never find a real table
+ * shadowing it and accidentally vouch.
+ */
+const UNVOUCHABLE_DEP = "!unvouchable";
+
+/**
+ * Wrap a ctx facade so calling one of `methods` stamps {@link UNVOUCHABLE_DEP}
+ * into the in-flight read footprint — making any subscription that touched it
+ * un-resumable, per the rule above.
+ *
+ * `onRead` is the footprint's own `onRead`, threaded from the generated
+ * `buildCtx`. It is `undefined` on the plain RPC dispatch path, where this
+ * returns the facade untouched: only `executeSubscription` builds the read-set
+ * the resume verdict reads, and stamping the RPC path instead would land the
+ * sentinel in the dependency tracker and from there in the request log's
+ * `tablesRead` — a fabricated table name in the operator-facing readout, buying
+ * nothing.
+ *
+ * Stamps on CALL, never on property access. Feature detection is real here —
+ * `createShardCtxDb` probes `typeof scheduler.list === "function"` before wiring
+ * `ctx.db.system`, and `asBucketStorage` inspects the bucket facade — so a `get`
+ * trap that stamped eagerly would mark every query in a scheduler-enabled app
+ * un-resumable at ctx-build time, before the handler read anything.
+ *
+ * A `Proxy` rather than a spread copy so `this` still binds to the real facade
+ * (`Reflect.apply(value, target, …)`), and so methods NOT in `methods` pass
+ * through with their identity and behaviour intact. `methods` is an allowlist,
+ * not a blanket, because several of these facades expose genuinely pure members:
+ * `ctx.storage.getUrl` / `getSignedUrl` build a URL from configured base + HMAC
+ * and read nothing, and they are what real handlers call most — stamping them
+ * would cost re-snapshots for a dependency that cannot change the result.
+ */
+const markUnvouchableReads = <T extends object>(facade: T, onRead: ReadFootprint["onRead"] | undefined, methods: ReadonlyArray<string>): T => {
+    if (!onRead) {
+        return facade;
+    }
+
+    const stamped = new Set(methods);
+
+    return new Proxy(facade, {
+        get(target, property, receiver) {
+            const value = Reflect.get(target, property, receiver) as unknown;
+
+            if (typeof value !== "function" || typeof property !== "string" || !stamped.has(property)) {
+                return value;
+            }
+
+            return (...args: unknown[]): unknown => {
+                onRead(UNVOUCHABLE_DEP);
+
+                return Reflect.apply(value as (...a: unknown[]) => unknown, target, args);
+            };
+        },
+    });
+};
+
+export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP };
 export type { ReadFootprint };

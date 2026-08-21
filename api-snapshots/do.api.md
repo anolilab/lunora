@@ -552,6 +552,10 @@ interface TraceRefLike {
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `UNVOUCHABLE_DEP` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `ValidatorLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -645,6 +649,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `isSourceDue` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `markUnvouchableReads` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 

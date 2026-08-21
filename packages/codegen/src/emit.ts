@@ -3030,6 +3030,7 @@ const EMPTY_HELPER_FRAGMENTS: HelperFragments = { build: "", configField: "", co
  * override, else the conventional `env.KV`; absent both, every method throws a
  * directed error via `kvStub`.
  */
+/* eslint-disable no-secrets/no-secrets -- the flagged high-entropy strings are emitted identifiers (`markUnvouchableReads(kvBinding`), not credentials. */
 const emitKvFragments = (hasKv: boolean): HelperFragments => {
     if (!hasKv) {
         return EMPTY_HELPER_FRAGMENTS;
@@ -3040,7 +3041,16 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
     return {
         build: `
             const kvBinding = config.kv?.(env) ?? (env as Record<string, unknown>).KV;
-            const kv: Kv = kvBinding ? createKv({ namespace: kvBinding as KVNamespaceLike }) : kvStub;
+            // KV is not this shard's SQLite, so nothing appends a \`__cdc_log\` entry
+            // when a value changes — a subscription that read one can never be proven
+            // current on reconnect and must re-snapshot. Reads only; \`put\`/\`delete\`
+            // are writes and stay unstamped.
+            const kv: Kv = markUnvouchableReads(kvBinding ? createKv({ namespace: kvBinding as KVNamespaceLike }) : kvStub, options.onRead, [
+                "get",
+                "getRaw",
+                "getWithMetadata",
+                "list",
+            ]);
 `,
         configField: `\n    kv?: (env: Record<string, unknown>) => KVNamespaceLike;`,
         contextField: `\n                kv,`,
@@ -3048,6 +3058,8 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
         stub: renderThrowingStub("kvStub: Kv", kvMissing, ["delete", "get", "getRaw", "getWithMetadata", "list", "put"]),
     };
 };
+
+/* eslint-enable no-secrets/no-secrets */
 
 /**
  * `ctx.flags` (OpenFeature feature flags) fragments. A flag read is an external
@@ -3066,10 +3078,27 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
 
     return {
         build: `
-            const flags: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
+            const flagsClient: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
                 provider: () => config.flags?.(env),
                 targetingKey: () => flagsConfig.identify?.({ identity: identity ?? null, userId: userId ?? null }),
             });
+            // A flag lives in the OpenFeature provider, so flipping one appends
+            // nothing to \`__cdc_log\` and a subscription whose result branches on it
+            // cannot be proven current on reconnect. Of every surface stamped here
+            // this is the one that moves fastest — changing on the operator's
+            // schedule is the entire point of a flag — so the re-snapshot is the
+            // difference between a rollout taking effect and a reconnected client
+            // holding the old branch until some unrelated row happens to move.
+            //
+            // \`details\` is a nested object of the same four evaluations, so it is
+            // wrapped in its own right: the outer wrapper hands back plain
+            // (non-function) members untouched, and an unwrapped
+            // \`ctx.flags.details.*\` would be exactly the silent hole this closes.
+            const flags: import("${flagsSpecifier}").LunoraFlags = markUnvouchableReads(
+                { ...flagsClient, details: markUnvouchableReads(flagsClient.details, options.onRead, ["boolean", "number", "object", "string"]) },
+                options.onRead,
+                ["boolean", "number", "object", "string"],
+            );
 `,
         configField: `\n    flags?: (env: Record<string, unknown>) => import("${flagsSpecifier}").Provider;`,
         contextField: `\n                flags,`,
@@ -4431,7 +4460,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, ${hasShardSearchIndexes ? "backfillSearchIndexes, " : ""}buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${hasShardSearchIndexes ? "backfillSearchIndexes, " : ""}buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}markUnvouchableReads, ${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         // `TraceRefLike` rides along with the source imports: the poll override
         // takes the alarm's trace so its contained failures are correlated, and
         // `@lunora/do` projects it structurally rather than re-exporting the
@@ -4617,6 +4646,13 @@ ${vectorNamespaceField}
                 vectors = vectorsStub;
                 onWrite = undefined;
             }
+
+            // Vectorize lives outside this shard's SQLite, so a query whose result
+            // depends on a similarity search cannot be proven current on reconnect —
+            // an unrelated upsert (or a re-index) moves the matches without touching
+            // \`__cdc_log\`. Wrapped AFTER \`onWrite\` is built so the write-through
+            // vector-sync hook keeps calling the bare facade.
+            vectors = markUnvouchableReads(vectors, options.onRead, ["getByIds", "query"]);
 `
         : "";
 
@@ -5553,12 +5589,29 @@ ${
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
 ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}${agentsBuild}
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            // \`list\`/\`get\` are the two methods \`ctx.db.system.query("_scheduled_functions")\`
+            // reaches through, and pending jobs live in the SchedulerDO — nothing the
+            // CDC changelog records — so reading them must forfeit a delta resume.
+            // The scheduler's own \`runAfter\`/\`runAt\`/\`cancel\` are writes and stay unstamped.
+            const scheduler = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
             // \`storageStub\` fallback satisfies SystemReaderStorageLike structurally
             // (its \`list\`/\`getMetadata\` throw the "no storage configured" error).
-            const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
+            //
+            // Wrapped BEFORE the split so both consumers share one stamping facade.
+            // Only the methods that actually reach R2 are stamped: \`getUrl\` and
+            // \`getSignedUrl\` build a URL from the configured base (and an HMAC) and
+            // read nothing, and they are what handlers overwhelmingly call — stamping
+            // them would forfeit resumes for a dependency that cannot move the result.
+            // \`bucket\` IS stamped: it hands back a sub-facade this wrapper does not
+            // reach, so the selection is the last point at which the read can be seen.
+            const storage = markUnvouchableReads(asBucketStorage(config.storage?.(env) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
+                "bucket",
+                "download",
+                "getMetadata",
+                "list",
+            ]);
             // \`ctx.log\`: the DO base builds the attributed logger (structured
             // fields + \`.with(...)\` child + trace correlation) and routes each call
             // to the optional \`observability\` sink. It also buffers the line (studio
