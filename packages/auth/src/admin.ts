@@ -1107,7 +1107,26 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
                 const hashed = await context_.password.hash(newPassword);
 
-                await context_.internalAdapter.updatePassword(userId, hashed);
+                if (!(await context_.internalAdapter.findUserById(userId))) {
+                    throw new LunoraAuthAdminError("user not found", "USER_NOT_FOUND");
+                }
+
+                // `updatePassword` is an updateMany filtered on `providerId: "credential"`
+                // — zero matching rows is a silent no-op. A user created without a
+                // password (or via OAuth) has no credential account yet, so create it.
+                const accounts = await context_.internalAdapter.findAccounts(userId);
+
+                if (accounts.some((account) => account.providerId === "credential")) {
+                    await context_.internalAdapter.updatePassword(userId, hashed);
+                } else {
+                    await context_.internalAdapter.linkAccount({
+                        issuer: createLocalAccountIssuer("credential"),
+                        password: hashed,
+                        providerAccountId: userId,
+                        providerId: "credential",
+                        userId,
+                    });
+                }
             }),
 
         unbanUser: ({ userId }) =>

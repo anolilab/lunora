@@ -133,6 +133,49 @@ describe("createAuthAdmin", () => {
         await expect(adminApi.setUserPassword({ newPassword: "x", userId: user.id })).rejects.toThrow(/PASSWORD_TOO_SHORT|at least/iu);
     });
 
+    const credentialAccounts = (userId: string): Record<string, unknown>[] =>
+        (database["account"] ?? []).filter((row) => {
+            const account = row as { providerId?: string; userId?: string };
+
+            return account.userId === userId && account.providerId === "credential";
+        }) as Record<string, unknown>[];
+
+    it("creates the credential account when setting a password for a user without one", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "nopw@example.com", name: "NoPw" });
+
+        expect(credentialAccounts(user.id)).toHaveLength(0);
+
+        await adminApi.setUserPassword({ newPassword: STRONG_PASSWORD, userId: user.id });
+
+        const accounts = credentialAccounts(user.id);
+
+        expect(accounts).toHaveLength(1);
+        expect(typeof accounts[0]?.["password"]).toBe("string");
+    });
+
+    it("rejects setting a password for an unknown user", async () => {
+        expect.assertions(1);
+
+        await expect(adminApi.setUserPassword({ newPassword: STRONG_PASSWORD, userId: "no-such-user" })).rejects.toThrow(/USER_NOT_FOUND|not found/iu);
+    });
+
+    it("updates the existing credential account without adding a second one", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "haspw@example.com", name: "HasPw", password: STRONG_PASSWORD });
+        const before = credentialAccounts(user.id)[0]?.["password"];
+
+        await adminApi.setUserPassword({ newPassword: "another sound password", userId: user.id });
+
+        const accounts = credentialAccounts(user.id);
+
+        expect(accounts).toHaveLength(1);
+        expect(typeof accounts[0]?.["password"]).toBe("string");
+        expect(accounts[0]?.["password"]).not.toBe(before);
+    });
+
     it("mints an impersonation token for a user", async () => {
         expect.assertions(2);
 
