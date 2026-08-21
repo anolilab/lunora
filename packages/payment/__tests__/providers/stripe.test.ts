@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { money } from "../../src/money";
 import type { StripeClientLike } from "../../src/providers/stripe";
 import { createStripeAdapter } from "../../src/providers/stripe";
+import { MemoryPaymentStore } from "../../src/store";
+import applyWebhookAction from "../../src/sync";
 
 interface RecordedCall {
     args: unknown[];
@@ -257,6 +259,63 @@ describe("stripe adapter", () => {
 
         // An unpaid subscription checkout must not assert `subscription.active`.
         expect(action.type).toBe("subscription.updated");
+    });
+
+    it("keys a payment-mode completed session on the payment intent id", async () => {
+        expect.assertions(2);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const event = {
+            data: { object: { amount_total: 1000, currency: "usd", customer: "cus_1", id: "cs_1", mode: "payment", payment_intent: "pi_1" } },
+            id: "evt_cs_paid",
+            type: "checkout.session.completed",
+        };
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
+
+        expect(action.type).toBe("payment.captured");
+        expect(action.sessionId).toBe("pi_1");
+    });
+
+    it("defers a completed session without a payment_intent to payment_intent.succeeded (regression)", async () => {
+        expect.assertions(4);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        // Async payment methods (SEPA, ACH) can complete the session before the intent id is
+        // attached — capturing under the cs_… id would double-count once pi_… lands.
+        const completed = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount_total: 1000, currency: "usd", customer: "cus_1", id: "cs_1", mode: "payment" } },
+                id: "evt_cs_async",
+                type: "checkout.session.completed",
+            }),
+        });
+
+        expect(completed.type).toBe("unhandled");
+
+        const succeeded = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount_received: 1000, currency: "usd", customer: "cus_1", id: "pi_1", metadata: { referenceId: "user_1" } } },
+                id: "evt_pi_async",
+                type: "payment_intent.succeeded",
+            }),
+        });
+
+        expect(succeeded.sessionId).toBe("pi_1");
+
+        // Apply both: exactly one captured row, keyed on the pi_… id.
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, completed);
+        await applyWebhookAction(store, succeeded);
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.state).toBe("captured");
+        await expect(store.getPaymentSession("stripe", "cs_1")).resolves.toBeUndefined();
     });
 
     it("rejects an unsigned webhook", async () => {

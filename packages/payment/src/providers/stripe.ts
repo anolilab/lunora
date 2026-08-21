@@ -199,6 +199,16 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 };
             }
 
+            const paymentIntentId = readString(object, "payment_intent");
+
+            // Async payment methods can complete the session before a payment_intent id is
+            // attached. Capturing under the cs_… id here and the pi_… id on the later
+            // payment_intent.succeeded would create two rows for one payment — defer to
+            // payment_intent.succeeded, the authoritative capture, instead.
+            if (paymentIntentId === undefined) {
+                return { ...base, type: "unhandled" };
+            }
+
             const amountTotal = readNumber(object, "amount_total");
 
             return {
@@ -206,7 +216,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 amount: amountTotal === undefined ? undefined : money(BigInt(Math.round(amountTotal)), currency),
                 customerId: readString(object, "customer"),
                 referenceId: readReferenceId(object),
-                sessionId: readString(object, "payment_intent") ?? readString(object, "id"),
+                sessionId: paymentIntentId,
                 type: "payment.captured",
             };
         }
