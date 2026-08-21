@@ -378,6 +378,20 @@ const MAX_BAN_SECONDS = 100 * 365 * 24 * 60 * 60;
 const INVITATION_TTL_MS = 48 * 60 * 60 * 1000;
 
 /**
+ * Plugin tables `removeUser` unwinds, each gated on the model actually being
+ * installed. `invitation` is keyed on `inviterId` — invitations the user *sent*;
+ * ones addressed **to** them are keyed by email, not user, and deliberately stay.
+ * Audit log rows are absent by design too (forensics outlive the account).
+ */
+const USER_CASCADE = [
+    { field: "userId", model: "member" },
+    { field: "userId", model: "teamMember" },
+    { field: "userId", model: "passkey" },
+    { field: "userId", model: "twoFactor" },
+    { field: "inviterId", model: "invitation" },
+] as const;
+
+/**
  * Columns never handed back to a browser across any model: bearer credentials,
  * password hashes, OAuth tokens, and 2FA secrets. A denylist (not an allowlist)
  * so app-defined `additionalFields` still pass through; the names cover the
@@ -1062,26 +1076,22 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
             }),
 
         // `internalAdapter.deleteUser` removes only `session`/`account`/`user` rows.
-        // FK cascade may be off (D1), so unwind the user-keyed plugin tables
-        // explicitly — orphaned `twoFactor` rows would retain the TOTP secret and
-        // backup codes of a deleted account. Audit log rows survive by design
-        // (forensics), as do invitations addressed to the user's email (email-keyed).
+        // FK cascade may be off (D1), so unwind {@link USER_CASCADE} explicitly —
+        // orphaned `twoFactor` rows would retain the TOTP secret and backup codes of
+        // an account that no longer exists.
+        //
+        // The cascade is several non-atomic writes ending in `deleteUser`, so a
+        // mid-failure leaves a partially-cascaded user; every step is idempotent, so
+        // re-running `removeUser` is the recovery.
         removeUser: ({ userId }) =>
             withContext(async (context_) => {
                 const tables = getAuthTables(context_.options);
-                const userKeyedModels = ["member", "teamMember", "passkey", "twoFactor"] as const;
 
-                for (const model of userKeyedModels) {
-                    if (tables[model]) {
-                        // eslint-disable-next-line no-await-in-loop -- sequential per-table cascade; table count is small and fixed
-                        await context_.adapter.deleteMany({ model, where: [{ field: "userId", value: userId }] });
-                    }
-                }
-
-                if (tables["invitation"]) {
-                    // Invitations the user *sent*; ones addressed to them are email-keyed and stay.
-                    await context_.adapter.deleteMany({ model: "invitation", where: [{ field: "inviterId", value: userId }] });
-                }
+                await Promise.all(
+                    USER_CASCADE.filter(({ model }) => tables[model]).map(({ field, model }) =>
+                        context_.adapter.deleteMany({ model, where: [{ field, value: userId }] }),
+                    ),
+                );
 
                 await context_.internalAdapter.deleteUserSessions(userId);
                 await context_.internalAdapter.deleteUser(userId);
