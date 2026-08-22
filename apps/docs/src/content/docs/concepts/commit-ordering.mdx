@@ -18,7 +18,7 @@ made?" and quietly wrong for anything that pages through changes:
 
 ```ts
 // A changefeed with a hole in it.
-const changed = await ctx.db.orders.findMany({
+const { page: changed } = await ctx.db.orders.findMany({
     where: { _creationTime: { gt: cursor } },
     orderBy: [{ _creationTime: "asc" }],
 });
@@ -92,7 +92,7 @@ cursor, and a **bounded page can end in the middle of a group**:
 
 ```ts
 // Rows A, B, C all committed together with _commitSeq = 5.
-const page = await ctx.db.orders.findMany({
+const { page } = await ctx.db.orders.findMany({
     limit: 2, // ← returns A and B
     where: { _commitSeq: { gt: cursor } },
     orderBy: [{ _commitSeq: "asc" }],
@@ -112,7 +112,7 @@ The rule in practice:
   this page size. Raise the limit — one mutation's rows have to fit in a page.
 
 ```ts
-const rows = await ctx.db.orders.findMany({
+const { page: rows } = await ctx.db.orders.findMany({
     limit: PAGE,
     where: { _commitSeq: { gt: cursor } },
     orderBy: [{ _commitSeq: "asc" }],
@@ -134,7 +134,7 @@ If you would rather not think about groups, carry `(_commitSeq, _id)` as the
 cursor and let the tie-breaker do the work:
 
 ```ts
-const rows = await ctx.db.orders.findMany({
+const { page: rows } = await ctx.db.orders.findMany({
     limit: PAGE,
     orderBy: [{ _commitSeq: "asc" }, { _id: "asc" }],
     where: {
