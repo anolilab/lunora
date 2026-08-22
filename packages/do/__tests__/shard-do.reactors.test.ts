@@ -225,6 +225,31 @@ describe("shardDO onQueryChange dispatch", () => {
         expect(shard.errors).toStrictEqual(["reactors:dispatch"]);
     });
 
+    it("contains a failure in the bookkeeping write itself", async () => {
+        expect.assertions(3);
+
+        const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        shard.reactorPaths = ["reactors:broken", "reactors:healthy"];
+        shard.throwOnRun = true;
+
+        // A reactor that throws because storage is unhealthy is exactly the
+        // condition that also breaks the counter write recording the failure.
+        // Drop the state table so `writeReactorState` throws inside the `catch`.
+        harness.sql.exec("DROP TABLE __reactor_state");
+
+        // The drain must still finish: unguarded, the second throw would escape
+        // `dispatchReactors`, abort `drainSubscriptionRefreshes` mid-loop, and
+        // strand every table merged into the pending set after it.
+        await expect(shard.writeRpc()).resolves.toBeDefined();
+
+        // The reactor's OWN error is still reported — the bookkeeping failure must
+        // not swallow the reason it failed.
+        expect(shard.errors).toContain("reactors:broken");
+        // And the sibling still ran.
+        expect(shard.runs.map((run) => run.path)).toStrictEqual(["reactors:broken", "reactors:healthy"]);
+    });
+
     it("keeps reactors independent — one failing does not skip the rest", async () => {
         expect.assertions(2);
 

@@ -106,9 +106,14 @@ const onDisconnect = (handler: LifecycleHandler): RegisteredLifecycleHook => wra
  * `.rls("required")`, exactly as for a cron tick or a migration. RLS scopes rows
  * to a user and an init hook has none, so `ctx.db` here sees every row: scope
  * your reads yourself. (`onConnect`/`onDisconnect` are the opposite case — they
- * carry the socket's verified identity and stay RLS-guarded.) A throw is logged and does NOT fail the dispatch that woke
- * the shard: an init hook that cannot rebuild presence must not take the whole
- * shard down with it, and the memory table is simply left empty.
+ * carry the socket's verified identity and stay RLS-guarded.)
+ *
+ * A throw is logged and does NOT fail the dispatch that woke the shard — an init
+ * hook that cannot rebuild presence must not take the whole shard down with it.
+ * The table is then cleared but not refilled, so reads see nothing. A failure
+ * EARLIER, before the framework's clear runs, instead leaves the previous
+ * instance's rows in place: a memory table's rows live in SQLite until they are
+ * deleted, so an eviction on its own does not remove them.
  */
 const onShardInit = (handler: ShardInitHandler): RegisteredLifecycleHook => wrapLifecycle("init", handler);
 

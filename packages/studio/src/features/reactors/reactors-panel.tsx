@@ -22,8 +22,18 @@ const STATE_VARIANT: Record<ReactorMetadata["state"], "default" | "destructive" 
     idle: "secondary",
 };
 
-/** Render an epoch-ms instant as a locale time, or an em dash when the reactor has never dispatched. */
-const formatLastRan = (lastRanAt: number | undefined): string => (lastRanAt === undefined ? "—" : new Date(lastRanAt).toLocaleString());
+/**
+ * Render an epoch-ms instant, or an em dash when the reactor has never
+ * dispatched.
+ *
+ * Explicit UTC rather than `toLocaleString()`: that formats with the renderer's
+ * locale and timezone, so a server render and the browser's hydration disagree.
+ * UTC is also the better answer for this panel — a reactor's timing is compared
+ * against shard logs and CI output, which are UTC, and an operator reading it
+ * alongside a colleague in another timezone gets the same string.
+ */
+const formatLastRan = (lastRanAt: number | undefined): string =>
+    lastRanAt === undefined ? "—" : `${new Date(lastRanAt).toISOString().slice(0, 19).replace("T", " ")} UTC`;
 
 /**
  * Ratio of suppressed dispatches to total ones, as a percentage — the number

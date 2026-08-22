@@ -267,6 +267,25 @@ interface CtxDbOptions {
     idGenerator?: IdGenerator;
 
     /**
+     * Does the host currently have an atomic write boundary open?
+     *
+     * Read only by `_commitSeq` allocation, and it is what keeps that sequence
+     * honest. Inside a transaction every write commits together, so ONE sequence
+     * describes the whole unit and the rows compare equal. Outside one — an
+     * action, which the generated dispatch deliberately does not wrap because its
+     * external I/O cannot be rolled back — each write commits on its own, so each
+     * needs its own sequence. Sharing one across independently-committed writes
+     * is the failure this exists to prevent: a consumer that checkpoints after
+     * seeing the first write would never be offered the rest, since they carry a
+     * sequence it has already passed.
+     *
+     * Absent ⇒ treated as NOT in a transaction, i.e. a fresh sequence per write.
+     * That is the conservative direction: more sequences than strictly needed
+     * costs a consumer nothing, while too few silently drops rows.
+     */
+    inTransaction?: () => boolean;
+
+    /**
      * Upper bound on the number of join keys a single relation-crossing `where`
      * predicate may pull back via semijoin pre-resolution before failing closed
      * (`DEFAULT_MAX_RELATION_KEYS` when undefined). A co-located node escapes the
@@ -1895,6 +1914,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     let commitSeq: number | undefined;
 
     /**
+     * Is an atomic write boundary open right now? Absent option ⇒ `false`, so a
+     * caller that does not report its transaction state gets a sequence per
+     * write rather than one shared across writes that may not commit together.
+     */
+    const inTransaction = (): boolean => options.inTransaction?.() === true;
+
+    /**
      * The `_commitSeq` entry to spread into a row image about to be written —
      * empty for a table that did not declare `.commitOrdered()`.
      *
@@ -1909,16 +1935,28 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * rather than carried forward.
      *
      * Allocating this early means a `before` trigger that aborts the write has
-     * already burned a sequence — harmless, because the allocation and the abort
-     * sit inside the same `state.storage.transaction(...)` and the counter row
-     * rolls back with everything else.
+     * already burned a sequence — harmless, because inside a transaction the
+     * allocation and the abort share `state.storage.transaction(...)` and the
+     * counter row rolls back with everything else.
+     *
+     * **The memo is transaction-scoped, not writer-scoped.** Reusing it across
+     * writes is only sound while those writes commit together. A mutation is
+     * wrapped in one storage transaction, so every row it writes shares a
+     * sequence and compares equal — the property a consumer relies on to process
+     * a mutation as a unit. An ACTION is deliberately not wrapped (its external
+     * I/O cannot be rolled back), so its writes commit independently; reusing one
+     * sequence there would let a consumer checkpoint after the first write and
+     * never be offered the rest, because they carry a sequence it has already
+     * passed. Outside a transaction each write therefore allocates its own.
      */
     const commitSeqFields = (tableName: string): Record<string, number> => {
         if (schema.tables[tableName]?.commitOrderedMode !== true) {
             return {};
         }
 
-        commitSeq ??= allocateCommitSeq(sql);
+        if (commitSeq === undefined || !inTransaction()) {
+            commitSeq = allocateCommitSeq(sql);
+        }
 
         return { [COMMIT_SEQ_FIELD]: commitSeq };
     };

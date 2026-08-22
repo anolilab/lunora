@@ -1805,6 +1805,12 @@ interface ShardInitEvent {
 }
 ```
 
+### `ShardInitHandler` (type)
+
+```ts
+type ShardInitHandler = (context: MutationCtx, event: ShardInitEvent) => Promise<void> | void;
+```
+
 ### `ShardMode` (type)
 
 ```ts

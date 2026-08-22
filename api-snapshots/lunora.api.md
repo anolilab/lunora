@@ -677,6 +677,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ShardInitHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShardMode` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5220,6 +5224,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ShardInitEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ShardInitHandler` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

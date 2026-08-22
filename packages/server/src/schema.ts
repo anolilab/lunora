@@ -123,6 +123,12 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * `_creationTime` can skip a row permanently. Paging on `_commitSeq`
      * (`where: { _commitSeq: { gt: cursor } }, orderBy: ["_commitSeq"]`) cannot.
      *
+     * It orders COMMITS, not rows: one mutation's rows share a value. A bounded
+     * page can therefore end mid-group, so a consumer must checkpoint at a
+     * sequence it has seen the whole of, never at the last row of a full page.
+     * An action's writes are the exception to the grouping — they commit
+     * independently, so each gets its own sequence.
+     *
      * Ordered, not contiguous — read a gap as "nothing to see", never as loss.
      * Per-shard, not global: two shards allocate independently, so a cursor is
      * only meaningful against the shard it came from. Rejected on `.global()`
@@ -935,6 +941,15 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
 const SYSTEM_INDEX_FIELDS = ["_commitSeq", "_creationTime", "_id"] as const;
 
 /**
+ * The `.commitOrdered()` system field. Typed off {@link SYSTEM_INDEX_FIELDS}
+ * rather than spelled independently, so the index guard below and the
+ * allow-list cannot drift apart — renaming the column in one place stops
+ * compiling in the other. (The annotation is explicit, not inferred, because
+ * `isolatedDeclarations` cannot resolve a cross-declaration reference.)
+ */
+const COMMIT_SEQ_FIELD: (typeof SYSTEM_INDEX_FIELDS)[0] = "_commitSeq";
+
+/**
  * Runtime lookup form of {@link SYSTEM_INDEX_FIELDS}. Typed `Set<string>`
  * (rather than inferring the literal-union element type) because it is
  * probed with an arbitrary user-declared `IndexDefinition["fields"]` entry,
@@ -1167,19 +1182,14 @@ const indexFieldsFromSchema = (schema: Schema): IndexFieldsByTable => {
 };
 
 /**
- * Reject `.commitOrdered()` on a `.global()` table.
+ * Reject `.memory()` alongside anything the per-restart `DELETE FROM` cannot
+ * keep consistent — another storage mode whose rows this shard does not own,
+ * or a companion that lives outside the base table and would be left
+ * describing rows that no longer exist.
  *
- * `_commitSeq` is allocated from the shard's `__commit_seq` counter inside the
- * same `state.storage.transaction(...)` that writes the row — that shared
- * boundary is the whole reason the value orders commits. A `.global()` table
- * lives in D1 (or Hyperdrive), written through a different connection with no
- * shard-local transaction to allocate inside, so the stamp would be a number
- * with no ordering guarantee behind it. Failing here beats shipping a field
- * whose contract silently does not hold.
- *
- * Enforced at `defineSchema` rather than in the builder because the chain order
- * is arbitrary — `.global().commitOrdered()` and `.commitOrdered().global()`
- * must both be caught, and only the assembled table knows both facts.
+ * Enforced at `defineSchema` rather than in the builder because the chain
+ * order is arbitrary — `.memory().global()` and `.global().memory()` must
+ * both be caught, and only the assembled table knows both facts.
  */
 const validateMemoryTables = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
@@ -1221,13 +1231,50 @@ const validateMemoryTables = (tables: Record<string, TableDefinition>): void => 
     }
 };
 
+/**
+ * Reject `.commitOrdered()` on a `.global()` table.
+ *
+ * `_commitSeq` is allocated from the shard's `__commit_seq` counter inside the
+ * same `state.storage.transaction(...)` that writes the row — that shared
+ * boundary is the whole reason the value orders commits. A `.global()` table
+ * lives in D1 (or Hyperdrive), written through a different connection with no
+ * shard-local transaction to allocate inside, so the stamp would be a number
+ * with no ordering guarantee behind it. Failing here beats shipping a field
+ * whose contract silently does not hold.
+ *
+ * Also rejects an index over `_commitSeq` on a table that never opted in — see
+ * the guard for why that index would be dead rather than merely useless.
+ *
+ * Enforced at `defineSchema` rather than in the builder because the chain order
+ * is arbitrary — `.global().commitOrdered()` and `.commitOrdered().global()`
+ * must both be caught, and only the assembled table knows both facts.
+ */
 const validateCommitOrdered = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
-        if (table.commitOrderedMode && table.shardMode.kind === "global") {
-            throw new LunoraError(
-                "INTERNAL",
-                `defineSchema: table "${tableName}" is both .global() and .commitOrdered(). \`_commitSeq\` is allocated inside the shard's write transaction, which a global (D1/Hyperdrive) table does not share — so the stamp would carry no commit-ordering guarantee. Drop one of the two.`,
-            );
+        if (table.commitOrderedMode) {
+            if (table.shardMode.kind === "global") {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineSchema: table "${tableName}" is both .global() and .commitOrdered(). \`_commitSeq\` is allocated inside the shard's write transaction, which a global (D1/Hyperdrive) table does not share — so the stamp would carry no commit-ordering guarantee. Drop one of the two.`,
+                );
+            }
+
+            continue;
+        }
+
+        // `_commitSeq` is in `SYSTEM_INDEX_FIELDS`, so `assertFieldInShape` accepts
+        // it on any table — but unlike `_id` and `_creationTime`, which every row
+        // carries, it is only stamped by the write path on a `.commitOrdered()`
+        // table. An index over it here would cover a field no row has: it builds,
+        // it validates, and it matches nothing. A dead index that reads as a
+        // working one is worse than a rejected schema.
+        for (const index of table.indexes) {
+            if (index.fields.includes(COMMIT_SEQ_FIELD)) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineSchema: table "${tableName}" index "${index.name}" names "${COMMIT_SEQ_FIELD}", but the table is not .commitOrdered() — no row carries that field, so the index would never match. Add .commitOrdered(), or drop the column from the index.`,
+                );
+            }
         }
     }
 };

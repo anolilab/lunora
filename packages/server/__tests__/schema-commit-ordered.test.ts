@@ -36,6 +36,54 @@ describe("defineTable().commitOrdered()", () => {
         expect(() => defineSchema({ feed: defineTable({ title: v.string() }).commitOrdered().global() })).toThrow(/both \.global\(\) and \.commitOrdered\(\)/u);
     });
 
+    it("rejects an index over _commitSeq on a table that never opted in", () => {
+        expect.assertions(1);
+
+        // `_commitSeq` is in `SYSTEM_INDEX_FIELDS`, so the shape check accepts it
+        // anywhere — but unlike `_id`/`_creationTime`, only a `.commitOrdered()`
+        // table's rows carry it. Left unguarded this index builds, validates, and
+        // matches nothing: a dead index that reads as a working one.
+        expect(() =>
+            defineSchema({
+                feed: defineTable({ title: v.string() }).index("by_commit", ["_commitSeq"]),
+            }),
+        ).toThrow(/is not \.commitOrdered\(\)/u);
+    });
+
+    it("rejects _commitSeq as part of a compound index on a table that never opted in", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                feed: defineTable({ deskId: v.string(), title: v.string() }).index("by_desk_commit", ["deskId", "_commitSeq"]),
+            }),
+        ).toThrow(/is not \.commitOrdered\(\)/u);
+    });
+
+    it("allows an index over _commitSeq once the table opts in", () => {
+        expect.assertions(1);
+
+        // The whole point of putting it in `SYSTEM_INDEX_FIELDS`: paging a
+        // changefeed wants the index.
+        expect(() =>
+            defineSchema({
+                feed: defineTable({ title: v.string() }).commitOrdered().index("by_commit", ["_commitSeq"]),
+            }),
+        ).not.toThrow();
+    });
+
+    it("still allows _creationTime and _id indexes on any table", () => {
+        expect.assertions(1);
+
+        // Those two are on every row, so they carry no such precondition — the
+        // guard must not have widened to all system fields.
+        expect(() =>
+            defineSchema({
+                feed: defineTable({ title: v.string() }).index("by_created", ["_creationTime"]).index("by_id", ["_id"]),
+            }),
+        ).not.toThrow();
+    });
+
     it("allows .commitOrdered() alongside .shardBy() and .softDelete()", () => {
         expect.assertions(1);
 

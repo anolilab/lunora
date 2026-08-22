@@ -1969,7 +1969,20 @@ abstract class ShardDO {
         const sqlHandle = this.sql as SqlExec;
 
         for (const path of paths) {
-            const state = readReactorState(sqlHandle, path);
+            // Reading the baseline is itself a SQL call, and the storage failure
+            // that breaks a reactor breaks this too. Unguarded it would abort the
+            // whole drain — stranding every table merged into the pending set and
+            // every live subscriber waiting on it — for one reactor's bad read.
+            // An unreadable baseline degrades to `undefined`, which
+            // `reactorNeedsRun` treats as "must run": the same direction every
+            // other unknown in this feature takes.
+            let state: ReactorState | undefined;
+
+            try {
+                state = readReactorState(sqlHandle, path);
+            } catch (error: unknown) {
+                this.recordReactorError(path, error);
+            }
 
             if (!reactorNeedsRun(state, changed)) {
                 continue;
@@ -2242,6 +2255,26 @@ abstract class ShardDO {
      * that fits: atomic, rolled back automatically when the closure throws, and
      * isolated from concurrent dispatch.
      */
+
+    /**
+     * Is an atomic write boundary open on this instance right now?
+     *
+     * Exposed for the generated `ctx.db`, whose `_commitSeq` allocation is only
+     * allowed to reuse one sequence across writes that commit together. A
+     * mutation dispatch runs inside {@link ShardDO.runInTransaction}; an action
+     * deliberately does not (its external I/O cannot be rolled back), so its
+     * writes commit independently and each needs its own sequence.
+     *
+     * A live predicate rather than a flag threaded at ctx-construction time: the
+     * boundary opens AFTER `buildCtx` has already run, and a flag would have to be
+     * passed correctly at every one of the many `buildCtx` call sites — a
+     * requirement that fails silently when missed.
+     * @returns `true` while a storage transaction is open.
+     */
+    protected isInTransaction(): boolean {
+        return this.transactionDepth > 0;
+    }
+
     protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
         if (this.transactionDepth > 0) {
             throw new LunoraError("NESTED_TRANSACTION", "nested transactions are not supported in SQLite-in-DO", { status: 500 });
@@ -3736,11 +3769,21 @@ abstract class ShardDO {
      * each starting their own. The field lives on the instance, so it is absent
      * exactly when the heap was dropped — the same signal `ensureMigrated` uses.
      *
-     * A failure is absorbed here, deliberately. An init hook that cannot rebuild
-     * presence must not take down the request that woke the shard; the memory
-     * table is left as it is (empty) and the error is recorded. Absorbing also
+     * A failure is absorbed here, deliberately: an init hook that cannot rebuild
+     * presence must not take down the request that woke the shard. Absorbing also
      * keeps the memo from caching a rejected promise, which would turn one bad
      * init into a permanently broken instance.
+     *
+     * What the shard is left holding depends on WHERE it failed, and neither state
+     * is "empty" by default — a memory table's rows sit in SQLite until
+     * `clearMemoryTables` deletes them, so an eviction alone does not remove them:
+     *
+     * - **After the clear** (a hook threw) — the tables are cleared but not
+     * refilled, so reads see nothing. The safe direction.
+     * - **Before or during the clear** (`ensureMigrated` or `clearMemoryTables`
+     * itself threw) — the PREVIOUS instance's rows are still there, so reads see
+     * stale presence rather than none. The worse of the two, and the reason the
+     * error is recorded rather than swallowed.
      */
     protected async ensureShardInit(): Promise<void> {
         this.shardInitOnce ??= this.runShardInit().catch((error: unknown) => {
@@ -6790,16 +6833,32 @@ abstract class ShardDO {
                 });
             }
         } catch (error: unknown) {
+            // Report FIRST. The counter write below goes through `runDrizzle` and
+            // throws on a SQL failure — and a reactor that threw because storage is
+            // unhealthy is exactly the condition that makes this bookkeeping write
+            // fail too. Ordered the other way, that second throw would swallow the
+            // reason the reactor failed, escape `dispatchReactors`, and abort the
+            // whole refresh drain mid-loop.
+            this.recordReactorError(path, error);
+
             // Baseline deliberately NOT advanced — a reactor that threw has not
             // observed this result, so the next flush must offer it again — but the
             // counter and message ARE recorded, which is the whole reason
             // `writeReactorState` takes an outcome rather than a row.
-            writeReactorState(sqlHandle, path, {
-                error: error instanceof Error ? error.message : String(error),
-                now: Date.now(),
-                result: "error",
-            });
-            this.recordReactorError(path, error);
+            //
+            // Best-effort, like every other durable bookkeeping write on a
+            // background path here (`persistIdempotentResult`, `saveShapePokeCursor`,
+            // `saveGlobalSnapshot`): losing a counter is not worth failing the drain
+            // that other reactors and every live subscriber are waiting on.
+            try {
+                writeReactorState(sqlHandle, path, {
+                    error: error instanceof Error ? error.message : String(error),
+                    now: Date.now(),
+                    result: "error",
+                });
+            } catch (writeError: unknown) {
+                this.recordReactorError(path, writeError);
+            }
         } finally {
             // A reactor's handler writes through `ctx.db`, which only STAGES the
             // touched tables (`recordChangedTable`) — the request path is what

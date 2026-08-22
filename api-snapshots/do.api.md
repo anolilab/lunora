@@ -295,6 +295,7 @@ abstract class ShardDO {
     protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown>;
     protected get sql(): unknown;
     protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>>;
+    protected isInTransaction(): boolean;
     protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
     protected getInboundBookmark(): string | undefined;
     protected setOutboundBookmark(bookmark: string | undefined): void;

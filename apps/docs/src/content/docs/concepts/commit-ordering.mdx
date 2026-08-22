@@ -76,6 +76,63 @@ export const changesSince = internalQuery({
 Store the highest `_commitSeq` you have processed; ask for everything above it.
 Nothing can commit into the gap behind you.
 
+An action is the exception to "once per mutation". Actions are not wrapped in a
+storage transaction — their external I/O cannot be rolled back — so each write
+an action makes commits on its own and gets its own sequence. That is the
+correct behaviour for the same reason: two writes that do not commit together
+must not share a sequence, or a consumer could checkpoint after the first and
+never be offered the second.
+
+### Checkpoint on a sequence boundary, not a row
+
+`_commitSeq` orders **commits**, not rows, and a mutation that writes several
+rows gives all of them the same value. That is usually what you want — you can
+process a mutation's writes as a unit — but it means the sequence is not a row
+cursor, and a **bounded page can end in the middle of a group**:
+
+```ts
+// Rows A, B, C all committed together with _commitSeq = 5.
+const page = await ctx.db.orders.findMany({
+    limit: 2, // ← returns A and B
+    where: { _commitSeq: { gt: cursor } },
+    orderBy: [{ _commitSeq: "asc" }],
+});
+// Checkpointing at 5 here loses C forever: the next query asks for `> 5`.
+```
+
+<Callout type="warn">Never checkpoint at the sequence of the **last row on a full page**. Advance only to a sequence you have seen the whole of.</Callout>
+
+The rule in practice:
+
+- **Short page** (fewer rows than `limit`): you have drained the feed. Checkpoint
+  at the last row's `_commitSeq`.
+- **Full page**: drop the trailing partial group. Process rows up to the last
+  sequence _change_ in the page and checkpoint there.
+- **Every row on a full page shares one sequence**: you cannot make progress at
+  this page size. Raise the limit — one mutation's rows have to fit in a page.
+
+```ts
+const rows = await ctx.db.orders.findMany({
+    limit: PAGE,
+    where: { _commitSeq: { gt: cursor } },
+    orderBy: [{ _commitSeq: "asc" }],
+});
+
+const last = rows.at(-1);
+const complete = rows.length < PAGE ? rows : rows.filter((row) => row._commitSeq !== last?._commitSeq);
+
+if (rows.length === PAGE && complete.length === 0) {
+    throw new Error("one commit exceeds the page size — raise PAGE");
+}
+
+// Process `complete`, then checkpoint at its last `_commitSeq`.
+```
+
+A composite `(_commitSeq, _id)` keyset cursor would also solve this, but the
+`where` compiler has no `OR`, so the two-part predicate it needs
+(`seq > s OR (seq = s AND id > lastId)`) cannot be expressed in a single query
+today. Group-boundary checkpointing is the supported answer.
+
 `_commitSeq` lives in the stored document rather than a dedicated column, so it
 is orderable, filterable, and indexable like any other field — and adding
 `.commitOrdered()` to a table that already holds data needs no migration.

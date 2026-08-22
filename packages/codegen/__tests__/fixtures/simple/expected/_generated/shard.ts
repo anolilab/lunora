@@ -635,6 +635,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -678,6 +680,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -732,6 +736,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -759,6 +765,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -820,6 +828,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -848,6 +858,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -879,6 +891,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -957,6 +971,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // stay guarded like any request.
                 enforceRls: options.trusted !== true,
                 headroom: options.headroom ?? this.transactionHeadroom(),
+                // A live predicate, not a flag: the transaction opens AFTER this ctx
+                // is built (a mutation dispatch wraps the handler), so only a call-time
+                // read reports the truth. `_commitSeq` reuses one sequence across
+                // writes only while they commit together — an action is not wrapped, so
+                // each of its writes allocates its own.
+                inTransaction: () => this.isInTransaction(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
                 onReadRange: options.onReadRange,

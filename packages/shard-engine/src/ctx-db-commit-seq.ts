@@ -10,13 +10,26 @@
  * which it can skip a row forever: the row's timestamp is below a cursor the
  * consumer has already passed.
  *
- * `_commitSeq` closes that window. It is a per-shard integer, allocated ONCE
- * per mutation (every row that mutation writes shares the value) and strictly
- * increasing in commit order, because the allocation happens inside the same
- * `state.storage.transaction(...)` boundary as the writes it stamps and a
- * Durable Object executes one event at a time. A `SELECT … WHERE _commitSeq >
- * cursor ORDER BY _commitSeq` is therefore a complete, gap-free changefeed
- * over a commit-ordered table.
+ * `_commitSeq` closes that window. It is a per-shard integer, allocated ONCE per
+ * atomic write boundary (every row a mutation writes shares the value) and
+ * strictly increasing in commit order, because the allocation happens inside the
+ * same `state.storage.transaction(...)` as the writes it stamps and a Durable
+ * Object executes one event at a time. A `SELECT … WHERE _commitSeq > cursor
+ * ORDER BY _commitSeq` is therefore a complete changefeed over the table.
+ *
+ * "Per atomic boundary" rather than "per dispatch" is load-bearing. An action is
+ * NOT wrapped in a transaction — its external I/O cannot be rolled back — so its
+ * writes commit independently and each allocates its own sequence. Sharing one
+ * across independently-committed writes would let a consumer checkpoint after the
+ * first and never be offered the rest, since they carry a sequence it has already
+ * passed. `createShardCtxDb` decides this per write via its `inTransaction`
+ * predicate, which reads the host's live transaction state rather than a flag
+ * threaded at construction time.
+ *
+ * Because the sequence groups a commit rather than a row, a BOUNDED page can end
+ * in the middle of a group — so a consumer must advance its cursor only to a
+ * sequence it has seen the whole of. See the "Checkpoint on a sequence boundary"
+ * section of the commit-ordering doc.
  *
  * Two properties callers should NOT read into it:
  *
@@ -43,7 +56,7 @@
  * never touches the counter.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-commit-seq" mirrors its parent "ctx-db.ts" (the established public module name). */
+/* eslint-disable unicorn/prevent-abbreviations -- silences the FILENAME rule only (it wants "context-database-commit-seq.ts"); no identifier in this file trips it. "ctx-db-commit-seq" mirrors its parent "ctx-db.ts", the established public module name that ten sibling `ctx-db-*` modules already follow. */
 
 import { sql as dsql } from "drizzle-orm";
 

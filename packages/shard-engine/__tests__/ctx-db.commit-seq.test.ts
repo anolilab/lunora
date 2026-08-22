@@ -34,8 +34,19 @@ const schema: SchemaLike = {
 
 let harness: ReturnType<typeof createSqliteExec>;
 
-/** A fresh writer — i.e. a fresh mutation, with its own `_commitSeq` allocation. */
-const mutation = (): DatabaseWriterLike => createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+/**
+ * A fresh writer standing in for one MUTATION: `inTransaction` reports `true`,
+ * as the DO does while a mutation dispatch is inside its storage transaction, so
+ * every write shares one sequence.
+ */
+const mutation = (): DatabaseWriterLike => createShardContextDatabase({ clock: () => 1_700_000_000_000, inTransaction: () => true, schema, sql: harness.sql });
+
+/**
+ * A fresh writer standing in for one ACTION. An action dispatch is deliberately
+ * NOT wrapped in a transaction (its external I/O cannot be rolled back), so each
+ * write commits on its own and must get its own sequence.
+ */
+const action = (): DatabaseWriterLike => createShardContextDatabase({ clock: () => 1_700_000_000_000, inTransaction: () => false, schema, sql: harness.sql });
 
 const tableExists = (name: string): boolean => harness.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name).toArray().length > 0;
 
@@ -94,6 +105,37 @@ describe("ctx-db commit sequence", () => {
         expect(first).toBe(1);
         await expect(seqOf(writer, "events", "e2")).resolves.toBe(first);
         await expect(seqOf(writer, "events", "e3")).resolves.toBe(first);
+    });
+
+    it("gives each write in one action its own sequence", async () => {
+        expect.assertions(3);
+
+        const writer = action();
+
+        await writer.insert("events", { _id: "e1", kind: "a" }, { allowExplicitId: true });
+        await writer.insert("events", { _id: "e2", kind: "b" }, { allowExplicitId: true });
+
+        // The failure this prevents: an action's writes commit independently, so
+        // sharing one sequence would let a consumer checkpoint after seeing `e1`
+        // and never be offered `e2`, which carries a sequence it has passed.
+        await expect(seqOf(writer, "events", "e1")).resolves.toBe(1);
+        await expect(seqOf(writer, "events", "e2")).resolves.toBe(2);
+
+        expect(readCommitSeq(harness.sql)).toBe(2);
+    });
+
+    it("defaults to per-write allocation when the host reports no transaction state", async () => {
+        expect.assertions(1);
+
+        // Absent `inTransaction` is read as "not in a transaction" — the
+        // conservative direction. Extra sequences cost a consumer nothing; too few
+        // silently drop rows.
+        const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+
+        await writer.insert("events", { _id: "e1", kind: "a" }, { allowExplicitId: true });
+        await writer.insert("events", { _id: "e2", kind: "b" }, { allowExplicitId: true });
+
+        await expect(seqOf(writer, "events", "e2")).resolves.toBe(2);
     });
 
     it("advances strictly across mutations", async () => {

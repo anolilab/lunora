@@ -492,6 +492,7 @@ interface CtxDbOptions {
     globalDb?: DatabaseWriterLike;
     headroom?: TransactionHeadroomTracker;
     idGenerator?: IdGenerator;
+    inTransaction?: () => boolean;
     maxRelationKeys?: number;
     onIndexUse?: IndexUseHook;
     onRead?: ReadHook;
