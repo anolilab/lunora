@@ -27,32 +27,34 @@
 
 - `packages/do/vitest.config.ts:7-24` — inline `coverage` object with `provider`, `reporter`, `include`, `exclude` — no `thresholds`. Two projects: `mocks` (always on) and `workerd` (gated by `LUNORA_WORKERD_TESTS=1`, coverage-free by design).
 - `packages/shard-engine/vitest.config.ts:19`:
-  ```ts
-  export default getVitestConfig({ test: { environment: "node" } }, { branches: 25, functions: 43, lines: 46, statements: 46 });
-  ```
-  with the RATCHET comment above it ("Do not lower them").
+    ```ts
+    export default getVitestConfig({ test: { environment: "node" } }, { branches: 25, functions: 43, lines: 46, statements: 46 });
+    ```
+    with the RATCHET comment above it ("Do not lower them").
 - `packages/client/vitest.config.ts` — the exemplar: an inline floor on a workerd-gated package, measured against its `mocks` project, with a file-level comment explaining the numbers.
 - `packages/shard-engine/__tests__/` — ~40 suites, none covering `durable-stream.ts` / `durable-stream-runner.ts`.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/do..." run build` | exit 0 |
-| Measure do coverage | `pnpm --filter "@lunora/do" run test:coverage` | coverage table printed (mocks project) |
-| Measure engine coverage | `pnpm --filter "@lunora/shard-engine" run test:coverage` | coverage table printed |
-| Tests | `pnpm --filter "@lunora/shard-engine" run test` | all pass |
+| Purpose                 | Command                                                  | Expected on success                    |
+| ----------------------- | -------------------------------------------------------- | -------------------------------------- |
+| Install                 | `pnpm install`                                           | exit 0                                 |
+| Build deps              | `pnpm --filter "@lunora/do..." run build`                | exit 0                                 |
+| Measure do coverage     | `pnpm --filter "@lunora/do" run test:coverage`           | coverage table printed (mocks project) |
+| Measure engine coverage | `pnpm --filter "@lunora/shard-engine" run test:coverage` | coverage table printed                 |
+| Tests                   | `pnpm --filter "@lunora/shard-engine" run test`          | all pass                               |
 
 ## Scope
 
 **In scope**:
+
 - `packages/do/vitest.config.ts` — add a `thresholds` block
 - `packages/shard-engine/vitest.config.ts` — raise the ratchet to the new measured numbers
 - `packages/shard-engine/__tests__/durable-stream-runner.test.ts` — create (if plan 428 already created it, extend it)
 - `packages/shard-engine/__tests__/durable-stream.test.ts` — create (store-layer round-trip: claim → append → read → finish → trim)
 
 **Out of scope**:
+
 - Any `src/` behavior change in either package.
 - The workerd projects (they stay coverage-free per the documented v8/inspector limitation).
 - Other packages' thresholds.
@@ -104,4 +106,4 @@ Covered by Steps 1–3; the new suites are the deliverable. Model structure on `
 ## Maintenance notes
 
 - Both floors are ratchets: raise them when tests land, never lower. The `do` comment should say so.
-- Reviewer: check the new tests assert stream *content* (chunk seq + data), not just call counts.
+- Reviewer: check the new tests assert stream _content_ (chunk seq + data), not just call counts.

@@ -28,43 +28,47 @@ The flags facade memoizes its bound OpenFeature client in a bare module-level sc
 - `packages/flags/src/flags.ts:16` — `const DOMAIN = "lunora";`
 - `packages/flags/src/flags.ts:24` — `let clientBinding: Promise<Client> | undefined;` with a docstring asserting "The provider is set + initialized exactly once per DO isolate".
 - `packages/flags/src/flags.ts:32-57` — `bindClient({ hooks, logger, provider })` memoizes into the scalar; a rejected bind self-clears:
-  ```ts
-  if (clientBinding === undefined) {
-      clientBinding = (async (): Promise<Client> => {
-          await OpenFeature.setProviderAndWait(DOMAIN, provider());
-          const client = OpenFeature.getClient(DOMAIN);
-          ...
-      })();
-      clientBinding.catch(() => { clientBinding = undefined; });
-  }
-  return clientBinding;
-  ```
+    ```ts
+    if (clientBinding === undefined) {
+        clientBinding = (async (): Promise<Client> => {
+            await OpenFeature.setProviderAndWait(DOMAIN, provider());
+            const client = OpenFeature.getClient(DOMAIN);
+            ...
+        })();
+        clientBinding.catch(() => { clientBinding = undefined; });
+    }
+    return clientBinding;
+    ```
 - `packages/flags/src/flags.ts:59-68` — `resetFlags()` (test-only) clears the scalar + `OpenFeature.clearProviders()`.
 - `packages/flags/src/providers/flagship.ts:70-85` — binding mode returns `(env) => new FlagshipServerProvider({ binding: env[bindingName], ... })`: the memoized bind captures one `env`.
 - The pattern to copy — `packages/notify/src/notify.ts:105-130`:
-  ```ts
-  const runtimeCache = new WeakMap<NotifyDefinition, WeakMap<NotifyEnv, NotifyRuntime>>();
-  const runtimeFor = (definition, env) => { /* two-level WeakMap get-or-create */ };
-  ```
+    ```ts
+    const runtimeCache = new WeakMap<NotifyDefinition, WeakMap<NotifyEnv, NotifyRuntime>>();
+    const runtimeFor = (definition, env) => {
+        /* two-level WeakMap get-or-create */
+    };
+    ```
 - Find what identity object `bindClient`'s caller has in hand: read `createFlags` in the same file — whatever stable objects it receives (the definition/options object and the `env`) are the memo keys. If `createFlags` is not handed the `env` object itself at bind time, STOP (see STOP conditions).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/flags..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/flags" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/flags" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/flags" run lint:eslint` | exit 0 |
+| Purpose    | Command                                         | Expected on success |
+| ---------- | ----------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                  | exit 0              |
+| Build deps | `pnpm --filter "@lunora/flags..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/flags" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/flags" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/flags" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/flags/src/flags.ts`
 - The flags test file(s) in `packages/flags/__tests__/`
 
 **Out of scope**:
+
 - The `DOMAIN` constant and OpenFeature's global registry semantics (deferred — see Why this matters).
 - `providers/flagship.ts` and other providers.
 - Client hooks (`useFlag`/`useFlags`).
@@ -80,7 +84,7 @@ The flags facade memoizes its bound OpenFeature client in a bare module-level sc
 
 Mirror `notify.ts`'s `runtimeCache`/`runtimeFor` shape: `WeakMap<object, WeakMap<object, Promise<Client>>>`, keyed first by the definition/options identity `createFlags` receives, then by the `env` object. Keep the rejected-bind self-clear (delete the entry on rejection instead of clearing a scalar). Keep `resetFlags()` working: it must clear the whole cache — since WeakMaps aren't clearable, hold the cache in a `let` and reassign a fresh WeakMap in `resetFlags()` alongside the existing `OpenFeature.clearProviders()`.
 
-Update the scalar's docstring to the new keying rationale (adapt notify's wording). Note in a comment that OpenFeature's registry is still global under one `DOMAIN` — the memo prevents *silent config discard*, not registry collision — and that a second distinct definition binding in one isolate now surfaces as a second `setProviderAndWait` on the same domain (last one wins in the registry): add a one-line `console.warn` when the cache holds a binding for a *different* definition key than the one being bound, so the collision is no longer silent. (Check how the package logs elsewhere first — if it has a logger convention, use it.)
+Update the scalar's docstring to the new keying rationale (adapt notify's wording). Note in a comment that OpenFeature's registry is still global under one `DOMAIN` — the memo prevents _silent config discard_, not registry collision — and that a second distinct definition binding in one isolate now surfaces as a second `setProviderAndWait` on the same domain (last one wins in the registry): add a one-line `console.warn` when the cache holds a binding for a _different_ definition key than the one being bound, so the collision is no longer silent. (Check how the package logs elsewhere first — if it has a logger convention, use it.)
 
 **Verify**: `pnpm --filter "@lunora/flags" run test` → existing suite passes.
 
@@ -135,7 +139,7 @@ Revised scope — mirror notify's `runtimeFor` (packages/notify/src/notify.ts:11
    per-request provider closure semantics inside `options`.
 3. Regenerate codegen golden fixtures (the emitted ctx builder changes) and
    update flags tests to the new signature.
-4. In scope: packages/flags/src/flags.ts, packages/flags/__tests__/,
+4. In scope: packages/flags/src/flags.ts, packages/flags/**tests**/,
    packages/codegen/src/emit.ts, codegen golden fixtures + their regen script,
    any emit tests asserting the createFlags call shape. Branch:
    improve/wave22-flags. Breaking API change on alpha — record in commit body.

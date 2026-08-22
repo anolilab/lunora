@@ -26,25 +26,26 @@ The repo contains two contradictory, load-bearing comments about the same API. `
 
 - The empirically-safe exemplar — `packages/container/src/exec.ts:184-200` (`execDeadline`): explicit `AbortController` + `setTimeout` + `AbortSignal.any`, returning `{ signal, dispose }`, with the weak-hold rationale in its docstring. Its abort reason is a container-specific `LunoraError`.
 - The contradicting sites (all Worker-runtime code):
-  - `packages/dispatch/src/create-dispatch-runner.ts:233` — `const timeoutSignal = AbortSignal.timeout(timeoutMs);` used for BOTH the fetch and the later `response.text()` body reads. Its `rethrowAsTimeoutOrOriginal` helper (~:246) matches `error.name === "TimeoutError"` to map the abort to a retryable 503.
-  - `packages/container/src/otel.ts` (~:340) — `signal: AbortSignal.timeout(timeoutMs)` on the OTLP POST.
-  - `packages/container/src/do/index.ts` (~:352) — `signal: AbortSignal.timeout(attemptTimeoutMs)` in the readiness poll loop.
+    - `packages/dispatch/src/create-dispatch-runner.ts:233` — `const timeoutSignal = AbortSignal.timeout(timeoutMs);` used for BOTH the fetch and the later `response.text()` body reads. Its `rethrowAsTimeoutOrOriginal` helper (~:246) matches `error.name === "TimeoutError"` to map the abort to a retryable 503.
+    - `packages/container/src/otel.ts` (~:340) — `signal: AbortSignal.timeout(timeoutMs)` on the OTLP POST.
+    - `packages/container/src/do/index.ts` (~:352) — `signal: AbortSignal.timeout(attemptTimeoutMs)` in the readiness poll loop.
 - The already-correct sibling: `packages/queue/src/capture.ts:126-132` uses the controller+timer form.
 - `shared/` (repo root) is the home for tiny zero-dep helpers inlined by the bundler (e.g. `shared/constant-time-equal.ts`); consumers import by relative path. **Both `packages/dispatch/tsconfig.json` and `packages/container/tsconfig.json` already omit `outDir`/`rootDir` with the breadcrumb comment**, so no tsconfig change is needed.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build     | `pnpm --filter "@lunora/dispatch..." run build && pnpm --filter "@lunora/container..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/dispatch" run test && pnpm --filter "@lunora/container" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/dispatch" run lint:types && pnpm --filter "@lunora/container" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/dispatch" run lint:eslint && pnpm --filter "@lunora/container" run lint:eslint` | exit 0 |
+| Purpose   | Command                                                                                                 | Expected on success |
+| --------- | ------------------------------------------------------------------------------------------------------- | ------------------- |
+| Install   | `pnpm install`                                                                                          | exit 0              |
+| Build     | `pnpm --filter "@lunora/dispatch..." run build && pnpm --filter "@lunora/container..." run build`       | exit 0              |
+| Tests     | `pnpm --filter "@lunora/dispatch" run test && pnpm --filter "@lunora/container" run test`               | all pass            |
+| Typecheck | `pnpm --filter "@lunora/dispatch" run lint:types && pnpm --filter "@lunora/container" run lint:types`   | exit 0              |
+| Lint      | `pnpm --filter "@lunora/dispatch" run lint:eslint && pnpm --filter "@lunora/container" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `shared/abort-deadline.ts` (create)
 - `packages/dispatch/src/create-dispatch-runner.ts`
 - `packages/container/src/exec.ts` (rebase `execDeadline` onto the shared helper, keeping its LunoraError reason)
@@ -52,6 +53,7 @@ The repo contains two contradictory, load-bearing comments about the same API. `
 - `packages/dispatch/__tests__/`, `packages/container/__tests__/` (adjust/extend)
 
 **Out of scope**:
+
 - CLI / Node-only `AbortSignal.timeout` call sites (per the repo's prior decision, the CLI sites are fine — long-lived process, strong refs).
 - `packages/queue/src/capture.ts` — already correct.
 
@@ -101,7 +103,7 @@ Pass `deadline.signal` to the fetch; call `deadline.dispose()` in a `finally` th
 
 ### Step 4: Convert the two remaining container sites
 
-`otel.ts` (~:340) and `do/index.ts` (~:352): same pattern, `dispose()` in `finally`. In the readiness poll loop, dispose per attempt. Update the otel comment that claims the unref'd timer is sufficient.
+`otel.ts` (~~:340) and `do/index.ts` (~~:352): same pattern, `dispose()` in `finally`. In the readiness poll loop, dispose per attempt. Update the otel comment that claims the unref'd timer is sufficient.
 
 **Verify**: `pnpm --filter "@lunora/container" run test` → all pass; `grep -rn "AbortSignal.timeout" packages/dispatch/src packages/container/src` → no matches.
 

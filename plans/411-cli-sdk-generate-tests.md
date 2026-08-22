@@ -31,21 +31,23 @@
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/cli..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/cli" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/cli" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/cli" run lint:eslint` | exit 0 |
+| Purpose    | Command                                       | Expected on success |
+| ---------- | --------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                | exit 0              |
+| Build deps | `pnpm --filter "@lunora/cli..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/cli" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/cli" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/cli" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/cli/__tests__/commands/sdk.test.ts` (create)
 - `packages/cli/__tests__/__fixtures__/` (a minimal OpenRPC fixture + a fake transport directory, following wherever existing command tests keep fixtures — check `ls packages/cli/__tests__/` for the convention first)
 
 **Out of scope**:
+
 - Any `src/` change. If a test reveals a bug, STOP and report it — this plan is tests-only.
 - Network-dependent tests. Everything runs through `--from`.
 

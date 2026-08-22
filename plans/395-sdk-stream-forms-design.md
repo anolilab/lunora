@@ -7,21 +7,21 @@
 
 ## The headline finding that reshapes the plan
 
-The spike's premise was that seven languages need idiomatic stream *runtimes*
+The spike's premise was that seven languages need idiomatic stream _runtimes_
 designed. They do not: **every one of the seven hand-written transports already
 ships a stream primitive next to `subscribe`, with its semantics decided and
 documented in-file**:
 
-| Runtime | Primitive | Location |
-|---|---|---|
-| Kotlin | `Client.stream(...) : Stream` — `Sequence<StreamEvent>` over a `LinkedBlockingQueue`, `AutoCloseable` | `sdks/kotlin/src/Client.kt:471-520` |
-| Swift | `client.stream(...) -> AsyncStream<LunoraStreamEvent>` | `sdks/swift/Sources/Lunora/Client.swift:573-586` |
-| Rust | `client.stream(...) -> (mpsc::Receiver<StreamEvent>, String)` — `Receiver` is an `Iterator` | `sdks/rust/src/client.rs:609-642` |
-| Python | `client.stream(...) -> AsyncIterator` (async generator) | `sdks/python/lunora/client.py:507-539` |
-| Go | `client.Stream(...) (<-chan StreamEvent, Unsubscribe)` | `sdks/go/lunora/client.go:719-750` |
-| Java | `client.stream(...) : Stream` — blocking `Iterable<StreamEvent>`, `AutoCloseable` | `sdks/java/src/dev/lunora/Client.java:614-694` |
-| Ruby | `client.stream(...) -> [Enumerator, stop]` over a `Thread::Queue` | `sdks/ruby/lib/lunora/client.rb:315-338` |
-| Dart | `client.watch(...) -> Stream<Object?>` (`Stream.multi`) | `sdks/dart/lib/src/client.dart:447-452` |
+| Runtime | Primitive                                                                                             | Location                                         |
+| ------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Kotlin  | `Client.stream(...) : Stream` — `Sequence<StreamEvent>` over a `LinkedBlockingQueue`, `AutoCloseable` | `sdks/kotlin/src/Client.kt:471-520`              |
+| Swift   | `client.stream(...) -> AsyncStream<LunoraStreamEvent>`                                                | `sdks/swift/Sources/Lunora/Client.swift:573-586` |
+| Rust    | `client.stream(...) -> (mpsc::Receiver<StreamEvent>, String)` — `Receiver` is an `Iterator`           | `sdks/rust/src/client.rs:609-642`                |
+| Python  | `client.stream(...) -> AsyncIterator` (async generator)                                               | `sdks/python/lunora/client.py:507-539`           |
+| Go      | `client.Stream(...) (<-chan StreamEvent, Unsubscribe)`                                                | `sdks/go/lunora/client.go:719-750`               |
+| Java    | `client.stream(...) : Stream` — blocking `Iterable<StreamEvent>`, `AutoCloseable`                     | `sdks/java/src/dev/lunora/Client.java:614-694`   |
+| Ruby    | `client.stream(...) -> [Enumerator, stop]` over a `Thread::Queue`                                     | `sdks/ruby/lib/lunora/client.rb:315-338`         |
+| Dart    | `client.watch(...) -> Stream<Object?>` (`Stream.multi`)                                               | `sdks/dart/lib/src/client.dart:447-452`          |
 
 What is missing is only the **generated surface**: every target's
 `renderSubscribe` emits the callback form alone (kotlin.ts:136-147, go.ts:98-106,
@@ -53,8 +53,8 @@ only" paragraph, which it extends):
 > never guess. A target whose language genuinely lacks a canonical
 > consumable stream shape may omit the form, stated in its file docblock.
 
-Naming note: the *runtime* primitive is named `stream` in six transports and
-`watch` in Dart; the *generated member* prefix is `watch` everywhere. `watch`
+Naming note: the _runtime_ primitive is named `stream` in six transports and
+`watch` in Dart; the _generated member_ prefix is `watch` everywhere. `watch`
 wins for the generated surface because (a) Dart shipped it first and renaming
 Dart's headline member is gratuitous breakage, and (b) `Stream${memberBase}`
 would collide with Java's/Kotlin's nested `Stream` class in more reader-facing
@@ -69,7 +69,7 @@ to `SubscribeX` (spec.ts:640). Plan 388 adds `Watch${memberBase}` for Dart's
 sake; **because the guard is language-neutral and runs before any target,
 that single reservation already covers every target adopting the `watch`
 prefix** — no per-language spec.ts change is needed after 388 lands. The
-build-plan rule stays: any target that ever adds a member under a *new* prefix
+build-plan rule stays: any target that ever adds a member under a _new_ prefix
 must extend the `names` array in `spec.ts` in the same commit (cite plan 388
 in that commit body; this bug shipped once already). If plan 388 has not
 landed when the first non-Dart target does, that target's PR carries the
@@ -81,16 +81,16 @@ Semantics below are **recorded from the shipped runtimes**, not proposed — the
 generated form inherits them by wrapping `client.stream(...)` exactly as
 `subscribeX` wraps `client.subscribe(...)` today.
 
-| Lang | Generated member | Return type | Cancellation (does drop unsubscribe?) | Error delivery | Buffering |
-|---|---|---|---|---|---|
-| Dart (shipped) | `watchX(args)` | `Stream<Model>` (typed via `fromJson`, dart.ts:383-388) | listener cancel → unsubscribe (`client.dart:449-451`); per-listener subscription | in-band error channel (`controller.addError`), non-terminating by default (listener's `cancelOnError` decides) | `Stream.multi`, per-listener |
-| Swift | `watchX(args:shardKey:)` | `AsyncStream<LunoraStreamEvent>` (`.value(Any)` / `.failure`) | yes — `continuation.onTermination` unsubscribes on break/task-cancel (`Client.swift:584`) | in-band `.failure` event, stream does NOT terminate (`AsyncStream`, not throwing — `Client.swift:551-558`) | unbounded (`Client.swift:570-573`) |
-| Kotlin | `watchX(args, shardKey)` | `Client.Stream` (`Sequence<StreamEvent>`, `AutoCloseable`) | no — `close()` required (use-block); drop alone leaks and grows the queue (`Client.kt:462-474`) | in-band `StreamEvent(value, error)`, non-terminating (`Client.kt:447-456`) | unbounded `LinkedBlockingQueue` |
-| Python | `watch_x(args, shard_key)` | `AsyncIterator` | yes — teardown in generator `finally` on break/`aclose()`/task cancel (`client.py:533-537`) | **raises** `LunoraError` into the loop — terminates (`client.py:518-520, 531-532`) | unbounded `asyncio.Queue` |
-| Rust | `watch_x(args, shard_key)` | `(mpsc::Receiver<StreamEvent>, String)` | no — must call `client.unsubscribe(id)`; dropping the receiver leaves the subscription open by documented design (`client.rs:612-617`) | in-band `StreamEvent::Error`, non-terminating | unbounded std `mpsc` (`client.rs:620-622`: std-only, no futures dep) |
-| Go | `WatchX(args, shardKey)` | `(<-chan StreamEvent, Unsubscribe)` | no — call the returned `Unsubscribe` (defer); it closes the channel (`client.go:711-713, 743-750`) | in-band `StreamEvent{Value, Err}`, non-terminating | **bounded 64, sends block** — deliberate backpressure, the one divergence, documented (`client.go:714-719, 752-755`) |
-| Java | `watchX(args, shardKey)` | `Client.Stream` (`Iterable<StreamEvent>`, `AutoCloseable`) | no — `close()` in try-with-resources; drop alone blocks the iterator forever (`Client.java:607-613`) | in-band `StreamEvent(value, error)` record, non-terminating (`Client.java:598-604`) | unbounded `LinkedBlockingQueue` |
-| Ruby | `watch_x(args, shard_key)` | `[Enumerator, stop]` | no — call `stop` (it closes the queue and wakes a blocked `pop`, `client.rb:319-324`) | **raises** `ApiError` into the loop — terminates (`client.rb:311-312, 331`) | unbounded `Thread::Queue` |
+| Lang           | Generated member           | Return type                                                   | Cancellation (does drop unsubscribe?)                                                                                                  | Error delivery                                                                                                 | Buffering                                                                                                            |
+| -------------- | -------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Dart (shipped) | `watchX(args)`             | `Stream<Model>` (typed via `fromJson`, dart.ts:383-388)       | listener cancel → unsubscribe (`client.dart:449-451`); per-listener subscription                                                       | in-band error channel (`controller.addError`), non-terminating by default (listener's `cancelOnError` decides) | `Stream.multi`, per-listener                                                                                         |
+| Swift          | `watchX(args:shardKey:)`   | `AsyncStream<LunoraStreamEvent>` (`.value(Any)` / `.failure`) | yes — `continuation.onTermination` unsubscribes on break/task-cancel (`Client.swift:584`)                                              | in-band `.failure` event, stream does NOT terminate (`AsyncStream`, not throwing — `Client.swift:551-558`)     | unbounded (`Client.swift:570-573`)                                                                                   |
+| Kotlin         | `watchX(args, shardKey)`   | `Client.Stream` (`Sequence<StreamEvent>`, `AutoCloseable`)    | no — `close()` required (use-block); drop alone leaks and grows the queue (`Client.kt:462-474`)                                        | in-band `StreamEvent(value, error)`, non-terminating (`Client.kt:447-456`)                                     | unbounded `LinkedBlockingQueue`                                                                                      |
+| Python         | `watch_x(args, shard_key)` | `AsyncIterator`                                               | yes — teardown in generator `finally` on break/`aclose()`/task cancel (`client.py:533-537`)                                            | **raises** `LunoraError` into the loop — terminates (`client.py:518-520, 531-532`)                             | unbounded `asyncio.Queue`                                                                                            |
+| Rust           | `watch_x(args, shard_key)` | `(mpsc::Receiver<StreamEvent>, String)`                       | no — must call `client.unsubscribe(id)`; dropping the receiver leaves the subscription open by documented design (`client.rs:612-617`) | in-band `StreamEvent::Error`, non-terminating                                                                  | unbounded std `mpsc` (`client.rs:620-622`: std-only, no futures dep)                                                 |
+| Go             | `WatchX(args, shardKey)`   | `(<-chan StreamEvent, Unsubscribe)`                           | no — call the returned `Unsubscribe` (defer); it closes the channel (`client.go:711-713, 743-750`)                                     | in-band `StreamEvent{Value, Err}`, non-terminating                                                             | **bounded 64, sends block** — deliberate backpressure, the one divergence, documented (`client.go:714-719, 752-755`) |
+| Java           | `watchX(args, shardKey)`   | `Client.Stream` (`Iterable<StreamEvent>`, `AutoCloseable`)    | no — `close()` in try-with-resources; drop alone blocks the iterator forever (`Client.java:607-613`)                                   | in-band `StreamEvent(value, error)` record, non-terminating (`Client.java:598-604`)                            | unbounded `LinkedBlockingQueue`                                                                                      |
+| Ruby           | `watch_x(args, shard_key)` | `[Enumerator, stop]`                                          | no — call `stop` (it closes the queue and wakes a blocked `pop`, `client.rb:319-324`)                                                  | **raises** `ApiError` into the loop — terminates (`client.rb:311-312, 331`)                                    | unbounded `Thread::Queue`                                                                                            |
 
 Two deliberate asymmetries to state in the convention rather than sand away:
 
@@ -119,9 +119,9 @@ Two deliberate asymmetries to state in the convention rather than sand away:
    the spike's framing missed: the transport is deliberately JDK-only — "`Flow`
    lives in kotlinx-coroutines, and this transport takes no dependencies
    beyond the JDK" (`Client.kt:466-468`). The generated form therefore wraps
-   the blocking `Client.Stream`, which Compose does *not* consume directly.
+   the blocking `Client.Stream`, which Compose does _not_ consume directly.
    Still second: the member removes the bare-string path, and the
-   `callbackFlow` bridge over the generated *callback* member is 5 lines a
+   `callbackFlow` bridge over the generated _callback_ member is 5 lines a
    README can carry (open question 1 covers the Flow upgrade).
 3. **Python** — `async for` over the shipped async generator; scripting and
    server-side agents bind live queries in one loop. Third.
@@ -132,7 +132,7 @@ Two deliberate asymmetries to state in the convention rather than sand away:
    pre-Loom shape the runtime already chose; nothing better exists without a
    reactive-streams dependency (open question 3).
 6. **Go** — borderline "not worth it": the runtime's `(<-chan, Unsubscribe)`
-   pair *is* the idiomatic form and the generated callback member already
+   pair _is_ the idiomatic form and the generated callback member already
    exists; but the wrapper is ~6 emitted lines and removes the bare-string
    path, so emit it for uniformity. Last-but-one.
 7. **Ruby** — last. The `[Enumerator, stop]` tuple is awkward, Ruby UI binding
@@ -176,24 +176,24 @@ Every implementation touches: the target's `renderSubscribe` (emit the second
 member, ~8-12 lines mirroring the existing callback emission), the vendored
 transport **not at all** (primitive exists), the language's conformance suite,
 and `generated_check/` where the language has a call-through sample
-(`bash sdks/generated-check.sh` builds and *calls* each generated SDK).
+(`bash sdks/generated-check.sh` builds and _calls_ each generated SDK).
 Reserved name: covered globally once plan 388's `Watch${memberBase}` lands
 (section 1).
 
-| Target | Emitter effort | Conformance additions (`sdks/run-all.sh` suites) |
-|---|---|---|
-| Swift | S | `Tests/`: stream yields `.value` on data frame, `.failure` on error frame, unsubscribe frame sent on termination (model on the existing subscribe cases in `sdks/swift/Tests/`) |
-| Kotlin | S | `test/ConformanceTest.kt`: generated `watchX` routes the typed function-path constant; close() emits unsubscribe frame |
-| Python | S | `tests/`: `async for` receives data; error frame raises `LunoraError`; `aclose()` sends unsubscribe |
-| Rust | S | `tests/`: receiver iterates values; unsubscribe(id) ends iteration |
-| Java | S | `test/dev/lunora/ConformanceTest.java`: try-with-resources loop; close() wakes blocked `take()` |
-| Go | S | `lunora/conformance_test.go` (`-count=1` note applies): range over channel; Unsubscribe closes it |
-| Ruby | S | `test/test_conformance.rb`: enumerator yields; error raises `ApiError`; stop closes queue |
+| Target | Emitter effort | Conformance additions (`sdks/run-all.sh` suites)                                                                                                                                |
+| ------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Swift  | S              | `Tests/`: stream yields `.value` on data frame, `.failure` on error frame, unsubscribe frame sent on termination (model on the existing subscribe cases in `sdks/swift/Tests/`) |
+| Kotlin | S              | `test/ConformanceTest.kt`: generated `watchX` routes the typed function-path constant; close() emits unsubscribe frame                                                          |
+| Python | S              | `tests/`: `async for` receives data; error frame raises `LunoraError`; `aclose()` sends unsubscribe                                                                             |
+| Rust   | S              | `tests/`: receiver iterates values; unsubscribe(id) ends iteration                                                                                                              |
+| Java   | S              | `test/dev/lunora/ConformanceTest.java`: try-with-resources loop; close() wakes blocked `take()`                                                                                 |
+| Go     | S              | `lunora/conformance_test.go` (`-count=1` note applies): range over channel; Unsubscribe closes it                                                                               |
+| Ruby   | S              | `test/test_conformance.rb`: enumerator yields; error raises `ApiError`; stop closes queue                                                                                       |
 
 All S: the hard half (runtime semantics, threading, buffering, reconnect
 resume via `resend_subscriptions`) shipped with the primitives and is already
 covered by each runtime's own tests; what each PR adds is the emitted wrapper
-plus the wiring assertion that the *generated* member reaches the primitive
+plus the wiring assertion that the _generated_ member reaches the primitive
 with the right function path. Per the maintenance note in the spike: one
 language per PR, each PR runs `bash sdks/run-all.sh <lang>` and
 `bash sdks/generated-check.sh`, and the first PR to land carries the

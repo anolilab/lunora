@@ -24,35 +24,37 @@ better-auth's after-hook runner treats **any non-`undefined` value a hook resolv
 ## Current state
 
 - `packages/auth/src/audit-hooks.ts:368-377`:
-  ```ts
-  const after = existing
-      ? async (context: unknown): Promise<unknown> => {
-            await existing(context);
+    ```ts
+    const after = existing
+        ? async (context: unknown): Promise<unknown> => {
+              await existing(context);
 
-            return (audit as unknown as (context: unknown) => Promise<unknown>)(context);
-        }
-      : audit;
-  ```
+              return (audit as unknown as (context: unknown) => Promise<unknown>)(context);
+          }
+        : audit;
+    ```
 - The audit hook itself always `return undefined;` (`audit-hooks.ts:360`) — deliberately, per the CRITICAL comment at `:348-359` — so in the composed form the caller's return value is dropped and replaced by `undefined`.
 - The doc comment above `withAuthAudit` (`:363-366`) says "theirs runs first, then the audit record" — ordering is right; only the return value is lost.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/auth..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/auth" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/auth" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/auth" run lint:eslint` | exit 0 |
+| Purpose    | Command                                        | Expected on success |
+| ---------- | ---------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                 | exit 0              |
+| Build deps | `pnpm --filter "@lunora/auth..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/auth" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/auth" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/auth" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/auth/src/audit-hooks.ts` (only the `withAuthAudit` composition)
 - `packages/auth/__tests__/audit-hooks.behaviour.test.ts`
 
 **Out of scope**:
+
 - `authAuditHook` itself — its `return undefined` contract is correct and pinned by tests; do not change it.
 - `email-gate.ts` — its before-hook composition has different semantics (before-hooks chain values); leave it.
 
@@ -104,9 +106,9 @@ One new test as in Step 2; the existing suite already covers the no-existing-hoo
 
 ## STOP conditions
 
-- The existing "hooks.after return value" suite fails after the change — that suite pins the *uncomposed* hook's `undefined` contract; if it starts failing, the change leaked into `authAuditHook` itself. Stop.
+- The existing "hooks.after return value" suite fails after the change — that suite pins the _uncomposed_ hook's `undefined` contract; if it starts failing, the change leaked into `authAuditHook` itself. Stop.
 - Current-state excerpts don't match live code.
 
 ## Maintenance notes
 
-- If a second hook-composing helper is ever added to this package, note the asymmetry: after-hooks forward the *first* non-undefined return; before-hooks (email-gate) chain. A shared composer is only worth it at a third instance.
+- If a second hook-composing helper is ever added to this package, note the asymmetry: after-hooks forward the _first_ non-undefined return; before-hooks (email-gate) chain. A shared composer is only worth it at a third instance.

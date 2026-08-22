@@ -28,30 +28,32 @@
 
 - `:66-79` — the `MIRROR_SCHEMA_VERSION = 2` docblock quoted above; `#reconcileSchemaVersion` (`:365-371`) drops every mirrored table when the stored version mismatches, so bumping the constant is the supported migration mechanism.
 - `:460-461` (inside `#ensureTableSchema`, the `existing.length === 0` create path):
-  ```ts
-  let columnDefs = `${escapeIdentifier_(pk)} TEXT PRIMARY KEY NOT NULL`;
-  ```
+    ```ts
+    let columnDefs = `${escapeIdentifier_(pk)} TEXT PRIMARY KEY NOT NULL`;
+    ```
 - `:416-440` — `#inferColumnAffinities(diff, pk, columns)` skips `key === pk`; `#collectDiffColumns` (`:397-401`) excludes the pk from `requiredColumns`. So the pk never reaches `inferColumnAffinity`.
 - The diff shape: `change.id` carries the row id for delete/update (`diff-applier.ts`), and insert/update `change.data` may carry the pk value under the pk key.
 - `packages/replica/__tests__/adapters.test.ts:417-450` — the "column affinity" suite covers a non-PK `priority` column only; no numeric-id case.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/replica..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/replica" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/replica" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/replica" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success |
+| ---------- | ------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                    | exit 0              |
+| Build deps | `pnpm --filter "@lunora/replica..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/replica" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/replica" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/replica" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/replica/src/local-mirror.ts`
 - `packages/replica/__tests__/adapters.test.ts`
 
 **Out of scope**:
+
 - `packages/replica/src/diff-applier.ts` — id **binding** normalization is plan 402.
 - Any change to `SqliteAdapter` implementations.
 

@@ -27,31 +27,31 @@ Payment providers do not guarantee event ordering. When the first event a subscr
 ## Current state
 
 - The claim is taken before apply — `packages/payment/src/sync.ts:235` (inside `applyWebhookAction`):
-  ```ts
-  const fresh = await store.markEventProcessed(action.provider, action.eventId);
+    ```ts
+    const fresh = await store.markEventProcessed(action.provider, action.eventId);
 
-  if (!fresh) {
-      notifyObserver(observer, { eventId: action.eventId, provider: action.provider, type: "webhook.duplicate" });
+    if (!fresh) {
+        notifyObserver(observer, { eventId: action.eventId, provider: action.provider, type: "webhook.duplicate" });
 
-      return { applied: false, reason: "duplicate" };
-  }
-  ```
+        return { applied: false, reason: "duplicate" };
+    }
+    ```
 - The orphan drop — `packages/payment/src/sync.ts:149-153` (inside `applySubscription`):
-  ```ts
-  // A pure metadata change (price / quantity / cancel-at-period-end) with no state transition.
-  if (action.type === "subscription.updated") {
-      if (!existing) {
-          return { applied: false, reason: "unhandled" };
-      }
-  ```
+    ```ts
+    // A pure metadata change (price / quantity / cancel-at-period-end) with no state transition.
+    if (action.type === "subscription.updated") {
+        if (!existing) {
+            return { applied: false, reason: "unhandled" };
+        }
+    ```
 - The precedent — the throw path already releases the claim, `sync.ts:250-257`:
-  ```ts
-  // The claim is taken before apply; a genuine store-write failure would otherwise leave the
-  // event marked-processed so the provider's retry dedupes to a lost effect. Release the claim
-  // so the retry re-processes, then rethrow so the caller returns non-2xx and the provider
-  // retries. ...
-  await store.releaseEvent(action.provider, action.eventId);
-  ```
+    ```ts
+    // The claim is taken before apply; a genuine store-write failure would otherwise leave the
+    // event marked-processed so the provider's retry dedupes to a lost effect. Release the claim
+    // so the retry re-processes, then rethrow so the caller returns non-2xx and the provider
+    // retries. ...
+    await store.releaseEvent(action.provider, action.eventId);
+    ```
 - `releaseEvent` exists on the `PaymentStore` interface (`packages/payment/src/store.ts:39-45`) and both store implementations.
 - After apply, `create-payment.ts` returns 200 ("Acknowledge once verified so the provider stops retrying") — so an `unhandled` result today permanently ends the event's life.
 
@@ -74,23 +74,25 @@ Keep returning 200-equivalent behavior at the HTTP layer for now? **No** — dec
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/payment..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/payment" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/payment" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success |
+| ---------- | ------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                    | exit 0              |
+| Build deps | `pnpm --filter "@lunora/payment..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/payment" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/payment" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/payment/src/sync.ts`
 - `packages/payment/src/create-payment.ts` (only the `handleWebhook` response mapping for the new reason)
 - `packages/payment/src/types.ts` (only if `ApplyResult` lives there)
 - `packages/payment/__tests__/sync.test.ts`, `packages/payment/__tests__/webhook.test.ts`
 
 **Out of scope**:
+
 - The provider adapters — their normalization to `subscription.updated` is by design.
 - `reconcile.ts` — do not add orphan repair there; the release-and-retry approach makes it unnecessary.
 - The FSM (`state-machine.ts`).
@@ -124,6 +126,7 @@ Read `handleWebhook` in `create-payment.ts`. Map the `"orphaned"` reason to a 50
 ### Step 4: Tests
 
 In `sync.test.ts` (model after existing `applyWebhookAction` tests):
+
 - `subscription.updated` with no existing row → reason `"orphaned"`, and a subsequent replay of the SAME event id is NOT treated as duplicate (the claim was released).
 - Ordering repair: deliver `subscription.updated` (orphaned) → deliver `subscription.active` (creates row) → replay the updated event → row now reflects the update.
 - Existing-row `subscription.updated` still applies normally.

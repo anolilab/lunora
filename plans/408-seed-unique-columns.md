@@ -25,31 +25,33 @@
 ## Current state
 
 - `packages/seed/src/introspect.ts:18` — the meta type already declares the flag but nothing reads it:
-  ```ts
-  column?: { defaultFn?: unknown; defaultValue?: unknown; notNull?: boolean; unique?: boolean };
-  ```
+    ```ts
+    column?: { defaultFn?: unknown; defaultValue?: unknown; notNull?: boolean; unique?: boolean };
+    ```
 - `packages/seed/src/introspect.ts:36-50` — `FieldSpec` has no `unique` field; `describeField` (`:72-90`) builds specs from `meta.column?.notNull` etc. but never touches `unique`.
 - `packages/seed/src/plan.ts:234-267` — rows are generated per-cell via `cellInput(seed, table, index, column)`; no cross-row uniqueness handling.
 - `packages/seed/src/generate-value.ts:140-144` — enum-constrained columns go through `copycat.oneOf(input, constraints.enum)`; `:113-116` — unmatched string columns fall back to `copycat.word(input)`.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/seed..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/seed" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/seed" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/seed" run lint:eslint` | exit 0 |
+| Purpose    | Command                                        | Expected on success |
+| ---------- | ---------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                 | exit 0              |
+| Build deps | `pnpm --filter "@lunora/seed..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/seed" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/seed" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/seed" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/seed/src/introspect.ts` (carry `unique` into `FieldSpec`)
 - `packages/seed/src/generate-value.ts` and/or `packages/seed/src/plan.ts` (unique-aware generation)
 - `packages/seed/__tests__/` (new cases in the existing test files)
 
 **Out of scope**:
+
 - `packages/values` — the metadata already exists; do not change it.
 - `packages/studio/src/lib/seed-data.ts` — the studio's mirror generator is a separate surface; note parity in the commit body but do not edit it here.
 - Golden/deterministic outputs for non-unique columns — existing generated values must not change.
@@ -72,7 +74,7 @@ In `introspect.ts`, add `unique: boolean` to `FieldSpec` and set it in `describe
 Where the cell value is produced (follow `cellInput` from `plan.ts:234-267` into `generate-value.ts`):
 
 - For a **unique string-kind** column: make the value row-unique by deriving it from the absolute row index — e.g. suffix the generated value with `-${index}` (keep the heuristic prefix so `email`-style columns still look like emails: `local+3@domain`-style is fine), or use `copycat.uuid(input)` when no heuristic matched. Deterministic per (seed, table, index, column) like everything else.
-- For a **unique bounded-domain** column (enum constraint, boolean kind): if the requested row count exceeds the domain size, fail fast *before generating* with a named error identifying table, column, domain size, and requested count (use the package's existing error type — find it with `grep -rn "LunoraError\|SeedError" packages/seed/src | head`). If count ≤ domain size, deal values without replacement (index into a deterministic shuffle of the domain).
+- For a **unique bounded-domain** column (enum constraint, boolean kind): if the requested row count exceeds the domain size, fail fast _before generating_ with a named error identifying table, column, domain size, and requested count (use the package's existing error type — find it with `grep -rn "LunoraError\|SeedError" packages/seed/src | head`). If count ≤ domain size, deal values without replacement (index into a deterministic shuffle of the domain).
 - Non-unique columns: completely untouched code path.
 
 **Verify**: `pnpm --filter "@lunora/seed" run test` → existing tests all pass (proves non-unique outputs unchanged).

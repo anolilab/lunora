@@ -25,48 +25,50 @@ The Studio admin plane's `setUserPassword` (`packages/auth/src/admin.ts:1092-110
 ## Current state
 
 - `packages/auth/src/admin.ts:1092-1108`:
-  ```ts
-  setUserPassword: ({ newPassword, userId }) =>
-      withContext(async (context_) => {
-          const min = context_.password.config.minPasswordLength;
-          const max = context_.password.config.maxPasswordLength;
-          // ...length checks throwing PASSWORD_TOO_SHORT / PASSWORD_TOO_LONG...
-          const hashed = await context_.password.hash(newPassword);
-          await context_.internalAdapter.updatePassword(userId, hashed);
-      }),
-  ```
+    ```ts
+    setUserPassword: ({ newPassword, userId }) =>
+        withContext(async (context_) => {
+            const min = context_.password.config.minPasswordLength;
+            const max = context_.password.config.maxPasswordLength;
+            // ...length checks throwing PASSWORD_TOO_SHORT / PASSWORD_TOO_LONG...
+            const hashed = await context_.password.hash(newPassword);
+            await context_.internalAdapter.updatePassword(userId, hashed);
+        }),
+    ```
 - The credential-link shape this repo already uses — `admin.ts:932-940` (inside `createUser`):
-  ```ts
-  await context_.internalAdapter.linkAccount({
-      issuer: createLocalAccountIssuer("credential"),
-      password: hashed,
-      providerAccountId: user.id,
-      providerId: "credential",
-      userId: user.id,
-  });
-  ```
+    ```ts
+    await context_.internalAdapter.linkAccount({
+        issuer: createLocalAccountIssuer("credential"),
+        password: hashed,
+        providerAccountId: user.id,
+        providerId: "credential",
+        userId: user.id,
+    });
+    ```
 - Upstream reference behaviour (installed `better-auth@1.6.25`, `dist/plugins/admin/routes.mjs` `setUserPassword` handler): `findUserById` → 404 `USER_NOT_FOUND`; then `findAccounts(userId)` → if a `providerId === "credential"` account exists, `updatePassword`, else `createAccount`.
 - Errors on this plane are `LunoraAuthAdminError(message, code)` — see the throws at `admin.ts:1098,1102`. Check the code union/type near the `LunoraAuthAdminError` definition; add `"USER_NOT_FOUND"` if it is not already a valid code.
 - Existing test coverage: `packages/auth/__tests__/admin.behaviour.test.ts:127-133` asserts only the too-short rejection.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/auth..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/auth" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/auth" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/auth" run lint:eslint` | exit 0 |
+| Purpose                                                     | Command                                         | Expected on success                                         |
+| ----------------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------- |
+| Install                                                     | `pnpm install`                                  | exit 0                                                      |
+| Build deps                                                  | `pnpm --filter "@lunora/auth..." run build`     | exit 0                                                      |
+| Tests                                                       | `pnpm --filter "@lunora/auth" run test`         | all pass                                                    |
+| Typecheck                                                   | `pnpm --filter "@lunora/auth" run lint:types`   | exit 0                                                      |
+| Lint                                                        | `pnpm --filter "@lunora/auth" run lint:eslint`  | exit 0                                                      |
 | API gate (only if the error-code union is exported surface) | `pnpm run build:packages && pnpm run api:check` | exit 0 (run `api:update` if it reports the intended change) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/auth/src/admin.ts` (the `setUserPassword` op; the `LunoraAuthAdminError` code union if `USER_NOT_FOUND` must be added)
 - `packages/auth/__tests__/admin.behaviour.test.ts`
 
 **Out of scope**:
+
 - `createUser` — its conditional credential link is correct.
 - better-auth internals, `packages/auth/src/auth-do.ts`, session handling.
 

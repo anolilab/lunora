@@ -26,34 +26,36 @@
 ## Current state
 
 - `packages/client/src/lunora-client.ts` — `flushQueryCacheWrites` (around `:4000-4017`):
-  ```ts
-  const batch = [...this.pendingCacheWrites.entries()];
-  this.pendingCacheWrites.clear();
-  // Writes are independent; fire them together and swallow individual
-  // failures (a quota error on one key must not drop the others).
-  await Promise.allSettled(batch.map(([key, entry]) => queryCache.put(key, entry)));
-  ```
-  Caller at `:3995`: `this.flushQueryCacheWrites().catch(() => undefined);`
+    ```ts
+    const batch = [...this.pendingCacheWrites.entries()];
+    this.pendingCacheWrites.clear();
+    // Writes are independent; fire them together and swallow individual
+    // failures (a quota error on one key must not drop the others).
+    await Promise.allSettled(batch.map(([key, entry]) => queryCache.put(key, entry)));
+    ```
+    Caller at `:3995`: `this.flushQueryCacheWrites().catch(() => undefined);`
 - `packages/client/src/query-cache.ts:30-32,59-64` — the in-memory adapter's `put` runs `clone` → `structuredClone(entry.value)` before returning a promise.
 - Error reporting seam: the client's persistence-error hook is `this.onPersistenceError` (`lunora-client.ts:841`, wired at `:1035` from `options.offlineQueue?.onPersistenceError`), used via `reportPersistenceError(this.onPersistenceError, "remove", error, id)` at `:5606`. Read `reportPersistenceError`'s signature (in `offline-queue.ts` or wherever it's exported) before using it — cache writes may or may not fit its `PersistenceErrorContext` shape; if it doesn't fit, keep the swallow-but-isolate behavior and skip reporting (the isolation is the bug fix; reporting is nice-to-have).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/client..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/client" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/client" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/client" run lint:eslint` | exit 0 |
+| Purpose    | Command                                          | Expected on success |
+| ---------- | ------------------------------------------------ | ------------------- |
+| Install    | `pnpm install`                                   | exit 0              |
+| Build deps | `pnpm --filter "@lunora/client..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/client" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/client" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/client" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/client/src/lunora-client.ts` (only `flushQueryCacheWrites`)
 - The existing test file covering the query cache flush (grep `flushQueryCacheWrites\|pendingCacheWrites\|queryCache` under `packages/client/__tests__/` to find it)
 
 **Out of scope**:
+
 - `query-cache.ts` adapters — a sync-validating adapter is legal; the caller must be robust to it.
 - The debounce/coalescing logic.
 

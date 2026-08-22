@@ -25,32 +25,34 @@
 ## Current state
 
 - `packages/studio/vitest.config.ts:95-98`:
-  ```ts
-  // coverage stalls. The suite is green and fast without coverage. Zeroed
-  // until it can finish under coverage.
-  { branches: 0, functions: 0, lines: 0, statements: 0 },
-  ```
+    ```ts
+    // coverage stalls. The suite is green and fast without coverage. Zeroed
+    // until it can finish under coverage.
+    { branches: 0, functions: 0, lines: 0, statements: 0 },
+    ```
 - Root `package.json:65,67` — both coverage scripts exclude the package: `--query "project!=lunora-e2e&&project!=studio&&project!=lunora-playground"`.
 - The `unit` project: `vitest.config.ts:15` (`unitTestFiles` list), `:68` (node-env project), `:86` (the component project excludes `unitTestFiles`).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/studio..." run build` | exit 0 |
+| Purpose                 | Command                                                                    | Expected on success                                   |
+| ----------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Install                 | `pnpm install`                                                             | exit 0                                                |
+| Build deps              | `pnpm --filter "@lunora/studio..." run build`                              | exit 0                                                |
 | Unit coverage (measure) | `pnpm --filter "@lunora/studio" exec vitest run --project unit --coverage` | completes without stalling; prints the coverage table |
-| Tests     | `pnpm --filter "@lunora/studio" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/studio" run lint:types` | exit 0 |
+| Tests                   | `pnpm --filter "@lunora/studio" run test`                                  | all pass                                              |
+| Typecheck               | `pnpm --filter "@lunora/studio" run lint:types`                            | exit 0                                                |
 
 ## Scope
 
 **In scope**:
+
 - `packages/studio/vitest.config.ts` (project-scoped thresholds)
 - `packages/studio/package.json` (a `test:coverage` script scoped to `--project unit`, if one doesn't exist — check first)
 - Root `package.json` (remove `project!=studio` from the two coverage queries **only if** studio's `test:coverage` is now the unit-scoped one — the vis target must not re-trigger the stalling full run)
 
 **Out of scope**:
+
 - Writing new tests. This plan installs the ratchet at today's measured numbers; raising them is future work.
 - The component project's coverage (the documented stall) — leave it uncovered and keep the explanatory comment, updated to say the unit project IS gated.
 

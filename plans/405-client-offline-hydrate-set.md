@@ -42,21 +42,23 @@ this.items.unshift(...restored);
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/client..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/client" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/client" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/client" run lint:eslint` | exit 0 |
+| Purpose    | Command                                          | Expected on success |
+| ---------- | ------------------------------------------------ | ------------------- |
+| Install    | `pnpm install`                                   | exit 0              |
+| Build deps | `pnpm --filter "@lunora/client..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/client" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/client" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/client" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/client/src/offline-queue.ts` (the dedupe only)
 - `packages/client/__tests__/offline-queue.test.ts` (only if no existing case covers duplicate-id hydration — check first)
 
 **Out of scope**:
+
 - The version gate, eviction, and restore-shape logic in the same loop — behavior must be byte-identical.
 
 ## Git workflow

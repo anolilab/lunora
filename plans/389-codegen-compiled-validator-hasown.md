@@ -24,43 +24,45 @@ The compiled (AOT) args validator's contract, stated in `packages/values/src/val
 ## Current state
 
 - `packages/codegen/src/compile-validator.ts:286` (inside `compileObject`) — nested-object field access:
-  ```ts
-  const fields = compileFields(shape, (key) => `${inExpr}[${JSON.stringify(key)}]`, context);
-  ```
+    ```ts
+    const fields = compileFields(shape, (key) => `${inExpr}[${JSON.stringify(key)}]`, context);
+    ```
 - `packages/codegen/src/compile-validator.ts:322` (inside `compileArgsValidator`) — top-level field access:
-  ```ts
-  const fields = compileFields(args, (key) => `source[${JSON.stringify(key)}]`, context);
-  ```
+    ```ts
+    const fields = compileFields(args, (key) => `source[${JSON.stringify(key)}]`, context);
+    ```
 - `packages/codegen/src/compile-validator.ts:130-133` — `v.any()` compiles to `{ out: inExpr, pre: "" }` (no guard), so an inherited value is committed rather than deferred.
 - The oracle, `packages/values/src/validator-map.ts:120`:
-  ```ts
-  const candidate = Object.hasOwn(source, key) ? source[key] : undefined;
-  ```
+    ```ts
+    const candidate = Object.hasOwn(source, key) ? source[key] : undefined;
+    ```
 - Consumer: `packages/codegen/src/emit.ts:1609` calls `compileArgsValidator(definition.args)` and embeds the returned source string in `_generated/functions.ts` — so the emitted-output golden fixture will change.
 - Differential harness: `packages/codegen/__tests__/compile-validator.test.ts` — `CORPUS` (lines 19-45) has no prototype-carrying input and no prototype-member field name; `assertParity` runs compiled-vs-interpreted over the corpus.
 - Bench: `packages/codegen/__tests__/compile-validator.bench.ts`.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/codegen..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/codegen" run test` | all pass |
-| Golden regen | `pnpm dlx tsx packages/codegen/__tests__/capture-expected.ts` | rewrites `packages/codegen/__tests__/fixtures/simple/expected/_generated/*` |
-| Bench     | `pnpm --filter "@lunora/codegen" run test -- bench` (or `vitest bench` per the package's scripts — check `packages/codegen/package.json`) | compiled path within noise of baseline |
-| Typecheck | `pnpm --filter "@lunora/codegen" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/codegen" run lint:eslint` | exit 0 |
+| Purpose      | Command                                                                                                                                   | Expected on success                                                         |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Install      | `pnpm install`                                                                                                                            | exit 0                                                                      |
+| Build deps   | `pnpm --filter "@lunora/codegen..." run build`                                                                                            | exit 0                                                                      |
+| Tests        | `pnpm --filter "@lunora/codegen" run test`                                                                                                | all pass                                                                    |
+| Golden regen | `pnpm dlx tsx packages/codegen/__tests__/capture-expected.ts`                                                                             | rewrites `packages/codegen/__tests__/fixtures/simple/expected/_generated/*` |
+| Bench        | `pnpm --filter "@lunora/codegen" run test -- bench` (or `vitest bench` per the package's scripts — check `packages/codegen/package.json`) | compiled path within noise of baseline                                      |
+| Typecheck    | `pnpm --filter "@lunora/codegen" run lint:types`                                                                                          | exit 0                                                                      |
+| Lint         | `pnpm --filter "@lunora/codegen" run lint:eslint`                                                                                         | exit 0                                                                      |
 
 ## Scope
 
 **In scope**:
+
 - `packages/codegen/src/compile-validator.ts`
 - `packages/codegen/__tests__/compile-validator.test.ts` (corpus + snippet additions)
 - `packages/codegen/__tests__/fixtures/simple/expected/_generated/*` (regenerated golden — commit the regen)
 - Any codegen test asserting on the emitted validator source substring (update expected strings)
 
 **Out of scope**:
+
 - `packages/values/*` — the oracle is correct; do not touch.
 - `apps/playground` / `examples/*` `_generated` output — drifts are swept in a dedicated chore commit, never mixed in (repo convention); explicitly deferred here.
 - The emitted `{ "__proto__": v }` object-literal question (validator-map's "considered" note) — author-declared keys, out of scope.
@@ -101,10 +103,12 @@ Emit instead an O(1)-per-object shape:
    `__proto__`-keyed edge cases) — the fast path keeps serving all wire input.
 
 **Verify**: `pnpm --filter "@lunora/codegen" run test -- compile-validator` → parity suite passes, including the corpus rows from Step 2 (a prototype-carrying source must now DEFER to the interpreter and agree with it).
+
 ### Step 2: Extend the differential corpus
 
 Add to `CORPUS` in `compile-validator.test.ts`:
-- `Object.assign(Object.create({ name: "inherited" }), {})` — a source whose *prototype* carries a declared field (compiled must now agree with the oracle: field absent).
+
+- `Object.assign(Object.create({ name: "inherited" }), {})` — a source whose _prototype_ carries a declared field (compiled must now agree with the oracle: field absent).
 - `{ toString: "x" }`-style own-property under a prototype-member name (must still parse normally).
 
 Add a snippet with a `v.any()` field named `toString` and assert parity (oracle yields `undefined` for the absent own key on a plain `{}` source).
@@ -146,7 +150,6 @@ Run the interleaved A/B (same process, alternating rounds, medians AND minima) �
 
 - The corpus now guards the own-property invariant; any new field-access emitter in `compile-validator.ts` must route through the same hasOwn shape.
 - Reviewer: check the golden diff is mechanical (one prototype guard per compiled object body; bare reads unchanged; hasOwn locals only for prototype-member-named fields, which typical schemas don't have).
-
 
 ## GATE DECISION (2026-08-21, advisor)
 

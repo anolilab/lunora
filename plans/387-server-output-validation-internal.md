@@ -26,54 +26,56 @@ When a builder-defined `query`/`mutation`/`action` declares `.output(...)` and t
 ## Current state
 
 - `packages/server/src/builder/index.ts:81-94` — `makeHandler` ends with:
-  ```ts
-  const result = await userHandler({ args: parsed, ctx: resolvedContext });
+    ```ts
+    const result = await userHandler({ args: parsed, ctx: resolvedContext });
 
-  return (output ? output.parse(result) : result) as Awaited<R>;
-  ```
-  The `ValidationError` from `output.parse` escapes untagged.
+    return (output ? output.parse(result) : result) as Awaited<R>;
+    ```
+    The `ValidationError` from `output.parse` escapes untagged.
 - `packages/server/src/http.ts:353-366` — the exemplar to mirror:
-  ```ts
-  /**
-   * Parse the handler result through `.output()`. A mismatch here is a server
-   * contract bug, not a client error, so re-tag it as a 500.
-   */
-  const applyOutput = (output: Validator, result: unknown): unknown => {
-      try {
-          return output.parse(result);
-      } catch (error: unknown) {
-          if (error instanceof ValidationError) {
-              throw new LunoraError("INTERNAL_SERVER_ERROR", `Response did not match the declared output schema: ${error.message}`);
-          }
+    ```ts
+    /**
+     * Parse the handler result through `.output()`. A mismatch here is a server
+     * contract bug, not a client error, so re-tag it as a 500.
+     */
+    const applyOutput = (output: Validator, result: unknown): unknown => {
+        try {
+            return output.parse(result);
+        } catch (error: unknown) {
+            if (error instanceof ValidationError) {
+                throw new LunoraError("INTERNAL_SERVER_ERROR", `Response did not match the declared output schema: ${error.message}`);
+            }
 
-          throw error;
-      }
-  };
-  ```
-  `applyOutput` is module-private (not exported).
+            throw error;
+        }
+    };
+    ```
+    `applyOutput` is module-private (not exported).
 - `packages/errors/src/to-error-body.ts` — an internal-coded `LunoraError` gets its message replaced with `redactedMessage` and `redacted: true`; the DO edge (`packages/do/src/shard-do.ts` around line 5930) then `console.error`s the raw error server-side. `INTERNAL_SERVER_ERROR` is internal-coded, so re-tagging automatically gets redaction + server-side logging.
 - `LunoraError` in `@lunora/server` is imported from `packages/server/src/error.ts` (see `http.ts:8`).
 - There is also `makeStreamHandler` directly below `makeHandler` in `builder/index.ts` — check whether it applies an output validator; if it does not parse output, leave it alone.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/server..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/server" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/server" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/server" run lint:eslint` | exit 0 |
+| Purpose    | Command                                          | Expected on success |
+| ---------- | ------------------------------------------------ | ------------------- |
+| Install    | `pnpm install`                                   | exit 0              |
+| Build deps | `pnpm --filter "@lunora/server..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/server" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/server" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/server" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope** (the only files you should modify):
+
 - `packages/server/src/builder/index.ts`
 - `packages/server/src/http.ts` (only to export/move the shared helper)
 - A new shared-helper module inside `packages/server/src/` if you extract one (e.g. `packages/server/src/apply-output.ts`)
 - `packages/server/__tests__/builder.test.ts` (add regression test)
 
 **Out of scope**:
+
 - `packages/errors/*` — the catalog entry for `VALIDATION_ERROR` stays a 400; args validation failures ARE client errors.
 - `packages/do/*` — the DO edge already handles internal codes correctly.
 - `makeStreamHandler`'s streaming semantics — only touch it if it parses output the same way (it likely does not).

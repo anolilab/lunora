@@ -27,36 +27,36 @@
 ## Current state
 
 - The fan-out — `packages/payment/src/create-payment.ts:354-361` (inside `listBalances`):
-  ```ts
-  // `Promise.all` preserves the sorted `featureNames` order.
-  return Promise.all(
-      featureNames(options.entitlements).map(async (featureId) => {
-          return {
-              featureId,
-              ...(await evaluateFeature(entitlements, subscriptions, referenceId, featureId, 1)),
-          };
-      }),
-  );
-  ```
+    ```ts
+    // `Promise.all` preserves the sorted `featureNames` order.
+    return Promise.all(
+        featureNames(options.entitlements).map(async (featureId) => {
+            return {
+                featureId,
+                ...(await evaluateFeature(entitlements, subscriptions, referenceId, featureId, 1)),
+            };
+        }),
+    );
+    ```
 - The per-feature read — `create-payment.ts:210-217` (inside `evaluateFeature`):
-  ```ts
-  const limit = entitlements.limit(featureId);
+    ```ts
+    const limit = entitlements.limit(featureId);
 
-  if (limit !== undefined) {
-      const used = await store.sumUsage(referenceId, featureId, usagePeriodStart(subscriptions));
-      const balance = limit - used;
+    if (limit !== undefined) {
+        const used = await store.sumUsage(referenceId, featureId, usagePeriodStart(subscriptions));
+        const balance = limit - used;
 
-      return { allowed: balance >= need, balance, limit, unlimited: false, used };
-  }
-  ```
+        return { allowed: balance >= need, balance, limit, unlimited: false, used };
+    }
+    ```
 - The scan — `packages/payment/src/database-store.ts:242-246`:
-  ```ts
-  sumUsage: async (referenceId, featureId, since) => {
-      // NOTE: this reads the full lifetime ledger for the pair and filters in memory — O(events)
-      // per call. Fine for typical volumes; for hot metered features, add a per-period rollup row
-      // (or a createdAt-range query) so old periods aren't re-scanned on every check/track.
-      const rows = await database.findMany("usageEvents", { featureId, referenceId });
-  ```
+    ```ts
+    sumUsage: async (referenceId, featureId, since) => {
+        // NOTE: this reads the full lifetime ledger for the pair and filters in memory — O(events)
+        // per call. Fine for typical volumes; for hot metered features, add a per-period rollup row
+        // (or a createdAt-range query) so old periods aren't re-scanned on every check/track.
+        const rows = await database.findMany("usageEvents", { featureId, referenceId });
+    ```
 - Both stores share `foldUsage` (`store.ts:85-94` region) so fold semantics are already centralized.
 - `PaymentStore.sumUsage` signature: `store.ts:64` — `(referenceId: string, featureId: string, since: number) => Promise<number>`.
 - The memory store's `sumUsage`: `store.ts:168-178` — iterates `this.usageEvents.values()` filtering by reference/feature/since.
@@ -77,18 +77,19 @@ sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, sinc
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/payment..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/payment" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/payment" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0 |
-| API snapshot | `pnpm run build:packages && pnpm run api:update` | exit 0; `api-snapshots/payment.api.md` updated |
+| Purpose      | Command                                           | Expected on success                            |
+| ------------ | ------------------------------------------------- | ---------------------------------------------- |
+| Install      | `pnpm install`                                    | exit 0                                         |
+| Build deps   | `pnpm --filter "@lunora/payment..." run build`    | exit 0                                         |
+| Tests        | `pnpm --filter "@lunora/payment" run test`        | all pass                                       |
+| Typecheck    | `pnpm --filter "@lunora/payment" run lint:types`  | exit 0                                         |
+| Lint         | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0                                         |
+| API snapshot | `pnpm run build:packages && pnpm run api:update`  | exit 0; `api-snapshots/payment.api.md` updated |
 
 ## Scope
 
 **In scope**:
+
 - `packages/payment/src/store.ts` (interface + memory implementation)
 - `packages/payment/src/database-store.ts`
 - `packages/payment/src/create-payment.ts` (`listBalances` only)
@@ -96,6 +97,7 @@ sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, sinc
 - `api-snapshots/payment.api.md` (via `pnpm run api:update`)
 
 **Out of scope**:
+
 - Per-period rollup rows / `createdAt`-range indexes — the documented future upgrade; this plan only removes the ×N fan-out.
 - `check` and `track` — they stay on single-feature `sumUsage`.
 - Any custom third-party `PaymentStore` implementations (pre-1.0 alpha: adding a required interface member is a break; say so in the commit body).

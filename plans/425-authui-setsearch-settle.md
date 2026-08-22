@@ -28,44 +28,46 @@
 Excerpts from committed HEAD, `packages/auth-ui/src/core/admin-users.ts`:
 
 - `:92-97`:
-  ```ts
-  const clearSearchTimer = (): void => {
-      if (searchTimer !== undefined) {
-          clearTimeout(searchTimer);
-          searchTimer = undefined;
-      }
-  };
-  ```
+    ```ts
+    const clearSearchTimer = (): void => {
+        if (searchTimer !== undefined) {
+            clearTimeout(searchTimer);
+            searchTimer = undefined;
+        }
+    };
+    ```
 - `:124-140` (`setSearch`): `resource.patch({ search: value }); clearSearchTimer();` … then
-  ```ts
-  return new Promise<void>((resolve) => {
-      searchTimer = setTimeout(() => {
-          searchTimer = undefined;
-          resolve(resource.refetch());
-      }, debounceMs);
-  });
-  ```
+    ```ts
+    return new Promise<void>((resolve) => {
+        searchTimer = setTimeout(() => {
+            searchTimer = undefined;
+            resolve(resource.refetch());
+        }, debounceMs);
+    });
+    ```
 - `:145-148` (`destroy`): `clearSearchTimer(); resource.destroy();`
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/auth-ui" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/auth-ui" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/auth-ui" run lint:eslint` | exit 0 |
-| Registry sync | `pnpm --filter "@lunora/auth-ui" run sync:registry` | exit 0 |
-| Registry gate | `pnpm run lint:registry:sync` | exit 0 |
+| Purpose       | Command                                             | Expected on success |
+| ------------- | --------------------------------------------------- | ------------------- |
+| Install       | `pnpm install`                                      | exit 0              |
+| Tests         | `pnpm --filter "@lunora/auth-ui" run test`          | all pass            |
+| Typecheck     | `pnpm --filter "@lunora/auth-ui" run lint:types`    | exit 0              |
+| Lint          | `pnpm --filter "@lunora/auth-ui" run lint:eslint`   | exit 0              |
+| Registry sync | `pnpm --filter "@lunora/auth-ui" run sync:registry` | exit 0              |
+| Registry gate | `pnpm run lint:registry:sync`                       | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/auth-ui/src/core/admin-users.ts`
 - Its core test file (find: `ls packages/auth-ui/__tests__ | grep -i admin`)
 - `registry/auth-ui-*/` via `sync:registry` only
 
 **Out of scope**:
+
 - `resource.refetch`/`patch`/the resource controller — unchanged.
 - Debounce timing/semantics — a superseded call resolves without refetching (that IS the semantic: only the last keystroke's promise performs the fetch).
 
@@ -85,6 +87,7 @@ Alongside `searchTimer`, hold `let searchResolve: (() => void) | undefined;`. In
 ### Step 2: Tests
 
 With fake timers (model on the existing debounce tests in the admin-users suite — they exist for the debounce behaviour):
+
 1. Two rapid `setSearch` calls: the first promise resolves when the second supersedes it; only one `refetch` fires after the delay.
 2. `setSearch` then `destroy()` before the delay: the promise resolves; no refetch fires.
 
@@ -108,7 +111,7 @@ Covered in Step 2.
 ## STOP conditions
 
 - Drift check reports in-scope changes and the live code no longer matches the excerpts.
-- An existing test awaits the *superseded* promise and expects its refetch result — would mean the dangling behaviour is somewhere load-bearing; report.
+- An existing test awaits the _superseded_ promise and expects its refetch result — would mean the dangling behaviour is somewhere load-bearing; report.
 
 ## Maintenance notes
 

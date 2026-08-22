@@ -24,38 +24,40 @@
 ## Current state
 
 - `packages/auth/src/audit.ts:176-202` — `ensureAuthAuditTable(executor)`: the CREATE, then:
-  ```ts
-  try {
-      await executor.run(`ALTER TABLE "${AUTH_AUDIT_TABLE}" ADD COLUMN target_email TEXT`, []);
-  } catch (error) {
-      const message = error instanceof Error ? error.message.toLowerCase() : ...;
-      if (!message.includes("duplicate column")) { throw error; }
-  }
-  ```
+    ```ts
+    try {
+        await executor.run(`ALTER TABLE "${AUTH_AUDIT_TABLE}" ADD COLUMN target_email TEXT`, []);
+    } catch (error) {
+        const message = error instanceof Error ? error.message.toLowerCase() : ...;
+        if (!message.includes("duplicate column")) { throw error; }
+    }
+    ```
 - Call sites: `audit.ts:215` (`appendAuthAuditEntry`), `audit.ts:263` (`readAuthAuditLog`).
 - The pattern to copy — `packages/auth/src/migrate.ts:30`:
-  ```ts
-  const migrating = new WeakMap<object, Promise<void>>();
-  ```
-  with its docblock explaining the per-reference single-flight semantics (dedupes only when the same long-lived object is reused — the Workers isolate-reuse case — and that this is sufficient).
+    ```ts
+    const migrating = new WeakMap<object, Promise<void>>();
+    ```
+    with its docblock explaining the per-reference single-flight semantics (dedupes only when the same long-lived object is reused — the Workers isolate-reuse case — and that this is sufficient).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/auth..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/auth" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/auth" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/auth" run lint:eslint` | exit 0 |
+| Purpose    | Command                                        | Expected on success |
+| ---------- | ---------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                 | exit 0              |
+| Build deps | `pnpm --filter "@lunora/auth..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/auth" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/auth" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/auth" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/auth/src/audit.ts`
 - The audit test file (find it: `ls packages/auth/__tests__ | grep -i audit`) — add the single-flight test.
 
 **Out of scope**:
+
 - `migrate.ts` — the exemplar, not a target.
 - The DDL itself (table shape, ALTER) — unchanged; only how often it runs.
 
@@ -73,7 +75,9 @@ Add a module-level `const ensured = new WeakMap<SqlExecutor, Promise<void>>();` 
 ```ts
 const ensureAuthAuditTable = (executor: SqlExecutor): Promise<void> => {
     const inFlight = ensured.get(executor);
-    if (inFlight) { return inFlight; }
+    if (inFlight) {
+        return inFlight;
+    }
     const run = ensureAuthAuditTableUncached(executor);
     ensured.set(executor, run);
     return run;

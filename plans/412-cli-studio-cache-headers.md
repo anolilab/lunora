@@ -26,29 +26,30 @@ The Vite studio host sends `Cache-Control: no-cache` plus a `W/"<file>-<stamp>"`
 
 - `packages/vite/src/studio-plugin.ts:186-228` — `serveStaticAsset`: stamp-keyed asset reload, `Cache-Control: no-cache`, `ETag: W/"<fileName>-<stamp>"`, If-None-Match → 304.
 - `packages/cli/src/util/studio-server.ts:153-158`:
-  ```ts
-  const sendAsset = (response: ServerResponse, body: Buffer, contentType: string): void => {
-      response.statusCode = 200;
-      response.setHeader("Content-Type", contentType);
-      response.end(body);
-  };
-  ```
-  `:307` serves the token-bearing SPA document through the same helper. The CLI host re-reads asset bytes on rebuild (a freshness mechanism the browser never asks for).
+    ```ts
+    const sendAsset = (response: ServerResponse, body: Buffer, contentType: string): void => {
+        response.statusCode = 200;
+        response.setHeader("Content-Type", contentType);
+        response.end(body);
+    };
+    ```
+    `:307` serves the token-bearing SPA document through the same helper. The CLI host re-reads asset bytes on rebuild (a freshness mechanism the browser never asks for).
 - The consolidation precedent + target home: `packages/config/src/studio-host/` (see `transport-guard.ts:9-16` for the drift-incident rationale; `assets.ts` already exports `studioAssetsStamp`, `loadStudioAssets`, `assetContentType` from the same directory, re-exported via `index.ts:16`).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/cli..." run build && pnpm --filter "@lunora/vite..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/config" run test && pnpm --filter "@lunora/cli" run test && pnpm --filter "@lunora/vite" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/config" run lint:types && pnpm --filter "@lunora/cli" run lint:types && pnpm --filter "@lunora/vite" run lint:types` | exit 0 |
-| API snapshot | `pnpm run build:packages && pnpm run api:check` | exit 0 (run `api:update` after a fresh build if the @lunora/config surface legitimately grew) |
+| Purpose      | Command                                                                                                                                      | Expected on success                                                                           |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Install      | `pnpm install`                                                                                                                               | exit 0                                                                                        |
+| Build deps   | `pnpm --filter "@lunora/cli..." run build && pnpm --filter "@lunora/vite..." run build`                                                      | exit 0                                                                                        |
+| Tests        | `pnpm --filter "@lunora/config" run test && pnpm --filter "@lunora/cli" run test && pnpm --filter "@lunora/vite" run test`                   | all pass                                                                                      |
+| Typecheck    | `pnpm --filter "@lunora/config" run lint:types && pnpm --filter "@lunora/cli" run lint:types && pnpm --filter "@lunora/vite" run lint:types` | exit 0                                                                                        |
+| API snapshot | `pnpm run build:packages && pnpm run api:check`                                                                                              | exit 0 (run `api:update` after a fresh build if the @lunora/config surface legitimately grew) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/config/src/studio-host/` — new small helper (e.g. `asset-cache.ts`): given `(fileName, stamp, ifNoneMatch)` return `{ etag?: string; notModified: boolean }`, plus the `no-cache`/`no-store` policy constants; export from `index.ts`.
 - `packages/vite/src/studio-plugin.ts` — replace the inline ETag/304 block with the shared helper (behaviour identical).
 - `packages/cli/src/util/studio-server.ts` — `sendAsset` gains `Cache-Control: no-cache` + ETag/304 via the helper; the SPA document path sends `Cache-Control: no-store` (token-bearing).
@@ -56,6 +57,7 @@ The Vite studio host sends `Cache-Control: no-cache` plus a `W/"<file>-<stamp>"`
 - `api-snapshots/config.api.md` via `pnpm run api:update` (new export).
 
 **Out of scope**:
+
 - Any change to which assets are served, transport guards, or the SPA fallback routing.
 - `@lunora/studio` itself.
 

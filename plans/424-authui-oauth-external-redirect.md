@@ -28,38 +28,40 @@ After an OAuth consent decision, `oauth-provider.ts` navigates to `response.data
 All excerpts from committed HEAD:
 
 - `packages/auth-ui/src/core/oauth-provider.ts:97-110` (`decide`):
-  ```ts
-  const response = assertOk(await context.authClient.oauth2.consent({ accept }));
-  const redirect = response.data?.redirectURI;
-  if (redirect === undefined || redirect === "") { …consentExpired error…; return; }
-  store.update({ status: "success" });
-  context.nav.replace(redirect);
-  ```
+    ```ts
+    const response = assertOk(await context.authClient.oauth2.consent({ accept }));
+    const redirect = response.data?.redirectURI;
+    if (redirect === undefined || redirect === "") { …consentExpired error…; return; }
+    store.update({ status: "success" });
+    context.nav.replace(redirect);
+    ```
 - `packages/auth-ui/src/core/config.ts:28-31` — `NavAdapter { navigate(to); replace(to); }`, documented as the router bridge.
 - `packages/auth-ui/src/core/default-nav.ts` — the fallback drives `globalThis.location.assign/replace`.
-- The in-app-path test that already exists — `packages/auth-ui/src/core/redirect-to.ts:38-51` `isSafeRedirect(target)`: true only for a same-origin *path* (rejects absolute URLs, `//host`, `/\` variants, control chars).
+- The in-app-path test that already exists — `packages/auth-ui/src/core/redirect-to.ts:38-51` `isSafeRedirect(target)`: true only for a same-origin _path_ (rejects absolute URLs, `//host`, `/\` variants, control chars).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/auth-ui" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/auth-ui" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/auth-ui" run lint:eslint` | exit 0 |
-| Registry sync | `pnpm --filter "@lunora/auth-ui" run sync:registry` | exit 0 |
-| Registry gate | `pnpm run lint:registry:sync` | exit 0 |
-| API gate | `pnpm run build:packages && pnpm run api:check` | exit 0 (`api:update` only for intended changes) |
+| Purpose       | Command                                             | Expected on success                             |
+| ------------- | --------------------------------------------------- | ----------------------------------------------- |
+| Install       | `pnpm install`                                      | exit 0                                          |
+| Tests         | `pnpm --filter "@lunora/auth-ui" run test`          | all pass                                        |
+| Typecheck     | `pnpm --filter "@lunora/auth-ui" run lint:types`    | exit 0                                          |
+| Lint          | `pnpm --filter "@lunora/auth-ui" run lint:eslint`   | exit 0                                          |
+| Registry sync | `pnpm --filter "@lunora/auth-ui" run sync:registry` | exit 0                                          |
+| Registry gate | `pnpm run lint:registry:sync`                       | exit 0                                          |
+| API gate      | `pnpm run build:packages && pnpm run api:check`     | exit 0 (`api:update` only for intended changes) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/auth-ui/src/core/oauth-provider.ts`
 - A small helper in `core/` (new function; put it in `redirect-to.ts` next to `isSafeRedirect` rather than a new file)
 - The oauth-provider core test file
 - `registry/auth-ui-*/` via `sync:registry` only
 
 **Out of scope**:
+
 - `NavAdapter`'s interface/contract and every other `nav.replace`/`nav.navigate` call site — they pass in-app paths and are correct.
 - `isSafeRedirect` itself — reuse, don't modify.
 

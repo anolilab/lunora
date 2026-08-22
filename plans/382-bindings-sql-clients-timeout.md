@@ -25,14 +25,16 @@ Both HTTP SQL clients in `@lunora/bindings` issue fetches with no `signal`. `ctx
 ## Current state
 
 - `packages/bindings/src/r2sql/client.ts:105-112`:
-  ```ts
-  const response = await fetchImpl(endpoint, {
-      body: JSON.stringify({ query: statement, warehouse }),
-      headers: { Authorization: `Bearer ${config.apiToken}`, "Content-Type": "application/json" },
-      method: "POST",
-  });
-  if (!response.ok) { throw new R2SqlError(response.status, await response.text()); }
-  ```
+    ```ts
+    const response = await fetchImpl(endpoint, {
+        body: JSON.stringify({ query: statement, warehouse }),
+        headers: { Authorization: `Bearer ${config.apiToken}`, "Content-Type": "application/json" },
+        method: "POST",
+    });
+    if (!response.ok) {
+        throw new R2SqlError(response.status, await response.text());
+    }
+    ```
 - `packages/bindings/src/analytics/sql-api.ts:86-93` — same shape (`body: sql`, `"Content-Type": "text/plain"`), throws `AnalyticsSqlError(response.status, await response.text())` on non-ok.
 - Config types: `R2SqlConfig` (same dir as client.ts, check `types.ts`/the config interface actually used) and `AnalyticsSqlConfig` — read them first; neither has a timeout today.
 - Both error classes carry an HTTP status as first argument — map a timeout to status `504`.
@@ -40,24 +42,26 @@ Both HTTP SQL clients in `@lunora/bindings` issue fetches with no `signal`. `ctx
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/bindings..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/bindings" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/bindings" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/bindings" run lint:eslint` | exit 0 |
-| API gate  | `pnpm run build:packages && pnpm run api:check` | exit 0 (`api:update` + commit snapshot for the two config-type additions) |
+| Purpose    | Command                                            | Expected on success                                                       |
+| ---------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
+| Install    | `pnpm install`                                     | exit 0                                                                    |
+| Build deps | `pnpm --filter "@lunora/bindings..." run build`    | exit 0                                                                    |
+| Tests      | `pnpm --filter "@lunora/bindings" run test`        | all pass                                                                  |
+| Typecheck  | `pnpm --filter "@lunora/bindings" run lint:types`  | exit 0                                                                    |
+| Lint       | `pnpm --filter "@lunora/bindings" run lint:eslint` | exit 0                                                                    |
+| API gate   | `pnpm run build:packages && pnpm run api:check`    | exit 0 (`api:update` + commit snapshot for the two config-type additions) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/bindings/src/r2sql/client.ts` (+ its config type file)
 - `packages/bindings/src/analytics/sql-api.ts` (+ its config type file)
 - `packages/bindings/__tests__/r2sql/`, `packages/bindings/__tests__/analytics/` (extend)
 - `packages/bindings/tsconfig.json` ONLY if it still sets `outDir`/`rootDir` and the shared import needs the drop (add the breadcrumb comment other such tsconfigs carry)
 
 **Out of scope**:
+
 - Every other subpath of `@lunora/bindings` (kv/images/pipelines/vectors) — different transports.
 - Studio/advisor call sites — they inherit the default.
 
@@ -96,6 +100,7 @@ If plan 379 has not landed on this branch's base, inline the controller+setTimeo
 ### Step 3: Tests
 
 In the existing r2sql and analytics test files (`packages/bindings/__tests__/r2sql/`, `__tests__/analytics/` — follow their `fetchImpl` stubbing pattern):
+
 - a `fetchImpl` that never resolves + fake timers → rejects with `R2SqlError`/`AnalyticsSqlError` status 504 mentioning the timeout;
 - a fast response leaves no pending timers (`vi.getTimerCount() === 0`);
 - `timeoutMs` override is honored.
