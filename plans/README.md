@@ -1807,6 +1807,10 @@ findings are worth reading even if the features are not: Convex's
 `useStaleSnapshot` does NOT transfer (Lunora has no read-set OCC conflict class,
 so the transferable idea is subscription re-run pressure instead), and `.memory()`
 buys the lifetime rather than the write, because workerd exposes no
-memory-backed SQL handle. Open follow-ups: an advisor lint for `.commitOrdered()`
-without `.softDelete()`, `apps/docs` pages, and a Studio surface for reactor
-runs/suppressions.
+memory-backed SQL handle. The three follow-ups it listed have since shipped
+too: the `commit_ordered_hard_delete` advisor lint, three `apps/docs` concept
+pages, and a Studio **Reactors** panel backed by durable per-reactor counters.
+Building those surfaced two bugs worth remembering — the conformance reference
+host could not serve a `PRAGMA` read (breaking any pragma-guarded `ALTER TABLE`),
+and a reactor's writes were staged but never flushed, so no subscriber saw them
+and the actor cascade never happened.

@@ -327,11 +327,36 @@ targets with that note attached.
   search/geo/aggregate/rank/vector companion, because clearing it is a `DELETE`
   on the base table.
 
-### 6.3 Still open
+### 6.3 Follow-ups, closed
 
-- An advisor lint for `.commitOrdered()` without `.softDelete()` — the
-  hard-delete blind spot is documentation-only today.
-- `apps/docs` pages for all four surfaces. The JSDoc is thorough; the docs site
-  has nothing.
-- A reactor observability surface. Runs, suppressions, and non-convergence stops
-  are only visible in the log ring; the Studio has no panel for them.
+All three items originally deferred out of the feature work have since shipped on
+the same branch:
+
+- **`commit_ordered_hard_delete`** — a `WARN`-level static lint flagging a
+  `.commitOrdered()` table with no `.softDelete()`. Warn rather than error
+  because an append-only table has no delete to express; the lint exists because
+  the failure is silent and permanent, so it should be a decision.
+- **Docs** — `concepts/commit-ordering`, `concepts/reactors`, and
+  `concepts/memory-tables`, each leading with the problem rather than the API,
+  and each stating its ceilings as prose rather than footnotes.
+- **Reactor observability** — durable per-reactor counters in `__reactor_state`,
+  the `listReactors` admin read, and a Studio **Reactors** panel under
+  Observability. The panel leads with a three-way state (`idle` / `active` /
+  `failing`) because "declared but never dispatched" is the state an operator is
+  actually looking for, and it surfaces the suppressed:runs ratio because a
+  suppressed dispatch is real work done to learn nothing changed.
+
+Two bugs surfaced while building those, both worth remembering:
+
+1. **The conformance reference host could not serve a `PRAGMA` read.** It
+   buffered rows only for statements starting with `select`, so the engine's
+   idempotent migrations — which pragma-check for a column before
+   `ALTER TABLE … ADD COLUMN` — saw "column missing" for a column that was there
+   and failed with "duplicate column name". The aggregate-companion migration had
+   the identical exposure and simply was not exercised by the suite.
+2. **A reactor's writes never flushed.** `ctx.db` only _stages_ touched tables via
+   `recordChangedTable`; the request path is what flushes them, and a reactor has
+   no request. Without an explicit flush its writes sat unflushed until an
+   unrelated RPC — invisible to subscribers, and the cascade that lets an actor
+   advance a state machine never happened. Caught because the convergence test
+   measured one run instead of eight.
