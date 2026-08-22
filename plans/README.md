@@ -1800,5 +1800,13 @@ reactivity, because a shard already is an actor. Memory tables are recommended
 (`ctx-db-global-shape-snapshot.ts`, `ctx-db-shape-poke-cursor.ts`) already
 record what that costs. Suggested order: `_commitSeq` → query-level reactors →
 snapshot-query options; memory tables + `onShardInit` only on a real forcing
-case. No plan numbers claimed; each section states the design questions a plan
-would have to answer first.
+case. **All four gaps subsequently shipped** (see the doc's §6 for what changed
+shape during implementation and why): `.commitOrdered()`/`_commitSeq`, untracked
+`ctx.runQuery`, `.memory()` + `onShardInit`, and `onQueryChange` reactors. Two
+findings are worth reading even if the features are not: Convex's
+`useStaleSnapshot` does NOT transfer (Lunora has no read-set OCC conflict class,
+so the transferable idea is subscription re-run pressure instead), and `.memory()`
+buys the lifetime rather than the write, because workerd exposes no
+memory-backed SQL handle. Open follow-ups: an advisor lint for `.commitOrdered()`
+without `.softDelete()`, `apps/docs` pages, and a Studio surface for reactor
+runs/suppressions.

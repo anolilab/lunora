@@ -265,8 +265,73 @@ The claim is accurate on all five counts. The useful reframe is that Lunora is
   tables, because our runtime evicts the heap and we have two shipped bugs
   proving what that costs.
 
-Suggested order: **`_commitSeq` first** (real gap, mechanism already exists,
-unblocks ordering-sensitive work across `@lunora/replica` and `@lunora/agent`),
-**query-level reactors second** (genuine differentiation, but the re-entrancy
-contract must be designed before any code), snapshot-query options as a
-ride-along, memory tables deferred pending a real forcing case.
+---
+
+## 6. What shipped (2026-08-22)
+
+All four gaps were closed on `claude/convex-primitives-analysis-ulk22g`. Two of
+the four changed shape once the code was read; those changes are the interesting
+record here.
+
+| Gap                       | Shipped as                                     | Notes                                                                                                                                                                                                                                                |
+| ------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Commit-ordered timestamps | `.commitOrdered()` → `_commitSeq`              | Stored in the `__doc__` blob, so `documentPath`'s `json_extract` fallback makes it orderable/indexable with no `ALTER TABLE`. Counter allocated once per mutation from `__commit_seq`, inside the same DO storage transaction as the rows it stamps. |
+| Snapshot queries          | `ctx.runQuery(ref, args, { untracked: true })` | **Re-derived, not ported** — see below.                                                                                                                                                                                                              |
+| Server-side reactivity    | `onQueryChange(select, handler)`               | Footprint gate + result digest, both durable in `__reactor_state`; convergence bounded per refresh drain.                                                                                                                                            |
+| Memory tables + init      | `.memory()` + `onShardInit`                    | Shipped as a pair; the ordering guarantee lives in the DO base.                                                                                                                                                                                      |
+
+### 6.1 Where the analysis above was wrong
+
+**Snapshot queries were mis-scoped.** §3 listed `ctx.runQuery`'s missing options
+bag as a gap on the assumption that Convex's `useStaleSnapshot` would transfer.
+It does not. Convex needs that flag because a mutation there validates its whole
+read set at commit, so _reading_ a hot append-only table manufactures OCC
+conflicts. Lunora's OCC is a compare-and-swap on the `__doc__` of each row a
+mutation **writes** (`runGuardedWrite` in `ctx-db.ts`) — there is no read-set
+conflict class, so a literal port would have relieved nothing.
+
+What a read actually costs here is **reactivity**: every table a live query
+touches enters its read footprint, and any write to those tables re-runs the
+subscription. That is Lunora's version of the pressure Convex is relieving, and
+`untracked` is what addresses it. The name matters: nothing is stale, so calling
+it `useStaleSnapshot` would have been a lie about the semantics.
+
+**Memory tables were half-right.** §4.3's recommendation to defer stands on the
+reasoning but was overruled by scope. The implementation is honest about what it
+could not deliver: workerd exposes one SQL handle and no memory-backed database,
+so `.memory()` buys the _lifetime_ (and keeps writes out of the CDC changelog),
+not the write. It is a real table that is wiped, not a heap store — which keeps
+one storage model instead of two that drift, and is rated `emulated` on both
+targets with that note attached.
+
+### 6.2 Decisions worth re-reading before extending any of this
+
+- **`onQueryChange` takes an inline read, not a query reference.** A reference
+  would need static resolution of an imported identifier and would couple
+  reactors to `_generated/api`. The callback keeps discovery trivial and lets the
+  read and handler share one transaction and one footprint. The cost is a
+  conservative footprint (the union of both), which can cost a redundant `select`
+  and never a missed reaction.
+- **The reactor baseline is the PRE-handler digest.** So a handler that changes
+  its own read is invoked again on the new result, and again, until it settles.
+  That cascade is the feature — it is how an actor advances a state machine — and
+  `MAX_REACTOR_RUNS_PER_DRAIN` is the backstop for the case that never settles.
+- **Reactors and `onShardInit` run system-trusted.** RLS scopes rows to a user
+  and neither dispatch has one. Failing them closed would make both unusable
+  under `.rls("required")`; inheriting the last writer's identity would be worse
+  than running as nobody. Both docblocks say plainly that `select` sees every row
+  and must scope itself.
+- **Three ceilings are documented rather than fixed.** A hard delete is invisible
+  to a `_commitSeq` feed (pair with `.softDelete()`); `_commitSeq` is per-shard,
+  so `.global()` is rejected; and a `.memory()` table cannot carry a
+  search/geo/aggregate/rank/vector companion, because clearing it is a `DELETE`
+  on the base table.
+
+### 6.3 Still open
+
+- An advisor lint for `.commitOrdered()` without `.softDelete()` — the
+  hard-delete blind spot is documentation-only today.
+- `apps/docs` pages for all four surfaces. The JSDoc is thorough; the docs site
+  has nothing.
+- A reactor observability surface. Runs, suppressions, and non-convergence stops
+  are only visible in the log ring; the Studio has no panel for them.
