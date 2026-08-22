@@ -271,7 +271,7 @@ interface FunctionIR {
     };
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
-    lifecycle?: "connect" | "disconnect" | "init";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     output?: ValidatorIR;
     returnType: string;
     visibility?: "internal" | "public";

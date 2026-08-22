@@ -553,6 +553,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ReactorHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ReactorOutcome` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ReactorSelect` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ReadOnlyStorage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -582,6 +594,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredReactor` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1122,6 +1138,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `onDisconnect` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `onQueryChange` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5079,6 +5099,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ReactorHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ReactorOutcome` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ReactorSelect` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ReadOnlyStorage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5108,6 +5140,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredReactor` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5648,6 +5684,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `onDisconnect` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `onQueryChange` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

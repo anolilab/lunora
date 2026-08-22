@@ -37,6 +37,7 @@ import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 import { migrateDurableStreams } from "./durable-stream";
 import { rankTableName, sortColumnName } from "./rank";
+import { migrateReactorState } from "./reactor-state";
 import { recordSchemaVersion } from "./schema-history";
 
 /** Create the secondary + `.unique()` expression indexes declared on a table. */
@@ -274,6 +275,12 @@ export const runShardMigrations = (
     if (Object.values(schema.tables).some((table) => table.commitOrderedMode === true)) {
         migrateCommitSeq(sql);
     }
+
+    // Always present: a reactor's baseline must survive hibernation, and a
+    // `.reactor` can be declared without any schema change — so the table has to
+    // exist before the first flush, not when a schema flag says so. Empty (and
+    // free) on a shard that declares none.
+    migrateReactorState(sql);
 
     // Always present: the mutation-replay dedup table is independent of CDC and
     // costs nothing until the first id-bearing mutation writes to it.

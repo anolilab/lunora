@@ -845,7 +845,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect" | "init";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
 ```
 
 ### `LifecycleHandler` (type)
@@ -1491,6 +1491,27 @@ interface RankSortKey {
 }
 ```
 
+### `ReactorHandler` (type)
+
+```ts
+type ReactorHandler<T> = (context: MutationCtx, result: T) => Promise<void> | void;
+```
+
+### `ReactorOutcome` (interface)
+
+```ts
+interface ReactorOutcome {
+    digest: string;
+    ran: boolean;
+}
+```
+
+### `ReactorSelect` (type)
+
+```ts
+type ReactorSelect<T> = (context: QueryCtx) => Promise<T> | T;
+```
+
 ### `ReadOnlyStorage` (interface)
 
 ```ts
@@ -1563,6 +1584,14 @@ interface RegisteredMutator<Args extends ValidatorMap = ValidatorMap, ServerCont
 
 ```ts
 type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
+```
+
+### `RegisteredReactor` (type)
+
+```ts
+type RegisteredReactor = RegisteredFunction<Record<string, never>, ReactorOutcome, "mutation"> & {
+    readonly lifecycle: "reactor";
+};
 ```
 
 ### `RegisteredShape` (interface)
@@ -2815,6 +2844,12 @@ const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
 
 ```ts
 const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
+```
+
+### `onQueryChange` (const)
+
+```ts
+const onQueryChange: <T>(select: ReactorSelect<T>, handler: ReactorHandler<T>) => RegisteredReactor;
 ```
 
 ### `onShardInit` (const)
@@ -4511,7 +4546,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect" | "init";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
 ```
 
 ### `LogFields` (type)

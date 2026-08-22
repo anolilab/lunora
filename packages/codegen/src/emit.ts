@@ -2391,8 +2391,8 @@ export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
  * `LUNORA_FUNCTIONS`, so the DO dispatches a hook by path like any other
  * registered function. Functions arrive pre-sorted, so the arrays are stable.
  */
-const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connect: string[]; disconnect: string[]; init: string[] } => {
-    const manifest: { connect: string[]; disconnect: string[]; init: string[] } = { connect: [], disconnect: [], init: [] };
+const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connect: string[]; disconnect: string[]; init: string[]; reactor: string[] } => {
+    const manifest: { connect: string[]; disconnect: string[]; init: string[]; reactor: string[] } = { connect: [], disconnect: [], init: [], reactor: [] };
 
     for (const definition of functions) {
         if (!definition.lifecycle) {
@@ -2499,6 +2499,13 @@ export interface RegisteredLunoraFunction {
      * \`AbortSignal\` as a third argument — the runtime drives it frame-by-frame.
      */
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
+    /**
+     * The lifecycle moment a hook fires on, when this registration came from
+     * \`onConnect\`/\`onDisconnect\`/\`onShardInit\`/\`onQueryChange\`. Read at
+     * dispatch to decide whether the function runs system-trusted: \`init\` and
+     * \`reactor\` have no caller identity, so RLS has no user to scope to.
+     */
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** \`"internal"\` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
 }
@@ -2511,16 +2518,18 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dis
 ${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
- * client's WebSocket connects (\`connect\`) or disconnects (\`disconnect\`), and
- * once per Durable Object instance before any handler runs (\`init\`). Each path
- * also resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
- * socket's verified identity; \`init\` has no caller, so it runs anonymous — both
- * via system dispatch.
+ * client's WebSocket connects (\`connect\`) or disconnects (\`disconnect\`), once
+ * per Durable Object instance before any handler runs (\`init\`), and after a
+ * write flush when a watched read's result changed (\`reactor\`). Each path also
+ * resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
+ * socket's verified identity; \`init\` and \`reactor\` have no caller, so they run
+ * anonymous — all via system dispatch.
  */
-export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[] } = {
+export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[]; reactor: readonly string[] } = {
     connect: [${lifecycleHooks.connect.map((path) => JSON.stringify(path)).join(", ")}],
     disconnect: [${lifecycleHooks.disconnect.map((path) => JSON.stringify(path)).join(", ")}],
     init: [${lifecycleHooks.init.map((path) => JSON.stringify(path)).join(", ")}],
+    reactor: [${lifecycleHooks.reactor.map((path) => JSON.stringify(path)).join(", ")}],
 };
 
 /**
@@ -4601,7 +4610,13 @@ ${vectorNamespaceField}
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
-                enforceRls: true,
+                // A dispatch with NO caller identity runs system-trusted: RLS scopes
+                // rows to a user, and these have no user to scope to. This is the tier
+                // migrations, imports and the external-source poll loop already run in
+                // (see \`adminWriterPrelude\`). Only \`onShardInit\` and \`onQueryChange\`
+                // reach it; \`onConnect\`/\`onDisconnect\` carry a verified identity and
+                // stay guarded like any request.
+                enforceRls: options.trusted !== true,
                 headroom: options.headroom ?? this.transactionHeadroom(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
@@ -5101,7 +5116,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // The main \`/rpc\` path always supplies one; \`dispatchLifecycle\` /
             // \`handleRunAs\` don't mint their own and omit it, so they keep the
             // prior fallback behavior unchanged.
-            const ctx = this.buildCtx({ functionPath, headroom });
+            const ctx = this.buildCtx({ functionPath, headroom, trusted: registered.lifecycle === "init" });
 
             // A mutation's writes must commit all-or-nothing: wrap its dispatch in
             // the DO's BEGIN/COMMIT span so any throw (a validator, an RLS denial,
@@ -5174,10 +5189,46 @@ ${relationFanout.override}
             };
         }
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
-        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init"): readonly string[] {
+        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
 ${shardInitOverride}
+        // One \`onQueryChange\` dispatch. Mirrors \`executeSubscription\` — the
+        // socket-terminated half of the same reactivity — and differs only in who
+        // consumes the result: the base's \`dispatchReactors\` stores the digest as
+        // the new baseline and the footprint as the "should I even re-run this"
+        // gate, instead of pushing a frame down a socket.
+        //
+        // Wrapped in \`runInTransaction\` because a reactor handler is a mutation
+        // and its writes must commit all-or-nothing. Safe to open here: the refresh
+        // drain runs OUTSIDE any dispatch transaction (it is post-flush background
+        // work), so this never nests.
+        //
+        // NO identity is threaded, and the ctx is built \`trusted\`. A reactor fires
+        // because data moved, not because anyone asked, so there is no user for RLS
+        // to scope to — it runs in the same system tier as migrations and the
+        // external-source poll loop. Inheriting the shared per-request identity
+        // would instead run an app's reactor as whichever user happened to write
+        // last, which is worse than running it as nobody.
+        protected override async runReactor(functionPath: string, previousDigest?: string): Promise<{ digest: string; ran: boolean; tables: readonly string[] } | undefined> {
+            const registered = LUNORA_FUNCTIONS[functionPath];
+
+            if (!registered || registered.kind !== "mutation") {
+                return undefined;
+            }
+
+            this.ensureMigrated();
+
+            const footprint = createReadFootprint();
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
+            const outcome = (await this.runInTransaction(async () => registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>))) as {
+                digest: string;
+                ran: boolean;
+            };
+
+            return { digest: outcome.digest, ran: outcome.ran, tables: [...footprint.tables] };
+        }
+
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
             return LUNORA_TABLE_REFS[table];
@@ -5440,7 +5491,7 @@ ${adminWriterPrelude}
             this.migrated = true;
         }
 
-        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void } = {}): unknown {
+        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
             // refresh — both run in deferred/interleaved contexts), use it by

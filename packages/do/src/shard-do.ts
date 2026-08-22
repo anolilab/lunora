@@ -171,6 +171,7 @@ import {
     QUEUE_TABLE,
     ReactiveCache,
     reactiveCacheKey,
+    reactorNeedsRun,
     readAuditLog,
     readBookmark,
     readCapturedMail,
@@ -183,6 +184,7 @@ import {
     readMigrationStatus,
     readQueueMessageById,
     readQueueMessages,
+    readReactorState,
     readShapePokeCursor,
     readTablePage,
     recordCapturedMail,
@@ -208,6 +210,7 @@ import {
     trySendFrame,
     writeGlobalShapeSnapshot,
     writeIdempotent,
+    writeReactorState,
     writeShapePokeCursor,
     writeTouchesMemo,
 } from "@lunora/shard-engine";
@@ -627,6 +630,20 @@ interface SubscriptionOutcome {
     tables: Set<string>;
 }
 
+/**
+ * What one reactor dispatch reports back to {@link ShardDO.dispatchReactors}.
+ *
+ * `digest` becomes the reactor's new baseline; `tables` is the read footprint
+ * that decides whether a later flush needs to re-run it at all. The shard cannot
+ * derive either without running the reactor, which is why the generated
+ * `runReactor` override returns both rather than the base computing them.
+ */
+interface ReactorRunOutcome {
+    digest: string;
+    ran: boolean;
+    tables: ReadonlyArray<string>;
+}
+
 /** Per-socket, per-shape poke baseline: the `__cdc_log` cursor this shape's view has been poked through. */
 interface ShapeMemo {
     cursor: number;
@@ -936,6 +953,25 @@ abstract class ShardDO {
      * failure stays unlikely.
      */
     protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
+
+    /**
+     * How many times one `onQueryChange` reactor may run within a single refresh
+     * drain before it is treated as non-converging and dropped for the rest of
+     * that drain.
+     *
+     * This is a correctness backstop, not a performance knob. A reactor's handler
+     * writes, those writes flush, and that flush re-evaluates reactors — so a
+     * handler that always changes what its own `select` returns never settles and
+     * would spin the shard indefinitely. 8 is generously above any legitimate
+     * cascade: an actor advancing a state machine converges in a handful of steps
+     * (each one removing rows from the set it watched), and anything needing more
+     * than 8 rounds off a single mutation is describing a loop, not a workflow.
+     *
+     * Scoped per DRAIN, so sustained legitimate write load is never throttled —
+     * each new drain restarts every reactor's budget. Only a cascade WITHIN one
+     * drain, which is exactly the non-convergence signature, can exhaust it.
+     */
+    protected static readonly MAX_REACTOR_RUNS_PER_DRAIN = 8;
 
     /**
      * Poll interval (ms) for `.global()`-table shapes. A global table lives in
@@ -1847,7 +1883,8 @@ abstract class ShardDO {
 
     /**
      * The registered function paths to dispatch on a lifecycle moment —
-     * `connect`/`disconnect` per socket, `init` once per Durable Object instance.
+     * `connect`/`disconnect` per socket, `init` once per Durable Object instance,
+     * `reactor` after each write flush.
      * Base default is empty; the codegen subclass overrides it to return the
      * generated lifecycle manifest keyed by `event`. Kept as a data hook (like
      * `tableRefs`/`rlsMetadata`) so the security-load-bearing dispatch — running
@@ -1855,7 +1892,7 @@ abstract class ShardDO {
      * base and can't be mis-wired by generated code.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated lifecycle manifest
-    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init"): ReadonlyArray<string> {
+    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor"): ReadonlyArray<string> {
         return [];
     }
 
@@ -1887,6 +1924,129 @@ abstract class ShardDO {
                 });
             }
         }
+    }
+
+    /**
+     * Re-evaluate every registered `onQueryChange` reactor after a write flush,
+     * and run the ones whose watched read actually changed.
+     *
+     * The cheap gate first: a reactor whose stored footprint is disjoint from
+     * `changed` cannot have had its result altered by this flush, so its `select`
+     * is not even re-run. An unknown footprint (never run, or an unparseable row)
+     * counts as "touches everything" — the same degradation direction the rest of
+     * the reactive layer takes, where a redundant run is acceptable and a missed
+     * one is not.
+     *
+     * Then the real test, which is what separates a reactor from a trigger: the
+     * dispatch re-runs `select`, digests the result, and invokes the app's handler
+     * ONLY when that digest differs from the stored baseline. A write that touched
+     * a watched table but did not change what the read returns costs one query and
+     * stops there.
+     *
+     * `runs` is the drain-scoped convergence bound. A reactor's handler writes;
+     * those writes flush; that flush re-enters this method. That cascade is the
+     * feature — it is how an actor advances a state machine a step at a time — and
+     * a reactor whose handler always changes its own read never settles. Rather
+     * than trust every app to converge, a reactor that exceeds
+     * {@link ShardDO.MAX_REACTOR_RUNS_PER_DRAIN} within one drain is dropped for
+     * the rest of that drain and the failure is logged. The shard stays
+     * responsive and the broken reactor is named.
+     *
+     * A throwing reactor is contained per reactor, like every other background
+     * dispatch here: its baseline is left untouched, so it is retried on the next
+     * flush rather than being silently skipped forever.
+     */
+    protected async dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void> {
+        const paths = this.lifecycleHookPaths("reactor");
+
+        if (paths.length === 0) {
+            return;
+        }
+
+        const sqlHandle = this.sql as SqlExec;
+
+        for (const path of paths) {
+            const state = readReactorState(sqlHandle, path);
+
+            if (!reactorNeedsRun(state, changed)) {
+                continue;
+            }
+
+            const used = runs.get(path) ?? 0;
+
+            if (used >= ShardDO.MAX_REACTOR_RUNS_PER_DRAIN) {
+                if (used === ShardDO.MAX_REACTOR_RUNS_PER_DRAIN) {
+                    // Log once per drain, not once per pass — a non-converging
+                    // reactor would otherwise flood the ring it is reported in.
+                    runs.set(path, used + 1);
+                    this.recordReactorError(
+                        path,
+                        new Error(
+                            `reactor did not converge: ran ${String(ShardDO.MAX_REACTOR_RUNS_PER_DRAIN)} times in one refresh drain and its watched read kept changing. Its handler is rewriting what its own select observes; stopped for this drain.`,
+                        ),
+                    );
+                }
+
+                continue;
+            }
+
+            runs.set(path, used + 1);
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- reactors run sequentially by design: each observes the writes the previous one committed, and one throwing reactor must not skip the rest
+                const outcome = await this.runReactor(path, state?.digest);
+
+                if (outcome !== undefined) {
+                    writeReactorState(sqlHandle, path, outcome.digest, outcome.tables);
+                }
+            } catch (error: unknown) {
+                // Baseline deliberately NOT advanced: a reactor that threw has not
+                // observed this result, so the next flush must offer it again.
+                this.recordReactorError(path, error);
+            } finally {
+                // A reactor's handler writes through `ctx.db`, which only STAGES
+                // the touched tables (`recordChangedTable`) — the request path is
+                // what normally flushes them, and a reactor has no request. Without
+                // this, a reactor's writes would sit unflushed until some unrelated
+                // RPC came along: no subscriber would see them, and the cascade that
+                // lets an actor advance a state machine would never happen.
+                //
+                // Safe inside the drain: `flushChangedTables` sees `refreshInFlight`
+                // and merges into THIS drain's pending set rather than starting a
+                // second one, so the loop simply gets another pass. In the `catch`
+                // case the reactor's transaction already rolled back, so at worst
+                // this stages a table whose re-run finds nothing changed — the same
+                // outcome a failed RPC mutation produces today.
+                // eslint-disable-next-line no-await-in-loop -- part of the same sequential per-reactor step
+                await this.flushChangedTables();
+            }
+        }
+    }
+
+    /**
+     * Run one reactor dispatch and report what it saw.
+     *
+     * A no-op seam here; the generated subclass overrides it, because running a
+     * reactor needs two things the base cannot build — a ctx (for `select` and the
+     * handler) and a read footprint around it. Mirrors `runSubscription`, which
+     * has the identical shape for the socket-terminated side of reactivity.
+     * @returns the run's digest and read footprint, or `undefined` when the path
+     * resolves to nothing (a manifest naming a function this build does not have).
+     */
+    // eslint-disable-next-line class-methods-use-this -- a seam: the base cannot build a ctx, the generated subclass overrides
+    protected async runReactor(_path: string, _previousDigest?: string): Promise<ReactorRunOutcome | undefined> {
+        await Promise.resolve();
+
+        return undefined;
+    }
+
+    /**
+     * Record a contained reactor failure into the log ring. Mirrors
+     * {@link ShardDO.recordExternalSourceError}: the dispatch loop needs to write
+     * this line and the log ring is private.
+     */
+    protected recordReactorError(path: string, error: unknown, trace?: TraceRefLike): void {
+        this.recordShapeError(`reactor:${path}`, error, trace);
     }
 
     /**
@@ -8238,6 +8398,14 @@ abstract class ShardDO {
 
         this.refreshInFlight = true;
 
+        // Per-DRAIN run counter, keyed by reactor path — the convergence bound.
+        // Scoped to the drain rather than to the instance so an app under
+        // sustained legitimate write load is never throttled: a new drain starts
+        // every reactor's budget over. What it does catch is the reactor whose own
+        // writes keep changing its own read, which cascades within ONE drain and
+        // would otherwise spin the shard forever.
+        const reactorRuns = new Map<string, number>();
+
         try {
             let batch = this.pendingRefreshTables;
             let batchKeys = this.pendingRefreshKeys;
@@ -8258,6 +8426,15 @@ abstract class ShardDO {
                     this.pokeShapeSubscribers(batch, frameCursor, frameEpoch),
                     this.relay?.onFlush(batch, frameCursor ?? 0),
                 ]);
+
+                // Reactors run AFTER the read fan-out, not alongside it. Two
+                // reasons: subscribers should observe the state the mutation
+                // committed before a reactor mutates it further (the reactor's own
+                // writes re-enter this loop and push again), and a reactor opens a
+                // write transaction — which has no business racing the read
+                // fan-out inside one `Promise.all`.
+                // eslint-disable-next-line no-await-in-loop -- same sequencing contract as the fan-out above
+                await this.dispatchReactors(batch, reactorRuns);
 
                 batch = this.pendingRefreshTables;
                 batchKeys = this.pendingRefreshKeys;

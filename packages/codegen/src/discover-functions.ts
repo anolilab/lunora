@@ -64,13 +64,15 @@ const INTERNAL_FACTORIES: Record<string, "action" | "mutation" | "query"> = {
  * they fire on. A call to one of these registers an internal mutation tagged
  * with its `lifecycle` so emit collects it into the `LUNORA_LIFECYCLE_HOOKS`
  * manifest: `connect`/`disconnect` are dispatched per socket, `init` once per
- * Durable Object instance before any handler runs.
+ * Durable Object instance before any handler runs, and `reactor` after each
+ * write flush whose tables the reactor's watched read touched.
  */
-type LifecycleMoment = "connect" | "disconnect" | "init";
+type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor";
 
 const LIFECYCLE_FACTORIES: Record<string, LifecycleMoment> = {
     onConnect: "connect",
     onDisconnect: "disconnect",
+    onQueryChange: "reactor",
     onShardInit: "init",
 };
 

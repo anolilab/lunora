@@ -320,7 +320,7 @@ export interface FunctionIR {
      * it into the `LUNORA_LIFECYCLE_HOOKS` manifest keyed by this side. Absent on
      * ordinary functions.
      */
-    lifecycle?: "connect" | "disconnect" | "init";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
 
     /**
      * The `.output(validator)` declaration, when the chain has one.

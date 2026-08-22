@@ -1555,6 +1555,12 @@ interface QueuesResult {
 const RANK_TIEBREAK = "__id__";
 ```
 
+### `REACTOR_STATE_TABLE` (const)
+
+```ts
+const REACTOR_STATE_TABLE = "__reactor_state";
+```
+
 ### `RELATION_EXISTS_KEY` (const)
 
 ```ts
@@ -1743,6 +1749,15 @@ interface ReactiveCacheOptions {
     maxBytes?: number;
     maxEntries?: number;
     now?: () => number;
+}
+```
+
+### `ReactorState` (interface)
+
+```ts
+interface ReactorState {
+    digest: string;
+    tables?: ReadonlyArray<string>;
 }
 ```
 
@@ -3722,6 +3737,12 @@ const migrateGlobalShapeSnapshot: (sql: SqlExec) => void;
 const migrateIdempotency: (sql: SqlExec) => void;
 ```
 
+### `migrateReactorState` (const)
+
+```ts
+const migrateReactorState: (sql: SqlExec) => void;
+```
+
 ### `migrateSearchState` (const)
 
 ```ts
@@ -3866,6 +3887,12 @@ const rankTableName: (table: string, indexName: string) => string;
 const reactiveCacheKey: (functionPath: string, args: Record<string, unknown>, identity: null | string) => string;
 ```
 
+### `reactorNeedsRun` (const)
+
+```ts
+const reactorNeedsRun: (state: ReactorState | undefined, changed: ReadonlySet<string>) => boolean;
+```
+
 ### `readAggregateValue` (const)
 
 ```ts
@@ -3973,6 +4000,12 @@ const readQueueMessageById: (sql: SqlExec, id: string) => QueueMessageRow | unde
 const readQueueMessages: (sql: SqlExec, options?: ReadQueueMessagesOptions) => {
     entries: QueueMessageRow[];
 };
+```
+
+### `readReactorState` (const)
+
+```ts
+const readReactorState: (sql: SqlExec, path: string) => ReactorState | undefined;
 ```
 
 ### `readSchemaHistory` (const)
@@ -4382,6 +4415,12 @@ const writeGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: stri
 
 ```ts
 const writeIdempotent: (sql: SqlExec, identity: string, mutationId: string, resultJson: string, ts: number) => void;
+```
+
+### `writeReactorState` (const)
+
+```ts
+const writeReactorState: (sql: SqlExec, path: string, digest: string, tables: ReadonlyArray<string>) => void;
 ```
 
 ### `writeSearchBackfillState` (const)

@@ -126,6 +126,7 @@ export interface PlatformCapabilities {
          * a scheduler to run the unattended half.
          */
         objectStorageBackups?: Capability;
+
         /** Pipelines / streaming data. */
         pipelines?: Capability;
         /** Queue-backed workpools. */
@@ -134,6 +135,19 @@ export interface PlatformCapabilities {
         scheduler?: Capability;
         /** Secrets management. */
         secrets?: Capability;
+
+        /**
+         * `onQueryChange` reactors — server-side reactivity: a subscriber that is
+         * not a socket, woken after a write flush when a watched read's result
+         * changed.
+         *
+         * Host-dependent because the whole mechanism rests on the host being able
+         * to run work AFTER a write commits, on the same shard, without a client
+         * connection to hang it off — and on that work being serialized against
+         * further writes so a reactor's own writes cascade deterministically
+         * rather than interleaving.
+         */
+        serverReactors?: Capability;
         /** Alarms / scheduled wakeup inside a shard. */
         shardAlarms?: Capability;
         /** Durable Object-style sharded state. */
@@ -183,6 +197,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "`state.storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a Durable Object executes one event at a time — so the allocation order IS the commit order, with no lock of ours in the path",
         },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
+        serverReactors: {
+            level: "emulated",
+            note: "The wake-up is Lunora's, not the platform's: reactors ride the existing post-write refresh drain, which already exists to push subscription frames. Cloudflare supplies the two properties that make it correct — one event at a time per Durable Object, and `waitUntil` to keep the drain alive past the response — but has no notion of a server-side subscription of its own",
+        },
         memoryTables: {
             level: "emulated",
             note: "The lifetime is real — an eviction drops the DO's heap and the framework clears every `.memory()` table on reconstruction, so the rows behave exactly like heap state, and their writes stay out of the CDC changelog. The STORAGE is not: workerd exposes one SQL handle and no memory-backed database, so a memory row is still written to the DO's SQLite and then deleted. `.memory()` buys the semantics, not the write",
@@ -293,6 +311,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "The sequence orders commits correctly, but the serialization it depends on is Lunora's per-shard write gate rather than a platform property — one process, one better-sqlite3 handle per shard key. Correct here; not something the host guarantees the way a Durable Object does",
         },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
+        serverReactors: {
+            level: "emulated",
+            note: "Same engine-level implementation as Cloudflare; the per-shard serialization it depends on is the host's own write gate rather than a platform guarantee",
+        },
         memoryTables: {
             level: "emulated",
             note: "Same shape as Cloudflare and for a different reason: better-sqlite3 CAN open `:memory:`, but a shard's memory tables share the one handle its durable tables use, so they are cleared rather than never written. A host process also outlives far more than a Durable Object does, so cold starts — and therefore `onShardInit` — are much rarer here than in production on Cloudflare; do not use this target to judge how often a memory table is actually empty",

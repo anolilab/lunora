@@ -702,9 +702,10 @@ interface RunAction {
  *
  * `connect`/`disconnect` are per-SOCKET and fire many times over a shard's life.
  * `init` is per-INSTANCE and fires once per cold start, before any handler runs
- * — see {@link ShardInitEvent}.
+ * — see {@link ShardInitEvent}. `reactor` is per-WRITE-FLUSH and fires only when
+ * a watched read's result changed — see `onQueryChange`.
  */
-type LifecycleEventKind = "connect" | "disconnect" | "init";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
 
 /**
  * The event a connection-lifecycle hook receives as its second argument. It is

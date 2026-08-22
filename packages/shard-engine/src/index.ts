@@ -229,6 +229,8 @@ export { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, rea
 export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankKeyFromDoc, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
+export type { ReactorState } from "./reactor-state";
+export { migrateReactorState, REACTOR_STATE_TABLE, reactorNeedsRun, readReactorState, writeReactorState } from "./reactor-state";
 export type { ReadFootprint } from "./read-footprint";
 export { createReadFootprint } from "./read-footprint";
 export type { IndexKeyEntry, KeyRange } from "./read-write-set";

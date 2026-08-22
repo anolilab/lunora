@@ -54,6 +54,8 @@ export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, Prese
 export { definePresence, PRESENCE_DEFAULT_TTL_MS, PRESENCE_TABLE, presenceExtension } from "./presence";
 export type { ProtectPublicOptions } from "./protect-public";
 export { protectPublic } from "./protect-public";
+export type { ReactorHandler, ReactorOutcome, ReactorSelect, RegisteredReactor } from "./reactors";
+export { onQueryChange } from "./reactors";
 export type {
     DefinePolicyInput,
     Permission,

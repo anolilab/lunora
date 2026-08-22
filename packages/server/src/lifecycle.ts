@@ -102,8 +102,11 @@ const onDisconnect = (handler: LifecycleHandler): RegisteredLifecycleHook => wra
  * happen once.
  *
  * **No caller identity.** The hook dispatches as a trusted system call with no
- * request identity — `ctx.auth` is anonymous and RLS does not apply, exactly as
- * for a cron tick. A throw is logged and does NOT fail the dispatch that woke
+ * request identity — `ctx.auth` is anonymous and RLS does not apply even under
+ * `.rls("required")`, exactly as for a cron tick or a migration. RLS scopes rows
+ * to a user and an init hook has none, so `ctx.db` here sees every row: scope
+ * your reads yourself. (`onConnect`/`onDisconnect` are the opposite case — they
+ * carry the socket's verified identity and stay RLS-guarded.) A throw is logged and does NOT fail the dispatch that woke
  * the shard: an init hook that cannot rebuild presence must not take the whole
  * shard down with it, and the memory table is simply left empty.
  */

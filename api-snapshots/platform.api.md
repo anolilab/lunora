@@ -270,6 +270,7 @@ interface PlatformCapabilities {
         queues?: Capability;
         scheduler?: Capability;
         secrets?: Capability;
+        serverReactors?: Capability;
         shardAlarms?: Capability;
         shardedState?: Capability;
         shardPlacement?: Capability;
