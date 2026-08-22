@@ -478,7 +478,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                     .query("notes")
                     .withSearchIndex("by_body", (q) => q.search("body", "world"))
                     .paginate({ numItems: 1025 }),
-            ).rejects.toThrow(/reaches past the 1024-document limit/u);
+            ).rejects.toThrow(/reaches the 1024-document limit/u);
         });
 
         it("pages through the relevance-ordered results", async () => {
