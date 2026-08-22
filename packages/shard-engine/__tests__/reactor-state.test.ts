@@ -93,6 +93,26 @@ describe("reactor state", () => {
             expect(listReactorStates(harness.sql).map((entry) => entry.path)).toStrictEqual(["reactors:alpha", "reactors:zeta"]);
         });
 
+        it("drops a non-string-digest row, like the by-path reader", () => {
+            expect.assertions(3);
+
+            writeReactorState(harness.sql, "reactors:good", { digest: "d", now: 1, result: "ran", tables: ["orders"] });
+            writeReactorState(harness.sql, "reactors:bad", { digest: "d", now: 1, result: "ran", tables: ["orders"] });
+
+            // A BLOB is the one non-string a `digest TEXT NOT NULL` column can
+            // hold: NOT NULL rules out NULL, and TEXT affinity rewrites a written
+            // number to its string form (a stored `42` reads back `"42"`) — but
+            // affinity leaves a BLOB alone, and it returns as a Uint8Array.
+            // Nothing in the engine writes one, so this guard is defensive; the
+            // point is that BOTH readers of this table apply it, since
+            // `ReactorState.digest` is declared `string`.
+            harness.sql.exec("UPDATE __reactor_state SET digest = ? WHERE path = ?", new Uint8Array([0, 1, 2]), "reactors:bad");
+
+            expect(readReactorState(harness.sql, "reactors:bad")).toBeUndefined();
+            expect(listReactorStates(harness.sql).map((entry) => entry.path)).toStrictEqual(["reactors:good"]);
+            expect(readReactorState(harness.sql, "reactors:good")?.digest).toBe("d");
+        });
+
         it("carries each reactor's counters and last error", () => {
             expect.assertions(3);
 

@@ -209,6 +209,13 @@ const readReactorState = (sql: SqlExec, path: string): ReactorState | undefined 
 const listReactorStates = (sql: SqlExec): { path: string; state: ReactorState }[] =>
     runDrizzle<ReactorRow>(sql, dsql`SELECT ${dsql.raw(REACTOR_COLUMNS)} FROM ${dsql.identifier(REACTOR_STATE_TABLE)} ORDER BY path`)
         .toArray()
+        // Same digest guard as `readReactorState`: SQLite columns are
+        // dynamically typed, and `ReactorState.digest` is declared `string`, so a
+        // row that somehow holds a non-string would hand callers a value its type
+        // says it cannot be. Dropping it makes the reactor read as "never
+        // dispatched" — which the panel already renders, and which is the same
+        // conclusion the by-path reader reaches for the same row.
+        .filter((row) => typeof row.digest === "string")
         .map((row) => {
             return { path: row.path, state: toState(row) };
         });
