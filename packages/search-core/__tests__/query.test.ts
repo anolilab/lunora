@@ -110,6 +110,18 @@ describe(finishSearchPage, () => {
             page: [{ id: 1 }, { id: 2 }],
         });
     });
+
+    it("is terminal when the window is shorter than the page — a genuinely ended corpus", () => {
+        expect.assertions(1);
+
+        const window = [{ id: 1 }];
+
+        expect(finishSearchPage(window, { numItems: 2, offset: 0 })).toStrictEqual({
+            continueCursor: null,
+            isDone: true,
+            page: [{ id: 1 }],
+        });
+    });
 });
 
 describe(resolveSearchScan, () => {
@@ -139,19 +151,52 @@ describe(resolveSearchScan, () => {
 });
 
 describe(planSearchPage, () => {
-    it("accepts a page that reaches exactly the cap", () => {
+    it("accepts a page ending one row below the cap, where the hasMore probe still fits", () => {
         expect.assertions(1);
 
-        expect(planSearchPage({ cursor: null, numItems: MAX_SEARCH_SCAN })).toStrictEqual({
-            numItems: MAX_SEARCH_SCAN,
+        expect(planSearchPage({ cursor: null, numItems: MAX_SEARCH_SCAN - 1 })).toStrictEqual({
+            numItems: MAX_SEARCH_SCAN - 1,
             offset: 0,
         });
+    });
+
+    it("rejects a page that ends exactly at the cap, where hasMore is unobservable", () => {
+        expect.assertions(1);
+
+        expect(() => planSearchPage({ cursor: null, numItems: MAX_SEARCH_SCAN })).toThrow(LunoraError);
+    });
+
+    it("rejects a cursor-addressed page that ends exactly at the cap", () => {
+        expect.assertions(1);
+
+        expect(() => planSearchPage({ cursor: encodeSearchCursor(1000), numItems: 24 })).toThrow(LunoraError);
+    });
+
+    it("names the largest page size that would still fit, so the caller can retry", () => {
+        expect.assertions(1);
+
+        // A power-of-two walk lands its final page exactly on the cap (512 at
+        // offset 512, 256 at 768, …); the refusal has to say what to ask for
+        // instead, or the caller can only guess.
+        expect(() => planSearchPage({ cursor: encodeSearchCursor(512), numItems: 512 })).toThrow("retry with numItems 511 or fewer");
+    });
+
+    it("accepts a cursor-addressed page ending below the cap", () => {
+        expect.assertions(1);
+
+        expect(planSearchPage({ cursor: encodeSearchCursor(999), numItems: 24 })).toStrictEqual({ numItems: 24, offset: 999 });
     });
 
     it("rejects a page that reaches one row past the cap", () => {
         expect.assertions(1);
 
         expect(() => planSearchPage({ cursor: null, numItems: MAX_SEARCH_SCAN + 1 })).toThrow(LunoraError);
+    });
+
+    it("rejects a NaN page size instead of letting it slide past the cap guard", () => {
+        expect.assertions(1);
+
+        expect(() => planSearchPage({ cursor: null, numItems: Number.NaN })).toThrow(LunoraError);
     });
 
     it("rejects bounded (endCursor) pagination", () => {

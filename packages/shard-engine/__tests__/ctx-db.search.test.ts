@@ -474,7 +474,7 @@ describe.each(ENGINES)("ctx-db search — $label", (engine) => {
                     .query("docs")
                     .withSearchIndex("by_body", (q) => q.search("body", "x"))
                     .paginate({ numItems: 2000 }),
-            ).rejects.toThrow(/reaches past the 1024-document limit/u);
+            ).rejects.toThrow(/reaches the 1024-document limit/u);
         });
 
         it("rejects a cursor that is not a search cursor", async () => {
