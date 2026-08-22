@@ -12,8 +12,8 @@ import type { TableIR } from "../src/ir";
  * thing before user code runs. A regression here does not throw — it serves a
  * silently empty table — so the emitted text is worth pinning.
  */
-const table = (overrides: Partial<TableIR> & { name: string }): TableIR =>
-    {return {
+const table = (overrides: Partial<TableIR> & { name: string }): TableIR => {
+    return {
         indexes: [],
         rankIndexes: [],
         relations: [],
@@ -22,7 +22,8 @@ const table = (overrides: Partial<TableIR> & { name: string }): TableIR =>
         shardMode: "root",
         vectorIndexes: [],
         ...overrides,
-    }};
+    };
+};
 
 const shardFor = (tables: TableIR[]): string => emitShard({ schema: { tables, vectorIndexes: [] } });
 
