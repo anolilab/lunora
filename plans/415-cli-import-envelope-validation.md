@@ -25,33 +25,35 @@
 ## Current state
 
 - `packages/cli/src/commands/data-transfer/import-rows.ts:102-117` — the transform's tail:
-  ```ts
-  // Every envelope is parsed when a rewrite is configured — a storage id or
-  // an object path can sit in a plain column, which no substring of the
-  // line announces. With neither, the line goes through untouched.
-  return storageIdMap === undefined && remapDocument === undefined ? trimmed : remapEnvelope(trimmed, lineNumber);
-  ```
+    ```ts
+    // Every envelope is parsed when a rewrite is configured — a storage id or
+    // an object path can sit in a plain column, which no substring of the
+    // line announces. With neither, the line goes through untouched.
+    return storageIdMap === undefined && remapDocument === undefined ? trimmed : remapEnvelope(trimmed, lineNumber);
+    ```
 - `:60-80` — `remapEnvelope` does `JSON.parse` (throwing the line-numbered `LunoraError`), then the `typeof parsed["table"] !== "string"` check, then the optional rewrites, then `JSON.stringify(parsed)`.
 
 Design note: on the no-remap path the output must stay the **original trimmed line**, not a re-`stringify` — re-encoding a line that wasn't modified would churn key order/whitespace for no reason and cost a serialization per line. Parse for validation, forward the original string.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/cli..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/cli" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/cli" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/cli" run lint:eslint` | exit 0 |
+| Purpose    | Command                                       | Expected on success |
+| ---------- | --------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                | exit 0              |
+| Build deps | `pnpm --filter "@lunora/cli..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/cli" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/cli" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/cli" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/cli/src/commands/data-transfer/import-rows.ts`
 - The existing import-rows test file (find: `grep -rln "import-rows\|remapEnvelope\|import envelope" packages/cli/__tests__ | head`)
 
 **Out of scope**:
+
 - The server-side `/_lunora/admin/import` endpoint.
 - The `--table` bare-document path (`wrapBareDocument`) — it already parses and line-numbers.
 - Streaming/perf restructuring of the import pipeline.

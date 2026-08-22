@@ -20,40 +20,42 @@
 
 ## Why this matters
 
-`normalizeDocUrl` guards the docs-page fetch against path traversal, but only against *literal* `..` segments. The normalized path is concatenated into a fetch URL (`${baseUrl}/llms.mdx${url}`), and WHATWG URL parsing — which `fetch` applies — decodes and collapses percent-encoded dot segments, so `"/docs/%2e%2e/%2e%2e/api/search"` resolves to `/api/search` on the docs origin. A model calling `lunora_get_doc` with an encoded-traversal `url` fetches an arbitrary path on the configured docs origin and returns its body into the model context. The guard's own docstring names the threat: "less so against the internal host a self-hosted `--docs-url` may point at." The sibling `search` path already encodes its query; this path is the inconsistent one.
+`normalizeDocUrl` guards the docs-page fetch against path traversal, but only against _literal_ `..` segments. The normalized path is concatenated into a fetch URL (`${baseUrl}/llms.mdx${url}`), and WHATWG URL parsing — which `fetch` applies — decodes and collapses percent-encoded dot segments, so `"/docs/%2e%2e/%2e%2e/api/search"` resolves to `/api/search` on the docs origin. A model calling `lunora_get_doc` with an encoded-traversal `url` fetches an arbitrary path on the configured docs origin and returns its body into the model context. The guard's own docstring names the threat: "less so against the internal host a self-hosted `--docs-url` may point at." The sibling `search` path already encodes its query; this path is the inconsistent one.
 
 ## Current state
 
 - `packages/mcp/src/docs/tools.ts` — `normalizeDocUrl` ends with the only traversal check:
-  ```ts
-  if (value.split("/").includes("..")) {
-      throw new RangeError(`"url" must not contain ".." segments: ${raw}`);
-  }
+    ```ts
+    if (value.split("/").includes("..")) {
+        throw new RangeError(`"url" must not contain ".." segments: ${raw}`);
+    }
 
-  return value;
-  ```
-  The docstring above it (same file, ~line 140) explains the guard's purpose ("would walk back out of the documentation tree…").
-- `packages/mcp/src/docs/remote-index.ts:186` — `fetchImplementation(\`${baseUrl}${path}\`, …)`; `:213` — `getPage` calls `get(\`/llms.mdx${url}\`)`. No decoding happens between the guard and the fetch — the collapse happens *inside* URL parsing at fetch time.
+    return value;
+    ```
+    The docstring above it (same file, ~line 140) explains the guard's purpose ("would walk back out of the documentation tree…").
+- `packages/mcp/src/docs/remote-index.ts:186` — `fetchImplementation(\`${baseUrl}${path}\`, …)`; `:213`—`getPage`calls`get(\`/llms.mdx${url}\`)`. No decoding happens between the guard and the fetch — the collapse happens _inside_ URL parsing at fetch time.
 - `packages/mcp/src/docs/remote-index.ts:243` — the `search` sibling uses `encodeURIComponent(query)`.
 - Existing test suite: `packages/mcp/__tests__/docs-tools.test.ts` (verify exact name with `ls packages/mcp/__tests__/ | grep -i doc`) already covers `normalizeDocUrl` rejections — extend it.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/mcp..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/mcp" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/mcp" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/mcp" run lint:eslint` | exit 0 |
+| Purpose    | Command                                       | Expected on success |
+| ---------- | --------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                | exit 0              |
+| Build deps | `pnpm --filter "@lunora/mcp..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/mcp" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/mcp" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/mcp" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/mcp/src/docs/tools.ts` (`normalizeDocUrl` only)
 - The docs tools test file in `packages/mcp/__tests__/`
 
 **Out of scope**:
+
 - `remote-index.ts` — keep the fetch-side concatenation as is; the fix belongs in the one validation choke point.
 - The `search` path — already safe.
 
@@ -111,5 +113,5 @@ Add cases to the existing `normalizeDocUrl` rejection tests: `"/docs/%2e%2e/%2e%
 
 ## Maintenance notes
 
-- If the docs tool ever accepts anchors or query params again, they are stripped *before* this check — keep it that way so the guard sees the final path.
+- If the docs tool ever accepts anchors or query params again, they are stripped _before_ this check — keep it that way so the guard sees the final path.
 - Reviewer: confirm the error type stays `RangeError` (or whatever the dispatch layer maps to a directed tool error) so the model gets a usable message.

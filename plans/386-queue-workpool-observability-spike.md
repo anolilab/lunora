@@ -32,9 +32,9 @@ The repo ships two workpool backends by explicit design (plans/README.md, plan 0
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---------|---------|----------|
-| Install | `pnpm install` | exit 0 |
+| Purpose               | Command                                                                  | Expected             |
+| --------------------- | ------------------------------------------------------------------------ | -------------------- |
+| Install               | `pnpm install`                                                           | exit 0               |
 | Find Studio consumers | `grep -rn "dead/retry\|/status" apps/studio packages/studio 2>/dev/null` | locates the UI pages |
 
 ## Scope

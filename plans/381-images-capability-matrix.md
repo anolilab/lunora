@@ -24,8 +24,8 @@
 
 ## Platform parity (mandatory section)
 
-| Feature | cloudflare | node |
-|---------|-----------|------|
+| Feature  | cloudflare                | node                                                                                           |
+| -------- | ------------------------- | ---------------------------------------------------------------------------------------------- |
 | `images` | `native` (Images binding) | `unsupported` (no binding; codegen omits the surface and emits `platform_unsupported_feature`) |
 
 If other target matrices exist in `packages/platform/src/capabilities.ts` (grep `_CAPABILITIES` — e.g. a celld matrix), rate `images` there too: `unsupported` unless the host demonstrably provides an Images binding.
@@ -39,24 +39,26 @@ If other target matrices exist in `packages/platform/src/capabilities.ts` (grep 
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build     | `pnpm run build:packages` | exit 0 |
-| Platform tests | `pnpm --filter "@lunora/platform" run test` | all pass |
-| Codegen tests | `pnpm --filter "@lunora/codegen" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/platform" run lint:types && pnpm --filter "@lunora/codegen" run lint:types` | exit 0 |
-| API gate  | `pnpm run api:check` | exit 0 after `pnpm run api:update` for the intentional `PlatformCapabilities.features.images` addition (update ONLY after a fresh `pnpm run build:packages` — a stale build writes a wrong snapshot) |
+| Purpose        | Command                                                                                             | Expected on success                                                                                                                                                                                  |
+| -------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Install        | `pnpm install`                                                                                      | exit 0                                                                                                                                                                                               |
+| Build          | `pnpm run build:packages`                                                                           | exit 0                                                                                                                                                                                               |
+| Platform tests | `pnpm --filter "@lunora/platform" run test`                                                         | all pass                                                                                                                                                                                             |
+| Codegen tests  | `pnpm --filter "@lunora/codegen" run test`                                                          | all pass                                                                                                                                                                                             |
+| Typecheck      | `pnpm --filter "@lunora/platform" run lint:types && pnpm --filter "@lunora/codegen" run lint:types` | exit 0                                                                                                                                                                                               |
+| API gate       | `pnpm run api:check`                                                                                | exit 0 after `pnpm run api:update` for the intentional `PlatformCapabilities.features.images` addition (update ONLY after a fresh `pnpm run build:packages` — a stale build writes a wrong snapshot) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/platform/src/capabilities.ts` (feature key + every target matrix in the file)
 - `packages/codegen/src/platform-target.ts` (`CAPABILITY_TO_FEATURE` + its doc comment)
 - `packages/platform/__tests__/`, `packages/codegen/__tests__/` (matrix/gating tests)
 - Golden fixtures under `packages/codegen/__fixtures__/` (or wherever `git grep -l platform_unsupported_feature packages/codegen` points) — ONLY if assertions change
 
 **Out of scope**:
+
 - `packages/bindings/src/images/**` — the implementation is correct; only the matrix is wrong.
 - `platform-node`'s runtime — rating `unsupported` requires no host code.
 - Any other unmapped capability (`flags`, `access`, `r2sql`, `x402`, payments) — deliberate, now documented per-key.

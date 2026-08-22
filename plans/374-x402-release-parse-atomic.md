@@ -22,55 +22,57 @@
 
 ## Why this matters
 
-`releaseSpendOnFailure` calls bare `BigInt()` on `context.selectedRequirements.amount` — a server-controlled string. The same file defines `parseAtomicAmount` specifically because bare `BigInt` "is the wrong tool twice over: it throws on junk … and it accepts `"-1"`", and both sibling enforcement paths use it. Here, junk makes the failure hook **throw**, replacing/masking the payment-creation error the client was about to see; and a negative string makes `release()` *increase* `spent` (`spent > amount` is true for any negative `amount`, so `spent - amount` adds), prematurely locking the wallet out for the rest of the run. Reaching it requires the guard's reservation path to have been bypassed, so it is latent — but the file's own docs say the hooks defend against exactly that mis-wiring. `@lunora/x402` is experimental tier.
+`releaseSpendOnFailure` calls bare `BigInt()` on `context.selectedRequirements.amount` — a server-controlled string. The same file defines `parseAtomicAmount` specifically because bare `BigInt` "is the wrong tool twice over: it throws on junk … and it accepts `"-1"`", and both sibling enforcement paths use it. Here, junk makes the failure hook **throw**, replacing/masking the payment-creation error the client was about to see; and a negative string makes `release()` _increase_ `spent` (`spent > amount` is true for any negative `amount`, so `spent - amount` adds), prematurely locking the wallet out for the rest of the run. Reaching it requires the guard's reservation path to have been bypassed, so it is latent — but the file's own docs say the hooks defend against exactly that mis-wiring. `@lunora/x402` is experimental tier.
 
 ## Current state
 
 - `packages/x402/src/pay/policy.ts:458-464`:
-  ```ts
-  export const releaseSpendOnFailure =
-      (state: SpendState): OnPaymentCreationFailureHook =>
-      (context) => {
-          state.release(BigInt(context.selectedRequirements.amount));
+    ```ts
+    export const releaseSpendOnFailure =
+        (state: SpendState): OnPaymentCreationFailureHook =>
+        (context) => {
+            state.release(BigInt(context.selectedRequirements.amount));
 
-          return Promise.resolve();
-      };
-  ```
+            return Promise.resolve();
+        };
+    ```
 - The helper — `policy.ts:44-53`:
-  ```ts
-  const ATOMIC_AMOUNT = /^\d+$/;
-  /**
-   * Parse a requirement's `amount`, or return `undefined` if it isn't a canonical atomic
-   * quantity. The value is chosen by the *server*, so bare `BigInt` is the wrong tool
-   * twice over: ...
-   */
-  const parseAtomicAmount = (raw: string): bigint | undefined => (ATOMIC_AMOUNT.test(raw) ? BigInt(raw) : undefined);
-  ```
+    ```ts
+    const ATOMIC_AMOUNT = /^\d+$/;
+    /**
+     * Parse a requirement's `amount`, or return `undefined` if it isn't a canonical atomic
+     * quantity. The value is chosen by the *server*, so bare `BigInt` is the wrong tool
+     * twice over: ...
+     */
+    const parseAtomicAmount = (raw: string): bigint | undefined => (ATOMIC_AMOUNT.test(raw) ? BigInt(raw) : undefined);
+    ```
 - The two sibling call sites that already parse: `policy.ts:321` (selection filter) and `policy.ts:398` (guard).
 - The arithmetic hazard — `policy.ts:182-184`:
-  ```ts
-  release: (amount: bigint): void => {
-      spent = spent > amount ? spent - amount : 0n;
-  },
-  ```
+    ```ts
+    release: (amount: bigint): void => {
+        spent = spent > amount ? spent - amount : 0n;
+    },
+    ```
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/x402..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/x402" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/x402" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/x402" run lint:eslint` | exit 0 |
+| Purpose    | Command                                        | Expected on success |
+| ---------- | ---------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                 | exit 0              |
+| Build deps | `pnpm --filter "@lunora/x402..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/x402" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/x402" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/x402" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/x402/src/pay/policy.ts` (the `releaseSpendOnFailure` body only)
 - `packages/x402/__tests__/pay-policy.test.ts`
 
 **Out of scope**:
+
 - `parseAtomicAmount`, `createSpendState`, the guard, and the selection filter — all correct.
 - Hardening `release()` itself against negative bigints — the parse-at-the-boundary fix makes the hook safe, and typed callers passing negative bigints is a different (compile-visible) misuse.
 
@@ -99,13 +101,14 @@ export const releaseSpendOnFailure =
 
         return Promise.resolve();
     };
-  ```
+```
 
 **Verify**: `grep -n "BigInt(context" packages/x402/src/pay/policy.ts` → no matches.
 
 ### Step 2: Tests
 
 In `pay-policy.test.ts`, next to the existing `releaseSpendOnFailure` / spend-state tests (find them: `grep -n "releaseSpendOnFailure\|createSpendState" packages/x402/__tests__/pay-policy.test.ts`):
+
 - Valid amount string still releases (spent drops).
 - `amount: "-1"` → hook resolves without throwing, `spentAtomic` unchanged.
 - `amount: "junk"` → hook resolves without throwing, `spentAtomic` unchanged.

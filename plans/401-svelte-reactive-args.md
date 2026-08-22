@@ -32,18 +32,19 @@ Every adapter except Svelte accepts a reactive args source for live queries: Vue
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/svelte..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/svelte" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/svelte" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/svelte" run lint:eslint` | exit 0 |
+| Purpose      | Command                                          | Expected on success                                                                            |
+| ------------ | ------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| Install      | `pnpm install`                                   | exit 0                                                                                         |
+| Build deps   | `pnpm --filter "@lunora/svelte..." run build`    | exit 0                                                                                         |
+| Tests        | `pnpm --filter "@lunora/svelte" run test`        | all pass                                                                                       |
+| Typecheck    | `pnpm --filter "@lunora/svelte" run lint:types`  | exit 0                                                                                         |
+| Lint         | `pnpm --filter "@lunora/svelte" run lint:eslint` | exit 0                                                                                         |
 | API snapshot | `pnpm run build:packages && pnpm run api:update` | snapshot updated for auth-ui? no — for svelte; commit the `api-snapshots/svelte.api.md` change |
 
 ## Scope
 
 **In scope**:
+
 - `packages/svelte/src/query.ts`
 - `packages/svelte/src/subscription.ts`
 - `packages/svelte/src/paginated-query.ts`
@@ -51,6 +52,7 @@ Every adapter except Svelte accepts a reactive args source for live queries: Vue
 - `api-snapshots/svelte.api.md` (via `pnpm run api:update` after a fresh build — never hand-edit)
 
 **Out of scope**:
+
 - Other adapters (react/vue/solid/angular) — already have the form.
 - `@lunora/client`'s `createQuerySubscription` — consume it as-is.
 
@@ -76,6 +78,7 @@ Same widening and same pattern for `subscription`; for `paginatedQuery`, the rea
 ### Step 3: Tests
 
 Model on the existing tests in `packages/svelte/__tests__/` (find the current query/subscription tests and copy their client-double setup). Cases per primitive:
+
 1. Store-args: emitting new args tears down the old subscription (assert the double's unsubscribe was called) and opens one with the new args.
 2. Emitting `"skip"` tears down and the store value becomes `undefined`.
 3. Static args behave exactly as before (regression).

@@ -27,29 +27,31 @@
 - `packages/browser/src/__tests__/create-browser.test.ts` — 31 `it`s (guards: url validation, rebinding, allowlist, clamping).
 - `packages/browser/__tests__/create-browser.test.ts` — 22 `it`s (timeouts, SSRF redirect/sub-resource, session reuse); helpers at `packages/browser/__tests__/_helpers/stub-doh.ts`.
 - `packages/browser/vitest.config.ts:35`:
-  ```ts
-  include: ["src/**/*.test.ts", "__tests__/**/*.test.ts"],
-  ```
-  and `coverage.include: ["src"]` at `:15` (coverage include is fine once no tests live under src).
+    ```ts
+    include: ["src/**/*.test.ts", "__tests__/**/*.test.ts"],
+    ```
+    and `coverage.include: ["src"]` at `:15` (coverage include is fine once no tests live under src).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/browser..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/browser" run test` | all pass, **53 tests** (31+22 — count them before moving: `pnpm --filter "@lunora/browser" run test 2>&1 | tail -5`) |
-| Typecheck | `pnpm --filter "@lunora/browser" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/browser" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success                                                                                      |
+| ---------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Install    | `pnpm install`                                    | exit 0                                                                                                   |
+| Build deps | `pnpm --filter "@lunora/browser..." run build`    | exit 0                                                                                                   |
+| Tests      | `pnpm --filter "@lunora/browser" run test`        | all pass, **53 tests** (31+22 — count them before moving: `pnpm --filter "@lunora/browser" run test 2>&1 | tail -5`) |
+| Typecheck  | `pnpm --filter "@lunora/browser" run lint:types`  | exit 0                                                                                                   |
+| Lint       | `pnpm --filter "@lunora/browser" run lint:eslint` | exit 0                                                                                                   |
 
 ## Scope
 
 **In scope**:
+
 - `packages/browser/src/__tests__/create-browser.test.ts` → move to `packages/browser/__tests__/create-browser.guards.test.ts`
 - `packages/browser/vitest.config.ts` (drop the `src/**/*.test.ts` include)
 - Import-path fixes inside the moved file only
 
 **Out of scope**:
+
 - Merging the two files' contents into one — a rename keeps the diff reviewable; renaming describes/merging can be a follow-up.
 - Any change to the SSRF guard source code.
 - `playwright-projection.test-d.ts` — type-level test, already in the right place.

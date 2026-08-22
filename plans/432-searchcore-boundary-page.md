@@ -28,35 +28,37 @@ The trade-off, stated honestly: after the fix, an exact-boundary request over a 
 ## Current state
 
 - `packages/search-core/src/query.ts:360-366` (inside `planSearchPage`):
-  ```ts
-  if (offset + numberItems > MAX_SEARCH_SCAN) {
-      throw new LunoraError(
-          "BAD_REQUEST",
-          `search pagination reaches past the ${String(MAX_SEARCH_SCAN)}-document limit (offset ${String(offset)} + ${String(numberItems)} requested) — narrow the query or the filters instead`,
-      );
-  }
-  ```
+    ```ts
+    if (offset + numberItems > MAX_SEARCH_SCAN) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `search pagination reaches past the ${String(MAX_SEARCH_SCAN)}-document limit (offset ${String(offset)} + ${String(numberItems)} requested) — narrow the query or the filters instead`,
+        );
+    }
+    ```
 - `:298` — `export const searchPageScan = (plan) => Math.min(plan.offset + plan.numItems + 1, MAX_SEARCH_SCAN);`
 - `:377-378` (inside `finishSearchPage`) — `const end = plan.offset + plan.numItems; const hasMore = plan.numItems > 0 && window.length > end;`
 - The module is **internal and bundled** into `@lunora/server`, `@lunora/do`, and `@lunora/sql-store` (devDependency + inline pattern), so consumer test suites in those packages may assert pagination behavior.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/search-core" run test` | all pass |
+| Purpose        | Command                                                                                       | Expected on success                                |
+| -------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Install        | `pnpm install`                                                                                | exit 0                                             |
+| Tests          | `pnpm --filter "@lunora/search-core" run test`                                                | all pass                                           |
 | Consumer tests | `pnpm --filter "@lunora/shard-engine" run test && pnpm --filter "@lunora/sql-store" run test` | all pass (both embed the shared search core paths) |
-| Typecheck | `pnpm --filter "@lunora/search-core" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/search-core" run lint:eslint` | exit 0 |
+| Typecheck      | `pnpm --filter "@lunora/search-core" run lint:types`                                          | exit 0                                             |
+| Lint           | `pnpm --filter "@lunora/search-core" run lint:eslint`                                         | exit 0                                             |
 
 ## Scope
 
 **In scope**:
+
 - `packages/search-core/src/query.ts` — the `planSearchPage` guard (one operator + message) and its docblock
 - `packages/search-core/__tests__/` — the pagination test file (find it: `grep -rln "planSearchPage" packages/search-core/__tests__`)
 
 **Out of scope**:
+
 - `searchPageScan` / `finishSearchPage` — unchanged; once the boundary request is refused, the clamp can only trim the probe row in the already-answered case (its docblock says exactly this and becomes true again).
 - `assertSearchWithinCap` (the `.collect()` guard) — separate, correct path.
 - Consumer packages' code.
@@ -77,6 +79,7 @@ Change `>` to `>=` in the `planSearchPage` cap check, and extend the error messa
 ### Step 2: Tests
 
 In the pagination suite:
+
 - `planSearchPage({ cursor: <encodes 1000>, numItems: 24 })` throws `BAD_REQUEST` (the exact-cap case).
 - `planSearchPage({ cursor: <encodes 999>, numItems: 24 })` still resolves (1023 < 1024; probe row fits: `searchPageScan` = 1024).
 - If an existing test asserted `isDone: true` at the boundary, it encoded the bug — rewrite it to expect the throw and say so in the commit body.

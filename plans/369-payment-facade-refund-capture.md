@@ -27,60 +27,62 @@
 ## Current state
 
 - `packages/payment/src/adapter.ts:50,53,84` (interface `PaymentAdapter`):
-  ```ts
-  cancelPayment: (sessionId: string, options?: { idempotencyKey?: string }) => Promise<PaymentSession>;
-  capturePayment: (input: CaptureInput) => Promise<PaymentSession>;
-  refundPayment: (input: RefundInput) => Promise<PaymentSession>;
-  ```
+    ```ts
+    cancelPayment: (sessionId: string, options?: { idempotencyKey?: string }) => Promise<PaymentSession>;
+    capturePayment: (input: CaptureInput) => Promise<PaymentSession>;
+    refundPayment: (input: RefundInput) => Promise<PaymentSession>;
+    ```
 - The `LunoraPayment` interface (`create-payment.ts:92-125`) exposes `attach`, `cancelSubscription`, `check`, `createCheckout`, `createPortalSession`, `handleWebhook`, `listBalances`, `listSubscriptions`, `track` — none of the three. It also exposes `readonly adapter: PaymentAdapter`, which is how callers bypass today.
 - The exemplar pattern to copy — `cancelSubscription`, `create-payment.ts:227-249`:
-  ```ts
-  cancelSubscription: async (subscriptionId, cancelOptions) => {
-      const existing = await store.getSubscription(adapter.identifier, subscriptionId);
+    ```ts
+    cancelSubscription: async (subscriptionId, cancelOptions) => {
+        const existing = await store.getSubscription(adapter.identifier, subscriptionId);
 
-      // Collapse "doesn't exist" and "not yours" into one indistinguishable NOT_FOUND so the
-      // endpoint can't be used as a cross-tenant existence oracle. ...
-      if (!existing) {
-          throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
-      }
+        // Collapse "doesn't exist" and "not yours" into one indistinguishable NOT_FOUND so the
+        // endpoint can't be used as a cross-tenant existence oracle. ...
+        if (!existing) {
+            throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
+        }
 
-      try {
-          await ensureAuthorized(existing.referenceId);
-      } catch {
-          throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
-      }
+        try {
+            await ensureAuthorized(existing.referenceId);
+        } catch {
+            throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
+        }
 
-      const key = cancelOptions?.idempotencyKey ?? idempotencyKey("cancel_subscription", adapter.identifier, subscriptionId);
-      const updated = await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key });
+        const key = cancelOptions?.idempotencyKey ?? idempotencyKey("cancel_subscription", adapter.identifier, subscriptionId);
+        const updated = await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key });
 
-      await store.upsertSubscription(updated);
+        await store.upsertSubscription(updated);
 
-      return updated;
-  },
-  ```
+        return updated;
+    },
+    ```
 - `idempotencyKey(operation, ...parts)` helper: `packages/payment/src/idempotency.ts:18`.
 - Session lookup for ownership: `store.getPaymentSession(provider, id)` exists (`store.ts:20`).
 - Read `RefundInput` / `CaptureInput` in `adapter.ts` (or `types.ts`) before writing — they carry the session id; mirror their field names exactly in the facade signatures.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/payment..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/payment" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/payment" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0 |
-| API snapshot | `pnpm run build:packages && pnpm run api:update` | exit 0; `api-snapshots/payment.api.md` updated |
+| Purpose      | Command                                           | Expected on success                            |
+| ------------ | ------------------------------------------------- | ---------------------------------------------- |
+| Install      | `pnpm install`                                    | exit 0                                         |
+| Build deps   | `pnpm --filter "@lunora/payment..." run build`    | exit 0                                         |
+| Tests        | `pnpm --filter "@lunora/payment" run test`        | all pass                                       |
+| Typecheck    | `pnpm --filter "@lunora/payment" run lint:types`  | exit 0                                         |
+| Lint         | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0                                         |
+| API snapshot | `pnpm run build:packages && pnpm run api:update`  | exit 0; `api-snapshots/payment.api.md` updated |
 
 ## Scope
 
 **In scope**:
+
 - `packages/payment/src/create-payment.ts` (the `LunoraPayment` interface + implementation)
 - `packages/payment/__tests__/create-payment.test.ts`
 - `api-snapshots/payment.api.md` (via `pnpm run api:update` — never hand-edit)
 
 **Out of scope**:
+
 - The adapter interface and every provider adapter — their signatures are the contract; do not change them.
 - Removing `readonly adapter` from the facade — it is the documented escape hatch for provider-specific calls; leave it.
 - The FSM (`state-machine.ts`) — the store upsert path from these calls uses the same verbatim-upsert semantics as `cancelSubscription`.
@@ -117,6 +119,7 @@ For `capturePayment`/`refundPayment`, the session id lives inside the input obje
 ### Step 3: Tests
 
 In `create-payment.test.ts`, model after the existing `cancelSubscription` tests (same file):
+
 - Refund on an owned session: adapter called with a derived idempotency key, store updated with the adapter's returned session.
 - Refund on a session owned by another reference with an `authorize` that denies: throws `NOT_FOUND` (not `FORBIDDEN` — the oracle collapse).
 - Refund on a nonexistent session id: `NOT_FOUND`.

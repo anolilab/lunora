@@ -24,37 +24,39 @@
 ## Current state
 
 - `packages/server/src/list-args.ts:154-171` — the operator object builder:
-  ```ts
-  const operatorsValidator = (value: Validator, maxInValues: number): Validator => {
-      ...
-      return v.object({
-          contains: v.optional(v.string()),
-          eq: v.optional(value),
-          gt: v.optional(value),
-          ...
-  ```
-  Every operator except `contains`/`isNull` is typed from `value`; `contains` is unconditionally present.
+    ```ts
+    const operatorsValidator = (value: Validator, maxInValues: number): Validator => {
+        ...
+        return v.object({
+            contains: v.optional(v.string()),
+            eq: v.optional(value),
+            gt: v.optional(value),
+            ...
+    ```
+    Every operator except `contains`/`isNull` is typed from `value`; `contains` is unconditionally present.
 - `packages/server/src/list-args.ts:196` — `OPERATOR_KEYS` includes `"contains"`, so the `toQueryArgs` sanitizer passes it through for every column.
 - `packages/server/src/list-args.ts:34-39` — module doc already names `contains` as non-sargable; the doc covers cost, not the type-mismatch.
 - Validator kinds available on a `Validator` (see `PASS_THROUGH_KINDS` in `packages/codegen/src/compile-validator.ts:40` for the kind vocabulary): `"string"`, `"id"`, `"storage"` are the string-ish kinds; a column may be wrapped `v.optional(...)` (kind `"optional"`, inner under a property — read `packages/values/src/v.ts` to find the exact wrapper shape, likely `.inner` or `.element`; grep `kind === "optional"` in `packages/values/src` for how other code unwraps it).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/server..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/server" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/server" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/server" run lint:eslint` | exit 0 |
+| Purpose    | Command                                          | Expected on success |
+| ---------- | ------------------------------------------------ | ------------------- |
+| Install    | `pnpm install`                                   | exit 0              |
+| Build deps | `pnpm --filter "@lunora/server..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/server" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/server" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/server" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/server/src/list-args.ts`
 - The `defineListArgs` test file (`grep -rln "defineListArgs" packages/server/__tests__/`)
 
 **Out of scope**:
+
 - `packages/shard-engine/src/where-sql.ts` — defense-in-depth there is a separate decision; the boundary fix belongs in the validator that admits client input.
 - The type-level `WhereOperators` in `data-model` — only if the runtime change makes a type assertion fail (then update the conditional type minimally and note it); do not redesign the type surface.
 - Other non-sargable operators (`ne`, `notIn`, `isNull: false`) — documented cost, semantically valid; not this plan.
@@ -85,6 +87,7 @@ Also gate the `toQueryArgs` pass-through: in the sanitizer that rebuilds against
 ### Step 2: Tests
 
 In the existing `defineListArgs` test file, add:
+
 1. A `v.number()` filter column: args containing `{ age: { contains: "4" } }` are **rejected** by the generated validator (assert the ValidationError mentions the unknown/unsupported key).
 2. A `v.string()` column still accepts `contains`.
 3. A `v.optional(v.string())` column still accepts `contains` (unwrap works).

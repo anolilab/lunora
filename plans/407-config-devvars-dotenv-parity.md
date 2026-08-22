@@ -21,7 +21,7 @@
 
 ## Why this matters
 
-`@lunora/config`'s `.dev.vars` grammar claims to read "the same file `@cloudflare/vite-plugin` / `wrangler dev` feed the worker" (`admin-token.ts:19-24`), but wrangler parses `.dev.vars` with **dotenv** (verified in the installed `wrangler@4.120.1`: `wrangler-dist/cli.js` `tryLoadDotDevDotVars` → `import_dotenv3.default.parse(contents)`), while Lunora hand-rolls a stricter split. Any line dotenv accepts but Lunora drops (or reads differently) means: the studio embeds an admin token the worker never saw → every admin RPC 401s with no explanation; and `lunora env doctor` / the deploy secret gate report a secret as *missing* that is actually set, offering to mint a replacement.
+`@lunora/config`'s `.dev.vars` grammar claims to read "the same file `@cloudflare/vite-plugin` / `wrangler dev` feed the worker" (`admin-token.ts:19-24`), but wrangler parses `.dev.vars` with **dotenv** (verified in the installed `wrangler@4.120.1`: `wrangler-dist/cli.js` `tryLoadDotDevDotVars` → `import_dotenv3.default.parse(contents)`), while Lunora hand-rolls a stricter split. Any line dotenv accepts but Lunora drops (or reads differently) means: the studio embeds an admin token the worker never saw → every admin RPC 401s with no explanation; and `lunora env doctor` / the deploy secret gate report a secret as _missing_ that is actually set, offering to mint a replacement.
 
 Known divergences (dotenv `LINE` regex, `dotenv@16.6.1/lib/main.js:9`, vs `splitDevVariableLine`):
 
@@ -35,32 +35,34 @@ Known divergences (dotenv `LINE` regex, `dotenv@16.6.1/lib/main.js:9`, vs `split
 ## Current state
 
 - `packages/config/src/dev-variables-format.ts` — the single owner of the grammar (its own doc: "one owner, shared by every reader/writer of the file"). Key parts:
-  - `:17` `const DEV_VARS_KEY_PATTERN: RegExp = /^[A-Za-z_]\w*$/u;`
-  - `:23-29` `unquoteDevVariable` strips one layer of matching single/double quotes (no backticks, no escape expansion).
-  - `:36-56` `splitDevVariableLine` — trims, drops `#`-leading and blank lines, splits at the first `=`, validates the key against `DEV_VARS_KEY_PATTERN`, returns the trimmed remainder verbatim.
+    - `:17` `const DEV_VARS_KEY_PATTERN: RegExp = /^[A-Za-z_]\w*$/u;`
+    - `:23-29` `unquoteDevVariable` strips one layer of matching single/double quotes (no backticks, no escape expansion).
+    - `:36-56` `splitDevVariableLine` — trims, drops `#`-leading and blank lines, splits at the first `=`, validates the key against `DEV_VARS_KEY_PATTERN`, returns the trimmed remainder verbatim.
 - `packages/config/src/studio-host/admin-token.ts:26-38` — `resolveAdminToken` reads `LUNORA_ADMIN_TOKEN` through this grammar.
 - Consumers of the grammar: `grep -rn "parseDevVariable\|splitDevVariableLine\|parseDevVariableEntries" packages/config/src packages/cli/src` — the CLI `env` command and the deploy secret gate route through here. The **writer** (`upsertDevVariableLine` / the scaffolder's comment-preserving rewrite) also lives in `dev-variables-format.ts` — its output format must not change.
 - Wrangler's parser (installed tree, for reference only — do not import from it): `node_modules/.pnpm/wrangler@4.120.1*/node_modules/wrangler/wrangler-dist/cli.js:255407-255427` parses via dotenv. `dotenv` versions `16.6.1` and `17.4.2` are both already in the lockfile.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/config..." run build` | exit 0 |
-| Tests (config) | `pnpm --filter "@lunora/config" run test` | all pass |
-| Tests (cli, consumer) | `pnpm --filter "@lunora/cli" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/config" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/config" run lint:eslint` | exit 0 |
+| Purpose               | Command                                          | Expected on success |
+| --------------------- | ------------------------------------------------ | ------------------- |
+| Install               | `pnpm install`                                   | exit 0              |
+| Build deps            | `pnpm --filter "@lunora/config..." run build`    | exit 0              |
+| Tests (config)        | `pnpm --filter "@lunora/config" run test`        | all pass            |
+| Tests (cli, consumer) | `pnpm --filter "@lunora/cli" run test`           | all pass            |
+| Typecheck             | `pnpm --filter "@lunora/config" run lint:types`  | exit 0              |
+| Lint                  | `pnpm --filter "@lunora/config" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/config/src/dev-variables-format.ts` (reader functions only)
 - `packages/config/__tests__/` — the existing dev-variables test file (extend)
 - `packages/config/package.json` **only if** you take the dotenv-dependency route (see Step 1) — then also `pnpm-workspace.yaml` is NOT to be touched (dotenv already resolves; use the version the catalog/lockfile already carries; if no catalog entry exists, STOP and report).
 
 **Out of scope**:
+
 - The writer path: `upsertDevVariableLine`, the scaffolder's line-preserving rewrite, `DEV_VARS_KEY_PATTERN` as writer-side validation. The writer keeps emitting the strict `KEY=value` form.
 - `packages/cli` source (consumers pick the change up through the shared module).
 - Wrangler/node_modules anything.
@@ -87,17 +89,17 @@ Keep `parseDevVariable(content, key)`'s signature unchanged.
 
 Add to the existing dev-variables test file a table-driven test over at least these inputs, asserting the parsed result equals what wrangler/dotenv would produce:
 
-| line | expected key | expected value |
-|---|---|---|
-| `export FOO=x` | `FOO` | `x` |
-| `FOO.BAR=x` | `FOO.BAR` | `x` |
-| `FOO=x # note` | `FOO` | `x` |
-| `FOO="a\nb"` | `FOO` | `a<newline>b` |
-| `FOO: colon` | `FOO` | `colon` |
-| `` FOO=`tick` `` | `FOO` | `tick` |
-| `FOO="multi` + newline + `line"` | `FOO` | `multi\nline` (real newline) |
-| `# comment=notakey` | (dropped) | |
-| `FOO='keep\n'` | `FOO` | `keep\n` (literal — single quotes don't expand) |
+| line                             | expected key | expected value                                  |
+| -------------------------------- | ------------ | ----------------------------------------------- |
+| `export FOO=x`                   | `FOO`        | `x`                                             |
+| `FOO.BAR=x`                      | `FOO.BAR`    | `x`                                             |
+| `FOO=x # note`                   | `FOO`        | `x`                                             |
+| `FOO="a\nb"`                     | `FOO`        | `a<newline>b`                                   |
+| `FOO: colon`                     | `FOO`        | `colon`                                         |
+| `` FOO=`tick` ``                 | `FOO`        | `tick`                                          |
+| `FOO="multi` + newline + `line"` | `FOO`        | `multi\nline` (real newline)                    |
+| `# comment=notakey`              | (dropped)    |                                                 |
+| `FOO='keep\n'`                   | `FOO`        | `keep\n` (literal — single quotes don't expand) |
 
 **Verify**: `pnpm --filter "@lunora/config" run test` → all pass.
 
@@ -125,7 +127,7 @@ Run the existing writer/scaffolder tests unchanged. The writer still emits `KEY=
 - The "Current state" excerpts don't match the live code.
 - Making the reader dotenv-compatible forces changes to the writer's output format or breaks the scaffolder's comment-preserving round-trip tests.
 - `dotenv` has no existing catalog entry AND porting the regex is blocked by some structure in `dev-variables-format.ts` you'd have to rewrite wholesale.
-- You find a consumer that depends on the old strict behaviour on purpose (e.g. a test asserting `export FOO=x` is *rejected* with a rationale comment).
+- You find a consumer that depends on the old strict behaviour on purpose (e.g. a test asserting `export FOO=x` is _rejected_ with a rationale comment).
 
 ## Maintenance notes
 

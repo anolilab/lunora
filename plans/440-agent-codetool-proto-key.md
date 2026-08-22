@@ -19,41 +19,43 @@
 
 ## Why this matters
 
-`resolveReferences` rebuilds a model-controlled input object by assigning into a plain `{}` accumulator: `resolved[key] = …`. When `key === "__proto__"` (an *own* property after `JSON.parse`, which is exactly what a model-emitted tool input is), the assignment invokes `Object.prototype`'s setter and replaces the accumulator's prototype instead of creating an own property. A prompt-injected model can hand a composed tool an input whose own keys look benign but that resolves inherited properties (`input.isAdmin`, `input.internal`) through a prototype it chose. The *read* side of this same file (`getPath`) was already hardened with `Object.hasOwn` and has a `__proto__` test; the write side got neither. Same class as the shipped wire-codec `__proto__` fix (plan 103). `JSON.stringify` drops inherited keys, so RPC-forwarded tools are safe — the exposure is any in-process `AgentToolDefinition.execute` reading `input.x` directly.
+`resolveReferences` rebuilds a model-controlled input object by assigning into a plain `{}` accumulator: `resolved[key] = …`. When `key === "__proto__"` (an _own_ property after `JSON.parse`, which is exactly what a model-emitted tool input is), the assignment invokes `Object.prototype`'s setter and replaces the accumulator's prototype instead of creating an own property. A prompt-injected model can hand a composed tool an input whose own keys look benign but that resolves inherited properties (`input.isAdmin`, `input.internal`) through a prototype it chose. The _read_ side of this same file (`getPath`) was already hardened with `Object.hasOwn` and has a `__proto__` test; the write side got neither. Same class as the shipped wire-codec `__proto__` fix (plan 103). `JSON.stringify` drops inherited keys, so RPC-forwarded tools are safe — the exposure is any in-process `AgentToolDefinition.execute` reading `input.x` directly.
 
 ## Current state
 
 - `packages/agent/src/code-tool.ts:129-135`:
-  ```ts
-  const resolved: Record<string, unknown> = {};
+    ```ts
+    const resolved: Record<string, unknown> = {};
 
-  for (const [key, nested] of Object.entries(object)) {
-      resolved[key] = resolveReferences(nested, results);
-  }
+    for (const [key, nested] of Object.entries(object)) {
+        resolved[key] = resolveReferences(nested, results);
+    }
 
-  return resolved;
-  ```
+    return resolved;
+    ```
 - The hardened read side, same file (`getPath`, ~`:88-100`), uses `Object.hasOwn` per segment; its docstring names `__proto__`/`constructor`/`prototype`.
 - Existing test: `packages/agent/__tests__/code-tool.test.ts:52` probes `$path: "__proto__"` / `"constructor"` on the read side.
 - Input reaches here unfiltered: `CODE_TOOL_SCHEMA` declares `input` as `{ additionalProperties: true, type: "object" }` and `generate.ts` registers the tool with no custom validator.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/agent..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/agent" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/agent" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/agent" run lint:eslint` | exit 0 |
+| Purpose    | Command                                         | Expected on success |
+| ---------- | ----------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                  | exit 0              |
+| Build deps | `pnpm --filter "@lunora/agent..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/agent" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/agent" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/agent" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/agent/src/code-tool.ts` (`resolveReferences` only)
 - `packages/agent/__tests__/code-tool.test.ts`
 
 **Out of scope**:
+
 - `getPath` — already hardened.
 - The tool JSON schema / `generate.ts` registration — the guard belongs in the pure function all inputs flow through.
 

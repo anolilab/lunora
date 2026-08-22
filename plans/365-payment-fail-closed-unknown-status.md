@@ -26,40 +26,42 @@ A subscription status string the hand-written status maps don't know falls back 
 ## Current state
 
 - `packages/payment/src/providers/stripe.ts:158`:
-  ```ts
-  state: SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(subscription, "status") ?? ""] ?? "active",
-  ```
+    ```ts
+    state: SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(subscription, "status") ?? ""] ?? "active",
+    ```
 - `packages/payment/src/providers/polar.ts:108`:
-  ```ts
-  state: SUBSCRIPTION_STATE_BY_POLAR_STATUS[readString(subscription, "status") ?? ""] ?? "active",
-  ```
+    ```ts
+    state: SUBSCRIPTION_STATE_BY_POLAR_STATUS[readString(subscription, "status") ?? ""] ?? "active",
+    ```
 - The exemplar to match — `packages/payment/src/providers/creem.ts:139-140`:
-  ```ts
-  // Fail closed: an unrecognized Creem status is treated as non-entitling `past_due`.
-  state: SUBSCRIPTION_STATE_BY_CREEM_STATUS[status] ?? "past_due",
-  ```
+    ```ts
+    // Fail closed: an unrecognized Creem status is treated as non-entitling `past_due`.
+    state: SUBSCRIPTION_STATE_BY_CREEM_STATUS[status] ?? "past_due",
+    ```
 - Webhook-path normalization (`packages/payment/src/providers/subscription-event.ts`) already degrades unknown statuses to a non-entitling event; this plan aligns the snapshot-mapping path with it.
 
 Before flipping Polar, check `SUBSCRIPTION_STATE_BY_POLAR_STATUS` (top of `polar.ts`) and `SUBSCRIPTION_STATE_BY_STRIPE_STATUS` (`stripe.ts:74`) cover the providers' current documented status enums, so the fail-closed fallback only ever catches genuinely unknown values. Stripe's documented statuses: `incomplete`, `incomplete_expired`, `trialing`, `active`, `past_due`, `canceled`, `unpaid`, `paused`. Polar's: `incomplete`, `incomplete_expired`, `trialing`, `active`, `past_due`, `canceled`, `unpaid`. Add any missing documented status to the map with its correct state — do not let a documented status fall into the fallback.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/payment..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/payment" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/payment" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success |
+| ---------- | ------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                    | exit 0              |
+| Build deps | `pnpm --filter "@lunora/payment..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/payment" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/payment" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope** (the only files you should modify):
+
 - `packages/payment/src/providers/stripe.ts`
 - `packages/payment/src/providers/polar.ts`
 - `packages/payment/__tests__/` — the existing provider test files for stripe and polar (add regression cases)
 
 **Out of scope**:
+
 - `creem.ts`, `dodopayments.ts`, `autumn.ts` — already fail closed.
 - `packages/payment/src/sync.ts`, `reconcile.ts` — the FSM/reconcile semantics are by design.
 - `subscription-event.ts` — the webhook normalization is already correct.
