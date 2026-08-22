@@ -188,6 +188,37 @@ describe("createIndexedDbQueryCache — durability across handles", () => {
     });
 });
 
+describe("maxEntries validation", () => {
+    // A NaN or negative cap makes every `size <= maxEntries` comparison false,
+    // so each put drops the whole cache and the adapter silently stores nothing;
+    // Infinity disables the bound entirely. All construct fine without a guard.
+    const rejected: [string, number][] = [
+        ["NaN", Number.NaN],
+        ["negative", -1],
+        ["zero", 0],
+        ["fractional", 2.5],
+        ["Infinity", Number.POSITIVE_INFINITY],
+    ];
+
+    it.each(rejected)("createInMemoryQueryCache rejects a %s cap", (_label, maxEntries) => {
+        expect.assertions(1);
+
+        expect(() => createInMemoryQueryCache({ maxEntries })).toThrow(/maxEntries must be a positive integer/);
+    });
+
+    it.each(rejected)("createIndexedDbQueryCache rejects a %s cap", (_label, maxEntries) => {
+        expect.assertions(1);
+
+        expect(() => createIndexedDatabaseQueryCache({ indexedDB: new IDBFactory(), maxEntries })).toThrow(/maxEntries must be a positive integer/);
+    });
+
+    it("accepts a positive integer cap", () => {
+        expect.assertions(1);
+
+        expect(() => createInMemoryQueryCache({ maxEntries: 1 })).not.toThrow();
+    });
+});
+
 describe("queryCacheKey", () => {
     it("composes functionPath, argsKey and shardKey", () => {
         expect.assertions(2);

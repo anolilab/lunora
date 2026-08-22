@@ -15,6 +15,29 @@ const queryCacheKey = (functionPath: string, argsKey: string, shardKey?: string)
 const DEFAULT_MAX_ENTRIES = 500;
 
 /**
+ * Validate an LRU cap at construction, shared by every {@link QueryCacheAdapter}
+ * so the three can't diverge on what they accept.
+ *
+ * Every adapter's eviction is a `size <= maxEntries` comparison, and a `NaN` or
+ * negative cap makes that comparison false at every step: each `put` then drops
+ * the WHOLE cache, so the adapter constructs fine, throws nothing, and silently
+ * caches nothing forever. `Infinity` fails the other way — it disables eviction
+ * entirely, which is what bounds the store. A fractional cap silently floors.
+ * All of them are misconfigurations that only show up as "the cache doesn't
+ * work", so they fail loudly here instead.
+ *
+ * `0` is rejected too: an always-empty cache is not a mode worth supporting when
+ * `queryCache: false` already turns the cache off explicitly.
+ */
+const assertMaxEntries = (maxEntries: number, factory: string): number => {
+    if (!Number.isInteger(maxEntries) || maxEntries < 1) {
+        throw new LunoraError("INTERNAL", `${factory}: maxEntries must be a positive integer, got ${String(maxEntries)}`);
+    }
+
+    return maxEntries;
+};
+
+/**
  * In-memory {@link QueryCacheAdapter}. Doesn't survive a reload — it exists so
  * the read-cache wiring can be exercised without IndexedDB (tests, SSR, or as a
  * deliberate "no durable store" choice that still satisfies the interface).
@@ -22,7 +45,7 @@ const DEFAULT_MAX_ENTRIES = 500;
  * from mutating stored values.
  */
 const createInMemoryQueryCache = (options: { maxEntries?: number } = {}): QueryCacheAdapter => {
-    const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
+    const maxEntries = assertMaxEntries(options.maxEntries ?? DEFAULT_MAX_ENTRIES, "createInMemoryQueryCache");
     const entries = new Map<string, StoredQuery>();
     const clone = (entry: StoredQuery): StoredQuery => {
         return { ...entry, value: structuredClone(entry.value) };
@@ -73,7 +96,7 @@ interface IndexedDbQueryCacheOptions {
     databaseName?: string;
     /** Injectable `IDBFactory` (e.g. `fake-indexeddb` in tests); defaults to the global `indexedDB`. */
     indexedDB?: IDBFactory;
-    /** LRU row cap; defaults to 500. The oldest rows by `ts` are pruned on `put` once exceeded. */
+    /** LRU row cap; defaults to 500. Must be a positive integer. The oldest rows by `ts` are pruned on `put` once exceeded. */
     maxEntries?: number;
     /** Object-store name; defaults to `"query-cache"`. */
     storeName?: string;
@@ -118,7 +141,7 @@ const createIndexedDbQueryCache = (options: IndexedDbQueryCacheOptions = {}): Qu
 
     const databaseName = options.databaseName ?? DEFAULT_DATABASE;
     const storeName = options.storeName ?? DEFAULT_STORE;
-    const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
+    const maxEntries = assertMaxEntries(options.maxEntries ?? DEFAULT_MAX_ENTRIES, "createIndexedDbQueryCache");
 
     const openDatabase = createDatabaseOpener(factory, databaseName, DATABASE_VERSION, (database) => {
         if (!database.objectStoreNames.contains(storeName)) {
@@ -203,5 +226,5 @@ const resolveQueryCacheAdapter = (option: false | QueryCacheAdapter | undefined)
     return createIndexedDbQueryCache();
 };
 
-export { createIndexedDbQueryCache, createInMemoryQueryCache, queryCacheKey, resolveQueryCacheAdapter };
+export { assertMaxEntries, createIndexedDbQueryCache, createInMemoryQueryCache, queryCacheKey, resolveQueryCacheAdapter };
 export type { IndexedDbQueryCacheOptions };

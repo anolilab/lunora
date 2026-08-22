@@ -139,6 +139,20 @@ describe("createAsyncStorageQueryCache", () => {
         expect(loaded.map((row) => row.key).toSorted((a, b) => a.localeCompare(b))).toEqual(["mid::{}::", "new::{}::"]);
     });
 
+    it.each([
+        ["NaN", Number.NaN],
+        ["negative", -1],
+        ["zero", 0],
+        ["fractional", 2.5],
+        ["Infinity", Number.POSITIVE_INFINITY],
+    ])("rejects a %s maxEntries at construction", (_label, maxEntries) => {
+        expect.assertions(1);
+
+        // Without the guard these construct fine and then either wipe the cache
+        // on every put (NaN, negative) or never evict at all (Infinity).
+        expect(() => createAsyncStorageQueryCache({ maxEntries, storage: createFakeAsyncStorage() })).toThrow(/maxEntries must be a positive integer/);
+    });
+
     it("a corrupt stored payload loads as empty instead of wedging", async () => {
         expect.assertions(1);
 

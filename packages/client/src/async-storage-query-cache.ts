@@ -1,12 +1,13 @@
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { AsyncStorageLike } from "./async-storage-persistence";
+import { assertMaxEntries } from "./query-cache";
 import { singleBlobStore } from "./single-blob-store";
 import type { QueryCacheAdapter, StoredQuery } from "./types";
 
 interface AsyncStorageQueryCacheOptions {
     /** Storage key the cache is serialized under; defaults to `"lunora:query-cache"`. */
     key?: string;
-    /** LRU row cap; defaults to 50 (see {@link DEFAULT_MAX_ENTRIES}). The oldest rows by `ts` are pruned on `put` once exceeded. */
+    /** LRU row cap; defaults to 50 (see {@link DEFAULT_MAX_ENTRIES}). Must be a positive integer. The oldest rows by `ts` are pruned on `put` once exceeded. */
     maxEntries?: number;
     /** The async key/value store the cache is read from and written to (e.g. React Native `AsyncStorage`). */
     storage: AsyncStorageLike;
@@ -54,7 +55,7 @@ const DEFAULT_MAX_ENTRIES = 50;
  * path.
  */
 const createAsyncStorageQueryCache = (options: AsyncStorageQueryCacheOptions): QueryCacheAdapter => {
-    const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
+    const maxEntries = assertMaxEntries(options.maxEntries ?? DEFAULT_MAX_ENTRIES, "createAsyncStorageQueryCache");
     const blob = singleBlobStore(options.storage, options.key ?? DEFAULT_KEY);
 
     const readAll = async (): Promise<Map<string, StoredQuery>> => {
