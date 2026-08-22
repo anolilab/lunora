@@ -20,42 +20,44 @@
 
 ## Why this matters
 
-`normalizeBindValue` exists (its docblock says so verbatim) because a value the driver rejects "previously took the ENTIRE diff's transaction down with it (including unrelated rows in the same batch)" — `better-sqlite3` throws `TypeError: can only bind numbers, strings, bigints, buffers, and null` on anything else. Every `SET` value goes through it; the row id — the one value present in *every* DELETE and UPDATE statement — does not. A diff whose `change.id` is a boolean, object, or `undefined` (untrusted server payload; no type guard rejects it) throws inside `database.transaction()` and rolls back the whole batch, exactly the blast radius the normalizer was written to contain.
+`normalizeBindValue` exists (its docblock says so verbatim) because a value the driver rejects "previously took the ENTIRE diff's transaction down with it (including unrelated rows in the same batch)" — `better-sqlite3` throws `TypeError: can only bind numbers, strings, bigints, buffers, and null` on anything else. Every `SET` value goes through it; the row id — the one value present in _every_ DELETE and UPDATE statement — does not. A diff whose `change.id` is a boolean, object, or `undefined` (untrusted server payload; no type guard rejects it) throws inside `database.transaction()` and rolls back the whole batch, exactly the blast radius the normalizer was written to contain.
 
 ## Current state
 
 `packages/replica/src/diff-applier.ts` (inside `applySingleDiff`):
 
 - `:90` (delete path):
-  ```ts
-  database.exec(`DELETE FROM ${table} WHERE ${pk} = ?`, [change.id]);
-  ```
+    ```ts
+    database.exec(`DELETE FROM ${table} WHERE ${pk} = ?`, [change.id]);
+    ```
 - `:113-114` (update path):
-  ```ts
-  const sql = `UPDATE ${table} SET ${setClause(keys)} WHERE ${pk} = ?`;
-  const values = [...keys.map((k) => normalizeBindValue(data[k])), change.id];
-  ```
+    ```ts
+    const sql = `UPDATE ${table} SET ${setClause(keys)} WHERE ${pk} = ?`;
+    const values = [...keys.map((k) => normalizeBindValue(data[k])), change.id];
+    ```
 - `:22-28` — the `normalizeBindValue` docblock quoted above; the insert path (`:101`) already normalizes everything including the pk (it rides in `data`).
 - `:139-142` — `applyDiffToDatabase` wraps `applySingleDiff` in `database.transaction`.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/replica..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/replica" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/replica" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/replica" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success |
+| ---------- | ------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                    | exit 0              |
+| Build deps | `pnpm --filter "@lunora/replica..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/replica" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/replica" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/replica" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/replica/src/diff-applier.ts` (the two bind sites)
 - The existing diff-applier test file (find it: `ls packages/replica/__tests__/ | grep -i diff`)
 
 **Out of scope**:
-- `local-mirror.ts` — PK column *affinity* is plan 399; this plan is only about bind-time normalization.
+
+- `local-mirror.ts` — PK column _affinity_ is plan 399; this plan is only about bind-time normalization.
 - `normalizeBindValue` itself — its mapping is correct; only the two call sites change.
 
 ## Git workflow

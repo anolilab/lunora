@@ -28,33 +28,35 @@
 
 - `:143` — `readonly #changeListeners = new Set<ChangeSubscriber>();`
 - `:304-311`:
-  ```ts
-  /**
-   * Dispose the mirror and close the database connection.
-   */
-  public close(): void {
-      this.#db.close();
-      this.#eventLog.clear();
-  }
-  ```
+    ```ts
+    /**
+     * Dispose the mirror and close the database connection.
+     */
+    public close(): void {
+        this.#db.close();
+        this.#eventLog.clear();
+    }
+    ```
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/replica..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/replica" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/replica" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/replica" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success |
+| ---------- | ------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                    | exit 0              |
+| Build deps | `pnpm --filter "@lunora/replica..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/replica" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/replica" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/replica" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/replica/src/local-mirror.ts` (`close()` only)
 - The existing LocalMirror test file (add one case)
 
 **Out of scope**:
+
 - Guarding `applyDiff`/`query` after close (fail-loudly-after-close) — a behavior change with its own blast radius; explicitly deferred, note it in the commit body only if trivial evidence emerges that it's already half-guarded. Do not implement it.
 
 ## Git workflow
@@ -95,7 +97,7 @@ In the existing LocalMirror test file (find the subscribe/notify cases via `grep
 ## STOP conditions
 
 - `close()` no longer matches the excerpt (drift).
-- Clearing listeners breaks an existing test that closes and *reuses* a mirror (would indicate close() is used as a soft reset somewhere) — report it.
+- Clearing listeners breaks an existing test that closes and _reuses_ a mirror (would indicate close() is used as a soft reset somewhere) — report it.
 
 ## Maintenance notes
 

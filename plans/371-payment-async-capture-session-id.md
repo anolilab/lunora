@@ -27,29 +27,29 @@ Stripe's `checkout.session.completed` (payment mode) and `payment_intent.succeed
 ## Current state
 
 - `packages/payment/src/providers/stripe.ts:201-210` — `checkout.session.completed`, non-subscription (payment) mode:
-  ```ts
-  const amountTotal = readNumber(object, "amount_total");
+    ```ts
+    const amountTotal = readNumber(object, "amount_total");
 
-  return {
-      ...base,
-      amount: amountTotal === undefined ? undefined : money(BigInt(Math.round(amountTotal)), currency),
-      customerId: readString(object, "customer"),
-      referenceId: readReferenceId(object),
-      sessionId: readString(object, "payment_intent") ?? readString(object, "id"),
-      type: "payment.captured",
-  };
-  ```
+    return {
+        ...base,
+        amount: amountTotal === undefined ? undefined : money(BigInt(Math.round(amountTotal)), currency),
+        customerId: readString(object, "customer"),
+        referenceId: readReferenceId(object),
+        sessionId: readString(object, "payment_intent") ?? readString(object, "id"),
+        type: "payment.captured",
+    };
+    ```
 - `packages/payment/src/providers/stripe.ts:247-256` — `payment_intent.succeeded`:
-  ```ts
-  return {
-      ...base,
-      amount: money(BigInt(Math.round(readNumber(object, "amount_received") ?? readNumber(object, "amount") ?? 0)), currency),
-      customerId: readString(object, "customer"),
-      referenceId: readReferenceId(object),
-      sessionId: readString(object, "id"),
-      type: "payment.captured",
-  };
-  ```
+    ```ts
+    return {
+        ...base,
+        amount: money(BigInt(Math.round(readNumber(object, "amount_received") ?? readNumber(object, "amount") ?? 0)), currency),
+        customerId: readString(object, "customer"),
+        referenceId: readReferenceId(object),
+        sessionId: readString(object, "id"),
+        type: "payment.captured",
+    };
+    ```
 - Note the refund branch (`stripe.ts:177`) has the same `readString(object, "payment_intent") ?? readString(object, "id")` fallback — there the object IS a refund/charge whose `payment_intent` is the correct key; that branch is not in scope.
 - The store keys sessions on `(provider, sessionId)`: `packages/payment/src/sync.ts` `applyPayment` path and `database-store.ts:265-266` (`{ provider, providerSessionId }`).
 
@@ -59,21 +59,23 @@ When a payment-mode `checkout.session.completed` arrives without a `payment_inte
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/payment..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/payment" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/payment" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success |
+| ---------- | ------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                    | exit 0              |
+| Build deps | `pnpm --filter "@lunora/payment..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/payment" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/payment" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/payment/src/providers/stripe.ts` (only the payment-mode `checkout.session.completed` branch)
 - `packages/payment/__tests__/providers/` — the stripe provider test file
 
 **Out of scope**:
+
 - The `payment_intent.succeeded` branch — already correct.
 - The refund branch's identical-looking fallback (`stripe.ts:177`) — there `payment_intent` is the correct primary key for a charge/refund object; leave it.
 - The subscription-mode half of `checkout.session.completed` — separate, already fail-closed.
@@ -109,6 +111,7 @@ Then use `sessionId: paymentIntentId` (drop the `?? readString(object, "id")` fa
 ### Step 2: Fixture tests
 
 In the existing stripe provider test file (find it: `ls packages/payment/__tests__/providers/`), model after the existing `checkout.session.completed` cases:
+
 - Payment-mode completed event WITH `payment_intent: "pi_1"` → `payment.captured`, `sessionId: "pi_1"` (unchanged behavior).
 - Payment-mode completed event WITHOUT `payment_intent` → `type: "unhandled"`.
 - Sequence test: completed-without-intent then `payment_intent.succeeded` with `id: "pi_1"` — run both through the sync/apply path used by existing tests (or assert normalization only, if no apply-path fixture exists there) → exactly one captured row, keyed `pi_1`.

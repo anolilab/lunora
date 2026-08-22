@@ -28,34 +28,36 @@ The three persistence adapters share one behavioural suite precisely "so the two
 `packages/client/__tests__/persistence.test.ts`:
 
 - `:9-16` — the factory:
-  ```ts
-  const mutation = (id: string, overrides: Partial<PersistedMutation> = {}): PersistedMutation => {
-      return {
-          args: { id },
-          functionPath: "posts:create",
-          id,
-          ...overrides,
-      };
-  };
-  ```
+    ```ts
+    const mutation = (id: string, overrides: Partial<PersistedMutation> = {}): PersistedMutation => {
+        return {
+            args: { id },
+            functionPath: "posts:create",
+            id,
+            ...overrides,
+        };
+    };
+    ```
 - `:64-79` — the shape case appends `mutation("a", { args: { title: "hi" }, shardKey: "room-1" })` and asserts `toEqual({ args, functionPath, id, shardKey })` — no `clientId`/`identity`/`version`, and `toEqual` ignores `undefined`-valued key presence.
 - `:42-46` — `adapters` runs the suite against `createInMemoryPersistence`, `createIndexedDbPersistence` (fake-indexeddb), and `createAsyncStoragePersistence` (fake AsyncStorage).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/client..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/client" run test` | all pass |
-| Lint      | `pnpm --filter "@lunora/client" run lint:eslint` | exit 0 |
+| Purpose    | Command                                          | Expected on success |
+| ---------- | ------------------------------------------------ | ------------------- |
+| Install    | `pnpm install`                                   | exit 0              |
+| Build deps | `pnpm --filter "@lunora/client..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/client" run test`        | all pass            |
+| Lint       | `pnpm --filter "@lunora/client" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/client/__tests__/persistence.test.ts`
 
 **Out of scope**:
+
 - Any `src/` file. If tightening the assertion reveals a NEW adapter divergence (beyond what plan 397 fixed), that's a STOP-and-report, not a fix here.
 
 ## Git workflow
@@ -120,4 +122,4 @@ Add one sibling case appending a record with the optional fields **absent** and 
 
 ## Maintenance notes
 
-- When a field is added to `PersistedMutation`, this case must be extended in the same change — the `toStrictEqual` will not fail on an *unset* new field, so reviewers of `types.ts` changes should check this file.
+- When a field is added to `PersistedMutation`, this case must be extended in the same change — the `toStrictEqual` will not fail on an _unset_ new field, so reviewers of `types.ts` changes should check this file.

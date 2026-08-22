@@ -20,43 +20,45 @@
 
 ## Why this matters
 
-The API try-it console has two dispatch branches. RPC operations go through the `LunoraClient` (worker origin + admin token). Plain REST routes (`httpRouter()` operations, no `functionPath`) do a bare same-origin `fetch(operation.httpPath, …)` with no Authorization header. Under `lunora dev`, the CLI studio server answers **every** non-`/_lunora/*` path with the SPA document as a 200 (history fallback), so pressing "Send" on any REST route renders the studio's own HTML in the response panel as a *successful* response — silently wrong. Under the Vite host the request reaches the app but unauthenticated, so guarded routes 401.
+The API try-it console has two dispatch branches. RPC operations go through the `LunoraClient` (worker origin + admin token). Plain REST routes (`httpRouter()` operations, no `functionPath`) do a bare same-origin `fetch(operation.httpPath, …)` with no Authorization header. Under `lunora dev`, the CLI studio server answers **every** non-`/_lunora/*` path with the SPA document as a 200 (history fallback), so pressing "Send" on any REST route renders the studio's own HTML in the response panel as a _successful_ response — silently wrong. Under the Vite host the request reaches the app but unauthenticated, so guarded routes 401.
 
 ## Current state
 
 - `packages/studio/src/features/api/openapi/run-context.tsx:97-114` — the REST branch:
-  ```tsx
-  if (operation.functionPath === undefined) {
-      // Plain REST route: best-effort fetch of the path with a JSON body.
-      const hasBody = operation.method !== "GET" && operation.method !== "HEAD";
-      const fetchResponse = await fetch(operation.httpPath, {
-          body: hasBody ? JSON.stringify(parsedArgs) : undefined,
-          headers: hasBody ? { "content-type": "application/json" } : undefined,
-          method: operation.method,
-      });
-  ```
-  The RPC branch below (`dispatchByKind(client, …)`) uses the mounted client.
+    ```tsx
+    if (operation.functionPath === undefined) {
+        // Plain REST route: best-effort fetch of the path with a JSON body.
+        const hasBody = operation.method !== "GET" && operation.method !== "HEAD";
+        const fetchResponse = await fetch(operation.httpPath, {
+            body: hasBody ? JSON.stringify(parsedArgs) : undefined,
+            headers: hasBody ? { "content-type": "application/json" } : undefined,
+            method: operation.method,
+        });
+    ```
+    The RPC branch below (`dispatchByKind(client, …)`) uses the mounted client.
 - `packages/cli/src/util/studio-server.ts:301-308` — the catch-all: `sendAsset(response, document, "text/html; charset=utf-8")` for anything that isn't a static asset or `/_lunora/*`.
 - The worker origin and token exist at app level: `packages/studio/src/app/app.tsx:155-190` — `StudioApp` computes `const origin = resolveOrigin(baseUrl)` (`:188`) and holds the admin token in `token`/`debouncedToken` state (`:158`), constructing `new LunoraClient({ url: origin, … })` (`:190`).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/studio..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/studio" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/studio" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/studio" run lint:eslint` | exit 0 |
+| Purpose    | Command                                          | Expected on success |
+| ---------- | ------------------------------------------------ | ------------------- |
+| Install    | `pnpm install`                                   | exit 0              |
+| Build deps | `pnpm --filter "@lunora/studio..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/studio" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/studio" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/studio" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/studio/src/features/api/openapi/run-context.tsx`
 - `packages/studio/src/app/app.tsx` and any provider file needed to thread `origin` + token down (smallest seam wins — check first whether an existing context already carries them: `grep -rn "resolveOrigin\|createContext" packages/studio/src/app packages/studio/src/features/api | head`)
 - `packages/studio/__tests__/` (one new test)
 
 **Out of scope**:
+
 - `packages/cli/src/util/studio-server.ts` — the SPA fallback is correct for the router; do not special-case try-it paths server-side.
 - The RPC branch of `run-context.tsx`.
 

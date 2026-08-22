@@ -33,17 +33,19 @@ The platform contracts document portability budgets that only one host enforces.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Read-only test run (context) | `pnpm --filter "@lunora/platform" run test` | all pass |
+| Purpose                      | Command                                     | Expected on success |
+| ---------------------------- | ------------------------------------------- | ------------------- |
+| Install                      | `pnpm install`                              | exit 0              |
+| Read-only test run (context) | `pnpm --filter "@lunora/platform" run test` | all pass            |
 
 ## Scope
 
 **In scope** (the only files you may create):
+
 - `plans/435-budget-tck-design.md` — the design doc (deliverable)
 
 **Out of scope**:
+
 - ANY source or test file. This spike writes one markdown document.
 
 ## Git workflow
@@ -62,7 +64,8 @@ Read the three contract files end to end — `packages/platform/src/socket-host.
 ### Step 2: Classify each budget
 
 For each row, recommend one of:
-- **Contract-enforced**: a shared zero-dep `assertWithin*` helper in `@lunora/platform`, called by every adapter's entry point, plus a TCK leg asserting *refusal* of an over-budget call on every host.
+
+- **Contract-enforced**: a shared zero-dep `assertWithin*` helper in `@lunora/platform`, called by every adapter's entry point, plus a TCK leg asserting _refusal_ of an over-budget call on every host.
 - **Engine-enforced**: belongs beside `WORKERD_SQLITE_LIMITS` (already host-independent) — note it and move on.
 - **Advisory**: genuinely Cloudflare-only semantics where refusing on other hosts would be wrong — justify in one sentence each.
 

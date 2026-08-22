@@ -27,52 +27,54 @@
 ## Current state
 
 - The rejection — `packages/ratelimit/src/store.ts:278-284`:
-  ```ts
-  const createReadOnlyDatabaseStore = (options: ReadOnlyDatabaseStoreOptions): RateLimitStore => {
-      const reject = (operation: string): never => {
-          throw new Error(
-              `@lunora/ratelimit: \`${operation}\` needs a writable \`ctx.db\`, but this store was created with \`createReadOnlyDbStore\` (a query context). ` +
-                  `Use \`createDbStore\` from a mutation or action; a query can only call \`getValue\`/\`check\`.`,
-          );
-      };
-  ```
+    ```ts
+    const createReadOnlyDatabaseStore = (options: ReadOnlyDatabaseStoreOptions): RateLimitStore => {
+        const reject = (operation: string): never => {
+            throw new Error(
+                `@lunora/ratelimit: \`${operation}\` needs a writable \`ctx.db\`, but this store was created with \`createReadOnlyDbStore\` (a query context). ` +
+                    `Use \`createDbStore\` from a mutation or action; a query can only call \`getValue\`/\`check\`.`,
+            );
+        };
+    ```
 - The classification — `packages/ratelimit/src/middleware.ts:73-91`:
-  ```ts
-  // Deterministic caller misuse (unconfigured limit, non-positive
-  // count, a count that exceeds capacity) is thrown as an INTERNAL
-  // LunoraError — a permanent config bug, not a store outage. ...
-  if (isLunoraError(error) && isInternalCode(error.code)) {
-      throw error;
-  }
-  ...
-  if (options.failOpen) {
-      return next();
-  }
-  ```
+    ```ts
+    // Deterministic caller misuse (unconfigured limit, non-positive
+    // count, a count that exceeds capacity) is thrown as an INTERNAL
+    // LunoraError — a permanent config bug, not a store outage. ...
+    if (isLunoraError(error) && isInternalCode(error.code)) {
+        throw error;
+    }
+    ...
+    if (options.failOpen) {
+        return next();
+    }
+    ```
 - The pattern to match — sibling sites all use `LunoraError("INTERNAL", …)`, e.g. `packages/ratelimit/src/rate-limiter.ts:196`:
-  ```ts
-  throw new LunoraError("INTERNAL", `rate limit "${name}" is not configured`);
-  ```
-  and `packages/ratelimit/src/algorithms.ts:32`. `INTERNAL` is registered internal in the catalog (`packages/errors/src/catalog.ts:93`).
+    ```ts
+    throw new LunoraError("INTERNAL", `rate limit "${name}" is not configured`);
+    ```
+    and `packages/ratelimit/src/algorithms.ts:32`. `INTERNAL` is registered internal in the catalog (`packages/errors/src/catalog.ts:93`).
 - `store.ts` currently imports nothing from `@lunora/errors` (`store.ts:1-3` imports only types) — the import must be added; `@lunora/errors` is already a dependency of this package (verify in `packages/ratelimit/package.json` — `rate-limiter.ts` imports it).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/ratelimit..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/ratelimit" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/ratelimit" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/ratelimit" run lint:eslint` | exit 0 |
+| Purpose    | Command                                             | Expected on success |
+| ---------- | --------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                      | exit 0              |
+| Build deps | `pnpm --filter "@lunora/ratelimit..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/ratelimit" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/ratelimit" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/ratelimit" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/ratelimit/src/store.ts` (the `reject` helper only)
 - `packages/ratelimit/__tests__/store.test.ts`, `packages/ratelimit/__tests__/middleware.test.ts` (or `db-store.test.ts` — put each test where its siblings live)
 
 **Out of scope**:
+
 - `middleware.ts` — its classification predicate is correct; the store's error type is what's wrong.
 - The genuine-availability failure path and `failOpen` semantics — unchanged.
 - `database-middleware.ts` — no change needed once the error classifies correctly.

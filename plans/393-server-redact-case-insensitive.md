@@ -24,43 +24,45 @@
 ## Current state
 
 - `packages/server/src/env.ts:101`:
-  ```ts
-  const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
-  ```
+    ```ts
+    const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
+    ```
 - `packages/server/src/env.ts:118-119`:
-  ```ts
-  const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*\S+/gu;
-  ```
+    ```ts
+    const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*\S+/gu;
+    ```
 - `packages/server/src/env.ts:155-159` — the pass:
-  ```ts
-  out = out.replaceAll(KEYED_VALUE, (match, ...groups) => {
-      const named = groups.at(-1) as { key?: string } | undefined;
-      return named?.key !== undefined && SECRET_KEY.test(named.key) ? `${named.key}=${REDACTED}` : match;
-  });
-  ```
+    ```ts
+    out = out.replaceAll(KEYED_VALUE, (match, ...groups) => {
+        const named = groups.at(-1) as { key?: string } | undefined;
+        return named?.key !== undefined && SECRET_KEY.test(named.key) ? `${named.key}=${REDACTED}` : match;
+    });
+    ```
 - `packages/server/src/env.ts:98-100` — a comment warns this regex is duplicated in the config package ("If you change this, change it there too") — find that twin (`grep -rn 'KEY|PASSWORD|SECRET|TOKEN' packages/config/src/`) and change both.
 - Only key-form tests are uppercase: `packages/server/__tests__/env.test.ts:234-235` (`AUTH_SECRET=`, `DB_PASSWORD:`).
 - The only in-repo caller is `env.ts:179`; the export is for app authors.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/server..." run build` | exit 0 |
-| Tests (server) | `pnpm --filter "@lunora/server" run test` | all pass |
-| Tests (config twin) | `pnpm --filter "@lunora/config" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/server" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/server" run lint:eslint` | exit 0 |
+| Purpose             | Command                                          | Expected on success |
+| ------------------- | ------------------------------------------------ | ------------------- |
+| Install             | `pnpm install`                                   | exit 0              |
+| Build deps          | `pnpm --filter "@lunora/server..." run build`    | exit 0              |
+| Tests (server)      | `pnpm --filter "@lunora/server" run test`        | all pass            |
+| Tests (config twin) | `pnpm --filter "@lunora/config" run test`        | all pass            |
+| Typecheck           | `pnpm --filter "@lunora/server" run lint:types`  | exit 0              |
+| Lint                | `pnpm --filter "@lunora/server" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/server/src/env.ts`
 - The duplicated regex in `packages/config/src/` (locate it; keep both byte-identical per the existing comment)
 - `packages/server/__tests__/env.test.ts` (+ the config twin's test file if one covers the copy)
 
 **Out of scope**:
+
 - The value-shape heuristics (`looksLikeSecretValue`, entropy floor, prefixes) — unchanged.
 - `@visulima/redact` usage in observability — different layer.
 
@@ -82,25 +84,27 @@ Replace `SECRET_KEY` (in both copies) with a pattern matching the four suffixes 
  * camelCase (`apiKey`). A boundary is required so `MONKEY`/`monkey` (ends in
  * "key" mid-word) never matches. Duplicated in @lunora/config — keep in step.
  */
-const SECRET_KEY = /(?:^|[_-])(?:key|password|secret|token)$|[a-z](?:Key|Password|Secret|Token)$|(?:^|[_-])(?:KEY|PASSWORD|SECRET|TOKEN)$|[A-Z](?:KEY|PASSWORD|SECRET|TOKEN)$/u;
+const SECRET_KEY =
+    /(?:^|[_-])(?:key|password|secret|token)$|[a-z](?:Key|Password|Secret|Token)$|(?:^|[_-])(?:KEY|PASSWORD|SECRET|TOKEN)$|[A-Z](?:KEY|PASSWORD|SECRET|TOKEN)$/u;
 ```
 
 Wait — verify each alternation against the test matrix in Step 2 before committing to this exact pattern; the required behaviour is the spec, the regex is yours to get right:
 
-| key | redact? |
-|---|---|
-| `API_KEY`, `AUTH_SECRET`, `DB_PASSWORD`, `TOKEN` | yes (today's behaviour, keep) |
-| `password`, `secret`, `token`, `key` (bare) | yes |
-| `apiKey`, `authSecret`, `apiToken`, `clientSecret` | yes |
-| `api_key`, `client-secret` (if `KEYED_VALUE` admits `-`; it does not — `\w` only — so kebab is unreachable; don't add support) | n/a |
-| `MONKEY`, `monkey`, `donkey=...` | **no** |
-| `sortKey`, `idempotencyKey` | yes — accepted over-redaction; camel boundary is real. Document it. |
+| key                                                                                                                            | redact?                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| `API_KEY`, `AUTH_SECRET`, `DB_PASSWORD`, `TOKEN`                                                                               | yes (today's behaviour, keep)                                       |
+| `password`, `secret`, `token`, `key` (bare)                                                                                    | yes                                                                 |
+| `apiKey`, `authSecret`, `apiToken`, `clientSecret`                                                                             | yes                                                                 |
+| `api_key`, `client-secret` (if `KEYED_VALUE` admits `-`; it does not — `\w` only — so kebab is unreachable; don't add support) | n/a                                                                 |
+| `MONKEY`, `monkey`, `donkey=...`                                                                                               | **no**                                                              |
+| `sortKey`, `idempotencyKey`                                                                                                    | yes — accepted over-redaction; camel boundary is real. Document it. |
 
 **Verify**: `pnpm --filter "@lunora/server" run test -- env` → existing tests pass.
 
 ### Step 2: Tests
 
 Add to `env.test.ts` (model on the existing "masks the value following a secret-named key" test at :232):
+
 - `password: hunter2` → `password=[redacted]`
 - `apiToken=abc123` → `apiToken=[redacted]`
 - `authSecret: x` → redacted

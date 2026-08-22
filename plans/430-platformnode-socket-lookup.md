@@ -29,30 +29,32 @@ Two defects in `packages/platform-node/src/node-socket-host.ts` (the experimenta
 ## Current state
 
 - `packages/platform-node/src/node-socket-host.ts:188`:
-  ```ts
-  handleFor: (raw) => [...runtimeSockets.values()].find((state) => state.raw === raw)?.handle,
-  ```
+    ```ts
+    handleFor: (raw) => [...runtimeSockets.values()].find((state) => state.raw === raw)?.handle,
+    ```
 - `:107-118` — `persistAttachment` / `persistTags` run `updateAttachment.run(...)` / `updateTags.run(...)` (UPDATEs; verify the prepared statements near the top of the factory).
 - `:241-258` — `restoreSocket` reads `selectRow.get(id)`, builds `NodeSocket` with `raw: undefined`, `runtimeSockets.set(id, state)`, returns `createHandle(state)`. No `upsertRow.run(...)` — contrast `accept` at `:156-180`, which does `upsertRow.run(id, ..., ...)`.
 - The conformance TCK (`@lunora/platform/conformance`) covers `handleFor` and the attachment round-trip across `simulateRecycle` — it is the verification harness for this change.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/platform-node..." run build` | exit 0 |
-| Tests (incl. TCK) | `pnpm --filter "@lunora/platform-node" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/platform-node" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/platform-node" run lint:eslint` | exit 0 |
+| Purpose           | Command                                                 | Expected on success |
+| ----------------- | ------------------------------------------------------- | ------------------- |
+| Install           | `pnpm install`                                          | exit 0              |
+| Build deps        | `pnpm --filter "@lunora/platform-node..." run build`    | exit 0              |
+| Tests (incl. TCK) | `pnpm --filter "@lunora/platform-node" run test`        | all pass            |
+| Typecheck         | `pnpm --filter "@lunora/platform-node" run lint:types`  | exit 0              |
+| Lint              | `pnpm --filter "@lunora/platform-node" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/platform-node/src/node-socket-host.ts`
 - `packages/platform-node/__tests__/` — the socket-host test file (find it: `ls packages/platform-node/__tests__ | grep -i socket`)
 
 **Out of scope**:
+
 - `packages/platform-cloudflare/**` — its cache design stays as is.
 - `packages/platform/src/**` — no contract change; this is an adapter fix.
 - `restoreSocket`'s `raw: undefined` semantics — a restored socket legitimately has no raw connection; do not invent one.

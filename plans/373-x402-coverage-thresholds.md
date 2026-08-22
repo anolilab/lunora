@@ -22,58 +22,60 @@
 
 ## Why this matters
 
-`packages/x402/vitest.config.ts` hand-rolls its coverage block with a comment claiming it is a "Mirror of the shared `tools/get-vitest-config` coverage block" — but the mirror omits `thresholds`, the one part with teeth. Every other package inherits `DEFAULT_COVERAGE_THRESHOLDS` (branches 70, functions 80, lines 80, statements 80) through the shared helper. So the package holding the spend policy and private-key custody resolution is the one package where deleting a test lowers no gate, and the omission is invisible because the config *looks* faithful.
+`packages/x402/vitest.config.ts` hand-rolls its coverage block with a comment claiming it is a "Mirror of the shared `tools/get-vitest-config` coverage block" — but the mirror omits `thresholds`, the one part with teeth. Every other package inherits `DEFAULT_COVERAGE_THRESHOLDS` (branches 70, functions 80, lines 80, statements 80) through the shared helper. So the package holding the spend policy and private-key custody resolution is the one package where deleting a test lowers no gate, and the omission is invisible because the config _looks_ faithful.
 
 ## Current state
 
 - `packages/x402/vitest.config.ts:4-22`:
-  ```ts
-  // Mirror of the shared `tools/get-vitest-config` coverage block. The workers
-  // pool relies on `defineConfig` (not the shared helper, which would break the
-  // `@cloudflare/vitest-pool-workers` projects), so coverage is wired inline here.
-  const coverage = {
-      ...coverageConfigDefaults,
-      provider: "v8" as const,
-      reporter: ["clover", "cobertura", "lcov", "text", "html"],
-      include: ["src"],
-      exclude: [ /* … */ ],
-  };
-  ```
-  No `thresholds` key anywhere in the file.
+    ```ts
+    // Mirror of the shared `tools/get-vitest-config` coverage block. The workers
+    // pool relies on `defineConfig` (not the shared helper, which would break the
+    // `@cloudflare/vitest-pool-workers` projects), so coverage is wired inline here.
+    const coverage = {
+        ...coverageConfigDefaults,
+        provider: "v8" as const,
+        reporter: ["clover", "cobertura", "lcov", "text", "html"],
+        include: ["src"],
+        exclude: [/* … */],
+    };
+    ```
+    No `thresholds` key anywhere in the file.
 - The shared block — `tools/get-vitest-config.ts:34-39,66-69`:
-  ```ts
-  export const DEFAULT_COVERAGE_THRESHOLDS: Required<CoverageThresholds> = {
-      branches: 70,
-      functions: 80,
-      lines: 80,
-      statements: 80,
-  };
-  ...
-              thresholds: {
-                  ...DEFAULT_COVERAGE_THRESHOLDS,
-                  ...coverageThresholds,
-              },
-  ```
+    ```ts
+    export const DEFAULT_COVERAGE_THRESHOLDS: Required<CoverageThresholds> = {
+        branches: 70,
+        functions: 80,
+        lines: 80,
+        statements: 80,
+    };
+    ...
+                thresholds: {
+                    ...DEFAULT_COVERAGE_THRESHOLDS,
+                    ...coverageThresholds,
+                },
+    ```
 - The config is two-project (`mocks` always on; `workerd` behind `LUNORA_WORKERD_TESTS=1`), which is WHY the shared helper isn't used — that rationale is sound and stays.
 - Ratchet precedent: `packages/payment/vitest.config.ts` pins `{ branches: 68 }` where the default is unreachable today.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/x402..." run build` | exit 0 |
-| Coverage  | `pnpm --filter "@lunora/x402" run test:coverage` | exits 0 (after thresholds set correctly) |
-| Typecheck | `pnpm --filter "@lunora/x402" run lint:types` | exit 0 |
+| Purpose    | Command                                          | Expected on success                      |
+| ---------- | ------------------------------------------------ | ---------------------------------------- |
+| Install    | `pnpm install`                                   | exit 0                                   |
+| Build deps | `pnpm --filter "@lunora/x402..." run build`      | exit 0                                   |
+| Coverage   | `pnpm --filter "@lunora/x402" run test:coverage` | exits 0 (after thresholds set correctly) |
+| Typecheck  | `pnpm --filter "@lunora/x402" run lint:types`    | exit 0                                   |
 
 (If `test:coverage` doesn't exist in `packages/x402/package.json` scripts, use `pnpm --filter "@lunora/x402" exec vitest run --coverage`.)
 
 ## Scope
 
 **In scope**:
+
 - `packages/x402/vitest.config.ts`
 
 **Out of scope**:
+
 - `tools/get-vitest-config.ts` and every other package's config.
 - Writing new tests to raise coverage — this plan installs the ratchet at today's measured level; raising it is separate work.
 - The `workerd` project gating.

@@ -26,36 +26,37 @@ Cloudflare Queues is at-least-once. When a queue handler's `ctx.run` mutation su
 ## Current state
 
 - `packages/dispatch/src/create-dispatch-runner.ts:258` — the POST body:
-  ```ts
-  body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
-  ```
-  `runOptions.messageId` is used only to stamp deterministic-failure errors (`toDispatchError(label, response.status, errorBody, runOptions.messageId)`).
+    ```ts
+    body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
+    ```
+    `runOptions.messageId` is used only to stamp deterministic-failure errors (`toDispatchError(label, response.status, errorBody, runOptions.messageId)`).
 - `packages/dispatch/src/types.ts:17-26` — `RunFunctionOptions.messageId` docstring currently says: "Purely local bookkeeping — **never sent to the dispatch endpoint**". This plan deliberately changes that contract; the docstring must be rewritten.
 - `packages/runtime/src/create-worker.ts` (~2847) — the receiver:
-  ```ts
-  const mutationId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
-  ...
-  const response = await dispatchToShard(candidate.functionPath, args, shardKey, mutationId, identity);
-  ```
-  with a comment explaining the id is the at-least-once dedup key. An absent `id` is ignored — the change is backward-compatible.
+    ```ts
+    const mutationId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
+    ...
+    const response = await dispatchToShard(candidate.functionPath, args, shardKey, mutationId, identity);
+    ```
+    with a comment explaining the id is the at-least-once dedup key. An absent `id` is ignored — the change is backward-compatible.
 - `packages/queue/src/dispatch.ts:131-134` — `pinRunToMessage` already sets `messageId` on every `message.run(...)` call.
 - `packages/workflow/src/run-context.ts:38` — workflow builds one runner per context with `createDispatchRunner({ env, fetchImpl, label: "@lunora/workflow" })` and never sets `messageId`. (Workflow step-scoped pinning is Step 3, investigate-only.)
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/queue..." run build` | exit 0 |
-| Dispatch tests | `pnpm --filter "@lunora/dispatch" run test` | all pass |
-| Queue tests | `pnpm --filter "@lunora/queue" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/dispatch" run lint:types && pnpm --filter "@lunora/queue" run lint:types` | exit 0 |
-| Lint | `pnpm --filter "@lunora/dispatch" run lint:eslint` | exit 0 |
-| API gate | `pnpm run build:packages && pnpm run api:check` | exit 0 (run `pnpm run api:update` and commit the snapshot if it reports the intentional surface change) |
+| Purpose        | Command                                                                                           | Expected on success                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Install        | `pnpm install`                                                                                    | exit 0                                                                                                  |
+| Build deps     | `pnpm --filter "@lunora/queue..." run build`                                                      | exit 0                                                                                                  |
+| Dispatch tests | `pnpm --filter "@lunora/dispatch" run test`                                                       | all pass                                                                                                |
+| Queue tests    | `pnpm --filter "@lunora/queue" run test`                                                          | all pass                                                                                                |
+| Typecheck      | `pnpm --filter "@lunora/dispatch" run lint:types && pnpm --filter "@lunora/queue" run lint:types` | exit 0                                                                                                  |
+| Lint           | `pnpm --filter "@lunora/dispatch" run lint:eslint`                                                | exit 0                                                                                                  |
+| API gate       | `pnpm run build:packages && pnpm run api:check`                                                   | exit 0 (run `pnpm run api:update` and commit the snapshot if it reports the intentional surface change) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/dispatch/src/create-dispatch-runner.ts`
 - `packages/dispatch/src/types.ts` (docstring)
 - `packages/dispatch/__tests__/` (extend existing runner tests)
@@ -63,6 +64,7 @@ Cloudflare Queues is at-least-once. When a queue handler's `ctx.run` mutation su
 - `packages/workflow/src/run-step.ts` + `run-context.ts` — ONLY if Step 3's investigation succeeds cheaply
 
 **Out of scope**:
+
 - `packages/runtime/src/create-worker.ts` — the receiver already handles `id`; do not touch.
 - `packages/scheduler` — its DO path already sends the id (plan 378 covers its queue-workpool copy).
 - The shard dedup table in `packages/do` — existing mechanism, do not touch.

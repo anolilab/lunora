@@ -24,49 +24,51 @@ The inbound-channel workflow dedup key is built by sanitizing the provider's del
 ## Current state
 
 - `packages/agent/src/channels.ts:284-305`:
-  ```ts
-  // Sanitize the id alone (the `channel-` prefix is already instance-id-safe);
-  // an id absent or reduced to empty by sanitization gives no dedup key.
-  const sanitizedId = id === undefined ? "" : id.replaceAll(UNSAFE_INSTANCE_ID, "");
+    ```ts
+    // Sanitize the id alone (the `channel-` prefix is already instance-id-safe);
+    // an id absent or reduced to empty by sanitization gives no dedup key.
+    const sanitizedId = id === undefined ? "" : id.replaceAll(UNSAFE_INSTANCE_ID, "");
 
-  if (sanitizedId === "") {
-      await workflow.create({ params: run });
-      return ack();
-  }
+    if (sanitizedId === "") {
+        await workflow.create({ params: run });
+        return ack();
+    }
 
-  try {
-      await workflow.create({ id: `${channel}-${sanitizedId}`.slice(0, 60), params: run });
-  } catch (error) {
-      if (isDuplicateInstanceError(error)) {
-          return ack();
-      }
-      ...
-  ```
+    try {
+        await workflow.create({ id: `${channel}-${sanitizedId}`.slice(0, 60), params: run });
+    } catch (error) {
+        if (isDuplicateInstanceError(error)) {
+            return ack();
+        }
+        ...
+    ```
 - The repo's precedent for exactly this need — `packages/notify/src/subscriptions/normalize.ts:94-96`:
-  ```ts
-  * Algorithm lifted from `@lunora/replica`'s bit-verified `fnv1a64Hex`.
-  const fnv1a64Hex = (input: string): string => {
-  ```
-  (module-private copy, ~15 lines, with the provenance comment). The verified original: `packages/replica/src/apply-diff.ts:92` (exported at `:287`, but importing `@lunora/replica` from `@lunora/agent` would add a dependency edge — copy, don't import, matching what notify did).
+    ```ts
+    * Algorithm lifted from `@lunora/replica`'s bit-verified `fnv1a64Hex`.
+    const fnv1a64Hex = (input: string): string => {
+    ```
+    (module-private copy, ~15 lines, with the provenance comment). The verified original: `packages/replica/src/apply-diff.ts:92` (exported at `:287`, but importing `@lunora/replica` from `@lunora/agent` would add a dependency edge — copy, don't import, matching what notify did).
 - Existing tests: `packages/agent/__tests__/channels.test.ts` (has dedup/id cases — read them before editing).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/agent..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/agent" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/agent" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/agent" run lint:eslint` | exit 0 |
+| Purpose    | Command                                         | Expected on success |
+| ---------- | ----------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                  | exit 0              |
+| Build deps | `pnpm --filter "@lunora/agent..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/agent" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/agent" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/agent" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/agent/src/channels.ts`
 - `packages/agent/__tests__/channels.test.ts`
 
 **Out of scope**:
+
 - `isDuplicateInstanceError` / the ack semantics — correct as designed.
 - notify's and replica's copies of the hash.
 

@@ -21,7 +21,7 @@
 
 ## Why this matters
 
-`webSocketClose` runs the user-facing `disconnect` lifecycle hooks **first**, ahead of every deterministic teardown step: stream-canceller aborts, per-socket memo eviction, the durable `deleteGlobalShapeSnapshotsForConnection` / `deleteShapePokeCursorsForConnection` purges, the attachment clear, and `relay.announceDrain`. `dispatchLifecycle` swallows a throwing *hook*, but anything the dispatch machinery itself throws (`withRequestIdentity` / `withSystemDispatch` / `lifecycleInfo` around the hook loop) escapes and skips the entire teardown — and the code's own comment says skipping the two durable purges "would orphan rows under a `connectionId` that can never reconnect… slowly leaking both tables". A hanging hook likewise stalls every step behind it. Cleanup that must happen belongs in a `finally`.
+`webSocketClose` runs the user-facing `disconnect` lifecycle hooks **first**, ahead of every deterministic teardown step: stream-canceller aborts, per-socket memo eviction, the durable `deleteGlobalShapeSnapshotsForConnection` / `deleteShapePokeCursorsForConnection` purges, the attachment clear, and `relay.announceDrain`. `dispatchLifecycle` swallows a throwing _hook_, but anything the dispatch machinery itself throws (`withRequestIdentity` / `withSystemDispatch` / `lifecycleInfo` around the hook loop) escapes and skips the entire teardown — and the code's own comment says skipping the two durable purges "would orphan rows under a `connectionId` that can never reconnect… slowly leaking both tables". A hanging hook likewise stalls every step behind it. Cleanup that must happen belongs in a `finally`.
 
 ## Current state
 
@@ -48,21 +48,23 @@ Hooks intentionally observe pre-cleanup state (the attachment is still readable,
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/do..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/do" run test` | all pass (mocks project; workerd project is `LUNORA_WORKERD_TESTS=1`-gated) |
-| Typecheck | `pnpm --filter "@lunora/do" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/do" run lint:eslint` | exit 0 |
+| Purpose    | Command                                      | Expected on success                                                         |
+| ---------- | -------------------------------------------- | --------------------------------------------------------------------------- |
+| Install    | `pnpm install`                               | exit 0                                                                      |
+| Build deps | `pnpm --filter "@lunora/do..." run build`    | exit 0                                                                      |
+| Tests      | `pnpm --filter "@lunora/do" run test`        | all pass (mocks project; workerd project is `LUNORA_WORKERD_TESTS=1`-gated) |
+| Typecheck  | `pnpm --filter "@lunora/do" run lint:types`  | exit 0                                                                      |
+| Lint       | `pnpm --filter "@lunora/do" run lint:eslint` | exit 0                                                                      |
 
 ## Scope
 
 **In scope**:
+
 - `packages/do/src/shard-do.ts` — ONLY the body of `webSocketClose`
 - `packages/do/__tests__/` — the suite covering socket close/lifecycle (find it: `grep -rln "webSocketClose\|disconnect" packages/do/__tests__ | head`)
 
 **Out of scope**:
+
 - `dispatchLifecycle` itself (its per-hook swallow is correct).
 - Any other method in `shard-do.ts` — the file has a frozen 305-name surface check; do not add/remove/rename anything class-level.
 - Timeout-bounding a hanging hook — deliberately deferred (see Maintenance notes).

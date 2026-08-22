@@ -24,33 +24,35 @@
 ## Current state
 
 - `packages/auth/src/audit.ts:308-314` (inside the `rows.map` of `readAuthAuditLog`):
-  ```ts
-  const detail = text(row["detail"]);
+    ```ts
+    const detail = text(row["detail"]);
 
-  if (detail !== undefined) {
-      base.detail = JSON.parse(detail) as Record<string, unknown>;
-  }
+    if (detail !== undefined) {
+        base.detail = JSON.parse(detail) as Record<string, unknown>;
+    }
 
-  return base;
-  ```
+    return base;
+    ```
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/auth..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/auth" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/auth" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/auth" run lint:eslint` | exit 0 |
+| Purpose    | Command                                        | Expected on success |
+| ---------- | ---------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                 | exit 0              |
+| Build deps | `pnpm --filter "@lunora/auth..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/auth" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/auth" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/auth" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/auth/src/audit.ts` (the parse site only)
 - The audit test file (find: `ls packages/auth/__tests__ | grep -i audit`)
 
 **Out of scope**:
+
 - `auth-do.ts` — the request-side hardening is done.
 - The `AuthAuditEntry` type — `detail` is already optional; degrading to "absent" needs no type change. (If you instead choose a `{ raw }` marker, that WOULD change the type and the api snapshot — don't; absent is simpler and sufficient.)
 

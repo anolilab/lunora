@@ -27,25 +27,25 @@ The two `PaymentStore` implementations disagree on what makes a customer row uni
 ## Current state
 
 - Memory store — `packages/payment/src/store.ts:180-184`:
-  ```ts
-  public upsertCustomer(customer: Customer): Promise<void> {
-      this.customers.set(customerKey(customer.provider, customer.referenceId), customer);
+    ```ts
+    public upsertCustomer(customer: Customer): Promise<void> {
+        this.customers.set(customerKey(customer.provider, customer.referenceId), customer);
 
-      return Promise.resolve();
-  }
-  ```
+        return Promise.resolve();
+    }
+    ```
 - Database store — `packages/payment/src/database-store.ts:263`:
-  ```ts
-  upsertCustomer: async (customer) => upsert("customers", { provider: customer.provider, providerCustomerId: customer.id }, customerToRow(customer)),
-  ```
+    ```ts
+    upsertCustomer: async (customer) => upsert("customers", { provider: customer.provider, providerCustomerId: customer.id }, customerToRow(customer)),
+    ```
 - Read path — `packages/payment/src/database-store.ts:171-175`:
-  ```ts
-  getCustomerByReference: async (provider, referenceId) => {
-      const row = await database.findFirst("customers", { provider, referenceId });
+    ```ts
+    getCustomerByReference: async (provider, referenceId) => {
+        const row = await database.findFirst("customers", { provider, referenceId });
 
-      return row ? rowToCustomer(row) : undefined;
-  },
-  ```
+        return row ? rowToCustomer(row) : undefined;
+    },
+    ```
 - Schema — `packages/payment/src/schema.ts:23-31`: `by_provider_customer` is `["provider", "providerCustomerId"], { unique: true }`; `by_reference` is `["referenceId"]` with **no** unique constraint.
 - The mint race — `packages/payment/src/create-payment.ts` (~line 168-198, `startCheckout`): `getCustomerByReference` → miss → `adapter.getOrCreateCustomer` → `upsertCustomer`, no transaction.
 
@@ -57,22 +57,24 @@ The `by_provider_customer` unique index stays — a provider customer id still m
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/payment..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/payment" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/payment" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success |
+| ---------- | ------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                    | exit 0              |
+| Build deps | `pnpm --filter "@lunora/payment..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/payment" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/payment" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/payment/src/database-store.ts` (the `upsertCustomer` match key)
 - `packages/payment/src/schema.ts` (comment on `by_reference` documenting the one-row-per-provider-reference invariant; add `{ unique: true }` ONLY if the index is per-provider — see STOP conditions)
 - `packages/payment/__tests__/database-store.test.ts`
 
 **Out of scope**:
+
 - `packages/payment/src/store.ts` — the memory store's keying is the correct one; leave it.
 - `create-payment.ts`'s mint flow — the check-then-act stays; with aligned keying the race degrades to a harmless double-mint where the second write wins in both stores.
 - Any data backfill/migration for existing deployments — pre-1.0 alpha; note it in the commit body instead.
@@ -99,6 +101,7 @@ In `database-store.ts:263`, change the match object from `{ provider: customer.p
 ### Step 3: Regression tests
 
 In `database-store.test.ts` (model after the existing upsert tests there):
+
 - Upserting two customers with the same `(provider, referenceId)` but different `providerCustomerId` leaves ONE row, holding the second id — and assert the memory store behaves identically on the same sequence (parity assertion).
 - Upserting customers for the same reference under two different providers leaves two rows.
 - `getCustomerByReference` returns the surviving row.

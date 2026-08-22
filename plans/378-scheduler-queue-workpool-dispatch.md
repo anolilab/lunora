@@ -27,46 +27,48 @@ Deliberately **kept**: the consumer's retry-everything-to-DLQ semantics. The mod
 ## Current state
 
 - `packages/scheduler/src/queue-workpool.ts:135-155`:
-  ```ts
-  const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
-      const fetchImpl = options.fetchImpl ?? ...;
-      const url = `${trimTrailingSlashes(options.originUrl)}/_lunora/scheduler/dispatch`;
-      return async (job: QueueJob): Promise<void> => {
-          const response = await fetchImpl(url, {
-              body: JSON.stringify({ args: job.args ?? {}, functionPath: job.functionPath, shardKey: job.shardKey }),
-              headers: { authorization: `Bearer ${options.adminToken}`, "content-type": "application/json" },
-              method: "POST",
-          });
-          if (!response.ok) { throw new LunoraError("INTERNAL", `...`); }
-      };
-  };
-  ```
-  No `signal`, no `id`, error shape diverges from `@lunora/dispatch`'s `toDispatchError`.
+    ```ts
+    const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
+        const fetchImpl = options.fetchImpl ?? ...;
+        const url = `${trimTrailingSlashes(options.originUrl)}/_lunora/scheduler/dispatch`;
+        return async (job: QueueJob): Promise<void> => {
+            const response = await fetchImpl(url, {
+                body: JSON.stringify({ args: job.args ?? {}, functionPath: job.functionPath, shardKey: job.shardKey }),
+                headers: { authorization: `Bearer ${options.adminToken}`, "content-type": "application/json" },
+                method: "POST",
+            });
+            if (!response.ok) { throw new LunoraError("INTERNAL", `...`); }
+        };
+    };
+    ```
+    No `signal`, no `id`, error shape diverges from `@lunora/dispatch`'s `toDispatchError`.
 - `packages/dispatch/src/create-dispatch-runner.ts` — POSTs to the same `SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch"` with a bounded timeout (`DEFAULT_DISPATCH_TIMEOUT_MS`), TimeoutError→retryable-503 mapping, and (post-377) the `id` field. Its options include `env`, `fetchImpl`, `label`.
 - Dependency wiring: `@lunora/dispatch` is internal/not published; consumers bundle it. `packages/queue/package.json` lists `"@lunora/dispatch": "workspace:*"` under **devDependencies** and its `packem.config.ts` inlines it into `dist`. `packages/scheduler/package.json` has NO `@lunora/*` devDependencies today (`dependencies`: errors, platform, cron-parser).
 - `QueueJob` (in `packages/scheduler/src/types.ts`) carries `functionPath`, `args`, `shardKey` — string function path, whereas `createDispatchRunner` takes a `FunctionReference` (`function_.__lunoraRef`).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/scheduler..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/scheduler" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/scheduler" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/scheduler" run lint:eslint` | exit 0 |
-| Manifest order | `pnpm run lint:package-json` | exit 0 |
-| Dist gate | `pnpm run dist:check` | exit 0 (dispatch must be inlined, not left as a dep) |
+| Purpose        | Command                                             | Expected on success                                  |
+| -------------- | --------------------------------------------------- | ---------------------------------------------------- |
+| Install        | `pnpm install`                                      | exit 0                                               |
+| Build deps     | `pnpm --filter "@lunora/scheduler..." run build`    | exit 0                                               |
+| Tests          | `pnpm --filter "@lunora/scheduler" run test`        | all pass                                             |
+| Typecheck      | `pnpm --filter "@lunora/scheduler" run lint:types`  | exit 0                                               |
+| Lint           | `pnpm --filter "@lunora/scheduler" run lint:eslint` | exit 0                                               |
+| Manifest order | `pnpm run lint:package-json`                        | exit 0                                               |
+| Dist gate      | `pnpm run dist:check`                               | exit 0 (dispatch must be inlined, not left as a dep) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/scheduler/src/queue-workpool.ts`
 - `packages/scheduler/package.json` (add `@lunora/dispatch` devDependency — same placement as queue's)
 - `packages/scheduler/packem.config.ts` (mirror queue's inlining of dispatch)
 - `packages/scheduler/__tests__/` (the existing queue-workpool test file)
 
 **Out of scope**:
+
 - `createQueueConsumer`'s retry semantics — documented design, keep as-is.
 - `SchedulerDO`'s own dispatch (HMAC-signed, different trust model).
 - `packages/dispatch` itself (plan 377/379 own it).
@@ -89,7 +91,11 @@ Add `"@lunora/dispatch": "workspace:*"` to `packages/scheduler/package.json` dev
 Replace the hand-rolled fetch with a runner built once per dispatcher:
 
 ```ts
-const run = createDispatchRunner({ env: { LUNORA_ADMIN_TOKEN: options.adminToken, LUNORA_ORIGIN_URL: options.originUrl }, fetchImpl: options.fetchImpl, label: "@lunora/scheduler" });
+const run = createDispatchRunner({
+    env: { LUNORA_ADMIN_TOKEN: options.adminToken, LUNORA_ORIGIN_URL: options.originUrl },
+    fetchImpl: options.fetchImpl,
+    label: "@lunora/scheduler",
+});
 ```
 
 First READ `createDispatchRunner`'s options type in `packages/dispatch/src/create-dispatch-runner.ts` / `types.ts` — the exact env-key names and whether origin/token are options or env come from the source, not from this sketch. Then dispatch each job as:
@@ -107,6 +113,7 @@ Keep `httpDispatcher`'s public signature (`HttpDispatcherOptions → QueueDispat
 ### Step 3: Tests
 
 Update/extend the existing queue-workpool tests (find them: `grep -rln "httpDispatcher" packages/scheduler/__tests__/`):
+
 - a dispatch that exceeds the timeout rejects with the runner's retryable timeout error (use a `fetchImpl` that never resolves + fake timers, following how `packages/dispatch/__tests__/` does it);
 - the POST body carries `id` (the message id) and the existing `args`/`functionPath`/`shardKey`;
 - a non-2xx response still throws (consumer retries — assert `message.retry()` is called, existing pattern).

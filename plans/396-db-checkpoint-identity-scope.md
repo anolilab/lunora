@@ -26,43 +26,45 @@
 ## Current state
 
 - `packages/db/src/collection-options.ts` — the registry, gate, and `getShardCheckpoints`:
-  - `:24-31` (gate never regresses):
-    ```ts
-    const createGate = (): Gate => {
-        let highest = Number.NEGATIVE_INFINITY;
-        ...
-        advance: (value) => {
-            if (value <= highest) { return; }
-            highest = value;
-    ```
-  - `:90` — `const registriesByClient = new WeakMap<LunoraClient, Map<string, CheckpointRegistry>>();`
-  - `:331-344` — `getShardCheckpoints(client, shardKey, options)` keys the inner map by `const key = shardKey ?? "";` — no identity anywhere.
-  - `:85-88` — the invariant to preserve: "A registry MUST be shared by every collection on the same shard" (a per-collection registry hangs `isPersisted` forever).
-  - `:380-392` — `releaseShardCheckpoints(client)` resolves all waiters with `Number.POSITIVE_INFINITY` and disposes each registry; exported, but nothing calls it on identity change.
-  - `:197` / `:289` — `CheckpointRegistry.dispose()` exists and guarantees no armed fallback timer survives.
+    - `:24-31` (gate never regresses):
+        ```ts
+        const createGate = (): Gate => {
+            let highest = Number.NEGATIVE_INFINITY;
+            ...
+            advance: (value) => {
+                if (value <= highest) { return; }
+                highest = value;
+        ```
+    - `:90` — `const registriesByClient = new WeakMap<LunoraClient, Map<string, CheckpointRegistry>>();`
+    - `:331-344` — `getShardCheckpoints(client, shardKey, options)` keys the inner map by `const key = shardKey ?? "";` — no identity anywhere.
+    - `:85-88` — the invariant to preserve: "A registry MUST be shared by every collection on the same shard" (a per-collection registry hangs `isPersisted` forever).
+    - `:380-392` — `releaseShardCheckpoints(client)` resolves all waiters with `Number.POSITIVE_INFINITY` and disposes each registry; exported, but nothing calls it on identity change.
+    - `:197` / `:289` — `CheckpointRegistry.dispose()` exists and guarantees no armed fallback timer survives.
 - `packages/db/src/define-mutators.ts`:
-  - `:270-284` — `resetCounterForIdentity()` lazily re-checks `client.currentIdentity()` and resets the seq counter; this is the pattern to mirror (no event hook exists — identity change is detected lazily).
-  - `:366-378` — `resolveCheckpoints()` is called **per mutation** (`:430`), so it re-resolves through `getShardCheckpoints` on every ack — a lazy identity sweep inside `getShardCheckpoints` is picked up automatically by the mutator path.
-  - `:430-441` — the ack path: `checkpoints.acknowledge({ mutationId: appliedSeq }); await checkpoints.awaitMutationId(appliedSeq);`
+    - `:270-284` — `resetCounterForIdentity()` lazily re-checks `client.currentIdentity()` and resets the seq counter; this is the pattern to mirror (no event hook exists — identity change is detected lazily).
+    - `:366-378` — `resolveCheckpoints()` is called **per mutation** (`:430`), so it re-resolves through `getShardCheckpoints` on every ack — a lazy identity sweep inside `getShardCheckpoints` is picked up automatically by the mutator path.
+    - `:430-441` — the ack path: `checkpoints.acknowledge({ mutationId: appliedSeq }); await checkpoints.awaitMutationId(appliedSeq);`
 - `packages/client/src/lunora-client.ts:1212` — `public currentIdentity(): string | null` is the identity source.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/db..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/db" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/db" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/db" run lint:eslint` | exit 0 |
+| Purpose    | Command                                      | Expected on success |
+| ---------- | -------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                               | exit 0              |
+| Build deps | `pnpm --filter "@lunora/db..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/db" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/db" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/db" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope** (the only files you should modify):
+
 - `packages/db/src/collection-options.ts`
 - `packages/db/__tests__/collection-options.test.ts`
 
 **Out of scope**:
+
 - `packages/db/src/define-mutators.ts` — its lazy `resolveCheckpoints()` already re-resolves per mutation; no change needed there.
 - `packages/client/` — `currentIdentity()` is a read-only input.
 - The `clientSeq`/watermark logic from plan 316 — already correct.

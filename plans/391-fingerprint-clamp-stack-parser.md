@@ -25,35 +25,37 @@
 
 - `packages/fingerprint/src/superlog.ts:111-120` — the exemplar clamp + rationale (`MESSAGE_INPUT_MAX = 1024`), applied at `:127` (`messageBucketFor`) and `:167` (`normalizeMessage`).
 - `packages/fingerprint/src/superlog.ts:232-249` — `splitFramedLocation`:
-  ```ts
-  for (let index = body.indexOf("("); index > 0; index = body.indexOf("(", index + 1)) {
-      const separator = body[index - 1] ?? "";
-      if (!/\s/.test(separator)) { continue; }
-      const path = splitLocation(body.slice(index + 1, -1));
-      ...
-  ```
-  Each candidate slices O(len) and `splitLocation` scans with `lastIndexOf` — quadratic on adversarial lines.
+    ```ts
+    for (let index = body.indexOf("("); index > 0; index = body.indexOf("(", index + 1)) {
+        const separator = body[index - 1] ?? "";
+        if (!/\s/.test(separator)) { continue; }
+        const path = splitLocation(body.slice(index + 1, -1));
+        ...
+    ```
+    Each candidate slices O(len) and `splitLocation` scans with `lastIndexOf` — quadratic on adversarial lines.
 - `packages/fingerprint/src/superlog.ts:254-262` — `parseFrames` iterates `stacktrace.split("\n")` unbounded; lines not starting with `at ` are skipped (so the adversarial line must start with `at ` — the shape is reachable).
 - Consumer: `packages/observability/src/request-log.ts:38` imports `fingerprintError`; `fingerprint`/`fingerprintLog` are exported public API for out-of-repo OTLP pipelines.
 - Zero-dep package — the fix must stay dependency-free.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build     | `pnpm --filter "@lunora/fingerprint..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/fingerprint" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/fingerprint" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/fingerprint" run lint:eslint` | exit 0 |
+| Purpose   | Command                                               | Expected on success |
+| --------- | ----------------------------------------------------- | ------------------- |
+| Install   | `pnpm install`                                        | exit 0              |
+| Build     | `pnpm --filter "@lunora/fingerprint..." run build`    | exit 0              |
+| Tests     | `pnpm --filter "@lunora/fingerprint" run test`        | all pass            |
+| Typecheck | `pnpm --filter "@lunora/fingerprint" run lint:types`  | exit 0              |
+| Lint      | `pnpm --filter "@lunora/fingerprint" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/fingerprint/src/superlog.ts`
 - The existing test file covering frame parsing (`grep -rln "parseFrames\|splitFramedLocation\|stacktrace" packages/fingerprint/__tests__/`)
 
 **Out of scope**:
+
 - `packages/observability/*` — the caller is fine once the library is bounded.
 - The message-path clamps — already correct; don't touch.
 - Changing hashes for well-formed stacks — the clamps must be sized so no realistic stack is affected (see Step 1 bounds).
@@ -80,6 +82,7 @@ Apply them: in `parseFrames`, slice each line to `STACK_LINE_MAX` before `splitF
 ### Step 2: Regression test
 
 Add to the existing frame-parsing test file:
+
 1. A pathological line — `"at " + "x (".repeat(20000) + "f.js:1:1)"` — parses (or returns no frame) in bounded time; assert wall-clock under a generous bound (e.g. `expect(elapsed).toBeLessThan(200)` ms) and, more importantly, that the function returns rather than hanging.
 2. A 100-line stack yields at most `STACK_FRAMES_MAX` frames.
 3. A canonical well-formed stack (copy one from an existing test) produces the same frames/fingerprint as before the change — pin the value.

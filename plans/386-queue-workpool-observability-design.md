@@ -31,20 +31,20 @@ plan 055 records the two backends coexisting by design.
 
 ## Evidence base (what exists today)
 
-| Piece | Location | What it does |
-|---|---|---|
-| Queues workpool consumer | `packages/scheduler/src/queue-workpool.ts:109-127` | `createQueueConsumer({ dispatch })` — per-message `ack()` on success, `retry()` on any failure. No capture, no logging. |
-| Consumer options | `packages/scheduler/src/types.ts:392-395` | `QueueConsumerOptions` = `{ dispatch }` only. |
-| Message projection | `packages/scheduler/src/types.ts:328-346` | `QueueMessageLike` carries `id`, `attempts`, `body`, `timestamp`, `ack`, `retry`; `MessageBatchLike` carries `queue`. Everything a capture record needs is already in the type. |
-| Capture record contract | `packages/queue/src/dispatch.ts:54-76` (`CapturedQueueMessage`), `:81` (`QueueCaptureSink`) | `{ attempts, body, deadLettered, error?, exportName, messageId, outcome, queue, timestamp }`. Doc comment says it "structurally matches `@lunora/do`'s `RecordQueueMessageInput` … keep them in sync by hand" — deliberately no dependency edge. |
-| Outcome/deadLettered derivation | `packages/queue/src/dispatch.ts:287-322` (`buildCaptureRecords`), `deadLettered` at `:311`: `outcome !== "ack" && attempts > maxRetries` | The `@lunora/queue` side flags the terminal failed attempt as it happens. |
-| Capture sink | `packages/queue/src/capture.ts:90-162` | POSTs the batch to root shard `__lunora_admin__:recordQueueMessage` with the admin bearer; 5s abort (`CAPTURE_FETCH_TIMEOUT_MS`, `:35`); no-ops without `SHARD` binding or `LUNORA_ADMIN_TOKEN`; best-effort by contract. Dev-gating in `shouldCaptureQueue` (`:69-81`, `LUNORA_QUEUE_CAPTURE` override). |
-| Shard-side write | `packages/do/src/shard-do.ts:6216`, `:6612-6622` | `recordQueueMessages(sql, messages, now)` into the queue catcher table. |
-| Shard-side read | `packages/do/src/shard-do.ts:7602`, `:7654-7666` | `getQueueMessages` — newest-first, optional per-queue filter, poll-refreshed (no live push). |
-| Shard-side requeue | `packages/do/src/shard-do.ts:6810-6851` | `replayQueueMessage` — re-enqueues a captured message onto its declared producer binding; refuses truncated bodies; audited. |
-| Studio surface | `packages/studio/src/features/queues/queues-panel.tsx` (log, outcome badges, replay/send), `packages/studio/src/features/queues/reliability.ts` (`computeQueueReliability`: flags queues without a DLQ, counts `deadLettered` in the loaded window) | Already renders exactly the read model above. |
-| SchedulerDO parity target | `packages/scheduler/src/scheduler-do.ts:391-418` (routes), `:1030-1066` (`/status`), `:1191-1248` (`/dead`, `/dead/retry`, `/dead/cancel`) | Consumed in Studio via `client.schedulerStatus()` (`packages/client/src/lunora-client.ts:2232`) in `scheduler-pools-panel.tsx` and `client.listDeadJobs()`/`retryDeadJob`/`removeDeadJob` (`lunora-client.ts:2261`) in `dead-letter-jobs.tsx`. |
-| Wrangler consumer schema in-repo | `packages/config/src/cloudflare/wrangler-validator.ts:79-87` (`WranglerQueueConsumer`: `dead_letter_queue`, `max_batch_size`, `max_batch_timeout`, `max_retries`, `queue`, `retry_delay`, `type`) and `reconcile-bindings.ts:655-659` (tuning → `max_retries`/`dead_letter_queue`) | Note: the validator does **not** model `max_concurrency`, so every claim about it below is marked "needs verification against CF docs". |
+| Piece                            | Location                                                                                                                                                                                                                                                                           | What it does                                                                                                                                                                                                                                                                                              |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Queues workpool consumer         | `packages/scheduler/src/queue-workpool.ts:109-127`                                                                                                                                                                                                                                 | `createQueueConsumer({ dispatch })` — per-message `ack()` on success, `retry()` on any failure. No capture, no logging.                                                                                                                                                                                   |
+| Consumer options                 | `packages/scheduler/src/types.ts:392-395`                                                                                                                                                                                                                                          | `QueueConsumerOptions` = `{ dispatch }` only.                                                                                                                                                                                                                                                             |
+| Message projection               | `packages/scheduler/src/types.ts:328-346`                                                                                                                                                                                                                                          | `QueueMessageLike` carries `id`, `attempts`, `body`, `timestamp`, `ack`, `retry`; `MessageBatchLike` carries `queue`. Everything a capture record needs is already in the type.                                                                                                                           |
+| Capture record contract          | `packages/queue/src/dispatch.ts:54-76` (`CapturedQueueMessage`), `:81` (`QueueCaptureSink`)                                                                                                                                                                                        | `{ attempts, body, deadLettered, error?, exportName, messageId, outcome, queue, timestamp }`. Doc comment says it "structurally matches `@lunora/do`'s `RecordQueueMessageInput` … keep them in sync by hand" — deliberately no dependency edge.                                                          |
+| Outcome/deadLettered derivation  | `packages/queue/src/dispatch.ts:287-322` (`buildCaptureRecords`), `deadLettered` at `:311`: `outcome !== "ack" && attempts > maxRetries`                                                                                                                                           | The `@lunora/queue` side flags the terminal failed attempt as it happens.                                                                                                                                                                                                                                 |
+| Capture sink                     | `packages/queue/src/capture.ts:90-162`                                                                                                                                                                                                                                             | POSTs the batch to root shard `__lunora_admin__:recordQueueMessage` with the admin bearer; 5s abort (`CAPTURE_FETCH_TIMEOUT_MS`, `:35`); no-ops without `SHARD` binding or `LUNORA_ADMIN_TOKEN`; best-effort by contract. Dev-gating in `shouldCaptureQueue` (`:69-81`, `LUNORA_QUEUE_CAPTURE` override). |
+| Shard-side write                 | `packages/do/src/shard-do.ts:6216`, `:6612-6622`                                                                                                                                                                                                                                   | `recordQueueMessages(sql, messages, now)` into the queue catcher table.                                                                                                                                                                                                                                   |
+| Shard-side read                  | `packages/do/src/shard-do.ts:7602`, `:7654-7666`                                                                                                                                                                                                                                   | `getQueueMessages` — newest-first, optional per-queue filter, poll-refreshed (no live push).                                                                                                                                                                                                              |
+| Shard-side requeue               | `packages/do/src/shard-do.ts:6810-6851`                                                                                                                                                                                                                                            | `replayQueueMessage` — re-enqueues a captured message onto its declared producer binding; refuses truncated bodies; audited.                                                                                                                                                                              |
+| Studio surface                   | `packages/studio/src/features/queues/queues-panel.tsx` (log, outcome badges, replay/send), `packages/studio/src/features/queues/reliability.ts` (`computeQueueReliability`: flags queues without a DLQ, counts `deadLettered` in the loaded window)                                | Already renders exactly the read model above.                                                                                                                                                                                                                                                             |
+| SchedulerDO parity target        | `packages/scheduler/src/scheduler-do.ts:391-418` (routes), `:1030-1066` (`/status`), `:1191-1248` (`/dead`, `/dead/retry`, `/dead/cancel`)                                                                                                                                         | Consumed in Studio via `client.schedulerStatus()` (`packages/client/src/lunora-client.ts:2232`) in `scheduler-pools-panel.tsx` and `client.listDeadJobs()`/`retryDeadJob`/`removeDeadJob` (`lunora-client.ts:2261`) in `dead-letter-jobs.tsx`.                                                            |
+| Wrangler consumer schema in-repo | `packages/config/src/cloudflare/wrangler-validator.ts:79-87` (`WranglerQueueConsumer`: `dead_letter_queue`, `max_batch_size`, `max_batch_timeout`, `max_retries`, `queue`, `retry_delay`, `type`) and `reconcile-bindings.ts:655-659` (tuning → `max_retries`/`dead_letter_queue`) | Note: the validator does **not** model `max_concurrency`, so every claim about it below is marked "needs verification against CF docs".                                                                                                                                                                   |
 
 ## 1. Consumed-job visibility
 
@@ -69,14 +69,14 @@ export interface QueueConsumerOptions {
  *  (queue-workpool.ts:37-43). No dependency edge. */
 export interface CapturedWorkpoolMessage {
     attempts: number;
-    body: unknown;              // the QueueJob (functionPath/args/shardKey)
-    deadLettered: boolean;      // outcome !== "ack" && attempts > maxRetries
+    body: unknown; // the QueueJob (functionPath/args/shardKey)
+    deadLettered: boolean; // outcome !== "ack" && attempts > maxRetries
     error?: string;
-    exportName: string;         // the job's functionPath — see below
+    exportName: string; // the job's functionPath — see below
     messageId: string;
     outcome: "ack" | "error" | "retry";
-    queue: string;              // batch.queue
-    timestamp: number;          // epoch-ms
+    queue: string; // batch.queue
+    timestamp: number; // epoch-ms
 }
 ```
 
@@ -87,7 +87,7 @@ must be repeated here to compute `deadLettered`; same compromise `@lunora/queue`
 makes via `definition.maxRetries`). The consumer body changes from
 "ack-or-retry" to "ack-or-retry, then build one record per message and hand the
 array to `capture` inside a `try {} catch {}`" — ~25 lines. No proxy harness is
-needed: unlike `@lunora/queue`, this consumer *owns* the ack/retry calls
+needed: unlike `@lunora/queue`, this consumer _owns_ the ack/retry calls
 (`queue-workpool.ts:120-123`), so outcomes are known directly, not observed.
 
 Per-record field notes:
@@ -116,7 +116,7 @@ this backend serves, and it should not need `@lunora/queue` installed to get
 the log.
 
 **Does the 5s bounded write suit a workpool batch?** Yes. The budget bounds one
-POST per *batch* (up to 100 records — `MAX_QUEUE_BATCH`,
+POST per _batch_ (up to 100 records — `MAX_QUEUE_BATCH`,
 `queue-workpool.ts:43`), not per message; `recordQueueMessages`
 (`shard-do.ts:6622`) is a batch insert on the shard side. The workpool batch is
 byte-wise smaller than a `@lunora/queue` batch of the same size (bodies are
@@ -133,13 +133,13 @@ alternative:
 - **Producer-side counting** requires a durable counter both producer and
   consumer agree on — i.e. a DO (or a root-shard row with two RPC writes per
   job). That is the SchedulerDO architecture re-introduced at ~2 subrequests
-  per job, on the backend whose whole point (`queue-workpool.ts:2-11`) is *not*
+  per job, on the backend whose whole point (`queue-workpool.ts:2-11`) is _not_
   paying for a DO hop per job. It also cannot be accurate: messages retried by
   the platform, delayed messages, and DLQ routing all mutate depth outside the
   producer's view.
 - **Platform APIs**: Cloudflare exposes queue depth/backlog via the dashboard
   and the GraphQL analytics API, and `wrangler queues info <name>` reports
-  backlog — *needs verification against CF docs* (the in-repo wrangler schema,
+  backlog — _needs verification against CF docs_ (the in-repo wrangler schema,
   `packages/config/src/cloudflare/wrangler-validator.ts:79-87`, models consumer
   settings only and says nothing about a read API). All of these are
   account-API surfaces requiring an API token — a credential class the worker
@@ -180,7 +180,7 @@ holds messages (retry with long `delaySeconds`) until an admin RPC flips a
 "drain" flag, then forwards to the main queue. Failure modes: the consumer must
 keep `retry()`ing every message on every visibility cycle just to keep it
 parked, which burns invocations forever and — worse — a DLQ consumer's own
-`max_retries` applies, so parked messages fall off the end of *its* retry
+`max_retries` applies, so parked messages fall off the end of _its_ retry
 budget into either a second DLQ or the void. Poison messages loop
 main→DLQ→main indefinitely once drained. This is a state machine impersonating
 a storage system. **Rejected.**
@@ -194,7 +194,7 @@ already 90% shipped.** With section 1 wired, the terminal failed delivery of
 every workpool job is captured with `deadLettered: true` (the
 `attempts > maxRetries && outcome !== "ack"` derivation,
 `dispatch.ts:311`) at the moment the consumer `retry()`s it for the last time —
-no DLQ consumer needed, because the *main* queue's consumer witnesses the final
+no DLQ consumer needed, because the _main_ queue's consumer witnesses the final
 attempt. The Studio Queues panel already renders the dead-lettered badge and
 the reliability banner counts these rows
 (`reliability.ts:32`). "Retry" is the panel's existing **replay** button:
@@ -243,7 +243,7 @@ show `workpool:<functionPath>` — a small formatter could label these "workpool
 job", but the raw string is already self-describing.
 
 The SchedulerDO panels (`scheduler-pools-panel.tsx`, `dead-letter-jobs.tsx`)
-stay what they are: the surface of the *other* backend. Do not try to merge the
+stay what they are: the surface of the _other_ backend. Do not try to merge the
 two into one abstract "workpool" page — the data models are genuinely
 different (live semaphore state vs. an append-only consumed log), and plan 055
 made the backends explicitly distinct.

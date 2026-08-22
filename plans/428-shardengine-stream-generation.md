@@ -26,19 +26,19 @@ A durable-stream consumer resuming with `sinceChunk > 0` can be silently spliced
 ## Current state
 
 - `packages/shard-engine/src/durable-stream-runner.ts:83-94`:
-  ```ts
-  const decideDurableAttach = (run: DurableStreamRun | undefined, context: { live: boolean; resuming: boolean }): DurableAttachDecision => {
-      if (run === undefined || context.live) {
-          return "attach";
-      }
-      if (run.status === "complete" || run.status === "error") {
-          return context.resuming ? "replay-terminal" : "reclaim";
-      }
-      // `running` with no live producer: the instance died mid-generation.
-      return context.resuming ? "interrupted" : "reclaim";
-  };
-  ```
-  Hole 1: `run === undefined` with `resuming` returns `"attach"`. Hole 2: `context.live` with `resuming` returns `"attach"` with no check that the live run is the caller's generation.
+    ```ts
+    const decideDurableAttach = (run: DurableStreamRun | undefined, context: { live: boolean; resuming: boolean }): DurableAttachDecision => {
+        if (run === undefined || context.live) {
+            return "attach";
+        }
+        if (run.status === "complete" || run.status === "error") {
+            return context.resuming ? "replay-terminal" : "reclaim";
+        }
+        // `running` with no live producer: the instance died mid-generation.
+        return context.resuming ? "interrupted" : "reclaim";
+    };
+    ```
+    Hole 1: `run === undefined` with `resuming` returns `"attach"`. Hole 2: `context.live` with `resuming` returns `"attach"` with no check that the live run is the caller's generation.
 - `attachOrThrow` (same file, ~`:166-210`): `const resuming = sinceChunk > 0;` … the `live` branch replays `readStreamChunks(sql, runKey, sinceChunk)` then `live.sinks.add(sink)`.
 - The run row already carries a generation stamp: `packages/shard-engine/src/durable-stream.ts:46-55` — `DurableStreamRun.startedAt` ("Wall-clock millis when the run started").
 - The client resume envelope carries only `sinceChunk`: `protocol/README.md:251` — `stream` frame is `{ type, id, query, sinceChunk? }`; `packages/client/src/lunora-client.ts:4916` re-sends `sinceChunk: stream.lastSeq` on reconnect. There is no run-identity field anywhere in the protocol today.
@@ -47,19 +47,20 @@ A durable-stream consumer resuming with `sinceChunk > 0` can be silently spliced
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/do..." run build` | exit 0 (builds shard-engine + platform deps too) |
-| Engine tests | `pnpm --filter "@lunora/shard-engine" run test` | all pass |
-| DO tests  | `pnpm --filter "@lunora/do" run test` | all pass (mocks project; workerd project needs `LUNORA_WORKERD_TESTS=1`, skip if it cannot boot in your environment) |
-| Client tests | `pnpm --filter "@lunora/client" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/shard-engine" run lint:types` (repeat for `do`, `client`) | exit 0 |
-| API snapshots | `pnpm run build:packages && pnpm run api:update` | snapshot updated for shard-engine/do/client surface changes |
+| Purpose       | Command                                                                           | Expected on success                                                                                                  |
+| ------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Install       | `pnpm install`                                                                    | exit 0                                                                                                               |
+| Build deps    | `pnpm --filter "@lunora/do..." run build`                                         | exit 0 (builds shard-engine + platform deps too)                                                                     |
+| Engine tests  | `pnpm --filter "@lunora/shard-engine" run test`                                   | all pass                                                                                                             |
+| DO tests      | `pnpm --filter "@lunora/do" run test`                                             | all pass (mocks project; workerd project needs `LUNORA_WORKERD_TESTS=1`, skip if it cannot boot in your environment) |
+| Client tests  | `pnpm --filter "@lunora/client" run test`                                         | all pass                                                                                                             |
+| Typecheck     | `pnpm --filter "@lunora/shard-engine" run lint:types` (repeat for `do`, `client`) | exit 0                                                                                                               |
+| API snapshots | `pnpm run build:packages && pnpm run api:update`                                  | snapshot updated for shard-engine/do/client surface changes                                                          |
 
 ## Scope
 
 **In scope**:
+
 - `packages/shard-engine/src/durable-stream-runner.ts` (decision function + attach envelope)
 - `packages/shard-engine/src/durable-stream.ts` (only if the chunk/run read helpers need to surface `startedAt` — read first; the run row already has it)
 - `packages/do/src/shard-do.ts` — ONLY the stream-attach handler region (~`:7975-8060`) and the frame emission it owns: pass the caller-echoed generation into the attach, include the run's `startedAt` as `generation` on outbound stream frames (find the exact frame builder — `streamFrames(ws, id)` near `:7990`).
@@ -69,6 +70,7 @@ A durable-stream consumer resuming with `sinceChunk > 0` can be silently spliced
 - Tests: new `packages/shard-engine/__tests__/durable-stream-runner.test.ts` (decision-function cases), plus the client resume test file that covers `sinceChunk` today (find it: `grep -rln "sinceChunk" packages/client/__tests__`).
 
 **Out of scope**:
+
 - Any other part of `shard-do.ts` (the file is ~8.5k lines with a frozen-surface check — touch only the stream region).
 - The ephemeral (non-durable) stream path — `protocol/README.md:266` says it ignores `sinceChunk`; it must also ignore `generation`.
 - Server-side TTL/trim policy (`trimStreamRuns`).
@@ -77,8 +79,8 @@ A durable-stream consumer resuming with `sinceChunk > 0` can be silently spliced
 
 - Branch: `improve/wave22-shard-engine`
 - Commits (one per logical unit):
-  - `fix(shard-engine): gate stream resume on run generation`
-  - `fix(client): echo stream generation on resume`
+    - `fix(shard-engine): gate stream resume on run generation`
+    - `fix(client): echo stream generation on resume`
 
 ## Steps
 
