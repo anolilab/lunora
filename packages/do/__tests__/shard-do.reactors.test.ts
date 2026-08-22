@@ -1,3 +1,4 @@
+import type { ReactorsResult } from "@lunora/shard-engine";
 import { migrateReactorState, readReactorState } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -105,6 +106,16 @@ class ReactorShard extends ShardDO {
     }
 }
 
+const ADMIN_TOKEN = "s3cret-admin";
+
+/** An authenticated admin-RPC POST — how the studio's Reactors panel reads this shard. */
+const adminRequest = (functionPath: string): Request =>
+    new Request("https://shard.internal/rpc", {
+        body: JSON.stringify({ args: {}, functionPath }),
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+        method: "POST",
+    });
+
 const createState = (): ShardDOState => {
     return {
         acceptWebSocket: () => undefined,
@@ -128,9 +139,9 @@ describe("shardDO onQueryChange dispatch", () => {
     });
 
     it("runs a reactor on the first flush and persists its baseline", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
-        const shard = new ReactorShard(createState(), {});
+        const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.writeRpc();
 
@@ -138,13 +149,17 @@ describe("shardDO onQueryChange dispatch", () => {
         // No baseline on the first run: "unknown" reads as "changed", never as
         // "unchanged" — the degradation direction the whole feature follows.
         expect(shard.runs[0]?.previousDigest).toBeUndefined();
-        expect(readReactorState(harness.sql, "reactors:dispatch")).toStrictEqual({ digest: "stable", tables: ["orders"] });
+
+        const stored = readReactorState(harness.sql, "reactors:dispatch");
+
+        expect(stored?.digest).toBe("stable");
+        expect(stored?.tables).toStrictEqual(["orders"]);
     });
 
     it("offers the stored baseline back on the next flush", async () => {
         expect.assertions(2);
 
-        const shard = new ReactorShard(createState(), {});
+        const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.writeRpc();
         await shard.writeRpc();
@@ -158,7 +173,7 @@ describe("shardDO onQueryChange dispatch", () => {
     it("skips the reactor entirely when the flush touched nothing it read", async () => {
         expect.assertions(2);
 
-        const shard = new ReactorShard(createState(), {});
+        const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.writeRpc();
 
@@ -175,7 +190,7 @@ describe("shardDO onQueryChange dispatch", () => {
     it("bounds a reactor whose handler never stops changing its own read", async () => {
         expect.assertions(3);
 
-        const shard = new ReactorShard(createState(), {});
+        const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         shard.neverConverges = true;
 
@@ -191,24 +206,29 @@ describe("shardDO onQueryChange dispatch", () => {
     });
 
     it("contains a throwing reactor and leaves its baseline for a retry", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
-        const shard = new ReactorShard(createState(), {});
+        const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         shard.throwOnRun = true;
 
         await expect(shard.writeRpc()).resolves.toBeDefined();
 
-        // Not advanced: a reactor that threw never observed this result, so the
-        // next flush has to offer it again rather than skipping it forever.
-        expect(readReactorState(harness.sql, "reactors:dispatch")).toBeUndefined();
+        // The counters ARE recorded, but the baseline is not: a reactor that threw
+        // never observed this result, so the next flush has to offer it again
+        // rather than skipping it forever. An empty digest + unknown footprint is
+        // exactly what `reactorNeedsRun` reads as "must run".
+        const stored = readReactorState(harness.sql, "reactors:dispatch");
+
+        expect(stored?.digest).toBe("");
+        expect(stored?.tables).toBeUndefined();
         expect(shard.errors).toStrictEqual(["reactors:dispatch"]);
     });
 
     it("keeps reactors independent — one failing does not skip the rest", async () => {
         expect.assertions(2);
 
-        const shard = new ReactorShard(createState(), {});
+        const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         shard.reactorPaths = ["reactors:a", "reactors:b"];
 
@@ -221,12 +241,106 @@ describe("shardDO onQueryChange dispatch", () => {
     it("does nothing at all when no reactor is declared", async () => {
         expect.assertions(1);
 
-        const shard = new ReactorShard(createState(), {});
+        const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         shard.reactorPaths = [];
 
         await shard.writeRpc();
 
         expect(shard.runs).toHaveLength(0);
+    });
+
+    /**
+     * `__lunora_admin__:listReactors` — what the studio's Reactors panel reads.
+     *
+     * The join is the point: the manifest is the roster (so a declared-but-never-
+     * dispatched reactor still appears, which is the state an operator is looking
+     * for when a reactor seems not to work), and `__reactor_state` supplies the
+     * counters (durable, so they survive the hibernation that is a reactor's
+     * normal steady state).
+     */
+    describe("listReactors admin read", () => {
+        // Admin responses are wire-encoded under `result` (see `adminResponse`),
+        // so the panel's payload is one level in.
+        const read = async (shard: ReactorShard): Promise<ReactorsResult> => {
+            const response = await shard.fetch(adminRequest("__lunora_admin__:listReactors"));
+            const body: unknown = await response.json();
+
+            return (body as { result: ReactorsResult }).result;
+        };
+
+        it("reports a declared but never-dispatched reactor as idle", async () => {
+            expect.assertions(2);
+
+            const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const { reactors } = await read(shard);
+
+            // Zero counters and no `lastRanAt`: materially different from a reactor
+            // that runs and is quiet, which the state table alone could not express.
+            expect(reactors).toHaveLength(1);
+            expect(reactors[0]).toStrictEqual({ errors: 0, path: "reactors:dispatch", runs: 0, state: "idle", suppressed: 0 });
+        });
+
+        it("counts a run and records the learned footprint", async () => {
+            expect.assertions(4);
+
+            const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await shard.writeRpc();
+
+            const { reactors } = await read(shard);
+            const [reactor] = reactors;
+
+            expect(reactor?.state).toBe("active");
+            expect(reactor?.runs).toBe(1);
+            expect(reactor?.tables).toStrictEqual(["orders"]);
+            expect(reactor?.lastRanAt).toBeGreaterThan(0);
+        });
+
+        it("separates a suppressed dispatch from a run", async () => {
+            expect.assertions(2);
+
+            const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            // First flush runs (no baseline); the second re-runs `select`, matches
+            // the digest, and suppresses the handler.
+            await shard.writeRpc();
+            await shard.writeRpc();
+
+            const { reactors } = await read(shard);
+            const [reactor] = reactors;
+
+            expect(reactor?.runs).toBe(1);
+            expect(reactor?.suppressed).toBe(1);
+        });
+
+        it("surfaces a failing reactor with its message", async () => {
+            expect.assertions(3);
+
+            const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            shard.throwOnRun = true;
+            await shard.writeRpc();
+
+            const { reactors } = await read(shard);
+            const [reactor] = reactors;
+
+            expect(reactor?.state).toBe("failing");
+            expect(reactor?.errors).toBe(1);
+            expect(reactor?.lastError).toBe("reactor blew up");
+        });
+
+        it("returns an empty roster when nothing is declared", async () => {
+            expect.assertions(1);
+
+            const shard = new ReactorShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            shard.reactorPaths = [];
+
+            const { reactors } = await read(shard);
+
+            expect(reactors).toStrictEqual([]);
+        });
     });
 });

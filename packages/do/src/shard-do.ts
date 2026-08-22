@@ -95,6 +95,8 @@ import type {
     QueueMetadata,
     QueuesResult,
     ReactiveCacheOptions,
+    ReactorMetadata,
+    ReactorState,
     ReadFootprint,
     RelayHost,
     RelayMember,
@@ -159,6 +161,7 @@ import {
     handleReplicaControl,
     isDevEnvironment,
     isLossyBody,
+    listReactorStates,
     listTables,
     MAIL_TABLE,
     MAX_PAGE_SIZE,
@@ -1972,54 +1975,12 @@ abstract class ShardDO {
                 continue;
             }
 
-            const used = runs.get(path) ?? 0;
-
-            if (used >= ShardDO.MAX_REACTOR_RUNS_PER_DRAIN) {
-                if (used === ShardDO.MAX_REACTOR_RUNS_PER_DRAIN) {
-                    // Log once per drain, not once per pass — a non-converging
-                    // reactor would otherwise flood the ring it is reported in.
-                    runs.set(path, used + 1);
-                    this.recordReactorError(
-                        path,
-                        new Error(
-                            `reactor did not converge: ran ${String(ShardDO.MAX_REACTOR_RUNS_PER_DRAIN)} times in one refresh drain and its watched read kept changing. Its handler is rewriting what its own select observes; stopped for this drain.`,
-                        ),
-                    );
-                }
-
+            if (!this.claimReactorBudget(path, runs)) {
                 continue;
             }
 
-            runs.set(path, used + 1);
-
-            try {
-                // eslint-disable-next-line no-await-in-loop -- reactors run sequentially by design: each observes the writes the previous one committed, and one throwing reactor must not skip the rest
-                const outcome = await this.runReactor(path, state?.digest);
-
-                if (outcome !== undefined) {
-                    writeReactorState(sqlHandle, path, outcome.digest, outcome.tables);
-                }
-            } catch (error: unknown) {
-                // Baseline deliberately NOT advanced: a reactor that threw has not
-                // observed this result, so the next flush must offer it again.
-                this.recordReactorError(path, error);
-            } finally {
-                // A reactor's handler writes through `ctx.db`, which only STAGES
-                // the touched tables (`recordChangedTable`) — the request path is
-                // what normally flushes them, and a reactor has no request. Without
-                // this, a reactor's writes would sit unflushed until some unrelated
-                // RPC came along: no subscriber would see them, and the cascade that
-                // lets an actor advance a state machine would never happen.
-                //
-                // Safe inside the drain: `flushChangedTables` sees `refreshInFlight`
-                // and merges into THIS drain's pending set rather than starting a
-                // second one, so the loop simply gets another pass. In the `catch`
-                // case the reactor's transaction already rolled back, so at worst
-                // this stages a table whose re-run finds nothing changed — the same
-                // outcome a failed RPC mutation produces today.
-                // eslint-disable-next-line no-await-in-loop -- part of the same sequential per-reactor step
-                await this.flushChangedTables();
-            }
+            // eslint-disable-next-line no-await-in-loop -- reactors run sequentially by design: each observes the writes the previous one committed, and one throwing reactor must not skip the rest
+            await this.dispatchOneReactor(sqlHandle, path, state?.digest);
         }
     }
 
@@ -6523,7 +6484,30 @@ abstract class ShardDO {
             return triaged;
         }
 
-        return this.handlePitrAdminOp(functionPath, args);
+        // `??` rather than another `if` arm: this method is a long dispatch chain
+        // held deliberately at the complexity budget, and each additional arm costs
+        // against it (which is why `handleIssueTriageOp` / `handleInspectAdminOp` /
+        // `handlePitrAdminOp` exist at all).
+        return this.handleInspectAdminOp(functionPath) ?? this.handlePitrAdminOp(functionPath, args);
+    }
+
+    /**
+     * Serve the argument-free, read-only inspection reads. A sibling of
+     * {@link ShardDO.handleIssueTriageOp} / {@link ShardDO.handlePitrAdminOp} for
+     * the same reason they exist: `handleExtraAdminOp` is a long `functionPath`
+     * chain, and every arm added to it costs a point of cognitive complexity
+     * against that method's budget.
+     *
+     * Synchronous, unlike its siblings — nothing here awaits, because these reads
+     * touch only this shard's own SQLite. Returns `undefined` for any path it does
+     * not own so the caller keeps walking the chain.
+     */
+    private handleInspectAdminOp(functionPath: string): Response | undefined {
+        if (functionPath === ADMIN_FUNCTIONS.listReactors) {
+            return this.handleListReactors();
+        }
+
+        return undefined;
     }
 
     /**
@@ -6779,6 +6763,138 @@ abstract class ShardDO {
         return adminResponse(result);
     }
     /* eslint-enable no-secrets/no-secrets */
+
+    /**
+     * Run one reactor dispatch and record what it did.
+     *
+     * Split out of {@link ShardDO.dispatchReactors} so that loop stays inside the
+     * complexity budget. The three-way split is the contract: a successful
+     * dispatch advances the baseline AND a counter, a failure advances only the
+     * counter (its baseline must stay put so the next flush retries it), and BOTH
+     * flush afterwards.
+     */
+    private async dispatchOneReactor(sqlHandle: SqlExec, path: string, previousDigest: string | undefined): Promise<void> {
+        try {
+            const outcome = await this.runReactor(path, previousDigest);
+
+            if (outcome !== undefined) {
+                writeReactorState(sqlHandle, path, {
+                    digest: outcome.digest,
+                    now: Date.now(),
+                    // `ran` distinguishes the two non-failure outcomes an operator
+                    // needs to tell apart: the handler fired, or `select` re-ran and
+                    // the digest matched so it did not. A high suppressed:runs ratio
+                    // is the signal that a reactor is watching more than it needs to.
+                    result: outcome.ran ? "ran" : "suppressed",
+                    tables: outcome.tables,
+                });
+            }
+        } catch (error: unknown) {
+            // Baseline deliberately NOT advanced — a reactor that threw has not
+            // observed this result, so the next flush must offer it again — but the
+            // counter and message ARE recorded, which is the whole reason
+            // `writeReactorState` takes an outcome rather than a row.
+            writeReactorState(sqlHandle, path, {
+                error: error instanceof Error ? error.message : String(error),
+                now: Date.now(),
+                result: "error",
+            });
+            this.recordReactorError(path, error);
+        } finally {
+            // A reactor's handler writes through `ctx.db`, which only STAGES the
+            // touched tables (`recordChangedTable`) — the request path is what
+            // normally flushes them, and a reactor has no request. Without this, a
+            // reactor's writes would sit unflushed until some unrelated RPC came
+            // along: no subscriber would see them, and the cascade that lets an
+            // actor advance a state machine would never happen.
+            //
+            // Safe inside the drain: `flushChangedTables` sees `refreshInFlight` and
+            // merges into THIS drain's pending set rather than starting a second one,
+            // so the loop simply gets another pass. In the `catch` case the reactor's
+            // transaction already rolled back, so at worst this stages a table whose
+            // re-run finds nothing changed — the same outcome a failed RPC mutation
+            // produces today.
+            await this.flushChangedTables();
+        }
+    }
+
+    /**
+     * Claim one run against a reactor's per-drain convergence budget.
+     *
+     * Split out of {@link ShardDO.dispatchReactors} so that loop stays inside the
+     * complexity budget, and because the "log exactly once" bookkeeping is fiddly
+     * enough to deserve naming: the counter is advanced one step PAST the ceiling
+     * on the first refusal, so the error is recorded once per drain rather than on
+     * every subsequent pass — a non-converging reactor would otherwise flood the
+     * very log ring that reports it.
+     * @returns `true` when the reactor may run; `false` when its budget is spent.
+     */
+    private claimReactorBudget(path: string, runs: Map<string, number>): boolean {
+        const used = runs.get(path) ?? 0;
+
+        if (used < ShardDO.MAX_REACTOR_RUNS_PER_DRAIN) {
+            runs.set(path, used + 1);
+
+            return true;
+        }
+
+        if (used === ShardDO.MAX_REACTOR_RUNS_PER_DRAIN) {
+            runs.set(path, used + 1);
+            this.recordReactorError(
+                path,
+                new Error(
+                    `reactor did not converge: ran ${String(ShardDO.MAX_REACTOR_RUNS_PER_DRAIN)} times in one refresh drain and its watched read kept changing. Its handler is rewriting what its own select observes; stopped for this drain.`,
+                ),
+            );
+        }
+
+        return false;
+    }
+
+    /**
+     * Serve `__lunora_admin__:listReactors` — the studio's read-only Reactors
+     * panel.
+     *
+     * Joins the generated manifest against `__reactor_state` rather than reading
+     * either alone. The manifest alone cannot say whether a reactor is doing
+     * anything; the state table alone cannot show a reactor that has been
+     * declared but never dispatched — and "declared, never run" is exactly the
+     * state an operator is looking for when a reactor appears not to work. The
+     * join makes both visible, with the manifest as the authoritative roster.
+     *
+     * Read-only: a reactor listing mutates no shard state, so nothing is flushed
+     * or audited. Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private handleListReactors(): Response {
+        const states = new Map<string, ReactorState>(listReactorStates(this.sql as SqlExec).map((entry) => [entry.path, entry.state] as const));
+
+        // Named `stored` rather than `state` because `ShardDO.state` is the Durable
+        // Object handle, and the row also carries a `state` FIELD in the response.
+        const reactors: ReactorMetadata[] = this.lifecycleHookPaths("reactor").map((path) => {
+            const stored = states.get(path);
+
+            if (stored === undefined) {
+                return { errors: 0, path, runs: 0, state: "idle", suppressed: 0 };
+            }
+
+            return {
+                errors: stored.stats.errors,
+                ...(stored.lastError === undefined ? {} : { lastError: stored.lastError }),
+                ...(stored.lastRanAt === 0 ? {} : { lastRanAt: stored.lastRanAt }),
+                path,
+                runs: stored.stats.runs,
+                // `failing` reads the LAST dispatch, not the lifetime count: a
+                // reactor that failed once a week ago and has run cleanly since is
+                // active, not failing. `lastError` is retained either way so the
+                // panel can still show what went wrong.
+                state: stored.lastError === undefined ? "active" : "failing",
+                suppressed: stored.stats.suppressed,
+                ...(stored.tables === undefined ? {} : { tables: stored.tables }),
+            };
+        });
+
+        return adminResponse({ reactors });
+    }
 
     /**
      * Serve `__lunora_admin__:listFlags` — the studio's read-only Flags page.

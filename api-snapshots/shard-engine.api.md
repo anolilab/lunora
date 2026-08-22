@@ -57,6 +57,7 @@ const ADMIN_FUNCTIONS: {
     readonly ignoreIssue: "__lunora_admin__:ignoreIssue";
     readonly importShard: "__lunora_admin__:importShard";
     readonly listFlags: "__lunora_admin__:listFlags";
+    readonly listReactors: "__lunora_admin__:listReactors";
     readonly listQueues: "__lunora_admin__:listQueues";
     readonly lintSql: "__lunora_admin__:lintSql";
     readonly listTables: "__lunora_admin__:listTables";
@@ -1752,12 +1753,54 @@ interface ReactiveCacheOptions {
 }
 ```
 
+### `ReactorDispatchResult` (type)
+
+```ts
+type ReactorDispatchResult = "error" | "ran" | "suppressed";
+```
+
+### `ReactorMetadata` (interface)
+
+```ts
+interface ReactorMetadata {
+    errors: number;
+    lastError?: string;
+    lastRanAt?: number;
+    path: string;
+    runs: number;
+    state: "active" | "failing" | "idle";
+    suppressed: number;
+    tables?: ReadonlyArray<string>;
+}
+```
+
 ### `ReactorState` (interface)
 
 ```ts
 interface ReactorState {
     digest: string;
+    lastError?: string;
+    lastRanAt: number;
+    stats: ReactorStats;
     tables?: ReadonlyArray<string>;
+}
+```
+
+### `ReactorStats` (interface)
+
+```ts
+interface ReactorStats {
+    errors: number;
+    runs: number;
+    suppressed: number;
+}
+```
+
+### `ReactorsResult` (interface)
+
+```ts
+interface ReactorsResult {
+    reactors: ReactorMetadata[];
 }
 ```
 
@@ -3634,6 +3677,15 @@ const liftSourceId: (row: Record<string, unknown>, options?: {
 const lintReadonlySql: (sql: SqlExec, query: string) => SqlLintResult;
 ```
 
+### `listReactorStates` (const)
+
+```ts
+const listReactorStates: (sql: SqlExec) => {
+    path: string;
+    state: ReactorState;
+}[];
+```
+
 ### `listTables` (const)
 
 ```ts
@@ -3890,7 +3942,7 @@ const reactiveCacheKey: (functionPath: string, args: Record<string, unknown>, id
 ### `reactorNeedsRun` (const)
 
 ```ts
-const reactorNeedsRun: (state: ReactorState | undefined, changed: ReadonlySet<string>) => boolean;
+const reactorNeedsRun: (state: Pick<ReactorState, "tables"> | undefined, changed: ReadonlySet<string>) => boolean;
 ```
 
 ### `readAggregateValue` (const)
@@ -4420,7 +4472,13 @@ const writeIdempotent: (sql: SqlExec, identity: string, mutationId: string, resu
 ### `writeReactorState` (const)
 
 ```ts
-const writeReactorState: (sql: SqlExec, path: string, digest: string, tables: ReadonlyArray<string>) => void;
+const writeReactorState: (sql: SqlExec, path: string, outcome: {
+    digest?: string;
+    error?: string;
+    now: number;
+    result: ReactorDispatchResult;
+    tables?: ReadonlyArray<string>;
+}) => void;
 ```
 
 ### `writeSearchBackfillState` (const)
