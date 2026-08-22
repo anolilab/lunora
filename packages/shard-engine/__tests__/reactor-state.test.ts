@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { migrateReactorState, reactorNeedsRun, readReactorState, writeReactorState } from "../src/reactor-state";
+import { listReactorStates, migrateReactorState, reactorNeedsRun, readReactorState, writeReactorState } from "../src/reactor-state";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -73,6 +73,90 @@ describe("reactor state", () => {
         migrateReactorState(harness.sql);
 
         expect(readReactorState(harness.sql, "reactors:dispatch")?.digest).toBe("abc123");
+    });
+
+    describe("listReactorStates", () => {
+        it("returns nothing on a shard that has never dispatched a reactor", () => {
+            expect.assertions(1);
+
+            expect(listReactorStates(harness.sql)).toStrictEqual([]);
+        });
+
+        it("returns every reactor, ordered by path", () => {
+            expect.assertions(1);
+
+            // Written out of order on purpose: the studio polls this, and an
+            // unordered listing would reshuffle the table on every render.
+            writeReactorState(harness.sql, "reactors:zeta", { digest: "z", now: 1, result: "ran", tables: ["orders"] });
+            writeReactorState(harness.sql, "reactors:alpha", { digest: "a", now: 1, result: "ran", tables: ["desks"] });
+
+            expect(listReactorStates(harness.sql).map((entry) => entry.path)).toStrictEqual(["reactors:alpha", "reactors:zeta"]);
+        });
+
+        it("carries each reactor's counters and last error", () => {
+            expect.assertions(3);
+
+            writeReactorState(harness.sql, "reactors:dispatch", { digest: "d", now: 1_700_000_000_000, result: "ran", tables: ["orders"] });
+            writeReactorState(harness.sql, "reactors:dispatch", { digest: "d", now: 1_700_000_000_001, result: "suppressed", tables: ["orders"] });
+            writeReactorState(harness.sql, "reactors:dispatch", { error: "boom", now: 1_700_000_000_002, result: "error" });
+
+            const [entry] = listReactorStates(harness.sql);
+
+            expect(entry?.state.stats).toStrictEqual({ errors: 1, runs: 1, suppressed: 1 });
+            expect(entry?.state.lastError).toBe("boom");
+            expect(entry?.state.lastRanAt).toBe(1_700_000_000_002);
+        });
+    });
+
+    describe("counters", () => {
+        it("increments only the counter its outcome names", () => {
+            expect.assertions(3);
+
+            for (let index = 0; index < 3; index += 1) {
+                writeReactorState(harness.sql, "reactors:dispatch", { digest: "d", now: index, result: "ran", tables: ["orders"] });
+            }
+
+            writeReactorState(harness.sql, "reactors:dispatch", { digest: "d", now: 9, result: "suppressed", tables: ["orders"] });
+
+            const state = readReactorState(harness.sql, "reactors:dispatch");
+
+            expect(state?.stats.runs).toBe(3);
+            expect(state?.stats.suppressed).toBe(1);
+            expect(state?.stats.errors).toBe(0);
+        });
+
+        it("records a failure without moving the baseline", () => {
+            expect.assertions(3);
+
+            writeReactorState(harness.sql, "reactors:dispatch", { digest: "good", now: 1, result: "ran", tables: ["orders"] });
+            writeReactorState(harness.sql, "reactors:dispatch", { error: "boom", now: 2, result: "error" });
+
+            const state = readReactorState(harness.sql, "reactors:dispatch");
+
+            // The split this whole signature exists for: a reactor that threw never
+            // observed the current result, so its digest and footprint must stay
+            // put and the next flush must offer it again — while the failure is
+            // still counted and its message retained for the panel.
+            expect(state?.digest).toBe("good");
+            expect(state?.tables).toStrictEqual(["orders"]);
+            expect(state?.stats).toStrictEqual({ errors: 1, runs: 1, suppressed: 0 });
+        });
+
+        it("clears a stale error message once the reactor runs cleanly again", () => {
+            expect.assertions(2);
+
+            writeReactorState(harness.sql, "reactors:dispatch", { error: "boom", now: 1, result: "error" });
+            writeReactorState(harness.sql, "reactors:dispatch", { digest: "d", now: 2, result: "ran", tables: ["orders"] });
+
+            const state = readReactorState(harness.sql, "reactors:dispatch");
+
+            // A successful dispatch passes no `error`, so the column keeps its old
+            // value — the counter is the lifetime record, `lastError` is not
+            // cleared. The panel reads `state`, derived from the LAST dispatch, so
+            // this reactor shows as active despite the retained message.
+            expect(state?.lastError).toBe("boom");
+            expect(state?.stats).toStrictEqual({ errors: 1, runs: 1, suppressed: 0 });
+        });
     });
 
     describe("reactorNeedsRun", () => {
