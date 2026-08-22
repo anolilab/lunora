@@ -25,38 +25,45 @@ Three helpers sign URLs; they disagree on what a valid input is. `packages/stora
 ## Current state
 
 - `packages/storage/src/signed-url.ts:84-90` — the posture to converge on:
-  ```ts
-  if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) { throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: expiresInSeconds must be a positive finite number"); }
-  if (expiresInSeconds > MAX_SIGNED_URL_TTL_SECONDS) { throw new LunoraError("VALIDATION_ERROR", `...must not exceed ... (7 days)`); }
-  ```
-  and `:38-42` + `:108-114` — `ONLY_SLASHES_RE = /^\/+$/u` base-path guard with the collapse rationale.
+    ```ts
+    if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: expiresInSeconds must be a positive finite number");
+    }
+    if (expiresInSeconds > MAX_SIGNED_URL_TTL_SECONDS) {
+        throw new LunoraError("VALIDATION_ERROR", `...must not exceed ... (7 days)`);
+    }
+    ```
+    and `:38-42` + `:108-114` — `ONLY_SLASHES_RE = /^\/+$/u` base-path guard with the collapse rationale.
 - `packages/storage/src/presigned-url.ts:108-118`:
-  ```ts
-  const requested = parameters.expiresInSeconds ?? DEFAULT_EXPIRES_SECONDS;
-  const normalised = Number.isFinite(requested) ? requested : DEFAULT_EXPIRES_SECONDS;
-  const expires = Math.min(Math.max(MIN_EXPIRES_SECONDS, Math.floor(normalised)), MAX_EXPIRES_SECONDS);
-  ```
-  An **absent** value defaulting to `DEFAULT_EXPIRES_SECONDS` is fine and stays; the silent clamp/NaN-fallback for **explicit** values is the defect.
+    ```ts
+    const requested = parameters.expiresInSeconds ?? DEFAULT_EXPIRES_SECONDS;
+    const normalised = Number.isFinite(requested) ? requested : DEFAULT_EXPIRES_SECONDS;
+    const expires = Math.min(Math.max(MIN_EXPIRES_SECONDS, Math.floor(normalised)), MAX_EXPIRES_SECONDS);
+    ```
+    An **absent** value defaulting to `DEFAULT_EXPIRES_SECONDS` is fine and stays; the silent clamp/NaN-fallback for **explicit** values is the defect.
 - `packages/bindings/src/images/signed-delivery-url.ts:96-106` — the divergent guard:
-  ```ts
-  if (basePath !== "" && basePath !== "/") { throw new TypeError(`...baseUrl must not carry a path...`); }
-  ```
-  (`https://cdn.test//` → pathname `"//"` → throws here, accepted by storage.)
+    ```ts
+    if (basePath !== "" && basePath !== "/") {
+        throw new TypeError(`...baseUrl must not carry a path...`);
+    }
+    ```
+    (`https://cdn.test//` → pathname `"//"` → throws here, accepted by storage.)
 - `shared/hmac-url.ts` — the shared canonical home: exports `MAX_SIGNED_URL_TTL_SECONDS` (`:33`), `extractHost`, `signCanonical`, `verifyCanonical`, etc. Both packages import it already, so a shared validator adds no new dependency edge. NOTE: the images helper throws `TypeError` while storage throws `LunoraError` — `shared/` must stay zero-dep, so the shared validator cannot construct a `LunoraError`. Shape it as a predicate/normalizer that RETURNS a problem description, with each caller throwing its own error type.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build     | `pnpm --filter "@lunora/storage..." run build && pnpm --filter "@lunora/bindings..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/storage" run test && pnpm --filter "@lunora/bindings" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/storage" run lint:types && pnpm --filter "@lunora/bindings" run lint:types` | exit 0 |
-| Lint      | both packages `run lint:eslint` | exit 0 |
+| Purpose   | Command                                                                                             | Expected on success |
+| --------- | --------------------------------------------------------------------------------------------------- | ------------------- |
+| Install   | `pnpm install`                                                                                      | exit 0              |
+| Build     | `pnpm --filter "@lunora/storage..." run build && pnpm --filter "@lunora/bindings..." run build`     | exit 0              |
+| Tests     | `pnpm --filter "@lunora/storage" run test && pnpm --filter "@lunora/bindings" run test`             | all pass            |
+| Typecheck | `pnpm --filter "@lunora/storage" run lint:types && pnpm --filter "@lunora/bindings" run lint:types` | exit 0              |
+| Lint      | both packages `run lint:eslint`                                                                     | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `shared/hmac-url.ts` (add the two shared validators)
 - `packages/storage/src/signed-url.ts` (switch to shared validators — behavior unchanged)
 - `packages/storage/src/presigned-url.ts` (explicit-invalid → throw; absent → default, unchanged)
@@ -64,6 +71,7 @@ Three helpers sign URLs; they disagree on what a valid input is. `packages/stora
 - `packages/storage/__tests__/presigned-url.test.ts`, `signed-url.test.ts`; `packages/bindings/__tests__/images/` signed-delivery tests
 
 **Out of scope**:
+
 - `MAX_EXPIRES_SECONDS` for S3 (7 days is AWS SigV4's own ceiling — the ceiling value is correct, only the silent clamp goes).
 - The HMAC canonical itself — signatures must remain byte-identical; this plan touches validation only.
 
@@ -78,7 +86,7 @@ Three helpers sign URLs; they disagree on what a valid input is. `packages/stora
 
 - `validateTtlSeconds(value: number, maxSeconds: number): string | undefined` — returns a human-readable problem ("must be a positive finite number" / "must not exceed N seconds") or `undefined` when valid. Pure, zero-dep.
 - `isOnlySlashesPath(path: string): boolean` — the `/^\/+$/u` test with the collapse-rationale comment moved here.
-Export both (named), keeping the existing export list style at `:157`.
+  Export both (named), keeping the existing export list style at `:157`.
 
 ### Step 2: Converge the three callers
 

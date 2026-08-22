@@ -24,46 +24,48 @@ The composite push provider routes an entire send by the kind of the **first** t
 ## Current state
 
 - `packages/notify/src/providers.ts:154-176` (`routingPushProvider`'s `send`):
-  ```ts
-  send: async (payload) => {
-      // ROUTING is on the first target — the endpoint IS the decision, present
-      // means web push, absent means FCM — because `ctx.push`'s own fan-out
-      // (`deliver`) sends exactly one target per call.
-      //
-      // The SSRF re-check, though, must cover EVERY target: ...
-      const targets = Array.isArray(payload.to) ? payload.to : [payload.to];
-      const endpoints = targets.map((entry) => webPushEndpoint(entry));
+    ```ts
+    send: async (payload) => {
+        // ROUTING is on the first target — the endpoint IS the decision, present
+        // means web push, absent means FCM — because `ctx.push`'s own fan-out
+        // (`deliver`) sends exactly one target per call.
+        //
+        // The SSRF re-check, though, must cover EVERY target: ...
+        const targets = Array.isArray(payload.to) ? payload.to : [payload.to];
+        const endpoints = targets.map((entry) => webPushEndpoint(entry));
 
-      for (const endpoint of endpoints) {
-          if (endpoint !== undefined) {
-              // eslint-disable-next-line no-await-in-loop -- ...
-              await assertPushTargetResolvable(endpoint, options.allowedPushOrigins);
-          }
-      }
+        for (const endpoint of endpoints) {
+            if (endpoint !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- ...
+                await assertPushTargetResolvable(endpoint, options.allowedPushOrigins);
+            }
+        }
 
-      return pick(endpoints[0]).send(payload);
-  },
-  ```
+        return pick(endpoints[0]).send(payload);
+    },
+    ```
 - `pick` (`providers.ts:132-144`) maps `endpoint === undefined` → FCM provider, defined → Web Push, throwing a directed error when the needed channel is unconfigured.
 - Return type: a provider `send` resolves one `Receipt`; the engine's `notify.send` returns `Receipt[]` per channel (`packages/notify/src/types.ts:307`). Read the `Receipt` type in `packages/notify/src/types.ts` (grep `Receipt`) before deciding the merge shape in Step 1.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/notify..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/notify" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/notify" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/notify" run lint:eslint` | exit 0 |
+| Purpose    | Command                                          | Expected on success |
+| ---------- | ------------------------------------------------ | ------------------- |
+| Install    | `pnpm install`                                   | exit 0              |
+| Build deps | `pnpm --filter "@lunora/notify..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/notify" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/notify" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/notify" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/notify/src/providers.ts` (`routingPushProvider.send` only)
 - The providers test file in `packages/notify/__tests__/`
 
 **Out of scope**:
+
 - `webPushEndpoint`, `assertPushTargetResolvable`, `pick`'s unconfigured-channel errors — all correct.
 - The engine (`notify.ts`) and `ctx.push` single-target paths.
 

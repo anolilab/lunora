@@ -27,44 +27,46 @@
 ## Current state
 
 - `packages/payment/src/money.ts:53-61`:
-  ```ts
-  /**
-   * Construct money. Currency is normalized to uppercase; never use floats for amounts.
-   * @experimental
-   */
-  export const money = (minorUnits: bigint | number, currency: CurrencyCode): Money => {
-      const units = typeof minorUnits === "bigint" ? minorUnits : BigInt(Math.trunc(minorUnits));
+    ```ts
+    /**
+     * Construct money. Currency is normalized to uppercase; never use floats for amounts.
+     * @experimental
+     */
+    export const money = (minorUnits: bigint | number, currency: CurrencyCode): Money => {
+        const units = typeof minorUnits === "bigint" ? minorUnits : BigInt(Math.trunc(minorUnits));
 
-      return { currency: currency.toUpperCase(), minorUnits: units };
-  };
-  ```
+        return { currency: currency.toUpperCase(), minorUnits: units };
+    };
+    ```
 - The exemplar guard to mirror — `packages/payment/src/create-payment.ts:390-392` (inside `track`):
-  ```ts
-  if (!Number.isSafeInteger(target) || target < 0) {
-      throw new LunoraPaymentError("VALIDATION_ERROR", `track(): \`quantity\` must be a non-negative safe integer (got ${String(input.quantity)})`);
-  }
-  ```
-  (No `target < 0` check here — negative money is legitimate for refund math; only integrality/finiteness is at issue.)
+    ```ts
+    if (!Number.isSafeInteger(target) || target < 0) {
+        throw new LunoraPaymentError("VALIDATION_ERROR", `track(): \`quantity\` must be a non-negative safe integer (got ${String(input.quantity)})`);
+    }
+    ```
+    (No `target < 0` check here — negative money is legitimate for refund math; only integrality/finiteness is at issue.)
 - In-repo callers pass either `bigint` or pre-rounded numbers (`Math.round(...)` in `providers/stripe.ts:126,174,205,236,250` and `providers/polar.ts:117`); `zeroMoney` passes `0n`. No in-repo caller passes a fraction.
 - `LunoraPaymentError` lives in `packages/payment/src/error.ts` (verify the exact import path used by `money.ts`'s siblings — `create-payment.ts` imports it from `"./error"`).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/payment..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/payment" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/payment" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success |
+| ---------- | ------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                    | exit 0              |
+| Build deps | `pnpm --filter "@lunora/payment..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/payment" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/payment" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/payment" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope** (the only files you should modify):
+
 - `packages/payment/src/money.ts`
 - `packages/payment/__tests__/money.test.ts`
 
 **Out of scope**:
+
 - The provider adapters (`providers/*.ts`) — their `Math.round` pre-rounding is deliberate provider-payload normalization; do not change it.
 - `formatMoney` — its `Number(minorUnits)` is documented UI-only.
 - `track()`'s guard in `create-payment.ts` — already correct.

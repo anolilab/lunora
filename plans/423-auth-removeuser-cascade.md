@@ -24,33 +24,35 @@
 ## Current state
 
 - `packages/auth/src/admin.ts:1061-1065`:
-  ```ts
-  removeUser: ({ userId }) =>
-      withContext(async (context_) => {
-          await context_.internalAdapter.deleteUserSessions(userId);
-          await context_.internalAdapter.deleteUser(userId);
-      }),
-  ```
+    ```ts
+    removeUser: ({ userId }) =>
+        withContext(async (context_) => {
+            await context_.internalAdapter.deleteUserSessions(userId);
+            await context_.internalAdapter.deleteUser(userId);
+        }),
+    ```
 - The exemplar — `admin.ts:709-736` (`deleteOrganization`): `const tables = getAuthTables(context_.options);` then guarded `context_.adapter.deleteMany({ model: "...", where: [...] })` per table, with `if (tables["team"]) { … }`-style gates.
 - Existing test: `packages/auth/__tests__/admin.behaviour.test.ts:181-188` asserts only that the `user` row is gone.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/auth..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/auth" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/auth" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/auth" run lint:eslint` | exit 0 |
+| Purpose    | Command                                        | Expected on success |
+| ---------- | ---------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                 | exit 0              |
+| Build deps | `pnpm --filter "@lunora/auth..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/auth" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/auth" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/auth" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/auth/src/admin.ts` (the `removeUser` op only)
 - `packages/auth/__tests__/admin.behaviour.test.ts`
 
 **Out of scope**:
+
 - `deleteOrganization` — the exemplar.
 - better-auth's `deleteUser` internals; any schema change.
 - Rows that reference the user only informationally (e.g. audit log entries) — the audit trail must survive user deletion by design.
@@ -76,7 +78,7 @@ then, each gated `if (tables["<model>"])` and scoped strictly to the user:
 - `teamMember` where `userId`
 - `passkey` where `userId`
 - `twoFactor` where `userId`
-- `invitation` where `inviterId` = userId (invitations the user *sent*; invitations addressed to their email stay — they're keyed by email, not user)
+- `invitation` where `inviterId` = userId (invitations the user _sent_; invitations addressed to their email stay — they're keyed by email, not user)
 
 Verify each model name and where-field against `getAuthTables`' output / the schema in `packages/auth/src/schema.ts` before writing (the field on `twoFactor` may be `userId` — confirm; if a table keys differently, use its actual field).
 

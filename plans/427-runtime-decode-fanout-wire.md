@@ -29,35 +29,37 @@ Critically, the internal round-trips are **correct by pairing**: `exportShard �
 
 - `packages/runtime/src/query-coordinator.ts:1199` — `const value = await response.json();` (inside `callOneShard`); no `decodeWire`/`encodeWire` import exists anywhere in `query-coordinator.ts`, `data-movement-admin-routes.ts`, `connector-format.ts`, or `export-stream.ts` (verified by grep at the planned-at commit).
 - `packages/do/src/shard-do.ts:313`:
-  ```ts
-  const adminResponse = (result: unknown): Response => jsonResponse({ result: encodeWire(result) }, 200);
-  ```
-  and the ingress half right below it (`decodeAdminArgs`) documents the pairing: "a payload this shard exported can be handed straight back — `cdcSync` → `applyCdc`, `exportShard` → `importShard` — with its `bigint`/bytes intact."
+    ```ts
+    const adminResponse = (result: unknown): Response => jsonResponse({ result: encodeWire(result) }, 200);
+    ```
+    and the ingress half right below it (`decodeAdminArgs`) documents the pairing: "a payload this shard exported can be handed straight back — `cdcSync` → `applyCdc`, `exportShard` → `importShard` — with its `bigint`/bytes intact."
 - `packages/runtime/src/data-movement-admin-routes.ts:164` — the export stream writes `JSON.stringify(row)` per NDJSON line; `:293` — `/connector/sync` returns `Response.json(page)`. Both payloads are wire-form and round-trip through `decodeAdminArgs` on re-import/replay — leave both as they are.
 - `packages/runtime/src/connector-format.ts:93` (`toFivetranResponse`) and `:151` (`toAirbyteMessages`) — both iterate `page.changes` and pass `change.doc` through untouched:
-  ```ts
-  const data = change.op === "delete" ? { ...change.doc, _lunora_deleted: true } : change.doc;
-  ```
+    ```ts
+    const data = change.op === "delete" ? { ...change.doc, _lunora_deleted: true } : change.doc;
+    ```
 - The wire codec lives in `shared/wire-codec.ts` (bundler-inlined, zero-dep — see the repo's `shared/` conventions in `CLAUDE.md`); `shared/base64.ts` exists. The shard-side source values are real (`packages/shard-engine/src/ctx-db-cdc.ts:107` returns `decodeDocJson(row.doc)`), so the tags are introduced purely by the missing inverse at the connector boundary.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/runtime..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/runtime" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/runtime" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/runtime" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success |
+| ---------- | ------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                    | exit 0              |
+| Build deps | `pnpm --filter "@lunora/runtime..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/runtime" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/runtime" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/runtime" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope** (the only files you should modify):
+
 - `packages/runtime/src/connector-format.ts`
 - `shared/wire-codec.ts` (only if the portable-mapping helper belongs beside the codec; a local helper inside `connector-format.ts` is equally acceptable — prefer the local helper unless a second consumer exists)
 - `packages/runtime/__tests__/` — the existing connector-format test file (find it: `ls packages/runtime/__tests__ | grep -i connector`)
 
 **Out of scope** (do NOT touch, even though they look related):
+
 - `packages/runtime/src/query-coordinator.ts` — `callOneShard` must keep returning wire-form payloads; the paired round-trips depend on it.
 - `packages/runtime/src/data-movement-admin-routes.ts` — the NDJSON export and `/sync` page stay wire-form (they are Lunora-native formats that re-import through `decodeAdminArgs`).
 - `packages/do/src/shard-do.ts` — the encode/decode pairing is correct as is.
@@ -90,6 +92,7 @@ In `toFivetranResponse` and `toAirbyteMessages`, map each `change.doc` through t
 ### Step 3: Regression tests
 
 In the existing connector-format test file, add cases feeding a `ConnectorSyncPage` whose `changes[].doc` contains a wire-encoded bigint (both within and beyond `Number.MAX_SAFE_INTEGER`) and wire-encoded bytes, asserting:
+
 - Fivetran `insert` rows carry the number / decimal-string / base64-string forms — never a `["$lunora.wire$", ...]` array;
 - Airbyte `RECORD.data` likewise;
 - a pure-JSON doc is byte-identical to today's output (the mapping is identity for pure JSON).

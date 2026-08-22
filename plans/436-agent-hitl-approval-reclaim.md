@@ -21,30 +21,30 @@
 
 ## Why this matters
 
-A human-in-the-loop approval that a person takes longer than 13 hours to give (overnight, a weekend) becomes permanently unresolvable. The HITL pause hibernates on `step.waitForEvent` with **no timeout**; meanwhile the staleness reclaim in `agentEnsureThread` treats any thread untouched for `ABANDONED_RUN_MS` (13h) as free — including `awaiting_input` threads — and re-stamps a new caller's `instanceId` onto it. The client still shows the `awaiting_approval` message row, but `agentResolveApproval` then throws `FORBIDDEN` (`instance "…" does not own thread "…"`) forever. A slow approver is the *normal* HITL case, so this is a first-encounter failure. The two comments in `component.ts` state contradictory intentions: the concurrency-guard comment says `awaiting_input` "still owns the thread and will resume", while the reclaim two lines later overrides exactly that.
+A human-in-the-loop approval that a person takes longer than 13 hours to give (overnight, a weekend) becomes permanently unresolvable. The HITL pause hibernates on `step.waitForEvent` with **no timeout**; meanwhile the staleness reclaim in `agentEnsureThread` treats any thread untouched for `ABANDONED_RUN_MS` (13h) as free — including `awaiting_input` threads — and re-stamps a new caller's `instanceId` onto it. The client still shows the `awaiting_approval` message row, but `agentResolveApproval` then throws `FORBIDDEN` (`instance "…" does not own thread "…"`) forever. A slow approver is the _normal_ HITL case, so this is a first-encounter failure. The two comments in `component.ts` state contradictory intentions: the concurrency-guard comment says `awaiting_input` "still owns the thread and will resume", while the reclaim two lines later overrides exactly that.
 
 ## Current state
 
 - `packages/agent/src/agent-loop.ts:216-226` — `awaitApproval` persists the `awaiting_approval` marker, patches the thread to `awaiting_input`, then:
-  ```ts
-  const event = await step.waitForEvent<ApprovalDecision>(`approval:${call.id}`, { type: `agent-approval:${call.id}` });
-  ```
-  No `timeout` — although the host type supports it: `packages/workflow/src/types.ts:152`:
-  ```ts
-  waitForEvent: <T = unknown>(name: string, options: { timeout?: number | string; type: string }) => Promise<...>;
-  ```
+    ```ts
+    const event = await step.waitForEvent<ApprovalDecision>(`approval:${call.id}`, { type: `agent-approval:${call.id}` });
+    ```
+    No `timeout` — although the host type supports it: `packages/workflow/src/types.ts:152`:
+    ```ts
+    waitForEvent: <T = unknown>(name: string, options: { timeout?: number | string; type: string }) => Promise<...>;
+    ```
 - `packages/agent/src/component.ts:44` — `const ABANDONED_RUN_MS = 13 * 60 * 60 * 1000;`
 - `packages/agent/src/component.ts:387-392` (inside `agentEnsureThread`):
-  ```ts
-  const updatedAt = typeof existing["updatedAt"] === "number" ? existing["updatedAt"] : 0;
-  const abandoned = now - updatedAt > ABANDONED_RUN_MS;
-  const isConcurrentRun =
-      !abandoned &&
-      (existing["status"] === "running" || existing["status"] === "awaiting_input") &&
-      priorInstanceId !== undefined &&
-      (args.instanceId === undefined || args.instanceId !== priorInstanceId);
-  ```
-  The comment block above it (`:363-368`) says `awaiting_input` "is a HITL pause hibernating on step.waitForEvent, which still owns the thread and will resume."
+    ```ts
+    const updatedAt = typeof existing["updatedAt"] === "number" ? existing["updatedAt"] : 0;
+    const abandoned = now - updatedAt > ABANDONED_RUN_MS;
+    const isConcurrentRun =
+        !abandoned &&
+        (existing["status"] === "running" || existing["status"] === "awaiting_input") &&
+        priorInstanceId !== undefined &&
+        (args.instanceId === undefined || args.instanceId !== priorInstanceId);
+    ```
+    The comment block above it (`:363-368`) says `awaiting_input` "is a HITL pause hibernating on step.waitForEvent, which still owns the thread and will resume."
 - `packages/agent/src/component.ts:413-419` — the fall-through patches `status: "running"` and re-stamps the new `instanceId`.
 - `packages/agent/src/component.ts:780-784` — `agentResolveApproval` throws `FORBIDDEN` when `readable["instanceId"] !== args.instanceId`.
 - `packages/agent/src/component.ts:561-577` — `agentCompleteRun`'s not-the-owner branch releases the parked run-queue slot; the reclaim exists to reap runs terminated while parked. Do not break this.
@@ -52,17 +52,18 @@ A human-in-the-loop approval that a person takes longer than 13 hours to give (o
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/agent..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/agent" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/agent" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/agent" run lint:eslint` | exit 0 |
+| Purpose    | Command                                         | Expected on success |
+| ---------- | ----------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                  | exit 0              |
+| Build deps | `pnpm --filter "@lunora/agent..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/agent" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/agent" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/agent" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope** (the only files you should modify):
+
 - `packages/agent/src/component.ts`
 - `packages/agent/src/agent-loop.ts`
 - `packages/agent/src/types.ts` (only if adding the timeout option here)
@@ -70,6 +71,7 @@ A human-in-the-loop approval that a person takes longer than 13 hours to give (o
 - `api-snapshots/agent.api.md` (only if the public option is added — via `pnpm run api:update`)
 
 **Out of scope**:
+
 - `packages/workflow/` — the `waitForEvent` host contract already supports `timeout`; do not change it.
 - The run-queue dequeue/parking machinery (`run-queue.ts`) and `agentCompleteRun`'s slot release.
 - The MCP surface.
@@ -84,10 +86,11 @@ A human-in-the-loop approval that a person takes longer than 13 hours to give (o
 ### Step 1: Exclude `awaiting_input` from the abandoned reclaim
 
 In `component.ts`, change the `abandoned` computation so a thread whose `status` is `"awaiting_input"` is **not** treated as abandoned at 13h. Two acceptable shapes — pick the first unless you find a reason not to:
+
 1. `const abandoned = existing["status"] !== "awaiting_input" && now - updatedAt > ABANDONED_RUN_MS;`
 2. A separate, much longer `ABANDONED_APPROVAL_MS` horizon for `awaiting_input` threads (e.g. 14 days, chosen to exceed any plausible approval timeout from Step 2).
 
-Prefer shape 2 only if Step 2's timeout is configurable beyond 13h with no upper bound — an `awaiting_input` thread must never outlive its ability to be reclaimed *eventually* (a workflow instance can die without ever timing out its wait). If you use shape 1, note in the commit body that Step 2's timeout is what ultimately frees the thread. Update the comment block at `:363-368` and the reclaim comment so the two no longer contradict each other.
+Prefer shape 2 only if Step 2's timeout is configurable beyond 13h with no upper bound — an `awaiting_input` thread must never outlive its ability to be reclaimed _eventually_ (a workflow instance can die without ever timing out its wait). If you use shape 1, note in the commit body that Step 2's timeout is what ultimately frees the thread. Update the comment block at `:363-368` and the reclaim comment so the two no longer contradict each other.
 
 **Verify**: `pnpm --filter "@lunora/agent" run test` → existing `component.test.ts` concurrency/reclaim tests still pass.
 
@@ -96,6 +99,7 @@ Prefer shape 2 only if Step 2's timeout is configurable beyond 13h with no upper
 In `agent-loop.ts`, pass a `timeout` to the `waitForEvent` call. Default: `"3 days"`. Make it configurable — add an optional `approvalTimeout?: number | string` to the agent definition's tool-loop options (find where `needsApproval` tools are configured — `packages/agent/src/types.ts` — and place the option at the level that reaches `TurnContext`; if threading it to `awaitApproval` requires touching more than `types.ts` + the context assembly + `agent-loop.ts`, STOP and report the actual thread-through path first).
 
 When the wait times out (Cloudflare Workflows rejects the `waitForEvent` promise on timeout — verify how the host surfaces it by reading `packages/workflow/src/wait-for-event.ts` and its tests), catch that specific timeout rejection and:
+
 1. `persist` a terminal marker updating the approval row: `status: "rejected"`, content `"Approval timed out."` (reuse the same `messageKey` `${instanceId}:approval:${call.id}` so the row is patched, not duplicated — verify `persist`'s upsert semantics by reading it first).
 2. Return `{ decision: "rejected", note: "approval timed out" }` so the loop proceeds down the existing rejection path.
 

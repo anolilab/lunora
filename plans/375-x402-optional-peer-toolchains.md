@@ -27,62 +27,64 @@
 ## Current state
 
 - `packages/x402/package.json:68-102` (verbatim):
-  ```json
-  "dependencies": {
-      "@lunora/errors": "1.0.0-alpha.22",
-      "@solana/kit": "catalog:web3",
-      "@x402/core": "catalog:web3",
-      "@x402/evm": "catalog:web3",
-      "@x402/fetch": "catalog:web3",
-      "@x402/svm": "catalog:web3",
-      "viem": "catalog:web3"
-  },
-  "devDependencies": { ... "@coinbase/cdp-sdk": "catalog:web3", "@coinbase/x402": "catalog:web3", ... },
-  "peerDependencies": {
-      "@coinbase/cdp-sdk": ">=1.0.0",
-      "@coinbase/x402": ">=2.0.0"
-  },
-  "peerDependenciesMeta": {
-      "@coinbase/cdp-sdk": { "optional": true },
-      "@coinbase/x402": { "optional": true }
-  }
-  ```
+    ```json
+    "dependencies": {
+        "@lunora/errors": "1.0.0-alpha.22",
+        "@solana/kit": "catalog:web3",
+        "@x402/core": "catalog:web3",
+        "@x402/evm": "catalog:web3",
+        "@x402/fetch": "catalog:web3",
+        "@x402/svm": "catalog:web3",
+        "viem": "catalog:web3"
+    },
+    "devDependencies": { ... "@coinbase/cdp-sdk": "catalog:web3", "@coinbase/x402": "catalog:web3", ... },
+    "peerDependencies": {
+        "@coinbase/cdp-sdk": ">=1.0.0",
+        "@coinbase/x402": ">=2.0.0"
+    },
+    "peerDependenciesMeta": {
+        "@coinbase/cdp-sdk": { "optional": true },
+        "@coinbase/x402": { "optional": true }
+    }
+    ```
 - Every EVM/SVM import site (complete list, verified by grep):
-  - Type-only (safe under optional peers — erased at compile): `src/config.ts:13-14`, `src/pay/wallet.ts:26-28` (`viem/accounts` type included).
-  - Dynamic runtime imports: `src/charge/resource-server.ts:28` (`@x402/evm/exact/server`), `:32` (`@x402/svm/exact/server`); `src/pay/wallet.ts:122` (`viem/accounts`), `:137` (`@solana/kit`), `:218` (`@x402/evm/exact/client`), `:222` (`@x402/svm/exact/client`).
+    - Type-only (safe under optional peers — erased at compile): `src/config.ts:13-14`, `src/pay/wallet.ts:26-28` (`viem/accounts` type included).
+    - Dynamic runtime imports: `src/charge/resource-server.ts:28` (`@x402/evm/exact/server`), `:32` (`@x402/svm/exact/server`); `src/pay/wallet.ts:122` (`viem/accounts`), `:137` (`@solana/kit`), `:218` (`@x402/evm/exact/client`), `:222` (`@x402/svm/exact/client`).
 - The error pattern to copy — `src/pay/wallet.ts:80-87`:
-  ```ts
-  try {
-      cdpModule = await import("@coinbase/cdp-sdk");
-  } catch {
-      throw new LunoraError(
-          "ENV_INVALID",
-          'x402 pay: CDP-managed custody needs the optional @coinbase/cdp-sdk peer — install it, or use "raw-key"/"signer" custody instead.',
-      );
-  }
-  ```
+    ```ts
+    try {
+        cdpModule = await import("@coinbase/cdp-sdk");
+    } catch {
+        throw new LunoraError(
+            "ENV_INVALID",
+            'x402 pay: CDP-managed custody needs the optional @coinbase/cdp-sdk peer — install it, or use "raw-key"/"signer" custody instead.',
+        );
+    }
+    ```
 - `@x402/core` and `@x402/fetch` stay hard deps — they are the protocol core, imported unconditionally.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/x402..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/x402" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/x402" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/x402" run lint:eslint` | exit 0 |
-| Manifest order | `pnpm run lint:package-json` | exit 0 |
+| Purpose        | Command                                        | Expected on success |
+| -------------- | ---------------------------------------------- | ------------------- |
+| Install        | `pnpm install`                                 | exit 0              |
+| Build deps     | `pnpm --filter "@lunora/x402..." run build`    | exit 0              |
+| Tests          | `pnpm --filter "@lunora/x402" run test`        | all pass            |
+| Typecheck      | `pnpm --filter "@lunora/x402" run lint:types`  | exit 0              |
+| Lint           | `pnpm --filter "@lunora/x402" run lint:eslint` | exit 0              |
+| Manifest order | `pnpm run lint:package-json`                   | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/x402/package.json`
 - `packages/x402/src/charge/resource-server.ts`
 - `packages/x402/src/pay/wallet.ts`
 - `packages/x402/__tests__/resource-server.test.ts`, `packages/x402/__tests__/pay-wallet.test.ts` (error-path tests, only if mocking an absent module is feasible with the file's existing mock style — see Step 4)
 
 **Out of scope**:
+
 - `src/config.ts` — type-only imports are erased; no change.
 - `@x402/core` / `@x402/fetch` — stay hard deps.
 - `pnpm-workspace.yaml` catalogs — versions already live in `catalog:web3`; peer RANGES in package.json must be real semver ranges (see the gotcha below), so read the catalog to pick them.

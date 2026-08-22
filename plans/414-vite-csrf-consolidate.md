@@ -31,17 +31,18 @@
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/vite..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/config" run test && pnpm --filter "@lunora/vite" run test` | all pass |
-| Typecheck | both packages `run lint:types` | exit 0 |
-| API snapshot | `pnpm run build:packages && pnpm run api:check` | exit 0 (`api:update` after fresh build for the new export) |
+| Purpose      | Command                                                                            | Expected on success                                        |
+| ------------ | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Install      | `pnpm install`                                                                     | exit 0                                                     |
+| Build deps   | `pnpm --filter "@lunora/vite..." run build`                                        | exit 0                                                     |
+| Tests        | `pnpm --filter "@lunora/config" run test && pnpm --filter "@lunora/vite" run test` | all pass                                                   |
+| Typecheck    | both packages `run lint:types`                                                     | exit 0                                                     |
+| API snapshot | `pnpm run build:packages && pnpm run api:check`                                    | exit 0 (`api:update` after fresh build for the new export) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/config/src/studio-host/serve-json-handler.ts` (export `csrfRejectionReason`; keep `originRejectionReason` private unless the Vite call sites genuinely need it separately — read them; the goal is ONE exported gate)
 - `packages/config/src/studio-host/index.ts` (re-export)
 - `packages/vite/src/studio-plugin.ts` (delete the two local copies, import the shared one; keep the belt-and-braces double invocation — middleware calls it before `serveJsonHandler` deliberately, note that in a comment)
@@ -49,6 +50,7 @@
 - `api-snapshots/config.api.md` via `pnpm run api:update`
 
 **Out of scope**:
+
 - Any behaviour change to the gate itself. This is a pure consolidation; both hosts must answer identically before and after.
 - `transport-guard.ts`, the WS upgrade path.
 

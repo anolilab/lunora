@@ -24,58 +24,60 @@
 ## Current state
 
 - `packages/observability/src/function-metrics.ts:471-482` — after the bucket upsert:
-  ```ts
-  // Bounded retention: keep only the most recent buckets for this path.
-  runSql(
-      sql,
-      `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"
-       WHERE path = ?
-         AND bucket_ms <= (
-          SELECT MAX(bucket_ms) - ? FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ?
-         )`,
-      ...
-  ```
-  Unconditional, every call.
+    ```ts
+    // Bounded retention: keep only the most recent buckets for this path.
+    runSql(
+        sql,
+        `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"
+         WHERE path = ?
+           AND bucket_ms <= (
+            SELECT MAX(bucket_ms) - ? FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ?
+           )`,
+        ...
+    ```
+    Unconditional, every call.
 - `packages/observability/src/auth-metrics.ts:176-184` — same shape (`DELETE … WHERE bucket_ms <= (SELECT MAX(bucket_ms) - ? …)`), every recorded attempt.
 - The established pattern — `packages/observability/src/query-metrics.ts:162-173`:
-  ```ts
-  /**
-   * The bucket most recently pruned PER SHARD, so the prune runs once per window
-   * instead of once per statement.
-   *
-   * Keyed by the storage handle rather than a module-level scalar: workerd hosts
-   * several Durable Object instances of the same class in one isolate ... A `WeakMap`
-   * means an evicted DO's entry is collected with it.
-   */
-  const lastPrunedBucket = new WeakMap<object, number>();
-  ```
-  used at `:299-304`:
-  ```ts
-  if (lastPrunedBucket.get(sql) !== bucket) {
-      lastPrunedBucket.set(sql, bucket);
-      pruneQueryBuckets(sql, now);
-  }
-  ```
+    ```ts
+    /**
+     * The bucket most recently pruned PER SHARD, so the prune runs once per window
+     * instead of once per statement.
+     *
+     * Keyed by the storage handle rather than a module-level scalar: workerd hosts
+     * several Durable Object instances of the same class in one isolate ... A `WeakMap`
+     * means an evicted DO's entry is collected with it.
+     */
+    const lastPrunedBucket = new WeakMap<object, number>();
+    ```
+    used at `:299-304`:
+    ```ts
+    if (lastPrunedBucket.get(sql) !== bucket) {
+        lastPrunedBucket.set(sql, bucket);
+        pruneQueryBuckets(sql, now);
+    }
+    ```
 - `packages/observability/src/metric-history.ts` (~`:246`, `:304`) applies the same marker pattern.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/observability..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/observability" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/observability" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/observability" run lint:eslint` | exit 0 |
+| Purpose    | Command                                                 | Expected on success |
+| ---------- | ------------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                          | exit 0              |
+| Build deps | `pnpm --filter "@lunora/observability..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/observability" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/observability" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/observability" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/observability/src/function-metrics.ts`
 - `packages/observability/src/auth-metrics.ts`
 - The corresponding test files in `packages/observability/__tests__/`
 
 **Out of scope**:
+
 - `query-metrics.ts` / `metric-history.ts` — already correct; do not refactor them into a shared helper unless the copy is truly identical (a six-line local copy per file is acceptable and matches the existing two files' shape; a shared module is fine ONLY if it stays inside `src/` and changes no public export).
 - Retention constants and bucket sizes.
 
@@ -117,7 +119,7 @@ In the existing function-metrics and auth-metrics test files (find them: `ls pac
 ## STOP conditions
 
 - The excerpts don't match the live code.
-- The existing tests assert a prune happens on *every* record (they would be encoding the old behavior) and rewriting them changes more than the prune-count expectation.
+- The existing tests assert a prune happens on _every_ record (they would be encoding the old behavior) and rewriting them changes more than the prune-count expectation.
 
 ## Maintenance notes
 

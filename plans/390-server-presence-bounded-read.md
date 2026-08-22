@@ -24,16 +24,16 @@
 ## Current state
 
 - `packages/server/src/presence.ts:262-268` — the unbounded read:
-  ```ts
-  const listPresent = query.input({ roomId: v.string() }).query(async ({ args, ctx: context }): Promise<PresenceMember[]> => {
-      const cutoff = Date.now() - ttlMs;
+    ```ts
+    const listPresent = query.input({ roomId: v.string() }).query(async ({ args, ctx: context }): Promise<PresenceMember[]> => {
+        const cutoff = Date.now() - ttlMs;
 
-      const rows = await context.db
-          .query(PRESENCE_TABLE)
-          .withIndex("byRoom", (q) => q.eq("roomId", args.roomId))
-          .collect();
-  ```
-  followed by a JS filter on `lastSeen > cutoff` and a newest-first `toSorted`.
+        const rows = await context.db
+            .query(PRESENCE_TABLE)
+            .withIndex("byRoom", (q) => q.eq("roomId", args.roomId))
+            .collect();
+    ```
+    followed by a JS filter on `lastSeen > cutoff` and a newest-first `toSorted`.
 - `packages/server/src/presence.ts:186-188` — indexes: `byRoomSession: ["roomId", "sessionId"]` and `byRoom: ["roomId"]`. No index covers `(roomId, lastSeen)`.
 - `packages/server/src/presence.ts:19-26` — module doc conceding the read filter "only HIDES stale rows; it never deletes them".
 - `packages/server/src/presence.ts:255-258` — heartbeat patches/inserts a row per beat (a mutation — it may delete too).
@@ -43,23 +43,25 @@
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/server..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/server" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/server" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/server" run lint:eslint` | exit 0 |
-| API snapshot (if `DefinePresenceOptions` grows) | `pnpm run build:packages && pnpm run api:update` | snapshot updated |
+| Purpose                                         | Command                                          | Expected on success |
+| ----------------------------------------------- | ------------------------------------------------ | ------------------- |
+| Install                                         | `pnpm install`                                   | exit 0              |
+| Build deps                                      | `pnpm --filter "@lunora/server..." run build`    | exit 0              |
+| Tests                                           | `pnpm --filter "@lunora/server" run test`        | all pass            |
+| Typecheck                                       | `pnpm --filter "@lunora/server" run lint:types`  | exit 0              |
+| Lint                                            | `pnpm --filter "@lunora/server" run lint:eslint` | exit 0              |
+| API snapshot (if `DefinePresenceOptions` grows) | `pnpm run build:packages && pnpm run api:update` | snapshot updated    |
 
 ## Scope
 
 **In scope**:
+
 - `packages/server/src/presence.ts`
 - `packages/server/__tests__/presence.test.ts` (find the actual presence test file: `ls packages/server/__tests__ | grep -i presence`)
 - `api-snapshots/server.api.md` via `pnpm run api:update` (new option = surface change)
 
 **Out of scope**:
+
 - `@lunora/react`'s `usePresence` — truncation awareness for capped rooms is an explicitly deferred follow-up; the cap default below is high enough that current consumers see no change.
 - `@lunora/do` subscription machinery — the live re-run behaviour is by design.
 - `@lunora/scheduler` — do NOT add a scheduler dependency to wire `sweep` to a cron; the opportunistic reap below is the dependency-free fix.
@@ -119,6 +121,7 @@ Keep `sweep` as-is for bulk cleanup; update the module doc (lines 19-26): the sw
 ### Step 4: Tests + API snapshot
 
 Add tests (model on the existing presence tests):
+
 1. Rooms with more than `maxMembers` rows: `listPresent` returns the newest ones and never more than the cap.
 2. Heartbeating a room deletes rows older than the reap cutoff, and does NOT delete a row inside the `disconnectGraceMs` window.
 

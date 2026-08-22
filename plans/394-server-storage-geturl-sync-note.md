@@ -31,21 +31,23 @@ The `storageRules` wrapper in `packages/server/src/storage/middleware.ts` is a s
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/server..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/server" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/server" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/server" run lint:eslint` | exit 0 |
+| Purpose    | Command                                          | Expected on success |
+| ---------- | ------------------------------------------------ | ------------------- |
+| Install    | `pnpm install`                                   | exit 0              |
+| Build deps | `pnpm --filter "@lunora/server..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/server" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/server" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/server" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/server/src/storage/middleware.ts` (comment only — no behaviour change)
 - The storage-rules test file (one new test)
 
 **Out of scope**:
+
 - Changing `getUrl` to async, changing the wrapper's types, or any behaviour change — this plan documents and pins, nothing more.
 
 ## Git workflow

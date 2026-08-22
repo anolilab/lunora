@@ -22,53 +22,55 @@
 
 ## Why this matters
 
-The `lunorash` umbrella's subpath-parity test only checks packages someone remembered to type into a ten-entry literal array. Subpath-level exclusions get a reasoned `OPT_OUT` map, but there is no package-level counterpart — so `@lunora/payment`, `@lunora/x402`, `@lunora/mail`, and ~40 other packages are simply absent from the umbrella with no assertion and no recorded rationale. A reader cannot tell "deliberate heavy add-on, installed directly" from "someone forgot", and the next package that *should* join the umbrella will be silently missing too. Deriving the list from `packages/*` on disk and requiring every package to be either covered or opted out with one sentence closes the hole. Test-only change.
+The `lunorash` umbrella's subpath-parity test only checks packages someone remembered to type into a ten-entry literal array. Subpath-level exclusions get a reasoned `OPT_OUT` map, but there is no package-level counterpart — so `@lunora/payment`, `@lunora/x402`, `@lunora/mail`, and ~40 other packages are simply absent from the umbrella with no assertion and no recorded rationale. A reader cannot tell "deliberate heavy add-on, installed directly" from "someone forgot", and the next package that _should_ join the umbrella will be silently missing too. Deriving the list from `packages/*` on disk and requiring every package to be either covered or opted out with one sentence closes the hole. Test-only change.
 
 ## Current state
 
 - `packages/lunora/__tests__/re-exports.test.ts:27-38`:
-  ```ts
-  const UPSTREAM_PACKAGE_DIRS: ReadonlyArray<string> = [
-      "server",
-      "values",
-      "errors",
-      "runtime",
-      "do",
-      "platform",
-      "observability",
-      "client",
-      "flags",
-      "ratelimit",
-  ];
-  ```
+    ```ts
+    const UPSTREAM_PACKAGE_DIRS: ReadonlyArray<string> = [
+        "server",
+        "values",
+        "errors",
+        "runtime",
+        "do",
+        "platform",
+        "observability",
+        "client",
+        "flags",
+        "ratelimit",
+    ];
+    ```
 - The file already reads manifests from disk relative to itself (`:7-8, :17-18`):
-  ```ts
-  const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-  const monorepoPackagesRoot = join(packageRoot, "..");
-  const readManifest = (packageDirName: string): UpstreamManifest =>
-      JSON.parse(readFileSync(join(monorepoPackagesRoot, packageDirName, "package.json"), "utf8")) as UpstreamManifest;
-  ```
-  It imports `readFileSync` from `node:fs`; `readdirSync` comes from the same module.
+    ```ts
+    const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const monorepoPackagesRoot = join(packageRoot, "..");
+    const readManifest = (packageDirName: string): UpstreamManifest =>
+        JSON.parse(readFileSync(join(monorepoPackagesRoot, packageDirName, "package.json"), "utf8")) as UpstreamManifest;
+    ```
+    It imports `readFileSync` from `node:fs`; `readdirSync` comes from the same module.
 - The subpath-level precedent — `OPT_OUT` map (`:76-89` region) with a docstring: "Add a new opt-out here (with a reason) rather than letting a future upstream subpath silently fall through the umbrella."
 - The 56 dirs under `packages/` include the umbrella itself (`lunora`) and non-`@lunora/*`-published dirs; each dir's manifest `name` tells you which are `@lunora/*`.
 - Not-published/internal packages that must be opted out with an "internal, not published" reason: check each manifest for `"private": true` (e.g. auth-ui, search-core, dispatch are documented internal — verify by reading their manifests, don't assume).
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "lunorash..." run build` | exit 0 |
-| Tests     | `pnpm --filter "lunorash" run test` | all pass |
-| Typecheck | `pnpm --filter "lunorash" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "lunorash" run lint:eslint` | exit 0 |
+| Purpose    | Command                                    | Expected on success |
+| ---------- | ------------------------------------------ | ------------------- |
+| Install    | `pnpm install`                             | exit 0              |
+| Build deps | `pnpm --filter "lunorash..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "lunorash" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "lunorash" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "lunorash" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/lunora/__tests__/re-exports.test.ts`
 
 **Out of scope**:
+
 - `packages/lunora/package.json` / `src/` — do NOT add re-exports; this plan records the current surface honestly, it does not grow it.
 - Every upstream package.
 - The existing `OPT_OUT` / `ALIAS_SUFFIX` subpath maps — unchanged.
@@ -122,6 +124,7 @@ Import `readdirSync` alongside `readFileSync`.
 ### Step 2: Fill `PACKAGE_OPT_OUT` with honest reasons
 
 One entry per unaccounted dir. Reason guidelines (write one sentence each, grounded — read the package's role in `CLAUDE.md`'s package table if unsure):
+
 - The umbrella's stated scope is "the base packages" (see `CLAUDE.md`: server + subpaths, values, runtime, do, client — plus the ones already listed). Everything else is an add-on/adapter/tool by that decision: e.g. `payment`/`x402`: "optional add-on with heavy provider/chain deps — installed directly"; framework adapters (`react`, `vue`, `solid`, `svelte`, `angular`, `astro`, `nuxt`, `react-native`, `db`, `replica`): "framework adapter — installed per framework, not part of the base surface"; `cli`/`vite`/`codegen`/`studio`/`advisor`/`config`/`testing`/`seed`: "tooling — dev-time, not a runtime re-export"; internal/not-published (`auth-ui`, `search-core`, `dispatch`, `sql-store`, and any manifest with `"private": true` — verify each): "internal, not published"; platform hosts (`platform-cloudflare`, `platform-node`, `platform-celld`, `shard-engine`, `d1`): "host/engine layer — consumed by @lunora/do or experimental, never app code"; the rest of the Cloudflare service add-ons (`storage`, `scheduler`, `queue`, `workflow`, `container`, `bindings`, `browser`, `hyperdrive`, `mail`, `notify`, `ai`, `agent`, `mcp`, `auth`, `cloudflare-access`, `fingerprint`, `errors`… note `errors` IS in the list already): "add-on — installed directly when used".
 - Do not guess for a package you can't classify — its reason can be "not yet decided; absent since the umbrella's introduction", which is still an honest record.
 

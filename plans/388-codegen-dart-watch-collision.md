@@ -24,39 +24,41 @@
 ## Current state
 
 - `packages/codegen/src/sdk/spec.ts:623-645` — the guard:
-  ```ts
-  const assertMethodsGeneratable = (namespace: SdkNamespace): void => {
-      // Both a method and its subscription land in this one map: a namespace with a
-      // query `list` and a sibling `subscribeList` otherwise passes validation and
-      // then emits `SubscribeList` twice — a compile error in Go, a silent shadow
-      // in Python.
-      const seenMethod = new Map<string, string>();
+    ```ts
+    const assertMethodsGeneratable = (namespace: SdkNamespace): void => {
+        // Both a method and its subscription land in this one map: a namespace with a
+        // query `list` and a sibling `subscribeList` otherwise passes validation and
+        // then emits `SubscribeList` twice — a compile error in Go, a silent shadow
+        // in Python.
+        const seenMethod = new Map<string, string>();
 
-      for (const method of namespace.methods) {
-          const memberBase = toPascalCase(method.functionName);
-          ...
-          const names = method.verb === "query" ? [memberBase, `Subscribe${memberBase}`] : [memberBase];
-  ```
+        for (const method of namespace.methods) {
+            const memberBase = toPascalCase(method.functionName);
+            ...
+            const names = method.verb === "query" ? [memberBase, `Subscribe${memberBase}`] : [memberBase];
+    ```
 - `packages/codegen/src/sdk/targets/dart.ts:366-389` — `renderSubscribe` emits both `subscribe${toPascalCase(method.functionName)}` and `watch${toPascalCase(method.functionName)}` per query. Dart is the only target with a second prefix (`grep -ln "watch" packages/codegen/src/sdk/targets/*.ts` → only `dart.ts`).
 - `packages/codegen/__tests__/sdk-dart.test.ts:239-241` asserts `watchList(` is emitted; no test covers the collision.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/codegen..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/codegen" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/codegen" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/codegen" run lint:eslint` | exit 0 |
+| Purpose    | Command                                           | Expected on success |
+| ---------- | ------------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                    | exit 0              |
+| Build deps | `pnpm --filter "@lunora/codegen..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/codegen" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/codegen" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/codegen" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/codegen/src/sdk/spec.ts` (the `names` array + the error message)
 - `packages/codegen/__tests__/sdk-spec.test.ts` or wherever `assertMethodsGeneratable`'s existing collision tests live (find with `grep -rln "SubscribeList\|assertGeneratable\|already used" packages/codegen/__tests__/`) — add the negative test there
 
 **Out of scope**:
+
 - `packages/codegen/src/sdk/targets/dart.ts` — the emitter is correct; only the guard is incomplete.
 - Golden fixtures — the guard change emits nothing new; fixtures must stay byte-identical.
 

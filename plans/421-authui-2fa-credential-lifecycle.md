@@ -28,11 +28,11 @@ The 2FA flow keeps the password typed for **enable** in shared core state across
 All excerpts from committed HEAD:
 
 - `packages/auth-ui/src/core/two-factor-setup.ts:70-73` — `enable` success:
-  ```ts
-  const { data } = assertOk(await context.authClient.twoFactor.enable({ password: state.password.value }));
-  store.update({ backupCodes: data?.backupCodes ?? [], status: "idle", step: "verify", totpUri: data?.totpURI });
-  ```
-  `password` is left untouched.
+    ```ts
+    const { data } = assertOk(await context.authClient.twoFactor.enable({ password: state.password.value }));
+    store.update({ backupCodes: data?.backupCodes ?? [], status: "idle", step: "verify", totpUri: data?.totpURI });
+    ```
+    `password` is left untouched.
 - `two-factor-setup.ts:91-93` — `verify` success: `store.update({ status: "success", step: "enabled" });` — again `password`/`code` untouched, and `backupCodes`/`totpUri` remain in state.
 - `two-factor-setup.ts:99-116` — `disable`: `required(state.password.value, …)` then `twoFactor.disable({ password: state.password.value })`; success does `store.set(initialState())` (the only full reset in the flow).
 - `packages/auth-ui/src/react/two-factor-setup-card.tsx:47-63` — the `step === "enabled"` branch binds the disable form's password `Field` to `state.password`.
@@ -41,24 +41,26 @@ All excerpts from committed HEAD:
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/auth-ui" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/auth-ui" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/auth-ui" run lint:eslint` | exit 0 |
-| Registry sync | `pnpm --filter "@lunora/auth-ui" run sync:registry` | exit 0 |
-| Registry gate | `pnpm run lint:registry:sync` | exit 0 |
-| API gate | `pnpm run build:packages && pnpm run api:check` | exit 0 (`api:update` only for intended surface changes) |
+| Purpose       | Command                                             | Expected on success                                     |
+| ------------- | --------------------------------------------------- | ------------------------------------------------------- |
+| Install       | `pnpm install`                                      | exit 0                                                  |
+| Tests         | `pnpm --filter "@lunora/auth-ui" run test`          | all pass                                                |
+| Typecheck     | `pnpm --filter "@lunora/auth-ui" run lint:types`    | exit 0                                                  |
+| Lint          | `pnpm --filter "@lunora/auth-ui" run lint:eslint`   | exit 0                                                  |
+| Registry sync | `pnpm --filter "@lunora/auth-ui" run sync:registry` | exit 0                                                  |
+| Registry gate | `pnpm run lint:registry:sync`                       | exit 0                                                  |
+| API gate      | `pnpm run build:packages && pnpm run api:check`     | exit 0 (`api:update` only for intended surface changes) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/auth-ui/src/core/two-factor-setup.ts` (the fix — core only).
 - Its core test file (find: `ls packages/auth-ui/__tests__ | grep -i two-factor`).
 - `registry/auth-ui-*/` via `sync:registry` only.
 
 **Out of scope**:
+
 - Port files (`react/`, `svelte/`, …) — they bind whatever core holds; clearing the field in core fixes every port at once. Do NOT add per-port fields.
 - A QR encoder, "I've saved these" acknowledgement UI, or any new UI surface — the minimal state fix below keeps codes visible without new components; anything more is a product decision, deferred.
 
@@ -83,6 +85,7 @@ Move `backupCodes` rendering out of the verify-only conditional in core's contra
 ### Step 3: Tests
 
 In the two-factor core test file (model on its existing cases):
+
 1. After a successful `enable`, `state.password.value === ""`.
 2. After a successful `verify`, `state.code.value === ""` and `state.totpUri === undefined`, `state.backupCodes` still populated.
 3. `disable()` immediately after enable+verify fails validation (password required) rather than calling the client — assert the client's `disable` was NOT invoked.

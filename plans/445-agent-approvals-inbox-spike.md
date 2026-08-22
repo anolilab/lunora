@@ -32,17 +32,19 @@ The HITL surface has a resolve verb with no matching list verb. `agentResolveApp
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
+| Purpose                      | Command                                  | Expected on success |
+| ---------------------------- | ---------------------------------------- | ------------------- |
+| Install                      | `pnpm install`                           | exit 0              |
 | Read-only test run (context) | `pnpm --filter "@lunora/agent" run test` | all pass (baseline) |
 
 ## Scope
 
 **In scope** (files you may create):
+
 - `plans/445-agent-approvals-inbox-design.md` (the deliverable)
 
 **Out of scope**:
+
 - Any `src/` modification, any schema change, any MCP tool implementation.
 
 ## Git workflow

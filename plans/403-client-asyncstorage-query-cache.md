@@ -25,9 +25,9 @@ A browser app renders from the durable query cache instantly after restart (Inde
 ## Current state
 
 - `packages/client/src/query-cache.ts`:
-  - `:27-70` — `createInMemoryQueryCache`: `Map`-backed, `clone` via `structuredClone`, `evict()` drops oldest-by-`ts` until under `maxEntries` (`DEFAULT_MAX_ENTRIES`) — this is the eviction semantics to replicate.
-  - `:115` — `createIndexedDbQueryCache` — the durable sibling (its `ts`-index eviction is at `:137-165`).
-  - `:193-207` — `resolveQueryCacheAdapter(option)`: explicit adapter → as-is; `false` → off; default → IndexedDB probe, else `undefined`.
+    - `:27-70` — `createInMemoryQueryCache`: `Map`-backed, `clone` via `structuredClone`, `evict()` drops oldest-by-`ts` until under `maxEntries` (`DEFAULT_MAX_ENTRIES`) — this is the eviction semantics to replicate.
+    - `:115` — `createIndexedDbQueryCache` — the durable sibling (its `ts`-index eviction is at `:137-165`).
+    - `:193-207` — `resolveQueryCacheAdapter(option)`: explicit adapter → as-is; `false` → off; default → IndexedDB probe, else `undefined`.
 - `packages/client/src/async-storage-persistence.ts:9-13` — `AsyncStorageLike` (`getItem`/`setItem`/`removeItem`, promise-based); `:35-93` — the serialized-chain read-modify-write pattern over a single key (`serialize` funnels every op through one promise chain; corrupt JSON → start clean). This is the template.
 - `packages/react-native/src/create-lunora-client.ts:95-100` — auto-wires `persistence: rest.persistence ?? (storage ? createAsyncStoragePersistence({ storage }) : undefined)`; no `queryCache` wiring.
 - `packages/client/src/types.ts:426` — `queryCache?: QueryCacheAdapter | false;` is the client option.
@@ -35,17 +35,18 @@ A browser app renders from the durable query cache instantly after restart (Inde
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build     | `pnpm --filter "@lunora/client..." run build && pnpm --filter "@lunora/react-native..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/client" run test && pnpm --filter "@lunora/react-native" run test` | all pass |
-| Typecheck | both packages `run lint:types` | exit 0 |
-| API snapshot | `pnpm run build:packages && pnpm run api:update` | client (+ react-native) snapshots updated |
+| Purpose      | Command                                                                                            | Expected on success                       |
+| ------------ | -------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| Install      | `pnpm install`                                                                                     | exit 0                                    |
+| Build        | `pnpm --filter "@lunora/client..." run build && pnpm --filter "@lunora/react-native..." run build` | exit 0                                    |
+| Tests        | `pnpm --filter "@lunora/client" run test && pnpm --filter "@lunora/react-native" run test`         | all pass                                  |
+| Typecheck    | both packages `run lint:types`                                                                     | exit 0                                    |
+| API snapshot | `pnpm run build:packages && pnpm run api:update`                                                   | client (+ react-native) snapshots updated |
 
 ## Scope
 
 **In scope**:
+
 - `packages/client/src/async-storage-query-cache.ts` (new file)
 - `packages/client/src/index.ts` (export the factory + options type)
 - `packages/react-native/src/create-lunora-client.ts` (auto-wire)
@@ -53,6 +54,7 @@ A browser app renders from the durable query cache instantly after restart (Inde
 - `api-snapshots/client.api.md`, `api-snapshots/react-native.api.md` (via `api:update`)
 
 **Out of scope**:
+
 - `query-cache.ts`'s existing adapters and `resolveQueryCacheAdapter` (no RN detection there — the wiring lives in the RN factory).
 - Persistence (write outbox) code.
 

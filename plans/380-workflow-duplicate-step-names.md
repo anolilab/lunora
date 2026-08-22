@@ -27,47 +27,48 @@ Deliberately NOT auto-suffixing names: that changes step identity for in-flight 
 ## Current state
 
 - `packages/workflow/src/run-step.ts:137`:
-  ```ts
-  return config === undefined ? deps.step.do(step.name, callback, rollbackOptions) : deps.step.do(step.name, config, callback, rollbackOptions);
-  ```
+    ```ts
+    return config === undefined ? deps.step.do(step.name, callback, rollbackOptions) : deps.step.do(step.name, config, callback, rollbackOptions);
+    ```
 - `packages/workflow/src/types.ts:274-277`:
-  ```ts
-  /** Per-call options for {@link WorkflowRunStepFunction}. */
-  export interface RunStepOptions {
-      /** Override the step's declared durability config for this call. */
-      config?: WorkflowStepConfigLike;
-  }
-  ```
-  (Check how `RunStepOptions` reaches `createRunStep`'s returned function — read `run-step.ts` top-to-bottom first.)
+    ```ts
+    /** Per-call options for {@link WorkflowRunStepFunction}. */
+    export interface RunStepOptions {
+        /** Override the step's declared durability config for this call. */
+        config?: WorkflowStepConfigLike;
+    }
+    ```
+    (Check how `RunStepOptions` reaches `createRunStep`'s returned function — read `run-step.ts` top-to-bottom first.)
 - `packages/workflow/src/wait-for-event.ts:55`:
-  ```ts
-  const received = await deps.step.waitForEvent(options?.name ?? `event:${event.type}`, { timeout: options?.timeout, type: event.type });
-  ```
-  `WaitForEventOptions` already HAS `name` — only the collision detection is missing there.
+    ```ts
+    const received = await deps.step.waitForEvent(options?.name ?? `event:${event.type}`, { timeout: options?.timeout, type: event.type });
+    ```
+    `WaitForEventOptions` already HAS `name` — only the collision detection is missing there.
 - The exemplar guard — `packages/workflow/src/fan-out.ts:229-244`: a `Set<string>` of seen ids, throwing `NonRetryableError` with a message explaining the memoization hazard.
 - Both factories are built in `packages/workflow/src/run-context.ts:89-92`:
-  ```ts
-  runStep: createRunStep({ env: options.env, log, nonRetryableErrorClass: options.nonRetryableErrorClass, run, step: options.step }),
-  ...
-  waitForEvent: createWaitForEvent({ nonRetryableErrorClass: options.nonRetryableErrorClass, step: options.step }),
-  ```
-  One run context = one workflow invocation, so a Set created here is naturally per-invocation.
+    ```ts
+    runStep: createRunStep({ env: options.env, log, nonRetryableErrorClass: options.nonRetryableErrorClass, run, step: options.step }),
+    ...
+    waitForEvent: createWaitForEvent({ nonRetryableErrorClass: options.nonRetryableErrorClass, step: options.step }),
+    ```
+    One run context = one workflow invocation, so a Set created here is naturally per-invocation.
 - `wait-for-event.ts` uses a `raiseNonRetryable(message, cause, deps.nonRetryableErrorClass)` helper — reuse it / its pattern for the new throws.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/workflow..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/workflow" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/workflow" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/workflow" run lint:eslint` | exit 0 |
-| API gate  | `pnpm run build:packages && pnpm run api:check` | exit 0 (`pnpm run api:update` + commit snapshot for the intentional `RunStepOptions.name` addition) |
+| Purpose    | Command                                            | Expected on success                                                                                 |
+| ---------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Install    | `pnpm install`                                     | exit 0                                                                                              |
+| Build deps | `pnpm --filter "@lunora/workflow..." run build`    | exit 0                                                                                              |
+| Tests      | `pnpm --filter "@lunora/workflow" run test`        | all pass                                                                                            |
+| Typecheck  | `pnpm --filter "@lunora/workflow" run lint:types`  | exit 0                                                                                              |
+| Lint       | `pnpm --filter "@lunora/workflow" run lint:eslint` | exit 0                                                                                              |
+| API gate   | `pnpm run build:packages && pnpm run api:check`    | exit 0 (`pnpm run api:update` + commit snapshot for the intentional `RunStepOptions.name` addition) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/workflow/src/run-step.ts`
 - `packages/workflow/src/wait-for-event.ts`
 - `packages/workflow/src/run-context.ts`
@@ -75,6 +76,7 @@ Deliberately NOT auto-suffixing names: that changes step identity for in-flight 
 - `packages/workflow/__tests__/` (extend existing step/event tests)
 
 **Out of scope**:
+
 - `fan-out.ts` — its branch-id guard already covers the parallel path; its `lunora:` reserved prefixes must keep working (the new tracker must either include them consistently or exclude framework-internal names — pick ONE and document it in a comment).
 - Any auto-suffix/rename scheme — explicitly rejected for in-flight-instance safety.
 
@@ -95,11 +97,13 @@ In `run-context.ts`, create `const usedStepNames = new Set<string>()` per contex
 
 - `types.ts`: add `/** Override the durable step name for this call — required when running one StepDefinition more than once per instance. */ name?: string;` to `RunStepOptions`.
 - `run-step.ts`: resolve `const stepName = options?.name ?? step.name`; before `deps.step.do`, check the tracker:
-  ```ts
-  if (deps.usedStepNames.has(stepName)) { /* raise NonRetryableError, message modeled on fan-out.ts's: name the collision, tell the caller to pass a unique `name` option */ }
-  deps.usedStepNames.add(stepName);
-  ```
-  Reject `options.name` starting with the reserved framework prefix the same way `wait-for-event.ts` rejects reserved event names.
+    ```ts
+    if (deps.usedStepNames.has(stepName)) {
+        /* raise NonRetryableError, message modeled on fan-out.ts's: name the collision, tell the caller to pass a unique `name` option */
+    }
+    deps.usedStepNames.add(stepName);
+    ```
+    Reject `options.name` starting with the reserved framework prefix the same way `wait-for-event.ts` rejects reserved event names.
 - `wait-for-event.ts`: same tracker check on the resolved name (`options?.name ?? `event:${event.type}``).
 
 Replay caveat (read before writing the guard): on a Cloudflare Workflows **replay**, the body re-executes from the top and each `step.do` returns memoized results — the tracker is rebuilt identically, so a legitimate replay never trips the guard; only a genuinely duplicate call within one body execution does. State this in the tracker's docstring.
@@ -109,6 +113,7 @@ Replay caveat (read before writing the guard): on a Cloudflare Workflows **repla
 ### Step 3: Tests
 
 In the existing test files (`packages/workflow/__tests__/define-step.test.ts` for runStep, `events.test.ts` for waitForEvent — follow their harness setup):
+
 1. running the same StepDefinition twice without `name` → throws NonRetryableError naming the step;
 2. running it twice with distinct `name` options → both run, distinct `step.do` names observed by the step double;
 3. two `waitForEvent` on one event type without names → throws; with distinct `name`s → OK;

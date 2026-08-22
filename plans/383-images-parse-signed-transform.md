@@ -25,39 +25,43 @@
 ## Current state
 
 - `packages/bindings/src/images/signed-delivery-url.ts:26-36` — the encoder:
-  ```ts
-  const serializeTransform = (transform: TransformOptions | undefined): string => {
-      if (transform === undefined) { return ""; }
-      return Object.entries(transform)
-          .filter(([, value]) => value !== undefined)
-          .toSorted(([a], [b]) => (a > b ? 1 : 0) - (a < b ? 1 : 0))
-          .map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`)
-          .join("&");
-  };
-  ```
+    ```ts
+    const serializeTransform = (transform: TransformOptions | undefined): string => {
+        if (transform === undefined) {
+            return "";
+        }
+        return Object.entries(transform)
+            .filter(([, value]) => value !== undefined)
+            .toSorted(([a], [b]) => (a > b ? 1 : 0) - (a < b ? 1 : 0))
+            .map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`)
+            .join("&");
+    };
+    ```
 - Same file (~:135-143) — `verifySignedImageUrl`'s result type carries `transform?: string` ("The raw, verified transform string (the `t` query value), when present").
 - `TransformOptions` — read its declaration (grep `TransformOptions` in `packages/bindings/src/images/`) to enumerate value kinds: numbers, strings, booleans, and object-valued keys (e.g. gravity coordinates). The parser's per-key typing comes from that type, not from guessing.
 - Check the barrel `packages/bindings/src/images/index.ts` for the export list; `parseSignedTransform` goes there as a named export.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/bindings..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/bindings" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/bindings" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/bindings" run lint:eslint` | exit 0 |
-| API gate  | `pnpm run build:packages && pnpm run api:check` | exit 0 (`api:update` + commit snapshot for the new export) |
+| Purpose    | Command                                            | Expected on success                                        |
+| ---------- | -------------------------------------------------- | ---------------------------------------------------------- |
+| Install    | `pnpm install`                                     | exit 0                                                     |
+| Build deps | `pnpm --filter "@lunora/bindings..." run build`    | exit 0                                                     |
+| Tests      | `pnpm --filter "@lunora/bindings" run test`        | all pass                                                   |
+| Typecheck  | `pnpm --filter "@lunora/bindings" run lint:types`  | exit 0                                                     |
+| Lint       | `pnpm --filter "@lunora/bindings" run lint:eslint` | exit 0                                                     |
+| API gate   | `pnpm run build:packages && pnpm run api:check`    | exit 0 (`api:update` + commit snapshot for the new export) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/bindings/src/images/signed-delivery-url.ts`
 - `packages/bindings/src/images/index.ts` (export)
 - `packages/bindings/__tests__/images/` (extend the signed-delivery-url test file)
 
 **Out of scope**:
+
 - The signature canonical — the raw string stays what is signed; parsing happens after verification.
 - `serializeTransform` itself — do not change the encoding (existing signed URLs in the wild must keep verifying).
 
@@ -71,6 +75,7 @@
 ### Step 1: Write the exact inverse
 
 `parseSignedTransform(t: string): TransformOptions` in `signed-delivery-url.ts`:
+
 - `""` → `{}`;
 - split on `&`, each part on the FIRST `=` only;
 - per key, coerce by `TransformOptions`' declared type: values that `JSON.parse` cleanly as objects (starts with `{`/`[`) → parsed; `"true"`/`"false"` for boolean keys; numeric strings for number keys (`Number(...)` + `Number.isFinite` check); everything else stays a string;
@@ -87,6 +92,7 @@ Add `transformOptions?: TransformOptions` beside the existing raw `transform` in
 ### Step 3: Tests
 
 In the existing signed-delivery-url test file (`packages/bindings/__tests__/images/`):
+
 - round-trip property: for a representative `TransformOptions` (number + string + boolean + object-valued key), `parseSignedTransform(serializeTransform(x))` deep-equals `x`;
 - `""` → `{}`;
 - value containing `=` (e.g. a string option with base64 padding, if `TransformOptions` has any string key) survives the first-`=` split;

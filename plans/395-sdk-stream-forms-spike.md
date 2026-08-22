@@ -32,17 +32,19 @@ Live queries are the framework's headline capability. The Dart SDK target emits 
 
 ## Commands you will need
 
-| Purpose | Command | Expected on success |
-|---|---|---|
-| Locate per-language subscribe surface | `grep -rn "subscribe" sdks/kotlin/src/ sdks/swift/ sdks/rust/src/ --include="*.kt" --include="*.swift" --include="*.rs" -l` | files listing |
-| Confirm target emitters | `grep -n "subscribe" packages/codegen/src/sdk/targets/*.ts` | one callback form per target |
+| Purpose                               | Command                                                                                                                     | Expected on success          |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Locate per-language subscribe surface | `grep -rn "subscribe" sdks/kotlin/src/ sdks/swift/ sdks/rust/src/ --include="*.kt" --include="*.swift" --include="*.rs" -l` | files listing                |
+| Confirm target emitters               | `grep -n "subscribe" packages/codegen/src/sdk/targets/*.ts`                                                                 | one callback form per target |
 
 ## Scope
 
 **In scope** (deliverable):
+
 - `plans/395-sdk-stream-forms-design.md` — the design doc (create).
 
 **Out of scope**:
+
 - ANY change under `packages/` or `sdks/` — this spike writes one markdown file.
 
 ## Git workflow
@@ -59,6 +61,7 @@ For each of the seven targets, read the emitted subscribe member (`packages/code
 ### Step 2: The design doc
 
 Write `plans/395-sdk-stream-forms-design.md` containing:
+
 1. **The convention**, phrased for `target.ts:29-47`: every target SHOULD emit a stream form per query where the language has a canonical async-stream type; the member name prefix per language; the reserved-name-list entries each adds (`Watch`/`watch_`/etc.) — extending `assertMethodsGeneratable` in the same change is mandatory (cite plan 388).
 2. **Per-language table**: stream type, member name, cancellation semantics, error-delivery semantics (terminate vs. side-channel — Dart terminates the stream; decide and state it per language).
 3. **Ordering**: Kotlin `Flow` and Swift `AsyncSequence` first (their UI layers consume them directly), with a one-paragraph justification; Ruby/Go last or "not worth it" with reasoning.

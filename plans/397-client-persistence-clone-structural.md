@@ -46,21 +46,23 @@ Note: the current field-literal clone also **adds** explicit `identity: undefine
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/client..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/client" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/client" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/client" run lint:eslint` | exit 0 |
+| Purpose    | Command                                          | Expected on success |
+| ---------- | ------------------------------------------------ | ------------------- |
+| Install    | `pnpm install`                                   | exit 0              |
+| Build deps | `pnpm --filter "@lunora/client..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/client" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/client" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/client" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/client/src/persistence.ts` (the `clone` function only)
 - `packages/client/__tests__/persistence.test.ts` (a minimal regression case; the full-shape contract tightening is plan 398)
 
 **Out of scope**:
+
 - `async-storage-persistence.ts`, the IndexedDB adapter — already correct.
 - `offline-queue.ts` — its enqueue/hydrate logic is correct.
 
@@ -105,7 +107,7 @@ In `packages/client/__tests__/persistence.test.ts`, add one case to the shared `
 ## STOP conditions
 
 - The `clone` excerpt doesn't match the live code.
-- Any existing test fails because it asserted the *dropped*-field behavior — report it rather than weakening the fix.
+- Any existing test fails because it asserted the _dropped_-field behavior — report it rather than weakening the fix.
 
 ## Maintenance notes
 

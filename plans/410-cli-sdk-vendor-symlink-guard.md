@@ -25,38 +25,40 @@
 ## Current state
 
 - `packages/cli/src/commands/sdk/vendor.ts:80-96` — `copyEntry`:
-  ```ts
-  cpSync(source, destination, {
-      filter: (candidate) => !isTestFile(candidate.slice(candidate.lastIndexOf(sep) + 1)),
-      force: true,
-      recursive: true,
-  });
-  ```
+    ```ts
+    cpSync(source, destination, {
+        filter: (candidate) => !isTestFile(candidate.slice(candidate.lastIndexOf(sep) + 1)),
+        force: true,
+        recursive: true,
+    });
+    ```
 - The exemplar stance to match — `packages/cli/src/commands/registry/reconcile.ts:44-49`:
-  ```ts
-  if (lstatSync(sourcePath).isSymbolicLink()) {
-      throw new LunoraError("INTERNAL", `registry item "${itemKey}": refusing to read "${file.from}" — it is a symlink, not a regular file`);
-  }
-  ```
+    ```ts
+    if (lstatSync(sourcePath).isSymbolicLink()) {
+        throw new LunoraError("INTERNAL", `registry item "${itemKey}": refusing to read "${file.from}" — it is a symlink, not a regular file`);
+    }
+    ```
 - Regression-test pattern: `packages/cli/__tests__/commands/registry-symlink-guard.test.ts`.
 
 ## Commands you will need
 
-| Purpose   | Command | Expected on success |
-|-----------|---------|---------------------|
-| Install   | `pnpm install` | exit 0 |
-| Build deps | `pnpm --filter "@lunora/cli..." run build` | exit 0 |
-| Tests     | `pnpm --filter "@lunora/cli" run test` | all pass |
-| Typecheck | `pnpm --filter "@lunora/cli" run lint:types` | exit 0 |
-| Lint      | `pnpm --filter "@lunora/cli" run lint:eslint` | exit 0 |
+| Purpose    | Command                                       | Expected on success |
+| ---------- | --------------------------------------------- | ------------------- |
+| Install    | `pnpm install`                                | exit 0              |
+| Build deps | `pnpm --filter "@lunora/cli..." run build`    | exit 0              |
+| Tests      | `pnpm --filter "@lunora/cli" run test`        | all pass            |
+| Typecheck  | `pnpm --filter "@lunora/cli" run lint:types`  | exit 0              |
+| Lint       | `pnpm --filter "@lunora/cli" run lint:eslint` | exit 0              |
 
 ## Scope
 
 **In scope**:
+
 - `packages/cli/src/commands/sdk/vendor.ts`
 - `packages/cli/__tests__/commands/` — new `sdk-vendor-symlink-guard.test.ts` (or extend the existing registry guard file if it is structured for multiple subjects — read it first and follow its shape)
 
 **Out of scope**:
+
 - `packages/cli/src/commands/registry/` — already guarded.
 - The rest of `sdk/` (generate/handler logic) — plan 411 covers tests for those.
 
