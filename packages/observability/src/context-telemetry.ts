@@ -441,7 +441,7 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }, ca
  *
  * **DO async-context caveat (EXPERIMENTAL, partially workerd-validated).**
  * `tracing.enterSpan` is now confirmed to EXIST and RUN inside a real Durable
- * Object under `@cloudflare/vitest-pool-workers` (see
+ * Object under `@cloudflare/vitest-plugin` (see
  * `__tests__/workerd/context-telemetry-cf-bridge.workerd.test.ts`): it resolves
  * from `cloudflare:workers`, its callback executes and returns the body value
  * without throwing, `span.isTraced` is a real boolean, and — the key additive

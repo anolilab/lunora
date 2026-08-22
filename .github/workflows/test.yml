@@ -91,7 +91,7 @@
 
             # workerd is intentionally OFF here (no LUNORA_WORKERD_TESTS): the
             # v8 coverage provider collects via node:inspector, which the
-            # @cloudflare/vitest-pool-workers runtime does not implement, and
+            # @cloudflare/vitest-plugin runtime does not implement, and
             # with coverage on the workerd-pool suites hang the runner. The
             # workerd projects run WITHOUT coverage in the dedicated
             # `test-workerd` job below. d1 runs here like any other package —
@@ -135,7 +135,7 @@
                   "fail_ci_if_error": false
 
     # Workerd integration suites: the `workerd` vitest projects run against real
-    # workerd via @cloudflare/vitest-pool-workers, gated behind
+    # workerd via @cloudflare/vitest-plugin, gated behind
     # LUNORA_WORKERD_TESTS=1. Coverage MUST stay off — the v8 provider collects
     # via node:inspector, which workerd does not implement, and with coverage on
     # these suites hang the runner. So this job uses the plain `test` script
