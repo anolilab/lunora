@@ -128,10 +128,28 @@ if (rows.length === PAGE && complete.length === 0) {
 // Process `complete`, then checkpoint at its last `_commitSeq`.
 ```
 
-A composite `(_commitSeq, _id)` keyset cursor would also solve this, but the
-`where` compiler has no `OR`, so the two-part predicate it needs
-(`seq > s OR (seq = s AND id > lastId)`) cannot be expressed in a single query
-today. Group-boundary checkpointing is the supported answer.
+### Or page on a composite cursor
+
+If you would rather not think about groups, carry `(_commitSeq, _id)` as the
+cursor and let the tie-breaker do the work:
+
+```ts
+const rows = await ctx.db.orders.findMany({
+    limit: PAGE,
+    orderBy: [{ _commitSeq: "asc" }, { _id: "asc" }],
+    where: {
+        OR: [{ _commitSeq: { gt: seq } }, { AND: [{ _commitSeq: seq }, { _id: { gt: id } }] }],
+    },
+});
+
+// Checkpoint at the last row, wherever the page ended.
+const last = rows.at(-1);
+```
+
+This is exact at any page size — a page may split a commit and nothing is lost,
+because `_id` orders the rows within one sequence. It costs a second cursor
+field and a wider predicate, so prefer group-boundary checkpointing when you
+want to process each commit as a unit, and this when you just want rows.
 
 `_commitSeq` lives in the stored document rather than a dedicated column, so it
 is orderable, filterable, and indexable like any other field — and adding

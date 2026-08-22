@@ -242,4 +242,80 @@ describe("ctx-db commit sequence", () => {
 
         expect(feed.page).toHaveLength(0);
     });
+
+    it("gives every row of one batch insert the same sequence", async () => {
+        expect.assertions(2);
+
+        // `insertManyUnsafe` writes a multi-row INSERT — one atomic commit. An
+        // action is the interesting case: it holds no transaction, so nothing
+        // memoizes the sequence for it except the per-chunk allocation.
+        // `insertManyUnsafe` is optional on `DatabaseWriterLike`; narrow it the same
+        // way `ctx-db.batch-writes.test.ts` does rather than asserting per call.
+        const writer = action() as DatabaseWriterLike & Required<Pick<DatabaseWriterLike, "insertManyUnsafe">>;
+
+        await writer.insertManyUnsafe(
+            "events",
+            [
+                { _id: "b1", kind: "a" },
+                { _id: "b2", kind: "b" },
+                { _id: "b3", kind: "c" },
+            ],
+            { allowExplicitId: true },
+        );
+
+        const seqs = await Promise.all(["b1", "b2", "b3"].map(async (id) => seqOf(writer, "events", id)));
+
+        // Rows that commit together compare equal — that is what lets a consumer
+        // treat one sequence as an indivisible unit.
+        expect(new Set(seqs).size).toBe(1);
+        expect(seqs[0]).toStrictEqual(expect.any(Number));
+    });
+
+    it("pages exactly on a composite (_commitSeq, _id) keyset cursor", async () => {
+        expect.assertions(2);
+
+        // Three rows sharing ONE sequence, so any page size below three splits the
+        // group — the case group-boundary checkpointing has to special-case and a
+        // keyset cursor does not.
+        const seed = mutation();
+
+        await seed.insert("events", { _id: "k1", kind: "a" }, { allowExplicitId: true });
+        await seed.insert("events", { _id: "k2", kind: "b" }, { allowExplicitId: true });
+        await seed.insert("events", { _id: "k3", kind: "c" }, { allowExplicitId: true });
+
+        const drain = async (): Promise<string[]> => {
+            const seen: string[] = [];
+            let seq = 0;
+            let id = "";
+
+            for (let guard = 0; guard < 10; guard += 1) {
+                // The exact predicate the docs hand the reader.
+                // eslint-disable-next-line no-await-in-loop -- a cursor walk is inherently sequential
+                const page = await mutation().findMany("events", {
+                    limit: 2,
+                    orderBy: [{ _commitSeq: "asc" }, { _id: "asc" }],
+                    where: { OR: [{ _commitSeq: { gt: seq } }, { AND: [{ _commitSeq: seq }, { _id: { gt: id } }] }] },
+                });
+
+                if (page.page.length === 0) {
+                    break;
+                }
+
+                for (const row of page.page) {
+                    seen.push(row["_id"] as string);
+                }
+
+                const last = page.page.at(-1) as Record<string, unknown>;
+
+                seq = last["_commitSeq"] as number;
+                id = last["_id"] as string;
+            }
+
+            return seen;
+        };
+
+        // Every row exactly once, despite the page boundary landing mid-group.
+        await expect(drain()).resolves.toStrictEqual(["k1", "k2", "k3"]);
+        expect(new Set(await drain())).toStrictEqual(new Set(["k1", "k2", "k3"]));
+    });
 });

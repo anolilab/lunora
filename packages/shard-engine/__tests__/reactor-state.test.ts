@@ -108,6 +108,38 @@ describe("reactor state", () => {
         });
     });
 
+    it("clears the last error once a later dispatch succeeds", () => {
+        expect.assertions(4);
+
+        writeReactorState(harness.sql, "reactors:dispatch", { error: "boom", now: 1_700_000_000_000, result: "error" });
+
+        expect(readReactorState(harness.sql, "reactors:dispatch")?.lastError).toBe("boom");
+
+        writeReactorState(harness.sql, "reactors:dispatch", { digest: "d", now: 1_700_000_000_001, result: "ran", tables: ["orders"] });
+
+        const recovered = readReactorState(harness.sql, "reactors:dispatch");
+
+        // `lastError` describes the LAST dispatch, which is what lets the
+        // Studio call a reactor that failed once and has run cleanly since
+        // "active". Preserving it across a success would pin the reactor to
+        // "failing" forever — nothing else ever nulls the column.
+        expect(recovered?.lastError).toBeUndefined();
+        // The lifetime error COUNT is a different question and still stands.
+        expect(recovered?.stats.errors).toBe(1);
+        expect(recovered?.stats.runs).toBe(1);
+    });
+
+    it("clears the last error on a suppressed dispatch too", () => {
+        expect.assertions(1);
+
+        writeReactorState(harness.sql, "reactors:dispatch", { error: "boom", now: 1_700_000_000_000, result: "error" });
+        // A suppressed dispatch means the reactor was offered the change and
+        // declined it — it did not fail, so it is not still failing.
+        writeReactorState(harness.sql, "reactors:dispatch", { digest: "d", now: 1_700_000_000_001, result: "suppressed", tables: ["orders"] });
+
+        expect(readReactorState(harness.sql, "reactors:dispatch")?.lastError).toBeUndefined();
+    });
+
     describe("counters", () => {
         it("increments only the counter its outcome names", () => {
             expect.assertions(3);
@@ -139,22 +171,6 @@ describe("reactor state", () => {
             // still counted and its message retained for the panel.
             expect(state?.digest).toBe("good");
             expect(state?.tables).toStrictEqual(["orders"]);
-            expect(state?.stats).toStrictEqual({ errors: 1, runs: 1, suppressed: 0 });
-        });
-
-        it("clears a stale error message once the reactor runs cleanly again", () => {
-            expect.assertions(2);
-
-            writeReactorState(harness.sql, "reactors:dispatch", { error: "boom", now: 1, result: "error" });
-            writeReactorState(harness.sql, "reactors:dispatch", { digest: "d", now: 2, result: "ran", tables: ["orders"] });
-
-            const state = readReactorState(harness.sql, "reactors:dispatch");
-
-            // A successful dispatch passes no `error`, so the column keeps its old
-            // value — the counter is the lifetime record, `lastError` is not
-            // cleared. The panel reads `state`, derived from the LAST dispatch, so
-            // this reactor shows as active despite the retained message.
-            expect(state?.lastError).toBe("boom");
             expect(state?.stats).toStrictEqual({ errors: 1, runs: 1, suppressed: 0 });
         });
     });

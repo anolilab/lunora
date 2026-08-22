@@ -242,6 +242,12 @@ const writeReactorState = (
     const tablesValue = tables === undefined ? "" : JSON.stringify([...tables]);
     // eslint-disable-next-line unicorn/no-null -- a SQL bind: the column is nullable and SQLite needs a real NULL, not `undefined`
     const errorValue = error ?? null;
+    // `last_error` describes the LAST dispatch, not the lifetime — that is what
+    // makes `handleListReactors` able to call a reactor that failed once and has
+    // run cleanly since "active" rather than "failing". So a non-error outcome
+    // CLEARS the column; only an `"error"` result writes into it. Preserving it
+    // across a successful run would pin the reactor to "failing" forever, since
+    // nothing else ever nulls it.
 
     runDrizzle(
         sql,
@@ -263,7 +269,7 @@ const writeReactorState = (
                 suppressed = ${dsql.raw(`${REACTOR_STATE_TABLE}.suppressed`)} + ${result === "suppressed" ? 1 : 0},
                 errors = ${dsql.raw(`${REACTOR_STATE_TABLE}.errors`)} + ${result === "error" ? 1 : 0},
                 last_ran_at = excluded.last_ran_at,
-                last_error = ${error === undefined ? dsql.raw(`${REACTOR_STATE_TABLE}.last_error`) : dsql`excluded.last_error`}`,
+                last_error = ${result === "error" ? dsql`excluded.last_error` : dsql.raw("NULL")}`,
     );
 };
 

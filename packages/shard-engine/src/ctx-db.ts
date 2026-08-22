@@ -3662,7 +3662,21 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Build every row up front: column defaults + a minted (or, for trusted
             // import, an explicit) id. **No `.check()` validators and no before/after
             // triggers run** — the caller vouches for the data; that is the "unsafe".
-            const rows = documents.map((document) => {
+            // One `_commitSeq` per CHUNK, not per row. Each chunk below is a single
+            // atomic multi-row INSERT, and a sequence identifies a commit rather
+            // than a row — so rows that land together must compare equal, which is
+            // what lets a consumer treat a sequence as an indivisible unit. Stamping
+            // inside the `map` would give every row in one commit its own sequence.
+            // Inside a transaction `commitSeqFields` memoizes, so all chunks share
+            // the transaction's single sequence; outside one, each chunk gets its own
+            // because each chunk is its own commit.
+            const chunkSeqFields: Record<string, number>[] = [];
+
+            for (let start = 0; start < documents.length; start += INSERT_CHUNK_ROWS) {
+                chunkSeqFields.push(commitSeqFields(tableName));
+            }
+
+            const rows = documents.map((document, index) => {
                 const withDefaults = applyInsertDefaults(definition, document, auth);
                 const id = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
                 // Gate `_creationTime` behind the same `allowExplicitId` opt-in as
@@ -3670,7 +3684,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const creationTime =
                     batchOptions?.allowExplicitId === true && typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
-                const documentWithMeta: Record<string, unknown> = { ...withDefaults, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
+                const documentWithMeta: Record<string, unknown> = {
+                    ...withDefaults,
+                    ...chunkSeqFields[Math.floor(index / INSERT_CHUNK_ROWS)],
+                    _creationTime: creationTime,
+                    _id: id,
+                };
 
                 return { creationTime, document: documentWithMeta, id };
             });
