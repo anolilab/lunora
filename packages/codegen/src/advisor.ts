@@ -141,6 +141,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                         table: relation.table,
                     };
                 }),
+                commitOrdered: table.commitOrdered,
                 shardKind: typeof table.shardMode === "string" ? table.shardMode : "shardBy",
                 softDelete: table.softDelete,
                 ttl: table.ttl,

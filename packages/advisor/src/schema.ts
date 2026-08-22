@@ -32,6 +32,16 @@ export interface AdvisorTable {
     columnKinds?: Record<string, string>;
 
     /**
+     * Set when the table opted into `.commitOrdered()` — every row carries
+     * `_commitSeq`, a per-shard integer allocated once per mutation and strictly
+     * increasing in commit order. Read by `commit_ordered_hard_delete`, which
+     * pairs it against {@link AdvisorTable.softDelete}: without a tombstone, the
+     * feed the sequence exists to serve cannot express a delete. Optional — a
+     * feeder that doesn't track it omits it, and absent must not read as opted-in.
+     */
+    commitOrdered?: boolean;
+
+    /**
      * `true` when the table is written outside Lunora's discoverable insert path
      * — declared via `.externallyManaged()` (e.g. `@lunora/auth`'s better-auth
      * tables, `@lunora/ratelimit`'s store). Insert-path lints
@@ -233,6 +243,7 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                       }
                     : undefined,
                 columnKinds,
+                commitOrdered: table.commitOrderedMode,
                 fields: Object.keys(table.shape),
                 indexes,
                 isPublic: table.isPublic ?? false,
