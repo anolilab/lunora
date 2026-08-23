@@ -15,7 +15,7 @@
     const t = context.localization;
     const { actions, state: avatar } = controllerStore(createAvatarUploadController);
 
-    let picker = $state<HTMLInputElement | undefined>(undefined);
+    const pickerId = `lunora-auth-picker-${crypto.randomUUID()}`;
 </script>
 
 {#if context.avatar.upload !== undefined}
@@ -24,34 +24,36 @@
         <div class="lunora-auth-avatar-row">
             <UserAvatar size={64} user={{ image: $avatar.imageUrl }} />
             <div class="lunora-auth-avatar-row__actions">
-                <input
-                    accept={ACCEPT_ATTRIBUTE}
-                    bind:this={picker}
-                    class="lunora-auth-visually-hidden"
-                    onchange={(event) => {
-                        const file = event.currentTarget.files?.[0];
+                <!--
+                    A label wrapping the input, not a button that clicks it: the
+                    input is the only control, so there is one tab stop, the label
+                    text is its accessible name, and Enter or Space opens the
+                    picker natively. The input stays focusable and out of the ARIA
+                    tree's way — `aria-hidden` on something focusable is what
+                    leaves focus with no accessible target.
+                -->
+                <label class="lunora-auth-button" for={pickerId}>
+                    <input
+                        accept={ACCEPT_ATTRIBUTE}
+                        id={pickerId}
+                        class="lunora-auth-visually-hidden"
+                        disabled={$avatar.status === "submitting"}
+                        onchange={(event) => {
+                            const file = event.currentTarget.files?.[0];
 
-                        // Clear the input so re-picking the same file after a
-                        // failure still fires `change` — browsers suppress it when
-                        // the value is unchanged.
-                        event.currentTarget.value = "";
+                            // Clear the input so re-picking the same file after a
+                            // failure still fires `change` — browsers suppress it when
+                            // the value is unchanged.
+                            event.currentTarget.value = "";
 
-                        if (file) {
-                            void actions.upload(file);
-                        }
-                    }}
-                    type="file"
-                />
-                <button
-                    class="lunora-auth-button"
-                    disabled={$avatar.status === "submitting"}
-                    onclick={() => {
-                        picker?.click();
-                    }}
-                    type="button"
-                >
+                            if (file) {
+                                void actions.upload(file);
+                            }
+                        }}
+                        type="file"
+                    />
                     {t.avatarUpload}
-                </button>
+                </label>
                 {#if $avatar.imageUrl !== undefined && $avatar.imageUrl !== ""}
                     <button
                         class="lunora-auth-button lunora-auth-button--danger"

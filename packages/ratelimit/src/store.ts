@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Id } from "@lunora/values";
 
 import type { RateLimitStore, RateLimitValue } from "./types";
@@ -277,7 +278,8 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
  */
 const createReadOnlyDatabaseStore = (options: ReadOnlyDatabaseStoreOptions): RateLimitStore => {
     const reject = (operation: string): never => {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             `@lunora/ratelimit: \`${operation}\` needs a writable \`ctx.db\`, but this store was created with \`createReadOnlyDbStore\` (a query context). ` +
                 `Use \`createDbStore\` from a mutation or action; a query can only call \`getValue\`/\`check\`.`,
         );

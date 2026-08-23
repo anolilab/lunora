@@ -66,7 +66,7 @@
               "run": "pnpm run test"
 
     # Same design as the `test-workerd` job in test.yml (see the comments
-    # there): real workerd via @cloudflare/vitest-pool-workers, coverage off
+    # there): real workerd via @cloudflare/vitest-plugin, coverage off
     # (v8/node:inspector is unsupported in the pool), one matrix leg per
     # gated package.
     "test-workerd":

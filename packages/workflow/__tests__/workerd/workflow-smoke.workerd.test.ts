@@ -3,7 +3,7 @@
  *
  * The Node unit suite exercises the context/dispatch glue against doubles;
  * this suite proves the generated-entrypoint shape actually runs on the real
- * Workflows engine (Miniflare-backed via `@cloudflare/vitest-pool-workers`).
+ * Workflows engine (Miniflare-backed via `@cloudflare/vitest-plugin`).
  * Covered: the `LunoraWorkflow`-based `WorkflowEntrypoint` subclass boots in
  * workerd and executes its named durable steps to completion; the typed
  * `ctx.workflows` binding surface (`createWorkflows`) creates and reads

@@ -5,7 +5,7 @@
 
 <script lang="ts">
     import { isFlowEnabled } from "../core/flow-gate";
-    import { slugify } from "../core/labels";
+    import { firstLabel, rowActionLabel, slugify } from "../core/labels";
     import { createOrganizationsController } from "../core/organization-list";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
@@ -38,7 +38,7 @@
     <AuthCard headingLevel={2} title={t.organizations}>
         <FormBanner error={$res.error} />
         {#if $res.loading}
-            <p class="lunora-auth-card__description">…</p>
+            <p class="lunora-auth-card__description" role="status">{t.loading}</p>
         {:else if $res.items.length === 0}
             <p class="lunora-auth-card__description">{t.noOrganizations}</p>
         {:else}
@@ -46,10 +46,11 @@
                 {#each $res.items as organization (organization.id ?? organization.slug ?? organization.name)}
                     {@const id = organization.id}
                     <li class="lunora-auth-list__item">
-                        <span class="lunora-auth-list__label">{organization.name ?? organization.slug}</span>
+                        <span class="lunora-auth-list__label">{firstLabel(organization.name, organization.slug)}</span>
                         <span class="lunora-auth-list__actions">
                             {#if id !== undefined}
                                 <button
+                                    aria-label={rowActionLabel(t.switchOrganization, firstLabel(organization.name, organization.slug))}
                                     class="lunora-auth-link"
                                     disabled={$res.busy}
                                     onclick={() => {
@@ -60,6 +61,7 @@
                                     {t.switchOrganization}
                                 </button>
                                 <button
+                                    aria-label={rowActionLabel(t.remove, firstLabel(organization.name, organization.slug))}
                                     class="lunora-auth-link"
                                     disabled={$res.busy}
                                     onclick={() => {

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { sessionLabel } from "../core/labels";
+    import { rowActionLabel, sessionLabel } from "../core/labels";
     import { createSessionsController } from "../core/sessions";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
@@ -13,7 +13,7 @@
 <AuthCard headingLevel={2} title={t.sessions}>
     <FormBanner error={$res.error} />
     {#if $res.loading}
-        <p class="lunora-auth-card__description">…</p>
+        <p class="lunora-auth-card__description" role="status">{t.loading}</p>
     {:else if $res.items.length === 0}
         <p class="lunora-auth-card__description">{t.sessionsEmpty}</p>
     {:else}
@@ -24,6 +24,7 @@
                     <span class="lunora-auth-list__label">{sessionLabel(session, t)}</span>
                     {#if token !== undefined}
                         <button
+                            aria-label={rowActionLabel(t.revoke, sessionLabel(session, t))}
                             class="lunora-auth-link"
                             disabled={$res.busy}
                             onclick={() => {

@@ -9,6 +9,8 @@ defineProps<{
     autoComplete?: string;
     field: TField;
     fields: Record<TField, FieldState>;
+    /** Forwarded to `<Field>`; `"numeric"` for digit-only codes. */
+    inputMode?: "numeric";
     label: string;
     name?: string;
     type?: "email" | "password" | "text";
@@ -22,6 +24,7 @@ defineProps<{
         :name="name ?? field"
         :type="type"
         :autoComplete="autoComplete"
+        :inputMode="inputMode"
         @blur="actions.blur(field)"
         @change="actions.setField(field, $event)"
     />
