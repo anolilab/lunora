@@ -1,0 +1,125 @@
+---
+title: Memory tables
+description: Declare .memory() for state the shard rebuilds rather than remembers — presence, cursors, live counters — and onShardInit to bring it back after an eviction.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/ttl
+    - to: /docs/concepts/realtime
+    - to: /docs/concepts/reactors
+---
+
+Some state is not worth remembering. Who is looking at a document right now,
+where their cursors are, how many requests a client has made this minute — all of
+it is derivable, cheap to rebuild, and meaningless five minutes after the fact.
+
+`.memory()` declares a table **ephemeral**:
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export default defineSchema({
+    presence: defineTable({
+        roomId: v.string(),
+        userId: v.string(),
+        cursor: v.optional(v.object({ x: v.number(), y: v.number() })),
+    })
+        .memory()
+        .index("by_room", ["roomId"]),
+});
+```
+
+It is a full `ctx.db` table — indexes, `where`, `orderBy`, pagination, relations,
+live queries all work exactly as they do on a durable one. What differs is its
+**lifetime**.
+
+## The lifetime
+
+A memory table's rows are cleared whenever the Durable Object is reconstructed.
+
+That is more often than it sounds. Cloudflare evicts a Durable Object routinely —
+a shard whose WebSockets are hibernating is evicted as a matter of course — so
+"cold start" is a steady-state event, not a rare one. A memory table is on the
+same footing as the DO's JS heap, and that is the mental model to hold: this is
+state that lives as long as the process, and the process is short.
+
+Its writes also never reach the CDC changelog, which matters more than it looks:
+the log is append-only, and a heartbeat-rate presence table would otherwise grow
+it for the entire life of the shard.
+
+## Rebuilding: `onShardInit`
+
+Because the clearing is guaranteed, so is the hook that follows it:
+
+```ts
+// lunora/init.ts
+import { onShardInit } from "lunorash/server";
+
+export const warm = onShardInit(async (ctx, event) => {
+    for await (const member of ctx.db.roomMembers.iterate({ where: { roomId: event.shardKey } })) {
+        await ctx.db.presence.insert({ roomId: event.shardKey, userId: member.userId });
+    }
+});
+```
+
+`onShardInit` fires **once per Durable Object instance**, before any handler on
+that instance can run. The ordering is a framework guarantee, not a convention:
+every memory table is cleared, then every init hook runs to completion, and only
+then does the dispatch that triggered the cold start proceed. No handler,
+subscription refresh, alarm, or shape poke can observe a memory table in the gap.
+
+Hooks run sequentially in manifest order, so one may depend on state an earlier
+one wrote. A hook that throws is logged and contained — it does not fail the
+request that woke the shard, and the memory table is simply left empty.
+
+Without a hook, a memory table just comes back empty. That is a correct state for
+presence and a wrong one for something being treated as authoritative — which is
+the distinction to make before reaching for `.memory()` at all.
+
+<Callout type="warn">
+    `onShardInit` runs **system-trusted**: no request identity, `ctx.auth` anonymous, RLS not applied even under `.rls("required")` — the same tier as a cron
+    tick or a migration. Its reads see every row, so scope them yourself.
+</Callout>
+
+## What `.memory()` buys, and what it does not
+
+<Callout type="info">
+    On Cloudflare, the rows still transit the DO's SQLite. workerd exposes exactly one SQL handle and no memory-backed database, so `.memory()` buys the
+    **lifetime** (and skips the CDC changelog) — **not the write**. Treat it as "state I am happy to lose", never as "state that is free to write".
+</Callout>
+
+This is why it is implemented as a real table that is wiped rather than a heap
+`Map`: keeping rows in memory would mean a second storage model with its own
+index, `where`, pagination, and relation code, drifting from the SQL path over
+time. One model, wiped, is the honest trade.
+
+## Restrictions
+
+`defineSchema` rejects `.memory()` alongside:
+
+- **`.global()`** — those rows live in D1, which the shard does not own and cannot
+  clear.
+- **`.commitOrdered()`** — a sequence that resets is not a sequence; a consumer's
+  cursor would silently skip everything after the restart.
+- **`.source()`** — the table is materialized by the ingest loop, so wiping it on
+  every eviction would fight the puller.
+- **`.searchIndex()` / `.geoIndex()` / `.aggregateIndex()` / `.rankIndex()` /
+  `.vectorize()`** — clearing is a `DELETE` on the base table, and each of these
+  keeps a separate companion (or, for vectors, an external index) that the delete
+  does not reach, leaving it describing rows that no longer exist.
+
+A plain `.index()` is fine: SQLite maintains it through the `DELETE`.
+
+## Choosing between `.memory()` and `.ttl()`
+
+They solve adjacent problems and the distinction is worth getting right.
+
+- **`.ttl()`** is for durable rows with a _deadline_ — sessions, one-time
+  passcodes, short-lived tokens. They survive restarts and disappear on schedule.
+- **`.memory()`** is for rows with no meaning beyond the current process —
+  presence, cursors, in-flight scratch. They disappear on restart, deadline or
+  not.
+
+If losing the data on an eviction would be a bug, you want `.ttl()`. If keeping
+it across an eviction would be a bug — a stale "currently viewing" list is worse
+than an empty one — you want `.memory()`.

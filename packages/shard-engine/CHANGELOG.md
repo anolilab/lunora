@@ -1,3 +1,15 @@
+## @lunora/shard-engine [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.33...@lunora/shard-engine@1.0.0-alpha.34) (2026-08-23)
+
+### Features
+
+* **server:** close all four Convex primitive gaps — _commitSeq, untracked runQuery, .memory() + onShardInit, onQueryChange reactors ([#469](https://github.com/anolilab/lunora/issues/469)) ([75b0187](https://github.com/anolilab/lunora/commit/75b01872c06ae32f0174d2cc8385e78e373d9693))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.15
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.33
+
 ## @lunora/shard-engine [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.32...@lunora/shard-engine@1.0.0-alpha.33) (2026-08-21)
 
 ### ⚠ BREAKING CHANGES

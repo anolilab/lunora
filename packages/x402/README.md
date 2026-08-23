@@ -25,6 +25,24 @@ The root export (`@lunora/x402`) carries only the shared config/types
 (`.x402({ price })`), and MCP tools behind a USDC price; the **pay** rail signs and
 retries `402` challenges under a mandatory spend policy.
 
+## Install
+
+The chain toolchains are **optional peers**, so an EVM-only deployment never
+installs Solana's (heavy) toolchain and vice versa. Install the pair your
+network family needs alongside the package:
+
+```bash
+pnpm add @lunora/x402                       # protocol core only
+pnpm add @x402/evm viem                     # + EVM networks (Base, Arbitrum, …)
+pnpm add @x402/svm @solana/kit              # + Solana networks
+pnpm add @coinbase/cdp-sdk                  # + CDP-managed custody (EVM)
+```
+
+Missing a peer fails with an `ENV_INVALID` error naming exactly what to install.
+Note that TypeScript needs the same peers present to resolve the pay rail's
+signer types (`ClientSvmSigner` resolves through `@solana/kit`); with neither
+family installed, compile the package's declarations under `skipLibCheck`.
+
 ## Networks & custody
 
 - **EVM** (Base, Arbitrum, Ethereum, Polygon, …) is signed via [`@x402/evm`](https://npmjs.com/package/@x402/evm) + [viem](https://viem.sh); pass a raw CAIP-2 id for chains without a friendly alias.

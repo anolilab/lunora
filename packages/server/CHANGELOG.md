@@ -1,3 +1,14 @@
+## @lunora/server [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.78...@lunora/server@1.0.0-alpha.79) (2026-08-23)
+
+### Features
+
+* **server:** close all four Convex primitive gaps — _commitSeq, untracked runQuery, .memory() + onShardInit, onQueryChange reactors ([#469](https://github.com/anolilab/lunora/issues/469)) ([75b0187](https://github.com/anolilab/lunora/commit/75b01872c06ae32f0174d2cc8385e78e373d9693))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/server [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/%40lunora%2Fserver%401.0.0-alpha.77...%40lunora%2Fserver%401.0.0-alpha.78) (2026-08-18)
 
 

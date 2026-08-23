@@ -316,3 +316,54 @@ describe("the RLS guard batch id→table probe (deleteMany/patchMany)", () => {
         expect(probeLikeCount).toBe(51);
     });
 });
+
+/**
+ * The trusted (system) path under a `.rls("required")` schema.
+ *
+ * `guardWriter` is applied only when `enforceRls` is set, which codegen's
+ * `buildCtx` derives from `trusted !== true`. An `onShardInit` hook is dispatched
+ * with `trusted: registered.lifecycle === "init"`, so it gets the UNGUARDED
+ * writer — RLS scopes rows to a user and an init hook has none, so it must be
+ * able to read every row in order to rebuild `.memory()` state from durable
+ * tables. The published `onShardInit` docblock promises exactly this; nothing
+ * pinned it, and the two behaviours are on opposite sides of one boolean.
+ */
+describe('a trusted dispatch under .rls("required")', () => {
+    let harness: ReturnType<typeof createSqliteExec>;
+
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const trustedSchema: SchemaLike = {
+        rlsMode: "required",
+        tables: {
+            posts: { indexes: [], isPublic: false, shape: { title: { kind: "string" } } },
+        },
+    };
+
+    it("reads a protected table instead of being denied", async () => {
+        expect.assertions(2);
+
+        runShardMigrations(harness.sql, trustedSchema);
+
+        // No `enforceRls` — the shape an init hook, a trigger, or a cron tick gets.
+        const trusted = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: trustedSchema, sql: harness.sql });
+        const id = await trusted.insert("posts", { title: "rebuilt" });
+
+        await expect(trusted.findMany("posts", {})).resolves.toStrictEqual(
+            expect.objectContaining({ page: [expect.objectContaining({ _id: id, title: "rebuilt" })] }),
+        );
+
+        // The same schema through the user-facing ctx still denies it, so the
+        // assertion above is about the flag rather than a schema that forgot to
+        // protect the table.
+        const guarded = createShardContextDatabase({ clock: () => 1_700_000_000_000, enforceRls: true, schema: trustedSchema, sql: harness.sql });
+
+        expect(() => guarded.findMany("posts", {})).toThrow(/\.rls\("required"\)/);
+    });
+});

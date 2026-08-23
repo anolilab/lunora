@@ -20,6 +20,7 @@ import type { Duplex } from "node:stream";
 import { detectAgentRules } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
+    applyStudioAssetCache,
     assetContentType,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
@@ -32,6 +33,7 @@ import {
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
     SEED_ENDPOINT,
+    sendStudioDocument,
     serveJsonHandler,
     studioAssetsStamp,
     transportRejectionReason,
@@ -150,7 +152,16 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         styleHref: "/styles.css",
     });
 
-    const sendAsset = (response: ServerResponse, body: Buffer, contentType: string): void => {
+    const sendAsset = (request: IncomingMessage, response: ServerResponse, body: Buffer, contentType: string, fileName: string): void => {
+        // The entry + stylesheet sit at stable, unhashed URLs, so without cache
+        // headers the browser heuristically caches them and serves a rebuilt
+        // `@lunora/studio` stale until a hard reload. Shared with the Vite route
+        // (`@lunora/config/studio-host`) so the two hosts answer identically; it
+        // sends the `304` itself when the client already holds this version.
+        if (applyStudioAssetCache(request, response, fileName, assetsStamp)) {
+            return;
+        }
+
         response.statusCode = 200;
         response.setHeader("Content-Type", contentType);
         response.end(body);
@@ -176,7 +187,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         sendText(response, 403, deniedMessage);
     };
 
-    const serveStaticAsset = (pathname: string, response: ServerResponse): boolean => {
+    const serveStaticAsset = (pathname: string, request: IncomingMessage, response: ServerResponse): boolean => {
         // Own the studio's static assets: `/styles.css`, plus every `.js` / `.js.map`
         // under the standalone directory — the `studio.js` entry and its on-demand,
         // code-split `chunk-*.js` siblings. Anything else is an SPA route and falls
@@ -204,7 +215,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         }
 
         if (isStyle) {
-            sendAsset(response, assets.styles, "text/css; charset=utf-8");
+            sendAsset(request, response, assets.styles, "text/css; charset=utf-8", "styles.css");
 
             return true;
         }
@@ -223,7 +234,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             return true;
         }
 
-        sendAsset(response, bytes, assetContentType(fileName));
+        sendAsset(request, response, bytes, assetContentType(fileName), fileName);
 
         return true;
     };
@@ -298,13 +309,13 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             return;
         }
 
-        if (serveStaticAsset(pathname, response)) {
+        if (serveStaticAsset(pathname, request, response)) {
             return;
         }
 
         // Everything else is an SPA route → serve the document (history fallback),
         // so a hard load of a deep link like `/data` boots the router there.
-        sendAsset(response, document, "text/html; charset=utf-8");
+        sendStudioDocument(response, document);
     });
 
     server.on("upgrade", (request, socket, head) => {

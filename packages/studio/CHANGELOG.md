@@ -1,3 +1,27 @@
+## @lunora/studio [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.118...@lunora/studio@1.0.0-alpha.119) (2026-08-23)
+
+### Features
+
+* **server:** close all four Convex primitive gaps — _commitSeq, untracked runQuery, .memory() + onShardInit, onQueryChange reactors ([#469](https://github.com/anolilab/lunora/issues/469)) ([75b0187](https://github.com/anolilab/lunora/commit/75b01872c06ae32f0174d2cc8385e78e373d9693))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.85
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.33
+* **@lunora/client:** upgraded to 1.0.0-alpha.56
+* **@lunora/react:** upgraded to 1.0.0-alpha.61
+* **@lunora/notify:** upgraded to 1.0.0-alpha.22
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.69
+
+## @lunora/studio [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.117...@lunora/studio@1.0.0-alpha.118) (2026-08-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.55
+* **@lunora/react:** upgraded to 1.0.0-alpha.60
+
 ## @lunora/studio [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.116...@lunora/studio@1.0.0-alpha.117) (2026-08-22)
 
 

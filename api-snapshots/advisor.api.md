@@ -728,6 +728,7 @@ interface AdvisorStorageUpload {
 ```ts
 interface AdvisorTable {
     columnKinds?: Record<string, string>;
+    commitOrdered?: boolean;
     externallyManaged?: boolean;
     externalSource?: AdvisorExternalSource;
     fields: ReadonlyArray<string>;
@@ -1226,6 +1227,12 @@ const circularFk: Lint;
 
 ```ts
 const classifySensitivity: (procedure: AdvisorProcedureProtection) => Sensitivity;
+```
+
+### `commitOrderedHardDelete` (const)
+
+```ts
+const commitOrderedHardDelete: Lint;
 ```
 
 ### `compareToBaseline` (const)

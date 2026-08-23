@@ -253,13 +253,23 @@ const createReferenceHost = (): ReferenceHost => {
             // Reads buffer their rows; writes produce none. Either way the
             // caller gets the same cursor shape — iterable, `toArray`, `one` —
             // because the contract requires all three of every host.
-            const rows = trimmed.startsWith("select")
-                ? statement.all(...normalized)
-                : ((): unknown[] => {
-                      statement.run(...normalized);
+            //
+            // `PRAGMA` counts as a read. An introspecting pragma (`table_info`,
+            // `index_list`) returns rows exactly like a SELECT, and the engine's
+            // idempotent migrations depend on that: they pragma-check for a column
+            // before `ALTER TABLE … ADD COLUMN`, so a host that answers the pragma
+            // with an empty cursor reports "column missing" for a column that is
+            // there and fails the ALTER with "duplicate column name". A
+            // setter-pragma (`PRAGMA foreign_keys = ON`) returns no rows, and
+            // `.all()` on it is harmless — so one branch covers both forms.
+            const rows =
+                trimmed.startsWith("select") || trimmed.startsWith("pragma")
+                    ? statement.all(...normalized)
+                    : ((): unknown[] => {
+                          statement.run(...normalized);
 
-                      return [];
-                  })();
+                          return [];
+                      })();
 
             return {
                 [Symbol.iterator]: () => rows[Symbol.iterator](),

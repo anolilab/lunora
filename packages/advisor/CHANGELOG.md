@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.84...@lunora/advisor@1.0.0-alpha.85) (2026-08-23)
+
+### Features
+
+* **server:** close all four Convex primitive gaps — _commitSeq, untracked runQuery, .memory() + onShardInit, onQueryChange reactors ([#469](https://github.com/anolilab/lunora/issues/469)) ([75b0187](https://github.com/anolilab/lunora/commit/75b01872c06ae32f0174d2cc8385e78e373d9693))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.79
+
 ## @lunora/advisor [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/%40lunora%2Fadvisor%401.0.0-alpha.83...%40lunora%2Fadvisor%401.0.0-alpha.84) (2026-08-18)
 
 
