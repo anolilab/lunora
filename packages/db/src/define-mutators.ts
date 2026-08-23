@@ -5,7 +5,7 @@ import type { Collection, Transaction } from "@tanstack/db";
 import { createTransaction } from "@tanstack/db";
 
 import type { CheckpointRegistry } from "./collection-options";
-import { getShardCheckpoints, hasCheckpointsAttached } from "./collection-options";
+import { getShardCheckpoints, hasCheckpointsAttached, syncShardCheckpointIdentity } from "./collection-options";
 import { runOutboxMutation } from "./internals";
 
 /**
@@ -275,6 +275,15 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
     // as OUT_OF_ORDER, permanently (see plan 316). Reset both together whenever
     // the client's identity has moved since the counter was last derived.
     const resetCounterForIdentity = (): void => {
+        // Rewind the shard's checkpoint watermarks on the same signal, BEFORE the
+        // new sequence is claimed. A registry still holding the previous identity's
+        // mark answers the fresh `clientSeq` (which restarts at 1) immediately, so
+        // the overlay drops before the new identity's row syncs — the flicker the
+        // registry exists to prevent. This is the only hook that fires for the
+        // documented wiring, where `checkpoints` is captured once and passed in
+        // explicitly, so `resolveCheckpoints` below never re-derives it.
+        syncShardCheckpointIdentity(client);
+
         const identity = client.currentIdentity();
 
         if (identity !== counterIdentity) {
