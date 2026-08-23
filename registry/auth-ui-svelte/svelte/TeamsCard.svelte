@@ -6,6 +6,7 @@
     server reports them from the resolved table map instead.
 -->
 <script lang="ts">
+    import { rowActionLabel } from "../core/labels";
     import { createTeamsController } from "../core/teams";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
@@ -34,6 +35,7 @@
                     <li class="lunora-auth-list__item">
                         <span class="lunora-auth-list__label">{team.name}</span>
                         <button
+                            aria-label={rowActionLabel(t.remove, team.name)}
                             class="lunora-auth-button lunora-auth-button--danger"
                             disabled={$res.busy}
                             onclick={() => {

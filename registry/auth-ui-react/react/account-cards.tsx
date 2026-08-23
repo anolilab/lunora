@@ -1,12 +1,12 @@
 "use client";
 
 import type { ChangeEvent, ReactElement } from "react";
-import { useRef } from "react";
+import { useId, useRef } from "react";
 
 import { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "../core/accounts";
 import { ACCEPT_ATTRIBUTE, createAvatarUploadController } from "../core/avatar";
 import { isFlowEnabled } from "../core/flow-gate";
-import { providerLabel } from "../core/labels";
+import { providerLabel, rowActionLabel } from "../core/labels";
 import { createThemeModeController, THEME_MODES } from "../core/theme-mode";
 import { createSetUsernameController } from "../core/username";
 import { createUsernameAvailabilityController } from "../core/username-availability";
@@ -48,6 +48,7 @@ const LinkedAccountsCard = (): ReactElement => {
                              */}
                             {NON_SOCIAL_PROVIDERS.has(account.providerId ?? "") ? null : (
                                 <button
+                                    aria-label={rowActionLabel(t.remove, providerLabel(account.providerId ?? ""))}
                                     className="lunora-auth-button lunora-auth-button--danger"
                                     disabled={state.busy || state.items.length <= 1}
                                     onClick={() => {
@@ -94,6 +95,7 @@ const AvatarCard = (): ReactElement | null => {
     const { localization: t } = context;
     const [state, actions] = useController(createAvatarUploadController);
     const inputRef = useRef<HTMLInputElement | null>(null);
+    const pickerId = useId();
 
     if (context.avatar.upload === undefined) {
         return null;
@@ -121,24 +123,26 @@ const AvatarCard = (): ReactElement | null => {
             <div className="lunora-auth-avatar-row">
                 <UserAvatar size={64} user={{ image: state.imageUrl }} />
                 <div className="lunora-auth-avatar-row__actions">
-                    <input
-                        accept={ACCEPT_ATTRIBUTE}
-                        aria-label={t.avatarUpload}
-                        className="lunora-auth-visually-hidden"
-                        onChange={onPick}
-                        ref={inputRef}
-                        type="file"
-                    />
-                    <button
-                        className="lunora-auth-button"
-                        disabled={state.status === "submitting"}
-                        onClick={() => {
-                            inputRef.current?.click();
-                        }}
-                        type="button"
-                    >
+                    {/*
+                     * A label wrapping the input, not a button that clicks it:
+                     * the input is the only control, so there is one tab stop,
+                     * the label text is its accessible name, and Enter or Space
+                     * opens the picker natively. The input stays focusable and
+                     * out of the ARIA tree's way — `aria-hidden` on something
+                     * focusable is what leaves focus with no accessible target.
+                     */}
+                    <label className="lunora-auth-button" htmlFor={pickerId}>
+                        <input
+                            accept={ACCEPT_ATTRIBUTE}
+                            className="lunora-auth-visually-hidden"
+                            disabled={state.status === "submitting"}
+                            id={pickerId}
+                            onChange={onPick}
+                            ref={inputRef}
+                            type="file"
+                        />
                         {t.avatarUpload}
-                    </button>
+                    </label>
                     {state.imageUrl === undefined || state.imageUrl === "" ? null : (
                         <button
                             className="lunora-auth-button lunora-auth-button--danger"
@@ -197,6 +201,11 @@ const SetUsernameCard = (): ReactElement | null => {
 /**
  * Light / dark / system. Not a better-auth feature at all — it lives here
  * because account settings is where people look for it.
+ *
+ * Toggle buttons rather than `role="radio"`: a radio group owes the user
+ * arrow-key navigation and a single roving tab stop, and declaring the role
+ * without implementing that is worse than not claiming it. `aria-pressed` on
+ * three ordinary buttons is honest about what the keyboard actually does.
  */
 const AppearanceCard = (): ReactElement => {
     const { localization: t } = useAuthUI();
@@ -206,16 +215,15 @@ const AppearanceCard = (): ReactElement => {
 
     return (
         <AuthCard title={t.appearance}>
-            <div className="lunora-auth-segmented" role="radiogroup">
+            <div aria-label={t.appearance} className="lunora-auth-segmented" role="group">
                 {THEME_MODES.map((mode) => (
                     <button
-                        aria-checked={state.mode === mode}
+                        aria-pressed={state.mode === mode}
                         className="lunora-auth-segmented__option"
                         key={mode}
                         onClick={() => {
                             actions.setMode(mode);
                         }}
-                        role="radio"
                         type="button"
                     >
                         {label[mode]}

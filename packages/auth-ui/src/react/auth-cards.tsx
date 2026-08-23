@@ -190,7 +190,7 @@ const ResetPasswordOtpCard = (): ReactElement => {
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                <FormField actions={actions} autoComplete="one-time-code" field="otp" label={t.codeLabel} state={state} />
+                <FormField actions={actions} autoComplete="one-time-code" field="otp" inputMode="numeric" label={t.codeLabel} state={state} />
                 <FormField actions={actions} autoComplete="new-password" field="password" label={t.passwordLabel} state={state} type="password" />
                 <FormField actions={actions} autoComplete="new-password" field="confirmPassword" label={t.confirmPasswordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.resetPassword}</SubmitButton>
@@ -253,6 +253,7 @@ const EmailOtpCard = (): ReactElement | null => {
                     <Field
                         autoComplete="one-time-code"
                         field={state.code}
+                        inputMode="numeric"
                         label={t.codeLabel}
                         name="code"
                         onBlur={() => undefined}
@@ -343,7 +344,7 @@ const TwoFactorCard = ({ method, trustDevice }: TwoFactorCardProps = {}): ReactE
         >
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
-                <FormField actions={actions} autoComplete="one-time-code" field="code" label={t.codeLabel} state={state} />
+                <FormField actions={actions} autoComplete="one-time-code" field="code" inputMode="numeric" label={t.codeLabel} state={state} />
                 <SubmitButton pending={state.status === "submitting"}>{t.twoFactor}</SubmitButton>
             </form>
         </AuthCard>

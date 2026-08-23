@@ -145,7 +145,7 @@ export interface ObservabilitySink {
      *
      * **Workerd-validated (partial).** The `tracing.enterSpan` bridge is confirmed
      * available and side-effect-free inside a real Durable Object under
-     * `@cloudflare/vitest-pool-workers` — the body runs without throwing,
+     * `@cloudflare/vitest-plugin` — the body runs without throwing,
      * `span.isTraced` is a real boolean, and `onSpan`'s recorded tree is byte-for-byte
      * identical with the flag on vs off. Still EXPERIMENTAL because the harness is
      * unsampled (`isTraced === false`), so CF's own EXPORTED parent-linking of the

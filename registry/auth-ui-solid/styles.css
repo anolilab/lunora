@@ -27,6 +27,25 @@
     box-sizing: border-box;
 }
 
+/*
+ * One focus ring for every interactive control, so keyboard users see the same
+ * indicator wherever they are (WCAG 2.4.7). Per-control rules used to cover only
+ * the text input and the avatar trigger — and disagreed on the `--ring` fallback
+ * — which left buttons and links on whatever the browser happened to draw.
+ */
+.lunora-auth-button:focus-visible,
+.lunora-auth-button:focus-within,
+.lunora-auth-field__input:focus-visible,
+.lunora-auth-link:focus-visible,
+.lunora-auth-segmented__option:focus-visible,
+.lunora-auth-select:focus-visible,
+.lunora-auth-social__button:focus-visible,
+.lunora-auth-toast__dismiss:focus-visible,
+.lunora-auth-userbutton__trigger:focus-visible {
+    outline: 2px solid var(--ring, hsl(256 72% 68%));
+    outline-offset: 2px;
+}
+
 .lunora-auth-card__header {
     margin-bottom: 1.5rem;
     text-align: center;
@@ -79,11 +98,6 @@
     font-size: 0.875rem;
 }
 
-.lunora-auth-field__input:focus-visible {
-    outline: 2px solid var(--ring, hsl(256 72% 68%));
-    outline-offset: 1px;
-}
-
 .lunora-auth-field__input[aria-invalid="true"] {
     border-color: var(--destructive, hsl(0 72% 45%));
 }
@@ -112,11 +126,12 @@
     transition: opacity 0.15s ease;
 }
 
-.lunora-auth-button:hover:not(:disabled) {
+.lunora-auth-button:hover:not(:disabled, :has(> input:disabled)) {
     opacity: 0.9;
 }
 
-.lunora-auth-button:disabled {
+.lunora-auth-button:disabled,
+.lunora-auth-button:has(> input:disabled) {
     opacity: 0.6;
     cursor: default;
 }
@@ -447,11 +462,6 @@
     border-radius: 999px;
 }
 
-.lunora-auth-userbutton__trigger:focus-visible {
-    outline: 2px solid var(--ring, hsl(240 14% 10%));
-    outline-offset: 2px;
-}
-
 .lunora-auth-userbutton__menu {
     position: absolute;
     right: 0;
@@ -496,7 +506,7 @@
     cursor: pointer;
 }
 
-.lunora-auth-segmented__option[aria-checked="true"] {
+.lunora-auth-segmented__option[aria-pressed="true"] {
     background: var(--muted, hsl(228 16% 93%));
     font-weight: 500;
 }
@@ -530,9 +540,13 @@
 }
 
 /*
- * Visually hidden but still focusable and announced — used for the avatar file
- * input, which is driven by a styled button beside it. `display: none` would
- * take it out of the accessibility tree and break keyboard access to it.
+ * Off-screen but still laid out and still focusable — used for the avatar file
+ * input, which is wrapped in a `.lunora-auth-button` label that supplies its
+ * visible appearance and its accessible name. The input is the real control, so
+ * it keeps focus; `:focus-within` above draws the ring on the label, which is
+ * the part anyone can actually see. `display: none` would take the control out
+ * of the tab order entirely, and `aria-hidden` on a focusable element is what
+ * leaves focus with no accessible target.
  */
 .lunora-auth-visually-hidden {
     position: absolute;

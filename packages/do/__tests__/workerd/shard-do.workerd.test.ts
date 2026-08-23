@@ -2,7 +2,7 @@
  * Real-workerd integration tests for `ShardDO`.
  *
  * These run inside a Miniflare-driven `workerd` process via
- * `@cloudflare/vitest-pool-workers`. The mock-state suite under
+ * `@cloudflare/vitest-plugin`. The mock-state suite under
  * `__tests__/shard-do.test.ts` exercises the same surface against hand-rolled
  * doubles — the value here is catching anything mock state cannot model:
  *

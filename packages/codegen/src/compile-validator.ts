@@ -250,12 +250,31 @@ const compileField = (key: string, node: ValidatorIR, access: string, context: E
     return { entry: `${keyLiteral}: ${emit.out}`, pre: emit.pre };
 };
 
-/** Compile every field of `shape` (validated against `accessFor(key)`) into combined pre-statements and object-literal entries, or `undefined` if any field declines. */
-const compileFields = (
-    shape: Record<string, ValidatorIR>,
-    accessFor: (key: string) => string,
-    context: EmitContext,
-): { entries: string; pre: string } | undefined => {
+/**
+ * Declared field names that `Object.prototype` also carries (`toString`,
+ * `constructor`, `__proto__`, …). Behind `plainPrototypeGuard` a bare
+ * `obj["k"]` read is own-only for every other name; these are the only keys
+ * where an absent own property would still find an inherited value, so they
+ * alone pay for an `Object.hasOwn` read.
+ */
+const PROTOTYPE_MEMBER_NAMES = new Set(Object.getOwnPropertyNames(Object.prototype));
+
+/**
+ * Compile every field of `shape` (read off `objectExpr`) into combined
+ * pre-statements and object-literal entries, or `undefined` if any field
+ * declines.
+ *
+ * Soundness contract (mirrors the interpreted oracle's
+ * `Object.hasOwn(source, key) ? source[key] : undefined`): inherited
+ * properties must read as absent. The caller has already emitted
+ * `plainPrototypeGuard` for `objectExpr`, so bare reads are own-only except
+ * for `PROTOTYPE_MEMBER_NAMES`, which get a hoisted
+ * `const __fN = Object.hasOwn(...) ? ... : undefined;` local (per-field
+ * hasOwn on every key benched 2-10x slower — it is a non-inlined builtin,
+ * so it is paid only where the prototype guard cannot help). Any new
+ * field-access emitter must route through this same shape.
+ */
+const compileFields = (shape: Record<string, ValidatorIR>, objectExpr: string, context: EmitContext): { entries: string; pre: string } | undefined => {
     let pre = "";
     const entries: string[] = [];
 
@@ -266,7 +285,17 @@ const compileFields = (
             return undefined;
         }
 
-        const field = compileField(key, node, accessFor(key), context);
+        const keyLiteral = JSON.stringify(key);
+        let access = `${objectExpr}[${keyLiteral}]`;
+
+        if (PROTOTYPE_MEMBER_NAMES.has(key)) {
+            const local = `__f${String(context.next())}`;
+
+            pre += `const ${local} = Object.hasOwn(${objectExpr}, ${keyLiteral}) ? ${objectExpr}[${keyLiteral}] : undefined;\n`;
+            access = local;
+        }
+
+        const field = compileField(key, node, access, context);
 
         if (!field) {
             return undefined;
@@ -279,10 +308,23 @@ const compileFields = (
     return { entries: entries.join(", "), pre };
 };
 
+/**
+ * One prototype check per compiled object, deferring any non-plain source to
+ * the interpreted parser (always sound — the oracle owns the answer). After
+ * this guard a bare `obj["k"]` read is own-only for every key outside
+ * `PROTOTYPE_MEMBER_NAMES`. `JSON.parse` output always has `Object.prototype`
+ * (or `null` proto), so the fast path keeps serving all wire input.
+ */
+const plainPrototypeGuard = (inExpr: string): string => {
+    const proto = `Object.getPrototypeOf(${inExpr})`;
+
+    return `if (${proto} !== Object.prototype && ${proto} !== null) return DEFER;\n`;
+};
+
 /** Compile `v.object({...})`: object guard + a fresh record rebuilt from declared keys (unknown keys dropped) as an object literal. */
 const compileObject = (node: ValidatorIR, inExpr: string, context: EmitContext): NodeEmit | undefined => {
     const shape = node.shape ?? {};
-    const fields = compileFields(shape, (key) => `${inExpr}[${JSON.stringify(key)}]`, context);
+    const fields = compileFields(shape, inExpr, context);
 
     if (!fields) {
         return undefined;
@@ -290,9 +332,9 @@ const compileObject = (node: ValidatorIR, inExpr: string, context: EmitContext):
 
     const id = context.next();
     const object = `__obj${String(id)}`;
-    const pre =
-        `if (typeof ${inExpr} !== "object" || ${inExpr} === null || Array.isArray(${inExpr})) return DEFER;\n` +
-        `${fields.pre}const ${object} = { ${fields.entries} };\n`;
+    const pre = `if (typeof ${inExpr} !== "object" || ${inExpr} === null || Array.isArray(${inExpr})) return DEFER;\n${plainPrototypeGuard(
+        inExpr,
+    )}${fields.pre}const ${object} = { ${fields.entries} };\n`;
 
     return { out: object, pre };
 };
@@ -317,15 +359,15 @@ const compileArgsValidator = (args: Record<string, ValidatorIR>): string | undef
         },
     };
 
-    const fields = compileFields(args, (key) => `source[${JSON.stringify(key)}]`, context);
+    const fields = compileFields(args, "source", context);
 
     if (!fields) {
         return undefined;
     }
 
-    // Defer the pathological non-object source (null / array) to the interpreted
-    // parser, which already handles it identically.
-    return `(source) => {\nif (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;\n${fields.pre}return { ${fields.entries} };\n}`;
+    // Defer the pathological non-object source (null / array / non-plain
+    // prototype) to the interpreted parser, which already handles it identically.
+    return `(source) => {\nif (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;\n${plainPrototypeGuard("source")}${fields.pre}return { ${fields.entries} };\n}`;
 };
 
 export default compileArgsValidator;

@@ -51,18 +51,21 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  */
 installCompiledValidatorMap(lunora_push_0.announce.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
 return { "body": source["body"], "title": source["title"] };
 });
 installCompiledValidatorMap(lunora_push_0.broadcast.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
 return { "body": source["body"], "title": source["title"] };
 });
 installCompiledValidatorMap(lunora_push_0.registerDevice.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 return { "subscription": source["subscription"] };
 });
 

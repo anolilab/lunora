@@ -24,7 +24,7 @@ real WebSocket lifecycle, real SQLite, or real hibernation behavior.
 
 ## `workerd` project (real Miniflare runtime)
 
-Runs via `@cloudflare/vitest-pool-workers`, which boots a real `workerd`
+Runs via `@cloudflare/vitest-plugin`, which boots a real `workerd`
 process from a wrangler config (`workerd/wrangler.jsonc`) and a test entry
 worker (`workerd/test-worker.ts`).
 

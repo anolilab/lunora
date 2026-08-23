@@ -16,6 +16,7 @@
     let {
         autoComplete,
         field,
+        inputMode,
         label,
         name,
         onBlur,
@@ -25,6 +26,12 @@
     }: {
         autoComplete?: AutoFill;
         field: FieldState;
+        /**
+         * The virtual keyboard to raise on touch devices. `"numeric"` for
+         * digit-only codes (TOTP, emailed OTPs); left unset for anything that
+         * can contain letters, such as backup codes and device codes.
+         */
+        inputMode?: "numeric";
         label: string;
         name: string;
         onBlur: () => void;
@@ -46,6 +53,7 @@
         autocomplete={autoComplete}
         class="lunora-auth-field__input"
         {id}
+        inputmode={inputMode}
         {name}
         onblur={onBlur}
         oninput={(event) => {

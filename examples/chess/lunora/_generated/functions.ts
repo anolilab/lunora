@@ -69,11 +69,13 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  */
 installCompiledValidatorMap(lunora_games_0.get.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["gameId"] !== "string") return DEFER;
 return { "gameId": source["gameId"] };
 });
 installCompiledValidatorMap(lunora_games_0.makeMove.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["gameId"] !== "string") return DEFER;
 if (typeof source["from"] !== "string") return DEFER;
 if (typeof source["to"] !== "string") return DEFER;
@@ -88,37 +90,44 @@ return { "gameId": source["gameId"], "from": source["from"], "to": source["to"],
 });
 installCompiledValidatorMap(lunora_games_0.moves.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["gameId"] !== "string") return DEFER;
 return { "gameId": source["gameId"] };
 });
 installCompiledValidatorMap(lunora_games_0.offerDraw.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["gameId"] !== "string") return DEFER;
 return { "gameId": source["gameId"] };
 });
 installCompiledValidatorMap(lunora_games_0.resign.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["gameId"] !== "string") return DEFER;
 return { "gameId": source["gameId"] };
 });
 installCompiledValidatorMap(lunora_games_0.respondToDraw.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["gameId"] !== "string") return DEFER;
 if (typeof source["accept"] !== "boolean") return DEFER;
 return { "gameId": source["gameId"], "accept": source["accept"] };
 });
 installCompiledValidatorMap(lunora_games_0.start.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["lobbyId"] !== "string") return DEFER;
 return { "lobbyId": source["lobbyId"] };
 });
 installCompiledValidatorMap(lunora_lobby_1.create.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["isPrivate"] !== "boolean") return DEFER;
 return { "isPrivate": source["isPrivate"] };
 });
 installCompiledValidatorMap(lunora_lobby_1.join.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["lobbyId"] !== "string") return DEFER;
 let __has1 = false;
 let __val1;
@@ -131,16 +140,19 @@ return { "lobbyId": source["lobbyId"], ...(__has1 ? { "inviteCode": __val1 } : {
 });
 installCompiledValidatorMap(lunora_lobby_1.joinByCode.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["inviteCode"] !== "string") return DEFER;
 return { "inviteCode": source["inviteCode"] };
 });
 installCompiledValidatorMap(lunora_lobby_1.leave.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["lobbyId"] !== "string") return DEFER;
 return { "lobbyId": source["lobbyId"] };
 });
 installCompiledValidatorMap(lunora_players_2.claim.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["displayName"] !== undefined) {
