@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { detectAgentRules } from "@lunora/config";
 import type { LocalEndpointHandler, StudioAssets } from "@lunora/config/studio-host";
 import {
+    applyStudioAssetCache,
     assetContentType,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
@@ -22,6 +23,7 @@ import {
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
     SEED_ENDPOINT,
+    sendStudioDocument,
     serveJsonHandler,
     studioAssetsStamp,
     transportRejectionReason,
@@ -209,20 +211,11 @@ const createStudioHandler = (
         // Key the ETag on the requested file (not just its kind) so each chunk
         // revalidates independently; the rebuild stamp busts them all at once.
         const fileName = pathname.slice(pathname.lastIndexOf("/") + 1);
-        const etag = stamp === undefined ? undefined : `W/"${fileName}-${String(stamp)}"`;
 
-        response.setHeader("Cache-Control", "no-cache");
-
-        if (etag !== undefined) {
-            response.setHeader("ETag", etag);
-
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
-            if (headerValue(request.headers?.["if-none-match"]) === etag.toLowerCase()) {
-                response.statusCode = 304;
-                response.end();
-
-                return;
-            }
+        // Shared with the CLI host (`@lunora/config/studio-host`) so the two
+        // cannot drift; it sends the `304` itself on a match.
+        if (applyStudioAssetCache(request, response, fileName, stamp)) {
+            return;
         }
 
         if (isStyle) {
@@ -333,7 +326,9 @@ const createStudioHandler = (
             styleHref: STUDIO_STYLE_PATH,
         });
 
-        sendOk(response, html, "text/html; charset=utf-8");
+        // The document embeds the admin token, so it is `no-store` and never
+        // carries an ETag — same helper the CLI host serves its document with.
+        sendStudioDocument(response, html);
     };
 };
 

@@ -43,7 +43,8 @@ describe("sessionsCard", () => {
             expect(screen.getByText("Chrome on macOS")).toBeDefined();
         });
 
-        fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+        // The row's own label is part of the button's accessible name.
+        fireEvent.click(screen.getByRole("button", { name: "Revoke: Chrome on macOS" }));
 
         await waitFor(() => {
             expect(client.revokeSession as ReturnType<typeof vi.fn>).toHaveBeenCalledWith({ token: "tok-1" });

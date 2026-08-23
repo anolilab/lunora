@@ -12,13 +12,7 @@ import type { PersistedMutation, PersistenceAdapter } from "./types";
 const createInMemoryPersistence = (): PersistenceAdapter => {
     const entries = new Map<string, PersistedMutation>();
     const clone = (mutation: PersistedMutation): PersistedMutation => {
-        return {
-            args: { ...mutation.args },
-            functionPath: mutation.functionPath,
-            id: mutation.id,
-            identity: mutation.identity,
-            shardKey: mutation.shardKey,
-        };
+        return { ...mutation, args: { ...mutation.args } };
     };
 
     return {

@@ -9,7 +9,7 @@ import { computed } from "vue";
 
 import type { AuthAccount } from "../core/types";
 import { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "../core/accounts";
-import { providerLabel } from "../core/labels";
+import { providerLabel, rowActionLabel } from "../core/labels";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUIContextRef } from "./provider";
@@ -50,6 +50,7 @@ const onLink = (provider: string): void => {
                     class="lunora-auth-button lunora-auth-button--danger"
                     type="button"
                     :disabled="state.busy || state.items.length <= 1"
+                    :aria-label="rowActionLabel(t.remove, providerLabel(account.providerId ?? ''))"
                     @click="onUnlink(account)"
                 >
                     {{ t.remove }}

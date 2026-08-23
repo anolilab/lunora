@@ -458,7 +458,15 @@ export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): Befor
 export const releaseSpendOnFailure =
     (state: SpendState): OnPaymentCreationFailureHook =>
     (context) => {
-        state.release(BigInt(context.selectedRequirements.amount));
+        // Server-controlled string — same fail-closed parse as the guard and the
+        // selection filter. An unparsable amount releases nothing rather than
+        // throwing out of a failure hook (which would mask the original error)
+        // or, for a negative value, inflating the ledger.
+        const amount = parseAtomicAmount(context.selectedRequirements.amount);
+
+        if (amount !== undefined) {
+            state.release(amount);
+        }
 
         return Promise.resolve();
     };

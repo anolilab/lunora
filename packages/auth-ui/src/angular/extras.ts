@@ -9,6 +9,7 @@ import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, injec
 import { ACCEPT_ATTRIBUTE } from "../core/avatar";
 import type { CaptchaProvider } from "../core/captcha";
 import { renderCaptcha } from "../core/captcha";
+import { DEFAULT_LOCALIZATION } from "../core/localization";
 import { promptOneTap } from "../core/one-tap";
 import type { LogoUploadActions, LogoUploadState } from "../core/organization-logo";
 import { createOrganizationLogoController } from "../core/organization-logo";
@@ -17,6 +18,15 @@ import { dismissToast, getToasts, subscribeToasts } from "../core/toast";
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, FormBannerComponent } from "./primitives";
 import { injectAuthUI, injectAuthUIContext } from "./provider";
+
+let pickerIdCounter = 0;
+
+/** A DOM id per instance. Hoisted out of the template literal so the increment is a statement, not an expression buried in a string. */
+const nextId = (prefix: string): string => {
+    pickerIdCounter += 1;
+
+    return `${prefix}${String(pickerIdCounter)}`;
+};
 
 /**
  * Renders the errors that have no card to land in — a failed social redirect, a
@@ -30,20 +40,24 @@ import { injectAuthUI, injectAuthUIContext } from "./provider";
     selector: "lunora-error-toaster",
     standalone: true,
     template: `
-        @if (toasts().length > 0) {
-            <!--
-              \`polite\`, not \`assertive\`: these are failures the user can retry, not
-              something that should interrupt a screen reader mid-sentence.
-            -->
-            <div class="lunora-auth-toaster" aria-live="polite">
-                @for (toast of toasts(); track toast.id) {
-                    <div class="lunora-auth-toast" role="status">
-                        <span class="lunora-auth-toast__message">{{ toast.message }}</span>
-                        <button class="lunora-auth-toast__dismiss" type="button" aria-label="Dismiss" (click)="dismiss(toast.id)">×</button>
-                    </div>
-                }
-            </div>
-        }
+        <!--
+          \`polite\`, not \`assertive\`: these are failures the user can retry, not
+          something that should interrupt a screen reader mid-sentence.
+
+          Mounted unconditionally — including with no toasts yet. A live region
+          only announces changes made AFTER it exists in the accessibility tree;
+          gating the whole wrapper on \`toasts().length > 0\` meant the very first
+          toast landed before assistive tech was watching the region, so it went
+          unannounced.
+        -->
+        <div class="lunora-auth-toaster" aria-live="polite">
+            @for (toast of toasts(); track toast.id) {
+                <div class="lunora-auth-toast" role="status">
+                    <span class="lunora-auth-toast__message">{{ toast.message }}</span>
+                    <button class="lunora-auth-toast__dismiss" type="button" [attr.aria-label]="dismissLabel()" (click)="dismiss(toast.id)">×</button>
+                </div>
+            }
+        </div>
     `,
 })
 class ErrorToasterComponent {
@@ -53,6 +67,13 @@ class ErrorToasterComponent {
      * hand instead of through `controllerSignal`.
      */
     protected readonly toasts = signal<ReadonlyArray<Toast>>(getToasts());
+
+    /**
+     * The dismiss button's accessible name. An input rather than a read of the
+     * provider's `localization`, because the toaster is mounted in the app shell
+     * and must keep working outside `provideAuthUI(...)`.
+     */
+    readonly dismissLabel = input(DEFAULT_LOCALIZATION.dismiss);
 
     /** Delegates to the shared helper — Angular templates can only call members. */
     protected readonly dismiss = dismissToast;
@@ -175,17 +196,18 @@ class OneTapComponent {
                         <span class="lunora-auth-avatar lunora-auth-avatar--initials" aria-hidden="true"></span>
                     }
                     <div class="lunora-auth-avatar-row__actions">
-                        <input
-                            class="lunora-auth-visually-hidden"
-                            type="file"
-                            #picker
-                            [attr.accept]="accept"
-                            [attr.aria-label]="t.avatarUpload"
-                            (change)="pick($event)"
-                        />
-                        <button class="lunora-auth-button" type="button" [disabled]="state().status === 'submitting'" (click)="picker.click()">
+                        <!-- A label wrapping the input — see the avatar card. -->
+                        <label class="lunora-auth-button" [attr.for]="pickerId">
+                            <input
+                                class="lunora-auth-visually-hidden"
+                                type="file"
+                                [id]="pickerId"
+                                [attr.accept]="accept"
+                                [disabled]="state().status === 'submitting'"
+                                (change)="pick($event)"
+                            />
                             {{ t.avatarUpload }}
-                        </button>
+                        </label>
                         @if (state().logoUrl !== undefined && state().logoUrl !== "") {
                             <button
                                 class="lunora-auth-button lunora-auth-button--danger"
@@ -203,6 +225,8 @@ class OneTapComponent {
     `,
 })
 class OrganizationLogoCardComponent implements OnInit {
+    protected readonly pickerId = nextId("lunora-auth-picker-");
+
     /** Defaults to the user's active organization. */
     readonly organizationId = input<string>();
 

@@ -8,8 +8,9 @@ import { createBackupCodesController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
 import { createDeviceAuthorizationController } from "../core/device-authorization";
 import { isFlowEnabled } from "../core/flow-gate";
-import { ROLE_OPTIONS } from "../core/labels";
+import { ROLE_OPTIONS, rowActionLabel } from "../core/labels";
 import { createDeviceSessionsController } from "../core/multi-session";
+import { userLabel } from "../core/session";
 import { createTeamsController } from "../core/teams";
 import { FormField } from "./form";
 import { onSubmit } from "./on-submit";
@@ -46,6 +47,7 @@ const MultiSessionCard = (): ReactElement | null => {
                             <UserView compact user={entry.user} />
                             <span className="lunora-auth-list__actions">
                                 <button
+                                    aria-label={rowActionLabel(t.switchAccount, userLabel(entry.user))}
                                     className="lunora-auth-button lunora-auth-button--secondary"
                                     disabled={state.busy || entry.session?.token === undefined}
                                     onClick={() => {
@@ -56,6 +58,7 @@ const MultiSessionCard = (): ReactElement | null => {
                                     {t.switchAccount}
                                 </button>
                                 <button
+                                    aria-label={rowActionLabel(t.signOut, userLabel(entry.user))}
                                     className="lunora-auth-button lunora-auth-button--danger"
                                     disabled={state.busy || entry.session?.token === undefined}
                                     onClick={() => {
@@ -118,7 +121,7 @@ const AdminUsersCard = (): ReactElement | null => {
                             </span>
                             <span className="lunora-auth-list__actions">
                                 <select
-                                    aria-label={t.roleLabel}
+                                    aria-label={rowActionLabel(t.roleLabel, user.email)}
                                     className="lunora-auth-select"
                                     disabled={state.busy || user.id === undefined}
                                     onChange={(event) => {
@@ -133,6 +136,7 @@ const AdminUsersCard = (): ReactElement | null => {
                                     ))}
                                 </select>
                                 <button
+                                    aria-label={rowActionLabel(t.adminImpersonate, user.email)}
                                     className="lunora-auth-button lunora-auth-button--secondary"
                                     disabled={state.busy || user.id === undefined}
                                     onClick={() => {
@@ -143,6 +147,7 @@ const AdminUsersCard = (): ReactElement | null => {
                                     {t.adminImpersonate}
                                 </button>
                                 <button
+                                    aria-label={rowActionLabel(user.banned === true ? t.adminUnban : t.adminBan, user.email)}
                                     className="lunora-auth-button lunora-auth-button--danger"
                                     disabled={state.busy || user.id === undefined}
                                     onClick={() => {
@@ -252,6 +257,7 @@ const TeamsCard = (): ReactElement | null => {
                         <li className="lunora-auth-list__item" key={team.id}>
                             <span className="lunora-auth-list__label">{team.name}</span>
                             <button
+                                aria-label={rowActionLabel(t.remove, team.name)}
                                 className="lunora-auth-button lunora-auth-button--danger"
                                 disabled={state.busy}
                                 onClick={() => {

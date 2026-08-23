@@ -7,7 +7,7 @@
         // TS6059 for the inlined `../../../shared/json-response` import (a file
         // outside this package, bundled in at build time). See shared/json-response.ts.
         "moduleResolution": "bundler",
-        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types", "node"]
+        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"]
     },
     "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"]
 }

@@ -57,6 +57,7 @@ const ADMIN_FUNCTIONS: {
     readonly ignoreIssue: "__lunora_admin__:ignoreIssue";
     readonly importShard: "__lunora_admin__:importShard";
     readonly listFlags: "__lunora_admin__:listFlags";
+    readonly listReactors: "__lunora_admin__:listReactors";
     readonly listQueues: "__lunora_admin__:listQueues";
     readonly lintSql: "__lunora_admin__:lintSql";
     readonly listTables: "__lunora_admin__:listTables";
@@ -300,6 +301,18 @@ const CDC_META_TABLE = "__cdc_meta";
 const CLIENT_WATERMARK_TABLE = "__client_watermark";
 ```
 
+### `COMMIT_SEQ_FIELD` (const)
+
+```ts
+const COMMIT_SEQ_FIELD = "_commitSeq";
+```
+
+### `COMMIT_SEQ_TABLE` (const)
+
+```ts
+const COMMIT_SEQ_TABLE = "__commit_seq";
+```
+
 ### `CacheEntry` (interface)
 
 ```ts
@@ -479,6 +492,7 @@ interface CtxDbOptions {
     globalDb?: DatabaseWriterLike;
     headroom?: TransactionHeadroomTracker;
     idGenerator?: IdGenerator;
+    inTransaction?: () => boolean;
     maxRelationKeys?: number;
     onIndexUse?: IndexUseHook;
     onRead?: ReadHook;
@@ -1543,6 +1557,12 @@ interface QueuesResult {
 const RANK_TIEBREAK = "__id__";
 ```
 
+### `REACTOR_STATE_TABLE` (const)
+
+```ts
+const REACTOR_STATE_TABLE = "__reactor_state";
+```
+
 ### `RELATION_EXISTS_KEY` (const)
 
 ```ts
@@ -1731,6 +1751,57 @@ interface ReactiveCacheOptions {
     maxBytes?: number;
     maxEntries?: number;
     now?: () => number;
+}
+```
+
+### `ReactorDispatchResult` (type)
+
+```ts
+type ReactorDispatchResult = "error" | "ran" | "suppressed";
+```
+
+### `ReactorMetadata` (interface)
+
+```ts
+interface ReactorMetadata {
+    errors: number;
+    lastError?: string;
+    lastRanAt?: number;
+    path: string;
+    runs: number;
+    state: "active" | "failing" | "idle";
+    suppressed: number;
+    tables?: ReadonlyArray<string>;
+}
+```
+
+### `ReactorState` (interface)
+
+```ts
+interface ReactorState {
+    digest: string;
+    lastError?: string;
+    lastRanAt: number;
+    stats: ReactorStats;
+    tables?: ReadonlyArray<string>;
+}
+```
+
+### `ReactorStats` (interface)
+
+```ts
+interface ReactorStats {
+    errors: number;
+    runs: number;
+    suppressed: number;
+}
+```
+
+### `ReactorsResult` (interface)
+
+```ts
+interface ReactorsResult {
+    reactors: ReactorMetadata[];
 }
 ```
 
@@ -2708,9 +2779,11 @@ interface TableColumnsResult {
 ```ts
 interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
+    readonly commitOrderedMode?: boolean;
     readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly isPublic?: boolean;
+    readonly memoryMode?: boolean;
     readonly rankIndexes?: ReadonlyArray<RankIndexDefinitionLike>;
     readonly relationMap?: Record<string, RelationDefinitionLike>;
     readonly searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
@@ -3024,6 +3097,12 @@ const aggregateSqlFunction: (op: string) => string;
 const aggregateTableName: (table: string, indexName: string) => string;
 ```
 
+### `allocateCommitSeq` (const)
+
+```ts
+const allocateCommitSeq: (sql: SqlExec) => number;
+```
+
 ### `appendAuditEntry` (const)
 
 ```ts
@@ -3196,6 +3275,12 @@ const clampPromotionThresholds: (tUp: number, tDownRaw: number) => PromotionThre
 const clearCapturedMail: (sql: SqlExec) => {
     cleared: true;
 };
+```
+
+### `clearMemoryTables` (const)
+
+```ts
+const clearMemoryTables: (sql: SqlExec, schema: SchemaLike) => number;
 ```
 
 ### `clearQueueMessages` (const)
@@ -3536,6 +3621,12 @@ const isFtsAvailable: (sql: SqlExec) => boolean;
 const isLossyBody: (body: unknown) => boolean;
 ```
 
+### `isMemoryTable` (const)
+
+```ts
+const isMemoryTable: (definition: TableDefinitionLike | undefined) => boolean;
+```
+
 ### `isRelationPredicate` (const)
 
 ```ts
@@ -3587,6 +3678,15 @@ const liftSourceId: (row: Record<string, unknown>, options?: {
 const lintReadonlySql: (sql: SqlExec, query: string) => SqlLintResult;
 ```
 
+### `listReactorStates` (const)
+
+```ts
+const listReactorStates: (sql: SqlExec) => {
+    path: string;
+    state: ReactorState;
+}[];
+```
+
 ### `listTables` (const)
 
 ```ts
@@ -3630,6 +3730,12 @@ const materializeExternalRowsIncremental: (writer: DatabaseWriterLike, pulled: R
 }) => Promise<IncrementalMaterializeResult>;
 ```
 
+### `memoryTableNames` (const)
+
+```ts
+const memoryTableNames: (schema: SchemaLike) => string[];
+```
+
 ### `mergeChangedKeys` (const)
 
 ```ts
@@ -3660,6 +3766,12 @@ const migrateCdcMeta: (sql: SqlExec) => void;
 const migrateClientWatermark: (sql: SqlExec) => void;
 ```
 
+### `migrateCommitSeq` (const)
+
+```ts
+const migrateCommitSeq: (sql: SqlExec) => void;
+```
+
 ### `migrateDurableStreams` (const)
 
 ```ts
@@ -3676,6 +3788,12 @@ const migrateGlobalShapeSnapshot: (sql: SqlExec) => void;
 
 ```ts
 const migrateIdempotency: (sql: SqlExec) => void;
+```
+
+### `migrateReactorState` (const)
+
+```ts
+const migrateReactorState: (sql: SqlExec) => void;
 ```
 
 ### `migrateSearchState` (const)
@@ -3822,6 +3940,12 @@ const rankTableName: (table: string, indexName: string) => string;
 const reactiveCacheKey: (functionPath: string, args: Record<string, unknown>, identity: null | string) => string;
 ```
 
+### `reactorNeedsRun` (const)
+
+```ts
+const reactorNeedsRun: (state: Pick<ReactorState, "tables"> | undefined, changed: ReadonlySet<string>) => boolean;
+```
+
 ### `readAggregateValue` (const)
 
 ```ts
@@ -3887,6 +4011,12 @@ const readCdcEpoch: (sql: SqlExec) => string;
 const readClientWatermark: (sql: SqlExec, identity: string, clientId: string) => number;
 ```
 
+### `readCommitSeq` (const)
+
+```ts
+const readCommitSeq: (sql: SqlExec) => number;
+```
+
 ### `readExternalSourceBaseline` (const)
 
 ```ts
@@ -3923,6 +4053,12 @@ const readQueueMessageById: (sql: SqlExec, id: string) => QueueMessageRow | unde
 const readQueueMessages: (sql: SqlExec, options?: ReadQueueMessagesOptions) => {
     entries: QueueMessageRow[];
 };
+```
+
+### `readReactorState` (const)
+
+```ts
+const readReactorState: (sql: SqlExec, path: string) => ReactorState | undefined;
 ```
 
 ### `readSchemaHistory` (const)
@@ -4332,6 +4468,18 @@ const writeGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: stri
 
 ```ts
 const writeIdempotent: (sql: SqlExec, identity: string, mutationId: string, resultJson: string, ts: number) => void;
+```
+
+### `writeReactorState` (const)
+
+```ts
+const writeReactorState: (sql: SqlExec, path: string, outcome: {
+    digest?: string;
+    error?: string;
+    now: number;
+    result: ReactorDispatchResult;
+    tables?: ReadonlyArray<string>;
+}) => void;
 ```
 
 ### `writeSearchBackfillState` (const)

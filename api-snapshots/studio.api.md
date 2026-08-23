@@ -40,6 +40,7 @@ const ADMIN_FUNCTIONS: {
     readonly getIssues: "__lunora_admin__:getIssues";
     readonly lintSql: "__lunora_admin__:lintSql";
     readonly listFlags: "__lunora_admin__:listFlags";
+    readonly listReactors: "__lunora_admin__:listReactors";
     readonly listPushSubscriptions: "__lunora_admin__:listPushSubscriptions";
     readonly listQueues: "__lunora_admin__:listQueues";
     readonly listSubscriptions: "__lunora_admin__:listSubscriptions";
@@ -1091,7 +1092,7 @@ interface StudioProps {
 ### `StudioTab` (type)
 
 ```ts
-type StudioTab = "agents" | "analytics" | "api" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "realtime" | "rls" | "schedule" | "schema" | "advisorHealth" | "evals" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
+type StudioTab = "agents" | "analytics" | "api" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "reactors" | "realtime" | "rls" | "schedule" | "schema" | "advisorHealth" | "evals" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
 ```
 
 ### `TFunction` (type)

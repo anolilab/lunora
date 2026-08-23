@@ -11,6 +11,9 @@ vi.mock(
     import("@tanstack/db"),
     () =>
         ({
+            // Referenced (never constructed) by a `lunoraCollectionOptions` config —
+            // the mock must still carry the export or reading it throws.
+            BTreeIndex: "BTreeIndex",
             // The real `createTransaction` is generic with a rich `Transaction` return; the
             // test only needs `mutate` + the captured config, so the whole module shape is
             // cast away (`as unknown as`) rather than reconstructed.
@@ -75,7 +78,7 @@ import type { FunctionReference } from "@lunora/client";
 import type { Collection } from "@tanstack/db";
 
 // eslint-disable-next-line import/first -- must follow the vi.mock above
-import { createCheckpointRegistry, getShardCheckpoints } from "../src/collection-options";
+import { createCheckpointRegistry, getShardCheckpoints, lunoraCollectionOptions } from "../src/collection-options";
 // eslint-disable-next-line import/first -- must follow the vi.mock above
 import type { MutatorRejectedEvent } from "../src/define-mutators";
 // eslint-disable-next-line import/first -- must follow the vi.mock above
@@ -202,6 +205,60 @@ describe(bindMutators, () => {
         // hang forever, since the fallback would never be armed.
         expect(acknowledged).toStrictEqual([1]);
         expect(awaited).toStrictEqual([1]);
+    });
+
+    it("keeps gating a registry captured before an identity switch", async () => {
+        configs.length = 0;
+
+        let identity: string | null = "user-a";
+        const client = {
+            callMutator: async () => {
+                return { applied: true, result: "ok" };
+            },
+            confirmedMutationWatermark: () => 0,
+            currentIdentity: () => identity,
+            subscribe: () => () => undefined,
+        } as never;
+        const { collection } = mockCollection();
+
+        // The DOCUMENTED wiring: `checkpoints` is captured ONCE from the collection
+        // options and handed to `bindMutators` as an EXPLICIT registry (codegen's
+        // `<shape>Collection()` returns it the same way, and an explicit registry is
+        // always honored). A switch that retired this object instead of rewinding it
+        // would leave every later `awaitMutationId` already-settled — dropping each
+        // overlay before the new identity's authoritative row synced.
+        const { checkpoints } = lunoraCollectionOptions({ client, list: { __lunoraRef: "messages:list" } });
+
+        checkpoints.resolve({ mutationId: 47 });
+
+        const bound = bindMutators(
+            client,
+            { checkpoints, collections: { messages: collection } },
+            { touch: defineMutator({ apply: () => undefined, serverRef: "messages:touch" }) },
+        );
+
+        identity = "user-b";
+
+        // The new identity restarts at clientSeq 1, which the previous identity's
+        // watermark (47) must not answer for.
+        bound.touch({});
+
+        let settled = false;
+        const pushed = configs[0]?.mutationFn().then(() => {
+            settled = true;
+
+            return undefined;
+        });
+
+        await flush();
+
+        expect(settled).toBe(false);
+
+        // Only the new identity's own authoritative frame releases the overlay.
+        checkpoints.resolve({ mutationId: 1 });
+        await pushed;
+
+        expect(settled).toBe(true);
     });
 
     it("does not gate on a derived registry that has no sync source attached", async () => {

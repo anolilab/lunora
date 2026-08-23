@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { OfflineQueue } from "../src/offline-queue";
 import { createInMemoryPersistence } from "../src/persistence";
-import type { PersistenceErrorContext } from "../src/types";
+import type { PersistenceAdapter, PersistenceErrorContext } from "../src/types";
 
 describe("offlineQueue", () => {
     it("fIFO drain order", () => {
@@ -346,6 +346,29 @@ describe("offlineQueue — persistence", () => {
         await queue.hydrate();
         // A second hydrate (or one after the live enqueue assigned the same id)
         // must not duplicate the entry.
+        await queue.hydrate();
+
+        expect(queue.size).toBe(1);
+    });
+
+    it("hydrate restores a single copy when the durable store holds duplicate ids", async () => {
+        expect.assertions(1);
+
+        // The in-memory adapter keys by id, so a duplicate-bearing load needs a
+        // hand-rolled stub (AsyncStorage's append-only log CAN hold duplicates).
+        const persistence: PersistenceAdapter = {
+            append: () => Promise.resolve(),
+            clear: () => Promise.resolve(),
+            load: () =>
+                Promise.resolve([
+                    { args: {}, functionPath: "a", id: "1" },
+                    { args: {}, functionPath: "a", id: "1" },
+                ]),
+            remove: () => Promise.resolve(),
+        };
+
+        const queue = new OfflineQueue({}, { persistence });
+
         await queue.hydrate();
 
         expect(queue.size).toBe(1);

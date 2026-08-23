@@ -365,6 +365,7 @@ class ResetPasswordCardComponent implements OnInit {
                     [label]="t.codeLabel"
                     name="otp"
                     autoComplete="one-time-code"
+                    inputMode="numeric"
                     (changed)="actions.setField('otp', $event)"
                     (blurred)="actions.blur('otp')"
                 />
@@ -452,6 +453,7 @@ class MagicLinkCardComponent {
                             [label]="t.codeLabel"
                             name="code"
                             autoComplete="one-time-code"
+                            inputMode="numeric"
                             (changed)="actions.setCode($event)"
                         />
                         <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.twoFactor }}</lunora-auth-submit-button>
@@ -520,6 +522,7 @@ class EmailOtpCardComponent {
                             [label]="t.codeLabel"
                             name="code"
                             autoComplete="one-time-code"
+                            inputMode="numeric"
                             (changed)="actions.setField('code', $event)"
                             (blurred)="actions.blur('code')"
                         />

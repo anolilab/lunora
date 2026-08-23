@@ -200,7 +200,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 quantity: readNumber(object, "quantity"),
                 referenceId: referenceFromMetadata(object) ?? customerIdOf(object),
                 subscriptionId: readString(object, "subscription_id"),
-                type: stateToEventType(SUBSCRIPTION_STATE_BY_DODO_STATUS[status ?? ""]),
+                // Fail closed before `stateToEventType` — an unmapped status must not degrade to a
+                // state-preserving metadata patch.
+                type: stateToEventType(SUBSCRIPTION_STATE_BY_DODO_STATUS[status ?? ""] ?? "past_due"),
             };
         }
 

@@ -10,7 +10,7 @@ import { computed } from "vue";
 import type { AuthAdminUser } from "../core/types";
 import { createAdminUsersController } from "../core/admin-users";
 import { isFlowEnabled } from "../core/flow-gate";
-import { ROLE_OPTIONS } from "../core/labels";
+import { ROLE_OPTIONS, rowActionLabel } from "../core/labels";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUIContextRef } from "./provider";
@@ -69,7 +69,7 @@ const onBanToggle = (user: AuthAdminUser): void => {
                 <span class="lunora-auth-list__actions">
                     <select
                         class="lunora-auth-select"
-                        :aria-label="t.roleLabel"
+                        :aria-label="rowActionLabel(t.roleLabel, user.email)"
                         :disabled="state.busy || user.id === undefined"
                         :value="user.role ?? 'user'"
                         @change="onRole(user, $event)"
@@ -80,6 +80,7 @@ const onBanToggle = (user: AuthAdminUser): void => {
                         class="lunora-auth-button lunora-auth-button--secondary"
                         type="button"
                         :disabled="state.busy || user.id === undefined"
+                        :aria-label="rowActionLabel(t.adminImpersonate, user.email)"
                         @click="onImpersonate(user)"
                     >
                         {{ t.adminImpersonate }}
@@ -88,6 +89,7 @@ const onBanToggle = (user: AuthAdminUser): void => {
                         class="lunora-auth-button lunora-auth-button--danger"
                         type="button"
                         :disabled="state.busy || user.id === undefined"
+                        :aria-label="rowActionLabel(user.banned === true ? t.adminUnban : t.adminBan, user.email)"
                         @click="onBanToggle(user)"
                     >
                         {{ user.banned === true ? t.adminUnban : t.adminBan }}

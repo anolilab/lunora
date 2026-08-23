@@ -27,6 +27,7 @@ const makeClient = (mutation: () => Promise<unknown> = async () => "server-id") 
         // The list-path row callback advances the checkpoint registry from this
         // (server-confirmed custom-mutator watermark); no custom mutators here → 0.
         confirmedMutationWatermark: () => 0,
+        currentIdentity: () => null,
         mutation: mutationMock,
         subscribe: vi.fn<
             (

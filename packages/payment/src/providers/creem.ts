@@ -226,7 +226,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 priceId: idOf(object.product),
                 referenceId: referenceFromMetadata(object) ?? idOf(object.customer),
                 subscriptionId: readString(object, "id"),
-                type: stateToEventType(SUBSCRIPTION_STATE_BY_CREEM_STATUS[status ?? ""]),
+                // Fail closed before `stateToEventType` — an unmapped status must not degrade to a
+                // state-preserving metadata patch.
+                type: stateToEventType(SUBSCRIPTION_STATE_BY_CREEM_STATUS[status ?? ""] ?? "past_due"),
             };
         }
 

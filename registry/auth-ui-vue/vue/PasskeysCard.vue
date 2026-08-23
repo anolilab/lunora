@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 
 import { isFlowEnabled } from "../core/flow-gate";
-import { passkeyLabel } from "../core/labels";
+import { passkeyLabel, rowActionLabel } from "../core/labels";
 import { createPasskeysController } from "../core/passkeys";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
@@ -40,12 +40,19 @@ const onRemove = (id?: string): void => {
 <template>
     <AuthCard v-if="enabled" :headingLevel="2" :title="t.passkeys">
         <FormBanner :error="state.error" />
-        <p v-if="state.loading" class="lunora-auth-card__description">…</p>
+        <p v-if="state.loading" class="lunora-auth-card__description" role="status">{{ t.loading }}</p>
         <p v-else-if="state.items.length === 0" class="lunora-auth-card__description">{{ t.passkeysEmpty }}</p>
         <ul v-else class="lunora-auth-list">
             <li v-for="passkey in state.items" :key="passkey.id ?? passkeyLabel(passkey, t)" class="lunora-auth-list__item">
                 <span class="lunora-auth-list__label">{{ passkeyLabel(passkey, t) }}</span>
-                <button v-if="passkey.id !== undefined" class="lunora-auth-link" type="button" :disabled="state.busy" @click="onRemove(passkey.id)">
+                <button
+                    v-if="passkey.id !== undefined"
+                    class="lunora-auth-link"
+                    type="button"
+                    :disabled="state.busy"
+                    :aria-label="rowActionLabel(t.remove, passkeyLabel(passkey, t))"
+                    @click="onRemove(passkey.id)"
+                >
                     {{ t.remove }}
                 </button>
             </li>

@@ -13,6 +13,7 @@
  * load the prebuilt asset bytes.
  */
 export { parseDevVariable, resolveAdminToken } from "./admin-token";
+export { applyStudioAssetCache, sendStudioDocument } from "./asset-cache";
 export { assetContentType, isStandaloneModulePath, loadStudioAssets, readStandaloneAsset, resolveStandaloneDirectory, studioAssetsStamp } from "./assets";
 export type { PolicyScaffoldBody, PolicyScaffoldRequest, PolicyScaffoldResponse, WirePolicyEdit } from "./policy-scaffold-handler";
 export { handlePolicyScaffoldRequest, POLICY_SCAFFOLD_ENDPOINT } from "./policy-scaffold-handler";

@@ -8,6 +8,8 @@ export type { OptimisticMessage, ReconcileDurableMessage } from "./agent-chat-re
 export { maxSeq, reconcileOptimistic, RETIRE_AFTER_DURABLE_SEQ_ADVANCE } from "./agent-chat-reconcile";
 export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-storage-persistence";
 export { createAsyncStoragePersistence } from "./async-storage-persistence";
+export type { AsyncStorageQueryCacheOptions } from "./async-storage-query-cache";
+export { createAsyncStorageQueryCache } from "./async-storage-query-cache";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
 export { createCallRunner } from "./call-runner";
 export type { ClientQueryRef } from "./client-query-store";
@@ -115,6 +117,7 @@ export type {
     ShardTrafficResult,
     StorageListPage,
     StorageObject,
+    StoredQuery,
     Unsubscribe,
     User,
     VectorIndexSummary,

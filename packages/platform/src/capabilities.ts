@@ -34,6 +34,21 @@ export interface PlatformCapabilities {
         browser?: Capability;
 
         /**
+         * `.commitOrdered()` tables — the `_commitSeq` system field: a per-shard
+         * integer allocated once per mutation and strictly increasing in commit
+         * order.
+         *
+         * Listed as a capability rather than assumed, because the ordering
+         * guarantee is not the engine's to give. It rests on two things the HOST
+         * provides: an atomic write boundary the counter bump shares with the
+         * rows it stamps, and serialized execution so two mutations cannot
+         * interleave their allocations. A host that offers neither can still
+         * create the counter and hand out increasing numbers — they just would
+         * not order commits, which is the whole contract.
+         */
+        commitOrderedTables?: Capability;
+
+        /**
          * Container execution (Cloudflare Containers / Fargate), including
          * `ctx.containers.<name>.exec`. Deliberately one rating rather than two:
          * `exec` is a method on the accessor this key already gates, not a
@@ -43,6 +58,7 @@ export interface PlatformCapabilities {
          * result back should say so in this note.
          */
         containers?: Capability;
+
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
 
@@ -54,6 +70,7 @@ export interface PlatformCapabilities {
         durableStreams?: Capability;
         /** Global (replicated) tables backed by a SQL store. */
         globalTables?: Capability;
+
         /** BYO database via connection pooling (Hyperdrive / RDS Proxy). */
         hyperdrive?: Capability;
 
@@ -79,8 +96,22 @@ export interface PlatformCapabilities {
         keyValueStore?: Capability;
         /** Local SQL execution inside a shard. */
         localSql?: Capability;
+
         /** Email sending (Resend / SES / etc). */
         mail?: Capability;
+
+        /**
+         * `.memory()` tables — the ephemeral tier: rows cleared on every shard
+         * cold start, never written to the CDC changelog, refilled by
+         * `onShardInit`.
+         *
+         * The rating answers "does a memory table avoid durable storage on this
+         * host", NOT "does it work". The lifetime semantics are the engine's and
+         * hold everywhere; whether the rows actually stay out of the durable
+         * store depends on the host offering a second, memory-backed SQL handle,
+         * which is a per-target fact.
+         */
+        memoryTables?: Capability;
 
         /** Object storage (R2 / S3 / MinIO). */
         objectStorage?: Capability;
@@ -95,6 +126,7 @@ export interface PlatformCapabilities {
          * a scheduler to run the unattended half.
          */
         objectStorageBackups?: Capability;
+
         /** Pipelines / streaming data. */
         pipelines?: Capability;
         /** Queue-backed workpools. */
@@ -103,6 +135,19 @@ export interface PlatformCapabilities {
         scheduler?: Capability;
         /** Secrets management. */
         secrets?: Capability;
+
+        /**
+         * `onQueryChange` reactors — server-side reactivity: a subscriber that is
+         * not a socket, woken after a write flush when a watched read's result
+         * changed.
+         *
+         * Host-dependent because the whole mechanism rests on the host being able
+         * to run work AFTER a write commits, on the same shard, without a client
+         * connection to hang it off — and on that work being serialized against
+         * further writes so a reactor's own writes cascade deterministically
+         * rather than interleaving.
+         */
+        serverReactors?: Capability;
         /** Alarms / scheduled wakeup inside a shard. */
         shardAlarms?: Capability;
         /** Durable Object-style sharded state. */
@@ -147,7 +192,19 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming",
         },
+        commitOrderedTables: {
+            level: "native",
+            note: "`state.storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a Durable Object executes one event at a time — so the allocation order IS the commit order, with no lock of ours in the path",
+        },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
+        serverReactors: {
+            level: "emulated",
+            note: "The wake-up is Lunora's, not the platform's: reactors ride the existing post-write refresh drain, which already exists to push subscription frames. Cloudflare supplies the two properties that make it correct — one event at a time per Durable Object, and `waitUntil` to keep the drain alive past the response — but has no notion of a server-side subscription of its own",
+        },
+        memoryTables: {
+            level: "emulated",
+            note: "The lifetime is real — an eviction drops the DO's heap and the framework clears every `.memory()` table on reconstruction, so the rows behave exactly like heap state, and their writes stay out of the CDC changelog. The STORAGE is not: workerd exposes one SQL handle and no memory-backed database, so a memory row is still written to the DO's SQLite and then deleted. `.memory()` buys the semantics, not the write",
+        },
         shardAlarms: { level: "native", note: "state.storage.setAlarm" },
         shardPlacement: {
             level: "native",
@@ -249,7 +306,19 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it — a durable stream declared here would silently behave as an ephemeral one",
         },
+        commitOrderedTables: {
+            level: "emulated",
+            note: "The sequence orders commits correctly, but the serialization it depends on is Lunora's per-shard write gate rather than a platform property — one process, one better-sqlite3 handle per shard key. Correct here; not something the host guarantees the way a Durable Object does",
+        },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
+        serverReactors: {
+            level: "emulated",
+            note: "Same engine-level implementation as Cloudflare; the per-shard serialization it depends on is the host's own write gate rather than a platform guarantee",
+        },
+        memoryTables: {
+            level: "emulated",
+            note: "Same shape as Cloudflare and for a different reason: better-sqlite3 CAN open `:memory:`, but a shard's memory tables share the one handle its durable tables use, so they are cleared rather than never written. A host process also outlives far more than a Durable Object does, so cold starts — and therefore `onShardInit` — are much rarer here than in production on Cloudflare; do not use this target to judge how often a memory table is actually empty",
+        },
         shardAlarms: {
             level: "emulated",
             note: "setTimeout over a durable row, dispatched to onAlarm and re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never",

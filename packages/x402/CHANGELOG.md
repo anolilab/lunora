@@ -1,3 +1,41 @@
+## @lunora/x402 [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.38...@lunora/x402@1.0.0-alpha.39) (2026-08-23)
+
+### ⚠ BREAKING CHANGES
+
+* **x402:** consumers must now install the peer(s) for their
+chain family — @x402/evm + viem for EVM networks, @x402/svm +
+@solana/kit for Solana (pre-1.0 alpha install-shape change).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* fix(x402): only blame the peer when it is missing
+
+The optional-peer guards caught every dynamic-import failure and
+reported "install the peer", so an installed-but-broken toolchain
+(runtime incompatibility, bad transitive dep, a throw at evaluation
+time) named the wrong cause and lost the original error. Extract one
+importOptionalPeer helper that matches module-not-found by error code
+or message — walking the cause chain, since loaders wrap it — rethrows
+everything else untouched, and attaches the original as cause. All
+seven guards, including the pre-existing CDP one, route through it.
+
+resolveEvmAccount now returns the structural ClientEvmSigner instead
+of viem's PrivateKeyAccount, keeping viem out of the published
+declarations so consumers without the peer can still type-check.
+README documents which peers each network family needs.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+### Bug Fixes
+
+* **x402:** parse release amounts, slim deps ([#436](https://github.com/anolilab/lunora/issues/436)) ([2daa83c](https://github.com/anolilab/lunora/commit/2daa83c225fcd0c5a60b0d1a636bd753113b6860))
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
 ## @lunora/x402 [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/%40lunora%2Fx402%401.0.0-alpha.37...%40lunora%2Fx402%401.0.0-alpha.38) (2026-08-14)
 
 

@@ -177,4 +177,54 @@ describe("createLunoraClient", () => {
 
         expect(() => createLunoraClient({ persistence: false, storage, url: "https://api.example.com" })).not.toThrow();
     });
+
+    it("derives an AsyncStorage query cache from `storage`", async () => {
+        expect.assertions(1);
+
+        const reads: string[] = [];
+        const storage = {
+            getItem: async (key: string) => {
+                reads.push(key);
+
+                return null;
+            },
+            removeItem: async () => {},
+            setItem: async () => {},
+        };
+
+        const client = createLunoraClient({ storage, url: "https://api.example.com" });
+
+        // Cache hydration runs on a construction-time microtask; a wired query
+        // cache shows up as a read of its storage key.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+        client.close();
+
+        expect(reads).toContain("lunora:query-cache");
+    });
+
+    it("honours an explicit `queryCache: false` over `storage`", async () => {
+        expect.assertions(1);
+
+        const reads: string[] = [];
+        const storage = {
+            getItem: async (key: string) => {
+                reads.push(key);
+
+                return null;
+            },
+            removeItem: async () => {},
+            setItem: async () => {},
+        };
+
+        const client = createLunoraClient({ queryCache: false, storage, url: "https://api.example.com" });
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+        client.close();
+
+        expect(reads).not.toContain("lunora:query-cache");
+    });
 });

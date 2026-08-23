@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { money } from "../../src/money";
 import type { StripeClientLike } from "../../src/providers/stripe";
 import { createStripeAdapter } from "../../src/providers/stripe";
+import { MemoryPaymentStore } from "../../src/store";
+import applyWebhookAction from "../../src/sync";
 
 interface RecordedCall {
     args: unknown[];
@@ -259,6 +261,94 @@ describe("stripe adapter", () => {
         expect(action.type).toBe("subscription.updated");
     });
 
+    it("keys a payment-mode completed session on the payment intent id", async () => {
+        expect.assertions(2);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const event = {
+            data: { object: { amount_total: 1000, currency: "usd", customer: "cus_1", id: "cs_1", mode: "payment", payment_intent: "pi_1" } },
+            id: "evt_cs_paid",
+            type: "checkout.session.completed",
+        };
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
+
+        expect(action.type).toBe("payment.captured");
+        expect(action.sessionId).toBe("pi_1");
+    });
+
+    it("still captures a fully discounted session, which never gets a payment intent (regression)", async () => {
+        expect.assertions(3);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        // A 100%-off session settles as `no_payment_required` and Stripe creates NO PaymentIntent,
+        // so deferring would drop the order entirely — it keeps the cs_… id it will always have.
+        const action = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: {
+                    object: {
+                        amount_total: 0,
+                        currency: "usd",
+                        customer: "cus_1",
+                        id: "cs_free",
+                        metadata: { referenceId: "user_1" },
+                        mode: "payment",
+                        payment_status: "no_payment_required",
+                    },
+                },
+                id: "evt_cs_free",
+                type: "checkout.session.completed",
+            }),
+        });
+
+        expect(action.type).toBe("payment.captured");
+        expect(action.sessionId).toBe("cs_free");
+        expect(action.referenceId).toBe("user_1");
+    });
+
+    it("defers a completed session without a payment_intent to payment_intent.succeeded (regression)", async () => {
+        expect.assertions(4);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        // Async payment methods (SEPA, ACH) can complete the session before the intent id is
+        // attached — capturing under the cs_… id would double-count once pi_… lands.
+        const completed = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount_total: 1000, currency: "usd", customer: "cus_1", id: "cs_1", mode: "payment", payment_status: "unpaid" } },
+                id: "evt_cs_async",
+                type: "checkout.session.completed",
+            }),
+        });
+
+        expect(completed.type).toBe("unhandled");
+
+        const succeeded = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount_received: 1000, currency: "usd", customer: "cus_1", id: "pi_1", metadata: { referenceId: "user_1" } } },
+                id: "evt_pi_async",
+                type: "payment_intent.succeeded",
+            }),
+        });
+
+        expect(succeeded.sessionId).toBe("pi_1");
+
+        // Apply both: exactly one captured row, keyed on the pi_… id.
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, completed);
+        await applyWebhookAction(store, succeeded);
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.state).toBe("captured");
+        await expect(store.getPaymentSession("stripe", "cs_1")).resolves.toBeUndefined();
+    });
+
     it("rejects an unsigned webhook", async () => {
         expect.assertions(1);
 
@@ -434,5 +524,65 @@ describe("stripe adapter", () => {
 
         expect((call?.args[0] as { amount?: number }).amount).toBe(1000);
         expect(session.state).toBe("refunded");
+    });
+
+    it("fails closed on an unknown status in the webhook path, for created and updated alike (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const unknownStatusEvent = async (type: string) =>
+            adapter.parseWebhook({
+                headers: webhookHeaders,
+                payload: JSON.stringify({
+                    data: {
+                        object: {
+                            customer: "cus_1",
+                            id: "sub_1",
+                            items: { data: [{ price: { id: "price_1" }, quantity: 1 }] },
+                            metadata: { referenceId: "user_1" },
+                            status: "some_future_status",
+                        },
+                    },
+                    id: `evt_${type}`,
+                    type,
+                }),
+            });
+
+        // An unmapped status must not reach `stateToEventType` as `undefined`: that degrades to
+        // `subscription.updated`, a metadata patch that leaves an existing `active` row entitling.
+        const [created, updated] = await Promise.all([
+            unknownStatusEvent("customer.subscription.created"),
+            unknownStatusEvent("customer.subscription.updated"),
+        ]);
+
+        expect(created.type).toBe("subscription.past_due");
+        expect(updated.type).toBe("subscription.past_due");
+    });
+
+    it("fails closed on an unknown subscription status (regression)", async () => {
+        expect.assertions(1);
+
+        const base = makeClient([]) as unknown as Record<string, unknown>;
+        const client = {
+            ...base,
+            subscriptions: {
+                ...(base.subscriptions as Record<string, unknown>),
+                retrieve: async (id: string) => {
+                    return {
+                        id,
+                        items: { data: [{ price: { id: "price_1" }, quantity: 1 }] },
+                        metadata: { referenceId: "user_1" },
+                        status: "some_future_status",
+                    };
+                },
+            },
+        } as unknown as Stripe;
+        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+
+        const subscription = await adapter.getSubscriptionStatus("sub_1");
+
+        // An unrecognized status must map to non-entitling `past_due`, never `active`.
+        expect(subscription.state).toBe("past_due");
     });
 });

@@ -268,6 +268,7 @@ interface SessionRecord {
 abstract class ShardDO {
     protected static readonly MAX_STREAMS_PER_SOCKET = 8;
     protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
+    protected static readonly MAX_REACTOR_RUNS_PER_DRAIN = 8;
     protected static readonly GLOBAL_SHAPE_POLL_INTERVAL_MS = 2e3;
     protected static readonly GLOBAL_SHAPE_MAX_ROWS = 5e4;
     protected static readonly MAX_WHISPER_TOPICS_PER_SOCKET = 64;
@@ -285,11 +286,16 @@ abstract class ShardDO {
     webSocketError(_ws: ShardSocketLike, _error: unknown): void;
     alarm(): Promise<void>;
     abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown>;
-    protected lifecycleHookPaths(_event: "connect" | "disconnect"): ReadonlyArray<string>;
+    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor"): ReadonlyArray<string>;
     protected dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void>;
+    protected dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void>;
+    protected runReactor(_path: string, _previousDigest?: string): Promise<ReactorRunOutcome | undefined>;
+    protected recordReactorError(path: string, error: unknown, trace?: TraceRefLike): void;
+    protected dispatchShardInit(): Promise<void>;
     protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown>;
     protected get sql(): unknown;
     protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>>;
+    protected isInTransaction(): boolean;
     protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
     protected getInboundBookmark(): string | undefined;
     protected setOutboundBookmark(bookmark: string | undefined): void;
@@ -374,6 +380,9 @@ abstract class ShardDO {
     protected pollTtlSweeps(trace?: TraceRefLike): Promise<number | undefined>;
     protected scheduleTtlSweep(): Promise<void>;
     protected currentShardKey(): string;
+    protected ensureShardInit(): Promise<void>;
+    protected runShardInit(): Promise<void>;
+    protected recordShardInitError(hookPath: string, error: unknown, trace?: TraceRefLike): void;
     protected recordExternalSourceError(table: string, error: unknown, trace?: TraceRefLike): void;
     protected recordExternalSourceWarning(table: string, message: string, trace?: TraceRefLike): void;
     protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | {
@@ -559,6 +568,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `buildReprojectionMigration` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `clearMemoryTables` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 

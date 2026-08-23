@@ -553,6 +553,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ReactorHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ReactorOutcome` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ReactorSelect` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ReadOnlyStorage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -585,6 +597,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredReactor` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredShape` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -614,6 +630,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `Role` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RunQueryOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -650,6 +670,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ShapeReadWhereRequest` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ShardInitEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ShardInitHandler` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1117,6 +1145,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `onQueryChange` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `onShardInit` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `presenceExtension` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1164,6 +1200,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `AsyncStoragePersistenceOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `AsyncStorageQueryCacheOptions` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1531,6 +1571,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `StoredQuery` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `StreamHandle` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1624,6 +1668,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `createAsyncStoragePersistence` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `createAsyncStorageQueryCache` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2286,6 +2334,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `buildReprojectionMigration` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `clearMemoryTables` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -5063,6 +5115,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ReactorHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ReactorOutcome` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ReactorSelect` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ReadOnlyStorage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5095,6 +5159,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredReactor` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredShape` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5124,6 +5192,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `Role` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RunQueryOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5160,6 +5232,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ShapeReadWhereRequest` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ShardInitEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ShardInitHandler` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5624,6 +5704,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `onDisconnect` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `onQueryChange` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `onShardInit` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6857,6 +6945,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RunQueryOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ScheduledFunctionDoc` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6894,6 +6986,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SecretsStoreSecretLike` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ShardInitEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
