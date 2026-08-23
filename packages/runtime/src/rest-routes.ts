@@ -16,12 +16,15 @@
  * contract that the OpenAPI emitter also uses, so the published spec and the live
  * surface cannot drift.
  */
+import type { HttpCacheLike } from "@lunora/platform";
+
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
 import { assertArgsObject } from "./assert-args-object";
 import { methodGuard } from "./method-guard";
 import { applyRestCache } from "./rest-cache";
+import { defaultHttpCache, lookupRestEdgeCache, storeRestEdgeCache } from "./rest-edge-cache";
 
 /** The bits of a registered function the REST router reads: its kind and its `.expose` tag. */
 interface RestRegistryEntry {
@@ -62,6 +65,14 @@ type RestRateLimit = (request: Request, functionPath: string) => Promise<Respons
 type RestRoute = (request: Request, env: unknown, url?: URL, context?: ExecutionContextLike) => Promise<Response>;
 
 interface RestRouteDeps {
+    /**
+     * The shared HTTP cache a declared `cache` policy is stored in. Defaults to
+     * the host's own (`caches.default` on Cloudflare); pass a double in tests, or
+     * `null` to keep the surface headers-only on a host whose cache should not be
+     * used. A host with no cache at all needs no opt-out — `undefined` is what
+     * `rest-edge-cache` already finds there.
+     */
+    edgeCache?: HttpCacheLike | null;
     /** The generated function registry — the source of which procedures are exposed. */
     functions: RestRegistryLike;
     /** The shared RPC dispatch (bound in `create-worker`). */
@@ -133,7 +144,11 @@ const argsFromQuery = (url: URL): Record<string, unknown> => {
  * `POST` (args from a JSON body); a `mutation` / `action` accepts `POST` only.
  */
 const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
-    const { functions, invoke, rateLimit, readJsonBody } = deps;
+    const { edgeCache, functions, invoke, rateLimit, readJsonBody } = deps;
+    // `null` is the explicit opt-out; `undefined` means "whatever the host has",
+    // resolved per request because the `caches` global cannot be read at
+    // construction time in workerd.
+    const resolveEdgeCache = (): HttpCacheLike | undefined => (edgeCache === null ? undefined : (edgeCache ?? defaultHttpCache()));
     const routes: Record<string, RestRoute> = {};
 
     for (const entry of restSurfaceFromRegistry(functions)) {
@@ -145,12 +160,7 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
         // the lookup cannot miss.
         const cache = (functions[entry.functionPath] as RestRegistryEntry).expose?.cache;
 
-        routes[entry.path] = async (
-            request: Request,
-            env: unknown,
-            _url?: URL,
-            context?: { waitUntil?: (promise: Promise<unknown>) => void },
-        ): Promise<Response> => {
+        routes[entry.path] = async (request: Request, env: unknown, _url?: URL, context?: ExecutionContextLike): Promise<Response> => {
             const wrongMethod = methodGuard(request, allowed);
 
             if (wrongMethod) {
@@ -167,6 +177,17 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
                 if (limited) {
                     return limited;
                 }
+            }
+
+            // After the limiter, before the dispatch — the order a CDN uses. A
+            // cache hit must still be metered (it is a request this caller made,
+            // and it still costs a Worker invocation), but it must not cost a
+            // shard round trip.
+            const httpCache = resolveEdgeCache();
+            const hit = await lookupRestEdgeCache(httpCache, cache, request, context);
+
+            if (hit) {
+                return hit;
             }
 
             let args: Record<string, unknown>;
@@ -203,7 +224,11 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
             // `private`, see `rest-cache`). The context is passed because one
             // credential — the Cloudflare Access identity under a Worker-scoped
             // policy — arrives there rather than on the request.
-            return applyRestCache(response, cache, request, context);
+            const answered = applyRestCache(response, cache, request, context);
+
+            // Stored only once the headers are on it, so a later hit replays the
+            // exact response the first caller got rather than a bare body.
+            return storeRestEdgeCache(httpCache, answered, cache, request, context);
         };
     }
 

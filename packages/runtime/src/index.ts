@@ -163,6 +163,7 @@ export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggr
 export type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceInput, ShardNamespaceLike } from "./resolve-shard";
 export { applyJurisdiction, resolveShard } from "./resolve-shard";
 export { applyRestCache, requestCarriesCredentials, restCacheHeaders } from "./rest-cache";
+export { defaultHttpCache, EDGE_CACHE_HEADER, isEdgeCacheable, lookupRestEdgeCache, restCacheKey, storeRestEdgeCache, VARY_KEY_PARAM } from "./rest-edge-cache";
 export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps } from "./rest-routes";
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry } from "./rest-routes";
 export type { BackupRetentionPreview, PrunedBackups } from "./scheduled-backup";

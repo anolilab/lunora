@@ -41,6 +41,41 @@ export interface QueueMessageLike<Body = unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// HTTP cache (Web Cache API)
+// ---------------------------------------------------------------------------
+
+/** Options accepted by {@link HttpCacheLike.match} and {@link HttpCacheLike.delete}. */
+export interface HttpCacheQueryOptions {
+    /** Match a non-`GET` request against a stored `GET` entry. */
+    ignoreMethod?: boolean;
+}
+
+/**
+ * Minimal projection of one Web Cache API cache — the store a host puts in front
+ * of the app, reached on Cloudflare as `caches.default` (the colo cache).
+ *
+ * Only the three calls Lunora makes are declared, so a host that has a cache but
+ * not the whole `Cache` interface still satisfies it, and a unit test can pass a
+ * plain object double. This is a **host** primitive, not a binding: it is reached
+ * through a runtime global rather than `env`, and a target without one leaves it
+ * `undefined` rather than shipping a fake — see `httpCache` in
+ * `PlatformCapabilities`.
+ *
+ * The stored entry is keyed by the request, so a caller that needs `Vary`
+ * semantics must fold the varying header values into the key itself: Cloudflare's
+ * cache honours `Vary` for `Accept-Encoding` only, and a projection cannot make
+ * that portable.
+ */
+export interface HttpCacheLike {
+    /** Evict the entry stored under `request`. Resolves `true` when something was removed. */
+    delete: (request: Request | string, options?: HttpCacheQueryOptions) => Promise<boolean>;
+    /** The stored response for `request`, or `undefined` on a miss. */
+    match: (request: Request | string, options?: HttpCacheQueryOptions) => Promise<Response | undefined>;
+    /** Store `response` under `request`. Rejects for a `206`, a `Vary: *`, or a `Set-Cookie`-bearing response. */
+    put: (request: Request | string, response: Response) => Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
 // D1 / relational database
 // ---------------------------------------------------------------------------
 

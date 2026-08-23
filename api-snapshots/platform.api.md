@@ -124,6 +124,24 @@ interface ExecutionContextLike {
 }
 ```
 
+### `HttpCacheLike` (interface)
+
+```ts
+interface HttpCacheLike {
+    delete: (request: Request | string, options?: HttpCacheQueryOptions) => Promise<boolean>;
+    match: (request: Request | string, options?: HttpCacheQueryOptions) => Promise<Response | undefined>;
+    put: (request: Request | string, response: Response) => Promise<void>;
+}
+```
+
+### `HttpCacheQueryOptions` (interface)
+
+```ts
+interface HttpCacheQueryOptions {
+    ignoreMethod?: boolean;
+}
+```
+
 ### `KVNamespaceLike` (interface)
 
 ```ts
@@ -258,6 +276,7 @@ interface PlatformCapabilities {
         crossShardFanout?: Capability;
         durableStreams?: Capability;
         globalTables?: Capability;
+        httpCache?: Capability;
         hyperdrive?: Capability;
         identityProxy?: Capability;
         images?: Capability;

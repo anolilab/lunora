@@ -589,6 +589,12 @@ interface DynamicShardRegistryOptions {
 }
 ```
 
+### `EDGE_CACHE_HEADER` (const)
+
+```ts
+const EDGE_CACHE_HEADER = "x-lunora-edge-cache";
+```
+
 ### `ExecutionContextLike` (interface)
 
 ```ts
@@ -1690,6 +1696,7 @@ type RestRoute = (request: Request, env: unknown, url?: URL, context?: Execution
 
 ```ts
 interface RestRouteDeps {
+    edgeCache?: HttpCacheLike | null;
     functions: RestRegistryLike;
     invoke: RestInvoke;
     rateLimit?: RestRateLimit;
@@ -2104,6 +2111,12 @@ type TraceTrustSignal = "mtls";
 type TrustInboundTraceContext = boolean | TraceTrustSignal | ((request: Request) => boolean);
 ```
 
+### `VARY_KEY_PARAM` (const)
+
+```ts
+const VARY_KEY_PARAM = "__lunora_vary";
+```
+
 ### `VERSION` (const)
 
 ```ts
@@ -2398,6 +2411,12 @@ const d1Probe: (name: string, database: {
 const decorateResponse: (response: Response, request: Request, resolved: ResolvedSecurity) => Response;
 ```
 
+### `defaultHttpCache` (const)
+
+```ts
+const defaultHttpCache: () => HttpCacheLike | undefined;
+```
+
 ### `defineExportSink` (const)
 
 ```ts
@@ -2450,6 +2469,18 @@ const isBackupManifestEntry: (value: unknown) => value is BackupManifestEntry;
 
 ```ts
 const isBackupManifestKey: (key: string) => boolean;
+```
+
+### `isEdgeCacheable` (const)
+
+```ts
+const isEdgeCacheable: (policy: RestCachePolicy, request: Request, context?: ExecutionContextLike) => boolean;
+```
+
+### `lookupRestEdgeCache` (const)
+
+```ts
+const lookupRestEdgeCache: (cache: HttpCacheLike | undefined, policy: RestCachePolicy | undefined, request: Request, context?: ExecutionContextLike) => Promise<Response | undefined>;
 ```
 
 ### `memoizeIdentity` (const)
@@ -2556,6 +2587,12 @@ const resolveShard: (namespace: ShardNamespaceInput, shardKey: string, locationH
 const restCacheHeaders: (policy: RestCachePolicy, request: Request, status: number, context?: ExecutionContextLike) => Record<string, string> | undefined;
 ```
 
+### `restCacheKey` (const)
+
+```ts
+const restCacheKey: (policy: RestCachePolicy, request: Request) => Request;
+```
+
 ### `restSurfaceFromRegistry` (const)
 
 ```ts
@@ -2584,6 +2621,12 @@ const sanitizeChange: (raw: Record<string, unknown>) => ExportChange;
 
 ```ts
 const sentrySink: (options: SentrySinkOptions) => ObservabilitySink;
+```
+
+### `storeRestEdgeCache` (const)
+
+```ts
+const storeRestEdgeCache: (cache: HttpCacheLike | undefined, response: Response, policy: RestCachePolicy | undefined, request: Request, context?: ExecutionContextLike) => Response;
 ```
 
 ### `toAirbyteMessages` (const)

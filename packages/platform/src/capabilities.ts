@@ -71,6 +71,21 @@ export interface PlatformCapabilities {
         /** Global (replicated) tables backed by a SQL store. */
         globalTables?: Capability;
 
+        /**
+         * A shared HTTP cache in front of the app that the runtime can READ AND
+         * WRITE — the Web Cache API (`caches.default` on Cloudflare), projected
+         * as `HttpCacheLike`.
+         *
+         * Rated separately from the app merely emitting `Cache-Control`, because
+         * only this half needs a host primitive. Emitting the header is portable
+         * by construction: any host that returns an HTTP response can do it, and
+         * browsers and downstream CDNs honour it wherever the app runs. What is
+         * not portable is a store the Worker itself can `match`/`put` against,
+         * which is why `@lunora/runtime`'s REST edge cache degrades to
+         * headers-only on a target rated `unsupported` rather than failing.
+         */
+        httpCache?: Capability;
+
         /** BYO database via connection pooling (Hyperdrive / RDS Proxy). */
         hyperdrive?: Capability;
 
@@ -242,6 +257,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
         hyperdrive: { level: "native", note: "Cloudflare Hyperdrive" },
+        httpCache: {
+            level: "native",
+            note: "The colo cache via caches.default. Worker-generated responses are NOT stored by it automatically — the runtime has to caches.default.put() them — and it honours Vary for Accept-Encoding only, so a varying response has to fold those header values into the cache key itself. A 206, a Vary: *, or a Set-Cookie-bearing response is refused by put()",
+        },
         identityProxy: {
             level: "native",
             note: "Cloudflare Access. A policy attached to the Worker covers its custom domains, routes, workers.dev and preview URLs at once, and the authenticated identity arrives on the execution context as ctx.access — no header to verify, and nothing a request can forge to manufacture one. A hostname-scoped Access application instead stamps the Cf-Access-Jwt-Assertion header, which needs no host support at all",
@@ -369,6 +388,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         mail: { level: "unsupported", note: "@lunora/mail's queue-backed sends need a queues binding, which this target does not provide" },
         secrets: { level: "unsupported", note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars)" },
         hyperdrive: { level: "unsupported", note: "No connection-pooling binding implemented" },
+        httpCache: {
+            level: "unsupported",
+            note: "Nothing sits in front of this host to cache its responses, and Node exposes no Web Cache API global — the runtime's REST edge cache finds no HttpCacheLike here and degrades to emitting Cache-Control alone, which browsers and any CDN in front still honour",
+        },
         identityProxy: {
             level: "unsupported",
             note: "Nothing sits in front of this host to authenticate callers, so it never populates the execution context's access identity. @lunora/cloudflare-access still works here through its Cf-Access-Jwt-Assertion fallback, which is a plain header check and needs no host support",
