@@ -381,13 +381,12 @@ describe("createSqlCtxDb — search iteration terminates like collect()", () => 
     it("raises the cap error rather than stopping silently at the cap", async () => {
         expect.assertions(2);
 
-        // A search page is capped at MAX_SEARCH_SCAN and `planSearchPage`
-        // refuses any page reaching past it, so a page sized to the cap comes
-        // back full and `isDone` whether there were exactly that many matches
-        // or ten times as many — the probe row that tells them apart cannot be
-        // fetched. Paging here would therefore stop at the cap looking
-        // complete, while `.collect()` on the same query throws. Same query,
-        // same data, two answers is the bug; both must refuse.
+        // A search page is capped at MAX_SEARCH_SCAN, and a page sized to
+        // the cap cannot fetch the probe row that tells "exactly that many
+        // matches" from "ten times as many" — so `planSearchPage` refuses it
+        // rather than reporting a false `isDone`. Iterating must therefore
+        // raise the same cap error `.collect()` raises: same query, same data,
+        // one answer.
         const writer = makeSearchWriter();
 
         await seedMatching(writer, MAX_SEARCH_SCAN + 1);

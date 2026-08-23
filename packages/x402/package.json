@@ -75,7 +75,7 @@
         "viem": "catalog:web3"
     },
     "devDependencies": {
-        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@coinbase/cdp-sdk": "catalog:web3",
         "@coinbase/x402": "catalog:web3",

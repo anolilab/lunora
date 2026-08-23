@@ -74,7 +74,7 @@
     },
     "devDependencies": {
         "@cloudflare/containers": "catalog:cloudflare",
-        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

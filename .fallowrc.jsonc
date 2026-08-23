@@ -46,7 +46,7 @@
         "@anolilab/eslint-config",
         "@anolilab/prettier-config",
         "@codspeed/vitest-plugin",
-        "@cloudflare/vitest-pool-workers",
+        "@cloudflare/vitest-plugin",
         "@cloudflare/playwright",
         "babel-plugin-react-compiler",
         "@babel/preset-react",
