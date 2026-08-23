@@ -52,11 +52,13 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  */
 installCompiledValidatorMap(lunora_tasks_0.remove.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 return { "id": source["id"] };
 });
 installCompiledValidatorMap(lunora_tasks_0.rename.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
 return { "id": source["id"], "title": source["title"] };
