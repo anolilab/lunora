@@ -55,6 +55,7 @@ export {
 export { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 export { appendCdcChange, bumpCdcEpoch, CDC_META_TABLE, migrateCdcLog, migrateCdcMeta, minCdcSeq, readCdcCursor, readCdcEpoch } from "./ctx-db-cdc";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
+export { allocateCommitSeq, COMMIT_SEQ_FIELD, COMMIT_SEQ_TABLE, migrateCommitSeq, readCommitSeq } from "./ctx-db-commit-seq";
 export type { CompanionSync, CompanionSyncDeps } from "./ctx-db-companions";
 export { createCompanionSync } from "./ctx-db-companions";
 export {
@@ -67,6 +68,7 @@ export {
 } from "./ctx-db-global-shape-snapshot";
 export type { IdempotentRecord } from "./ctx-db-idempotency";
 export { IDEMPOTENCY_TABLE, migrateIdempotency, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db-idempotency";
+export { clearMemoryTables, isMemoryTable, memoryTableNames } from "./ctx-db-memory";
 export type { RankPageComputation, RankPageDeps } from "./ctx-db-rank-page";
 export { computeRankPage, hydrateDocsById } from "./ctx-db-rank-page";
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState } from "./ctx-db-search-state";
@@ -155,6 +157,8 @@ export type {
     MaskPoliciesResult,
     QueueMetadata,
     QueuesResult,
+    ReactorMetadata,
+    ReactorsResult,
     ReadTablePageOptions,
     RlsPoliciesResult,
     RlsPolicyMetadata,
@@ -227,6 +231,8 @@ export { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, rea
 export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankKeyFromDoc, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
+export type { ReactorDispatchResult, ReactorState, ReactorStats } from "./reactor-state";
+export { listReactorStates, migrateReactorState, REACTOR_STATE_TABLE, reactorNeedsRun, readReactorState, writeReactorState } from "./reactor-state";
 export type { ReadFootprint } from "./read-footprint";
 export { createReadFootprint } from "./read-footprint";
 export type { IndexKeyEntry, KeyRange } from "./read-write-set";

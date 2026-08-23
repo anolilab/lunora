@@ -72,7 +72,7 @@ export { exportShardRows, importShardRows } from "@lunora/shard-engine";
 export { runDataMigration } from "@lunora/shard-engine";
 export { buildReprojectionMigration, countLegacyRows, REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationId, reprojectionTables } from "@lunora/shard-engine";
 export { isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "@lunora/shard-engine";
-export { applyCdcChanges, createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+export { applyCdcChanges, clearMemoryTables, createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 export { assertShapeShardable } from "@lunora/shard-engine";
 
 // Emitter-conditional: the generated shard imports `WhereInput` when the project

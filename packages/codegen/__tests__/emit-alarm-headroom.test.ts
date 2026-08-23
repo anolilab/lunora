@@ -63,6 +63,10 @@ describe("emitShard — handleRpc dispatch-race fix (plan 207 step 3)", () => {
         expect(shard).toContain(
             "public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown>",
         );
-        expect(shard).toContain("const ctx = this.buildCtx({ functionPath, headroom });");
+        // `trusted` rides alongside it (an `onShardInit` hook has no caller
+        // identity, so RLS has no user to scope to) — the assertion here is that
+        // `headroom` is still threaded BY VALUE rather than falling back to the
+        // shared field, which is what this suite exists to protect.
+        expect(shard).toContain('const ctx = this.buildCtx({ functionPath, headroom, trusted: registered.lifecycle === "init" });');
     });
 });

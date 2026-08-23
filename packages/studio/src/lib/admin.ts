@@ -60,6 +60,7 @@ export const ADMIN_FUNCTIONS = {
     getIssues: "__lunora_admin__:getIssues",
     lintSql: "__lunora_admin__:lintSql",
     listFlags: "__lunora_admin__:listFlags",
+    listReactors: "__lunora_admin__:listReactors",
     listPushSubscriptions: "__lunora_admin__:listPushSubscriptions",
     listQueues: "__lunora_admin__:listQueues",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
@@ -730,6 +731,30 @@ export interface FlagEvaluation {
 export interface FlagsResult {
     configured: boolean;
     flags: FlagEvaluation[];
+}
+
+/**
+ * One `onQueryChange` reactor, hand-mirroring `@lunora/do`'s `ReactorMetadata`.
+ *
+ * `state` is the field the panel leads with because it separates the three cases
+ * an operator actually needs to tell apart: `idle` (declared, never dispatched —
+ * usually a wiring problem), `active` (running), and `failing` (its last dispatch
+ * threw, so its baseline is frozen and it is being retried every flush).
+ */
+export interface ReactorMetadata {
+    errors: number;
+    lastError?: string;
+    lastRanAt?: number;
+    path: string;
+    runs: number;
+    state: "active" | "failing" | "idle";
+    suppressed: number;
+    tables?: ReadonlyArray<string>;
+}
+
+/** Payload of a `__lunora_admin__:listReactors` call: every declared reactor, sorted by path. */
+export interface ReactorsResult {
+    reactors: ReactorMetadata[];
 }
 
 /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */

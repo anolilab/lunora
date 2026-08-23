@@ -64,34 +64,40 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  */
 installCompiledValidatorMap(lunora_channels_0.create.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["name"] !== "string") return DEFER;
 return { "name": source["name"] };
 });
 installCompiledValidatorMap(lunora_messages_1.attachmentUrl.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
 if (typeof source["key"] !== "string") return DEFER;
 return { "channelId": source["channelId"], "key": source["key"] };
 });
 installCompiledValidatorMap(lunora_messages_1.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
 return { "channelId": source["channelId"] };
 });
 installCompiledValidatorMap(lunora_messages_1.requestAttachmentUpload.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
 if (typeof source["contentType"] !== "string") return DEFER;
 return { "channelId": source["channelId"], "contentType": source["contentType"] };
 });
 installCompiledValidatorMap(lunora_messages_1.search.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
 if (typeof source["text"] !== "string") return DEFER;
 return { "channelId": source["channelId"], "text": source["text"] };
 });
 installCompiledValidatorMap(lunora_messages_1.send.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
 if (typeof source["content"] !== "string") return DEFER;
 let __has1 = false;
@@ -112,6 +118,7 @@ return { "channelId": source["channelId"], "content": source["content"], ...(__h
 });
 installCompiledValidatorMap(lunora_presence_2.heartbeat.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
 if (typeof source["sessionId"] !== "string") return DEFER;
 if (typeof source["name"] !== "string") return DEFER;
@@ -119,27 +126,32 @@ return { "channelId": source["channelId"], "sessionId": source["sessionId"], "na
 });
 installCompiledValidatorMap(lunora_presence_2.leave.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
 if (typeof source["sessionId"] !== "string") return DEFER;
 return { "channelId": source["channelId"], "sessionId": source["sessionId"] };
 });
 installCompiledValidatorMap(lunora_presence_2.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
 return { "channelId": source["channelId"] };
 });
 installCompiledValidatorMap(lunora_profiles_3.avatarUrl.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["key"] !== "string") return DEFER;
 return { "key": source["key"] };
 });
 installCompiledValidatorMap(lunora_profiles_3.requestAvatarUpload.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["contentType"] !== "string") return DEFER;
 return { "contentType": source["contentType"] };
 });
 installCompiledValidatorMap(lunora_profiles_3.save.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["name"] !== "string") return DEFER;
 let __has1 = false;
 let __val1;

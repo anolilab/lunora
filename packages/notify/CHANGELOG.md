@@ -1,3 +1,9 @@
+## @lunora/notify [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.21...@lunora/notify@1.0.0-alpha.22) (2026-08-23)
+
+### Bug Fixes
+
+* **notify:** route push targets by their kind ([#450](https://github.com/anolilab/lunora/issues/450)) ([2b0e29b](https://github.com/anolilab/lunora/commit/2b0e29b43abbac315218fe9bbe657cb79d6779a0))
+
 ## @lunora/notify [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/%40lunora%2Fnotify%401.0.0-alpha.20...%40lunora%2Fnotify%401.0.0-alpha.21) (2026-08-14)
 
 

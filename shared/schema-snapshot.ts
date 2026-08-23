@@ -20,6 +20,8 @@
  * the severity classification, and the content hash.
  */
 
+import { contentDigest } from "./content-digest";
+
 /** Current snapshot format version. Bumped if the structural shape below changes. */
 const SCHEMA_SNAPSHOT_VERSION = 1 as const;
 
@@ -184,23 +186,7 @@ const serializeSchemaSnapshot = (snapshot: SchemaSnapshot): string => `${JSON.st
  * a ~64-bit digest and a 50-version cap that is negligible — but it is a wrong
  * answer, not a merged row, and anyone widening the retention cap should know it.
  */
-const hashSchemaSnapshot = (snapshot: SchemaSnapshot): string => {
-    const text = serializeSchemaSnapshot(snapshot);
-
-    const fnv = (offset: number): string => {
-        let hash = offset;
-
-        for (let index = 0; index < text.length; index += 1) {
-            hash ^= text.codePointAt(index) ?? 0;
-            // FNV prime 16777619, applied with shifts to stay inside 32-bit int math.
-            hash = Math.imul(hash, 0x01_00_01_93) >>> 0;
-        }
-
-        return hash.toString(16).padStart(8, "0");
-    };
-
-    return `${fnv(0x81_1c_9d_c5)}${fnv(0x01_00_01_93)}`;
-};
+const hashSchemaSnapshot = (snapshot: SchemaSnapshot): string => contentDigest(serializeSchemaSnapshot(snapshot));
 
 /** True when `value` is a non-null object (the shape every snapshot sub-record must have). */
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;

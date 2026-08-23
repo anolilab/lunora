@@ -1,3 +1,23 @@
+## @lunora/mcp [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.80...@lunora/mcp@1.0.0-alpha.81) (2026-08-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.56
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.34
+* **@lunora/x402:** upgraded to 1.0.0-alpha.39
+
+## @lunora/mcp [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.79...@lunora/mcp@1.0.0-alpha.80) (2026-08-23)
+
+### Bug Fixes
+
+* **mcp:** reject encoded dot segments in docs urls ([#459](https://github.com/anolilab/lunora/issues/459)) ([c3f89de](https://github.com/anolilab/lunora/commit/c3f89de8067e2d253093826af6852febd419e690))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.55
+
 ## @lunora/mcp [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.78...@lunora/mcp@1.0.0-alpha.79) (2026-08-21)
 
 

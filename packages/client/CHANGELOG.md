@@ -1,3 +1,26 @@
+## @lunora/client [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.55...@lunora/client@1.0.0-alpha.56) (2026-08-23)
+
+### Features
+
+* **server:** close all four Convex primitive gaps — _commitSeq, untracked runQuery, .memory() + onShardInit, onQueryChange reactors ([#469](https://github.com/anolilab/lunora/issues/469)) ([75b0187](https://github.com/anolilab/lunora/commit/75b01872c06ae32f0174d2cc8385e78e373d9693))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.93
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.69
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.34
+
+## @lunora/client [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.54...@lunora/client@1.0.0-alpha.55) (2026-08-23)
+
+### Bug Fixes
+
+* **client:** keep durable caches lossless ([#440](https://github.com/anolilab/lunora/issues/440)) ([ba18c62](https://github.com/anolilab/lunora/commit/ba18c62c0f00333e0ae7384c18c4dcbff2caba20))
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
 ## @lunora/client [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/%40lunora%2Fclient%401.0.0-alpha.53...%40lunora%2Fclient%401.0.0-alpha.54) (2026-08-18)
 
 ## @lunora/client [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/%40lunora%2Fclient%401.0.0-alpha.52...%40lunora%2Fclient%401.0.0-alpha.53) (2026-08-18)

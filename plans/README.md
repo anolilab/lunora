@@ -1784,3 +1784,33 @@ originally reported.
 | 449  | Decide how the offline mutation outbox serializes caller args               | P2  | bug       | TODO   |
 | 450  | Remove the `workflow_duplicate_step_name` lint — its premise is false       | P2  | bug       | TODO   |
 | 451  | Make private packages use `workspace:*` for intra-repo deps, and enforce it | P2  | release   | TODO   |
+
+## Reference — Convex primitives gap analysis (2026-08-21)
+
+`convex-primitives-gap-analysis.md` — verifies, against `get-convex/convex-backend`
+@ `ba336a6`, the claim that Convex has shipped snapshot queries and
+commit-ordering timestamps and now lacks three primitives (server-side
+reactivity for actor patterns, memory tables, init mutations), then scores
+Lunora on all five. Findings: we are **ahead** on row-level server reactivity
+(`.triggers()` is native schema; Convex ships it as a userland component) and on
+range-precise invalidation; **behind** on commit-ordered timestamps and
+stale-snapshot reads; and best-placed of the two to build query-level server
+reactivity, because a shard already is an actor. Memory tables are recommended
+**deferred** — the DO heap is evicted on hibernation, and two shipped bugs
+(`ctx-db-global-shape-snapshot.ts`, `ctx-db-shape-poke-cursor.ts`) already
+record what that costs. Suggested order: `_commitSeq` → query-level reactors →
+snapshot-query options; memory tables + `onShardInit` only on a real forcing
+case. **All four gaps subsequently shipped** (see the doc's §6 for what changed
+shape during implementation and why): `.commitOrdered()`/`_commitSeq`, untracked
+`ctx.runQuery`, `.memory()` + `onShardInit`, and `onQueryChange` reactors. Two
+findings are worth reading even if the features are not: Convex's
+`useStaleSnapshot` does NOT transfer (Lunora has no read-set OCC conflict class,
+so the transferable idea is subscription re-run pressure instead), and `.memory()`
+buys the lifetime rather than the write, because workerd exposes no
+memory-backed SQL handle. The three follow-ups it listed have since shipped
+too: the `commit_ordered_hard_delete` advisor lint, three `apps/docs` concept
+pages, and a Studio **Reactors** panel backed by durable per-reactor counters.
+Building those surfaced two bugs worth remembering — the conformance reference
+host could not serve a `PRAGMA` read (breaking any pragma-guarded `ALTER TABLE`),
+and a reactor's writes were staged but never flushed, so no subscriber saw them
+and the actor cascade never happened.

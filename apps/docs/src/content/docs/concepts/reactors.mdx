@@ -1,0 +1,144 @@
+---
+title: Reactors (server-side reactivity)
+description: Declare onQueryChange to run server logic when a query's result changes — the actor pattern, with no client on the other end and nothing polling.
+related:
+    - to: /docs/concepts/realtime
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/scheduling
+    - to: /docs/concepts/observability
+---
+
+Lunora's reactivity normally terminates at a socket: a client subscribes, and the
+shard pushes it a new frame when the data moves. That is the right shape for a
+UI and the wrong shape for an **actor** — a matching engine, a dispatcher, a
+scheduler, an agent — which needs to wake when the state it watches moves, with
+no client involved and nothing polling.
+
+A **reactor** is that subscriber.
+
+```ts
+// lunora/reactors.ts
+import { onQueryChange } from "lunorash/server";
+
+export const dispatchWaiting = onQueryChange(
+    (ctx) => ctx.db.orders.findMany({ where: { status: "waiting" } }),
+    async (ctx, waiting) => {
+        for (const order of waiting) {
+            await ctx.db.orders.patch(order._id, { status: "dispatched" });
+        }
+    },
+);
+```
+
+The first argument is the read to watch. The second runs after a write flush —
+**only when that read's result actually changed.**
+
+## How this differs from a trigger
+
+One sentence: **a trigger fires on a row write; a reactor fires on a query result
+changing.** They are not two ways to do the same thing.
+
+|          | `.triggers()`                   | `onQueryChange`                      |
+| -------- | ------------------------------- | ------------------------------------ |
+| Fires on | one row's insert/update/delete  | a whole read's result changing       |
+| Runs     | inside the write transaction    | after the write flush                |
+| Sees     | that row (and its before-image) | the current result set               |
+| Skips    | never — every matching write    | writes that cannot change the result |
+
+A trigger cannot answer _"did the set of waiting orders become non-empty?"_
+without re-deriving the set on every single write. A reactor answers exactly
+that, and does not run at all when a write could not have changed the answer —
+writes to rows the read does not select, or to fields it does not project,
+produce no run. It is debounced by semantics rather than by a timer.
+
+Reach for a **trigger** to maintain an invariant on a row: a denormalized
+counter, a cascading write, a validation. Reach for a **reactor** when a decision
+depends on the shape of a whole result set.
+
+## The convergence contract
+
+A reactor's handler writes. Those writes flush. That flush re-evaluates reactors.
+
+**That loop is the feature** — it is how an actor advances a state machine one
+step at a time. The example above converges because a dispatched order leaves the
+`waiting` set, so the next evaluation returns a smaller set, and eventually an
+empty one that stops changing.
+
+A reactor that does _not_ converge — whose handler always changes what its own
+read returns — would spin the shard forever. The framework bounds that rather
+than trusting it: a reactor that runs more than a fixed number of times within
+one refresh drain is stopped for the rest of that drain, and the failure is named
+in the logs and the Studio panel.
+
+<Callout type="info">
+    The baseline stored after a run is the digest of the result the handler was **given**, before it ran. So a handler that changes its own read is invoked
+    again on the new result, and again, until the result stops moving. Write handlers that make progress — each run should shrink the set it watches.
+</Callout>
+
+## What the handler receives
+
+The current result, and nothing else. It does not get the previous one: keeping
+every reactor's full prior result durable is an unbounded cost for a value most
+handlers never read.
+
+When you genuinely need a diff, project what matters into a
+[`.memory()` table](/docs/concepts/memory-tables) and compare against that. The
+two compose exactly for this, and `onShardInit` rebuilds the projection after an
+eviction like any other ephemeral state.
+
+## Execution and identity
+
+A reactor is an internal mutation. Its writes are transactional, and it dispatches
+with **no request identity**.
+
+<Callout type="warn">
+    A reactor runs **system-trusted**: `ctx.auth` is anonymous and RLS does not apply, even under `.rls("required")`. RLS scopes rows to a user, and a reactor
+    has no user — it fires because data moved. That means your `select` sees **every row in the table**. Scope it yourself, by shard key, tenant column, or an
+    explicit predicate, exactly as you would in a migration or a cron job.
+</Callout>
+
+A reactor's **first** run always fires, with whatever the read returns — often an
+empty list — because "no baseline" is read as "changed", never as "unchanged".
+That degradation direction costs a redundant run rather than a missed one, so
+write handlers that tolerate it.
+
+## Reads that should not wake you
+
+The mirror image of a reactor: sometimes a **live query** reads a table it does
+not want to be woken by. Every table a subscription touches enters its read
+footprint, so a query that joins in a hot append-only table re-runs on every
+append — even when the append cannot change its result.
+
+`ctx.runQuery` takes an opt-out:
+
+```ts
+const config = await ctx.runQuery(internal.settings.current, {}, { untracked: true });
+```
+
+The sub-query's reads do not enter the caller's footprint, so the subscription
+does not re-run when those tables change. The result is exactly as fresh as a
+tracked call — same data, same instant. The only thing given up is the
+invalidation edge, so use it for reads whose changes genuinely should not reach
+the client, and never as a performance reflex: a subscription that should have
+updated and does not is stale indefinitely, not merely late.
+
+## Watching them work
+
+Reactors are the one reactive surface with no client on the other end, which
+makes them easy to misdiagnose: a reactor that never fires and a reactor that
+fires and does nothing look identical from outside.
+
+The Studio's **Reactors** panel (under Observability) separates them. Each
+reactor reports one of three states — `idle` (declared, never dispatched, usually
+a wiring problem), `active`, or `failing` (its last dispatch threw, so its
+baseline is frozen and it is being retried every flush) — plus its run count,
+suppressed count, the tables it watches, and its last error.
+
+The **suppressed:runs ratio** is the number worth watching. A suppressed dispatch
+means the read re-ran and nothing had moved: real work done to learn nothing
+changed. A high ratio means writes keep re-evaluating a read they cannot affect,
+and the `select` wants narrowing or an index.
+
+These counters are stored durably rather than in memory, because a reactor's
+steady state is an idle shard — counters that reset on eviction would almost
+always read zero.

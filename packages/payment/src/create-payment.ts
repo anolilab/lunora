@@ -13,6 +13,7 @@ import type { Entitlements, EntitlementsConfig } from "./entitlements";
 import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 import { LunoraPaymentError } from "./errors";
 import { derivedIdempotencyKey, idempotencyKey } from "./idempotency";
+import { addMoney, compareMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
@@ -20,11 +21,15 @@ import applyWebhookAction from "./sync";
 import type {
     AttachInput,
     CancelSubscriptionOptions,
+    CaptureInput,
     CheckInput,
     CheckoutInput,
     CheckoutResult,
     CheckResult,
     FeatureBalance,
+    Money,
+    PaymentSession,
+    RefundInput,
     Subscription,
     TrackInput,
     TrackResult,
@@ -55,6 +60,9 @@ const nextUsageStamp = (): number => {
 
     return lastUsageStamp;
 };
+
+/** The amount, as stable idempotency-key parts — a full-amount operation is its own distinct part. */
+const amountPart = (amount: Money | undefined): string => (amount ? `${amount.currency}:${String(amount.minorUnits)}` : "full");
 
 /** Drop a caller-supplied `referenceId` from checkout metadata — it's framework-controlled, never caller-set. */
 const stripReferenceId = (metadata: Record<string, string> | undefined): Record<string, string> | undefined =>
@@ -97,7 +105,11 @@ export interface LunoraPayment {
      * with `mode` defaulting to `"subscription"`. Returns a hosted-checkout URL to redirect to.
      */
     attach: (input: AttachInput) => Promise<CheckoutResult>;
+    /** Cancel the caller's own uncaptured payment (authorized, derived idempotency key, store synced). */
+    cancelPayment: (sessionId: string, options?: { idempotencyKey?: string }) => Promise<PaymentSession>;
     cancelSubscription: (subscriptionId: string, options?: CancelSubscriptionOptions) => Promise<Subscription>;
+    /** Capture the caller's own authorized payment (authorized, derived idempotency key, store synced). */
+    capturePayment: (input: CaptureInput) => Promise<PaymentSession>;
 
     /**
      * Is a reference allowed something right now? Pass `featureId` to check a grant/allowance (boolean
@@ -108,11 +120,17 @@ export interface LunoraPayment {
     createCheckout: (input: CheckoutInput) => Promise<CheckoutResult>;
     /** Open the provider billing portal for the caller's own customer (derived from the store). */
     createPortalSession: (referenceId: string, returnUrl: string) => Promise<{ url: string }>;
-    /** Verify + normalize + apply a provider webhook. Always 200 once verified, even on no-op. */
+
+    /**
+     * Verify + normalize + apply a provider webhook. 200 once verified, even on a no-op — except an
+     * event whose target row doesn't exist yet, which returns 500 so the provider redelivers it once.
+     */
     handleWebhook: (request: Request) => Promise<Response>;
     /** Resolve every configured feature's allowance for a reference in one call. Requires `entitlements`. */
     listBalances: (referenceId: string) => Promise<FeatureBalance[]>;
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;
+    /** Refund the caller's own captured payment (authorized, derived idempotency key, store synced). */
+    refundPayment: (input: RefundInput) => Promise<PaymentSession>;
     readonly store: PaymentStore;
 
     /**
@@ -200,6 +218,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
     // Resolve one feature's allowance — shared by `check` and `listBalances`. A metered feature
     // (numeric plan limit) subtracts usage tracked this period; a boolean feature is granted or not.
+    // The balance arithmetic for a metered feature — shared by the single-feature `check` path and
+    // the batched `listBalances` path so the two can never disagree.
+    const meteredResult = (limit: number, used: number, need: number): CheckResult => {
+        const balance = limit - used;
+
+        return { allowed: balance >= need, balance, limit, unlimited: false, used };
+    };
+
     const evaluateFeature = async (
         entitlements: Entitlements,
         subscriptions: ReadonlyArray<Subscription>,
@@ -211,18 +237,82 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
         if (limit !== undefined) {
             const used = await store.sumUsage(referenceId, featureId, usagePeriodStart(subscriptions));
-            const balance = limit - used;
 
-            return { allowed: balance >= need, balance, limit, unlimited: false, used };
+            return meteredResult(limit, used, need);
         }
 
         return { allowed: entitlements.has(featureId), unlimited: entitlements.has(featureId) };
+    };
+
+    // Shared ownership guard for the money-moving session operations. Collapse "doesn't exist" and
+    // "not yours" into one indistinguishable NOT_FOUND so the endpoint can't be used as a
+    // cross-tenant existence oracle (same posture as `cancelSubscription`).
+    const ownedSession = async (sessionId: string): Promise<PaymentSession> => {
+        // Every failure below raises the SAME message: `toErrorBody` echoes a payment error's message
+        // verbatim to the caller, so varying it by cause would rebuild the existence oracle this
+        // collapse exists to prevent.
+        const notFound = (): LunoraPaymentError => new LunoraPaymentError("NOT_FOUND", `payment session "${sessionId}" not found`);
+
+        let existing = await store.getPaymentSession(adapter.identifier, sessionId);
+
+        // No local row yet is normal, not an error: an authorize-then-capture inside one request, and
+        // any manual-capture flow driven by `payment_intent.*`, runs before the webhook that creates
+        // the row. Ask the provider before giving up, so those flows work through the facade.
+        if (!existing) {
+            try {
+                existing = await adapter.getPaymentStatus(sessionId);
+            } catch {
+                throw notFound();
+            }
+        }
+
+        // Nothing to authorize against — refuse rather than let an unowned session through.
+        if (!existing.referenceId) {
+            throw notFound();
+        }
+
+        try {
+            await ensureAuthorized(existing.referenceId);
+        } catch {
+            throw notFound();
+        }
+
+        return existing;
+    };
+
+    /**
+     * Persist an adapter result onto the stored row.
+     *
+     * An adapter returns a PROVIDER-shaped session, not a store row: Polar's `refundPayment` pins
+     * `amount`/`capturedAmount` to the refund amount and blanks `referenceId`, and Stripe's
+     * `intentToSession` blanks `referenceId` for any checkout-originated intent (the reference lives
+     * on the checkout session, not the PaymentIntent). Writing one verbatim would wipe the captured
+     * total and orphan the row from `by_reference`, leaving it unauthorizable — and so permanently
+     * unrefundable. Merge the way the webhook path does (`sync.ts`): the stored row owns identity and
+     * money, and each operation contributes only the fields it actually establishes.
+     */
+    const persistSession = async (existing: PaymentSession, patch: Partial<PaymentSession>): Promise<PaymentSession> => {
+        const merged: PaymentSession = { ...existing, ...patch, updatedAt: Date.now() };
+
+        await store.upsertPaymentSession(merged);
+
+        return merged;
     };
 
     return {
         adapter,
 
         attach: async (input) => startCheckout({ ...input, mode: input.mode ?? "subscription" }),
+
+        cancelPayment: async (sessionId, cancelOptions) => {
+            const existing = await ownedSession(sessionId);
+
+            const key = cancelOptions?.idempotencyKey ?? idempotencyKey("cancel_payment", adapter.identifier, sessionId);
+            const updated = await adapter.cancelPayment(sessionId, { ...cancelOptions, idempotencyKey: key });
+
+            // A cancel establishes the state and nothing else — the amounts on the row stand.
+            return persistSession(existing, { state: updated.state });
+        },
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
             const existing = await store.getSubscription(adapter.identifier, subscriptionId);
@@ -246,6 +336,20 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             await store.upsertSubscription(updated);
 
             return updated;
+        },
+
+        capturePayment: async (input) => {
+            const existing = await ownedSession(input.sessionId);
+
+            // The amount is part of the key: `CaptureInput` supports partial captures, and reusing one
+            // key across two different amounts makes the provider reject the second call as a
+            // parameter mismatch — while two identical ones must still replay rather than double-charge.
+            const key = input.idempotencyKey ?? (await derivedIdempotencyKey("capture_payment", adapter.identifier, input.sessionId, amountPart(input.amount)));
+            const updated = await adapter.capturePayment({ ...input, idempotencyKey: key });
+
+            // The provider's captured total is authoritative here, and its own `payment.captured`
+            // webhook later ASSIGNS the same value (never accumulates), so both paths agree.
+            return persistSession(existing, { capturedAmount: updated.capturedAmount, state: updated.state });
         },
 
         check: async (input) => {
@@ -331,7 +435,16 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // treating a 400 as "stop retrying". Do not wrap this call in the parseWebhook try/catch.
             const result = await applyWebhookAction(store, action, options.observability);
 
-            // Acknowledge once verified so the provider stops retrying — a no-op is still a 200.
+            // Deliberate non-200: the row this event patches hasn't been created yet (out-of-order
+            // delivery), and its claim was released — the provider must retry so the update applies
+            // once the create event lands. Only `orphaned` gets this; genuinely unhandleable events
+            // keep the always-200 contract below.
+            if (result.reason === "orphaned") {
+                return jsonResponse({ applied: result.applied, reason: result.reason }, 500);
+            }
+
+            // Every other outcome acknowledges: once verified, a no-op is still a 200 and the provider
+            // stops retrying.
             return jsonResponse({ applied: result.applied, reason: result.reason }, 200);
         },
 
@@ -349,22 +462,58 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             const subscriptions = await store.listSubscriptionsByReference(referenceId);
             const entitlements = resolveEntitlements(options.entitlements, subscriptions);
+            const names = featureNames(options.entitlements);
+            const metered = names.filter((featureId) => entitlements.limit(featureId) !== undefined);
+            // One batched ledger read for every metered feature instead of one unbounded scan each.
+            const usage =
+                metered.length === 0 ? new Map<string, number>() : await store.sumUsageByFeature(referenceId, metered, usagePeriodStart(subscriptions));
 
-            // `Promise.all` preserves the sorted `featureNames` order.
-            return Promise.all(
-                featureNames(options.entitlements).map(async (featureId) => {
-                    return {
-                        featureId,
-                        ...(await evaluateFeature(entitlements, subscriptions, referenceId, featureId, 1)),
-                    };
-                }),
-            );
+            // `names` is already sorted; mapping it preserves the order.
+            return names.map((featureId) => {
+                const limit = entitlements.limit(featureId);
+
+                if (limit !== undefined) {
+                    return { featureId, ...meteredResult(limit, usage.get(featureId) ?? 0, 1) };
+                }
+
+                return { featureId, allowed: entitlements.has(featureId), unlimited: entitlements.has(featureId) };
+            });
         },
 
         listSubscriptions: async (referenceId) => {
             await ensureAuthorized(referenceId);
 
             return store.listSubscriptionsByReference(referenceId);
+        },
+
+        refundPayment: async (input) => {
+            const existing = await ownedSession(input.sessionId);
+
+            // Resolve the resulting refunded total BEFORE moving money: a mismatched currency or an
+            // over-refund must fail with nothing issued, not leave a refund the ledger can't record.
+            const refunded = input.amount ? addMoney(existing.refundedAmount, input.amount) : existing.capturedAmount;
+
+            if (compareMoney(refunded, existing.capturedAmount) > 0) {
+                throw new LunoraPaymentError(
+                    "VALIDATION_ERROR",
+                    `refundPayment(): refunding ${String(input.amount?.minorUnits)} would exceed the captured amount on session "${input.sessionId}"`,
+                );
+            }
+
+            // Amount and reason are part of the key — see `capturePayment`; partial refunds of one
+            // session are legitimate and must not collide on the provider's idempotency window.
+            const key =
+                input.idempotencyKey ??
+                (await derivedIdempotencyKey("refund_payment", adapter.identifier, input.sessionId, amountPart(input.amount), input.reason ?? ""));
+
+            await adapter.refundPayment({ ...input, idempotencyKey: key });
+
+            // Deliberately no `refundedAmount` here: the provider's refund webhook owns the running
+            // total, because only it knows whether that provider reports refunds as a delta or as a
+            // cumulative total (`sync.ts`). Writing it here too would double-count on a delta provider.
+            // The state IS derived locally — from the amount this call refunds, not from the adapter's
+            // own state, which Polar pins to "refunded" for a partial refund too.
+            return persistSession(existing, { state: compareMoney(refunded, existing.capturedAmount) < 0 ? "partially_refunded" : "refunded" });
         },
 
         store,

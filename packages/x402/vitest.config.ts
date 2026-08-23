@@ -1,6 +1,8 @@
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
+import { DEFAULT_COVERAGE_THRESHOLDS } from "../../tools/get-vitest-config";
+
 // Mirror of the shared `tools/get-vitest-config` coverage block. The workers
 // pool relies on `defineConfig` (not the shared helper, which would break the
 // `@cloudflare/vitest-plugin` projects), so coverage is wired inline here.
@@ -19,6 +21,7 @@ const coverage = {
         "**/node_modules/**",
         "**/dist/**",
     ],
+    thresholds: { ...DEFAULT_COVERAGE_THRESHOLDS },
 };
 
 /**

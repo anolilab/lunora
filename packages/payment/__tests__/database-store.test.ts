@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { PaymentDatabase, PaymentRow } from "../src/database-store";
 import { createDatabasePaymentStore } from "../src/database-store";
 import { money } from "../src/money";
+import { MemoryPaymentStore } from "../src/store";
 import type { Customer, PaymentSession, Subscription } from "../src/types";
 
 // In-memory PaymentDatabase that mirrors the equality-filter semantics ctx.db provides.
@@ -96,6 +97,32 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.getCustomerByReference("stripe", "user_1")).resolves.toEqual(customer);
     });
 
+    it("keys customer upserts by (provider, referenceId) in both stores (parity regression)", async () => {
+        expect.assertions(5);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+        const memory = new MemoryPaymentStore();
+
+        // A re-mint — same (provider, referenceId), new provider customer id — must update the row
+        // in place, not fork a second row the read path can never find. Same sequence in both stores.
+        await store.upsertCustomer(customer);
+        await store.upsertCustomer({ ...customer, id: "cus_2" });
+        await memory.upsertCustomer(customer);
+        await memory.upsertCustomer({ ...customer, id: "cus_2" });
+
+        await expect(db.findMany("customers", { provider: "stripe", referenceId: "user_1" })).resolves.toHaveLength(1);
+        await expect(store.getCustomerByReference("stripe", "user_1")).resolves.toMatchObject({ id: "cus_2" });
+        // Parity: the memory store lands on the same surviving row.
+        await expect(memory.getCustomerByReference("stripe", "user_1")).resolves.toMatchObject({ id: "cus_2" });
+
+        // A second provider's customer for the same reference stays a separate row.
+        await store.upsertCustomer({ ...customer, id: "pcus_1", provider: "polar" });
+
+        await expect(db.findMany("customers", { referenceId: "user_1" })).resolves.toHaveLength(2);
+        await expect(store.getCustomerByReference("polar", "user_1")).resolves.toMatchObject({ id: "pcus_1" });
+    });
+
     it("round-trips a payment session, preserving bigint money", async () => {
         expect.assertions(2);
 
@@ -165,6 +192,41 @@ describe("createDatabasePaymentStore", () => {
         await store.recordUsage(event("c", 30, 7));
 
         await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(12);
+    });
+
+    it("sumUsageByFeature matches per-feature sumUsage in one read (parity)", async () => {
+        expect.assertions(4);
+
+        const store = createDatabasePaymentStore(makeDb());
+        const event = (idempotencyKey: string, featureId: string, createdAt: number, quantity: number, mode?: "set") => {
+            return {
+                createdAt,
+                featureId,
+                idempotencyKey,
+                ...(mode === undefined ? {} : { mode }),
+                provider: "stripe" as const,
+                quantity,
+                referenceId: "user_1",
+                reportedToProvider: false,
+            };
+        };
+
+        // Three features, mixed periods, including a `set` marker mid-period.
+        await store.recordUsage(event("a1", "api_calls", 10, 30));
+        await store.recordUsage(event("a2", "api_calls", 20, 5, "set"));
+        await store.recordUsage(event("a3", "api_calls", 30, 7));
+        await store.recordUsage(event("b1", "seats", 5, 2)); // before the period start
+        await store.recordUsage(event("b2", "seats", 15, 3));
+
+        const since = 10;
+        const batched = await store.sumUsageByFeature("user_1", ["api_calls", "seats", "storage"], since);
+
+        // Parity with three individual sumUsage calls, including the set-marker fold.
+        expect(batched.get("api_calls")).toBe(await store.sumUsage("user_1", "api_calls", since));
+        expect(batched.get("seats")).toBe(await store.sumUsage("user_1", "seats", since));
+        // A feature with zero events is present in the map as 0, not absent.
+        expect(batched.get("storage")).toBe(0);
+        expect(batched.get("api_calls")).toBe(12);
     });
 
     it("releaseEvent rolls back a claim so the id can be re-processed", async () => {

@@ -58,6 +58,45 @@ describe("lintSchema (codegen → advisor)", () => {
 
         expect(lintSchema({ schema: irFrom(INDEXED) })).toHaveLength(0);
     });
+
+    /**
+     * The `commitOrdered` flag has to survive the IR → advisor hop, or
+     * `commit_ordered_hard_delete` silently never fires: an absent flag is read
+     * as "not opted in", so the lint would pass on every table forever with
+     * nothing anywhere reporting that the feeder dropped it.
+     */
+    it("carries `.commitOrdered()` through to the advisor and flags the missing tombstone", () => {
+        expect.assertions(2);
+
+        const findings = lintSchema({
+            schema: irFrom(`
+                import { defineSchema, defineTable, v } from "@lunora/server";
+
+                export const schema = defineSchema({
+                    orders: defineTable({ status: v.string() }).commitOrdered(),
+                });
+            `),
+        });
+
+        expect(findings.map((finding) => finding.name)).toContain("commit_ordered_hard_delete");
+        expect(findings.find((finding) => finding.name === "commit_ordered_hard_delete")?.metadata).toMatchObject({ table: "orders" });
+    });
+
+    it("stops flagging once the commit-ordered table also soft-deletes", () => {
+        expect.assertions(1);
+
+        const findings = lintSchema({
+            schema: irFrom(`
+                import { defineSchema, defineTable, v } from "@lunora/server";
+
+                export const schema = defineSchema({
+                    orders: defineTable({ status: v.string() }).commitOrdered().softDelete(),
+                });
+            `),
+        });
+
+        expect(findings.map((finding) => finding.name)).not.toContain("commit_ordered_hard_delete");
+    });
 });
 
 describe("formatAdvisories", () => {
