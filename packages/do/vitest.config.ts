@@ -1,9 +1,9 @@
 import { defineConfig, coverageConfigDefaults } from "vitest/config";
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 
 // Mirror of the shared `tools/get-vitest-config` coverage block. The workers
 // pool relies on `defineConfig` (not the shared helper, which would break the
-// `@cloudflare/vitest-pool-workers` projects), so coverage is wired inline here.
+// `@cloudflare/vitest-plugin` projects), so coverage is wired inline here.
 const coverage = {
     ...coverageConfigDefaults,
     provider: "v8" as const,
@@ -28,7 +28,7 @@ const coverage = {
  *
  *  - `mocks`   — legacy mock-state suite. Runs in plain Node, no Miniflare.
  *               Always enabled.
- *  - `workerd` — real workerd + Miniflare suite via `@cloudflare/vitest-pool-workers`.
+ *  - `workerd` — real workerd + Miniflare suite via `@cloudflare/vitest-plugin`.
  *               Boots `__tests__/workerd/test-worker.ts` against the wrangler
  *               config in `__tests__/workerd/wrangler.jsonc`. Exercises the
  *               WebSocket Hibernation API, real `state.acceptWebSocket()`,

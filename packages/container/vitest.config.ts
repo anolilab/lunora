@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
 /**
@@ -13,7 +13,7 @@ import { defineConfig } from "vitest/config";
  *                `LunoraContainer` base class testable in plain Node. The alias
  *                lives on this project only — the workerd project must resolve
  *                the real runtime module.
- *  - `workerd` — real workerd via `@cloudflare/vitest-pool-workers`: boots the
+ *  - `workerd` — real workerd via `@cloudflare/vitest-plugin`: boots the
  *                generated-style Container DO up to the no-container-runtime
  *                guard, drives the `ctx.containers` surface over a real DO
  *                namespace, and round-trips the container→Lunora bridge client

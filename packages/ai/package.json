@@ -74,7 +74,7 @@
     "devDependencies": {
         "@ai-sdk/anthropic": "catalog:ai",
         "@ai-sdk/openai": "catalog:ai",
-        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/search-core": "workspace:*",
         "@types/node": "catalog:types",
