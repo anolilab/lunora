@@ -182,5 +182,22 @@ describe("db store", () => {
             await expect(limiter.limit("send", { key: "u1" })).rejects.toThrow(/createReadOnlyDbStore/u);
             await expect(limiter.reset("send", { key: "u1" })).rejects.toThrow(/createReadOnlyDbStore/u);
         });
+
+        it("rejects writes with an INTERNAL LunoraError, not a plain Error", async () => {
+            expect.assertions(2);
+
+            // The middleware only rethrows internal-code LunoraErrors; a plain
+            // Error would be classified as a store outage and swallowed by
+            // failOpen — the exact misuse this store exists to surface.
+            const database = createFakeDatabase();
+            const reader: RateLimitDatabaseReader = { query: database.query.bind(database) };
+            const limiter = new RateLimiter({
+                config: { send: { kind: "token bucket", period: 1000, rate: 3 } },
+                store: createReadOnlyDatabaseStore({ db: reader }),
+            });
+
+            await expect(limiter.limit("send", { key: "u1" })).rejects.toMatchObject({ code: "INTERNAL", name: "LunoraError" });
+            await expect(limiter.reset("send", { key: "u1" })).rejects.toMatchObject({ code: "INTERNAL", name: "LunoraError" });
+        });
     });
 });

@@ -431,6 +431,34 @@ describe("releaseSpendOnFailure", () => {
 
         expect(state.spentAtomic).toBe(0n);
     });
+
+    it("releases nothing for a negative amount instead of inflating the ledger", async () => {
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ maxPerRun: "$0.02" }, state);
+        const release = releaseSpendOnFailure(state);
+
+        await guard(guardContext(requirement({ amount: "20000" })));
+
+        expect(state.spentAtomic).toBe(20_000n);
+
+        await expect(release(failureContext(requirement({ amount: "-1" })))).resolves.toBeUndefined();
+
+        expect(state.spentAtomic).toBe(20_000n);
+    });
+
+    it("releases nothing for an unparsable amount instead of throwing", async () => {
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ maxPerRun: "$0.02" }, state);
+        const release = releaseSpendOnFailure(state);
+
+        await guard(guardContext(requirement({ amount: "20000" })));
+
+        expect(state.spentAtomic).toBe(20_000n);
+
+        await expect(release(failureContext(requirement({ amount: "junk" })))).resolves.toBeUndefined();
+
+        expect(state.spentAtomic).toBe(20_000n);
+    });
 });
 
 describe("assertBoundedPolicy", () => {

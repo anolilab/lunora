@@ -1,3 +1,17 @@
+## @lunora/platform-node [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.18...@lunora/platform-node@1.0.0-alpha.19) (2026-08-21)
+
+### Bug Fixes
+
+* **platform-node:** index sockets by raw handle ([#465](https://github.com/anolilab/lunora/issues/465)) ([eb2968e](https://github.com/anolilab/lunora/commit/eb2968eae2b4826419fba497a8e742453c071aac))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.83
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.85
+* **@lunora/do:** upgraded to 1.0.0-alpha.92
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.33
+
 ## @lunora/platform-node [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/%40lunora%2Fplatform-node%401.0.0-alpha.17...%40lunora%2Fplatform-node%401.0.0-alpha.18) (2026-08-19)
 
 

@@ -6,11 +6,17 @@
 // reach here, so nothing is announced twice.
 import { onScopeDispose, shallowRef } from "vue";
 
+import { DEFAULT_LOCALIZATION } from "../core/localization";
 import { dismissToast, getToasts, subscribeToasts } from "../core/toast";
 
 // The store is module-level (see `core/toast.ts`), so this is the same
 // subscribe-and-copy shape `useController` uses — shallow because the list is
 // replaced wholesale on every push, never mutated in place.
+// The dismiss button's accessible name is a prop rather than a read of the
+// provider's `localization`, because the toaster is mounted in the app shell and
+// must keep working outside `<AuthUIProvider>`.
+withDefaults(defineProps<{ dismissLabel?: string }>(), { dismissLabel: DEFAULT_LOCALIZATION.dismiss });
+
 const toasts = shallowRef(getToasts());
 
 const unsubscribe = subscribeToasts(() => {
@@ -38,7 +44,7 @@ const onDismiss = (id: number): void => {
     <div class="lunora-auth-toaster" aria-live="polite">
         <div v-for="toast in toasts" :key="toast.id" class="lunora-auth-toast" role="status">
             <span class="lunora-auth-toast__message">{{ toast.message }}</span>
-            <button class="lunora-auth-toast__dismiss" type="button" aria-label="Dismiss" @click="onDismiss(toast.id)">×</button>
+            <button class="lunora-auth-toast__dismiss" type="button" :aria-label="dismissLabel" @click="onDismiss(toast.id)">×</button>
         </div>
     </div>
 </template>

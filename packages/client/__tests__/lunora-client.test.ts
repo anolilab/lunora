@@ -6,7 +6,7 @@ import type { OptimisticUpdate } from "../src/local-store";
 import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryPersistence } from "../src/persistence";
 import { createInMemoryQueryCache, queryCacheKey } from "../src/query-cache";
-import type { FunctionReference } from "../src/types";
+import type { CachedQuery, FunctionReference, QueryCacheAdapter } from "../src/types";
 
 const flushMicrotasks = (): Promise<void> =>
     new Promise((resolve) => {
@@ -3818,6 +3818,56 @@ describe("lunoraClient", () => {
             expect(stored).toEqual([
                 { identity: null, key: queryCacheKey("messages:list", "{}"), serverCursor: 12, ts: expect.any(Number), value: { count: 5 } },
             ]);
+        });
+
+        it("a put that throws synchronously for one key does not drop the sibling writes", async () => {
+            expect.assertions(1);
+
+            const stored = new Map<string, CachedQuery>();
+            const cache: QueryCacheAdapter = {
+                clear: () => Promise.resolve(),
+                load: () => Promise.resolve([]),
+                put: (key, entry) => {
+                    // A sync throw before any promise exists — the shape of
+                    // structuredClone rejecting a non-cloneable value.
+                    if (key.startsWith("bad:")) {
+                        throw new Error("non-cloneable");
+                    }
+
+                    stored.set(key, entry);
+
+                    return Promise.resolve();
+                },
+                remove: () => Promise.resolve(),
+            };
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("bad:list"), {}, () => undefined);
+            client.subscribe(fnRef("good:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const [badSub, goodSub] = wireFrames(socket);
+
+            socket.receive({ id: badSub.id, type: "ack" });
+            socket.receive({ cursor: 1, data: { n: 1 }, id: badSub.id, type: "data" });
+            socket.receive({ id: goodSub.id, type: "ack" });
+            socket.receive({ cursor: 1, data: { n: 2 }, id: goodSub.id, type: "data" });
+
+            // close() flushes both debounced writes in one batch; the throwing
+            // key must not take the good one down with it.
+            client.close();
+
+            await flushMicrotasks();
+
+            expect([...stored.keys()]).toEqual([queryCacheKey("good:list", "{}")]);
         });
     });
 

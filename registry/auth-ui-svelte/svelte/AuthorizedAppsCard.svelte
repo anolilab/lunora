@@ -4,6 +4,7 @@
 -->
 <script lang="ts">
     import { isFlowEnabled } from "../core/flow-gate";
+    import { firstLabel, rowActionLabel } from "../core/labels";
     import { createAuthorizedAppsController } from "../core/oauth-provider";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
@@ -26,8 +27,9 @@
             <ul class="lunora-auth-list">
                 {#each $res.items as consent (consent.id ?? consent.clientId)}
                     <li class="lunora-auth-list__item">
-                        <span class="lunora-auth-list__label">{consent.clientName ?? consent.clientId}</span>
+                        <span class="lunora-auth-list__label">{firstLabel(consent.clientName, consent.clientId)}</span>
                         <button
+                            aria-label={rowActionLabel(t.revokeAccess, firstLabel(consent.clientName, consent.clientId))}
                             class="lunora-auth-button lunora-auth-button--danger"
                             disabled={$res.busy}
                             onclick={() => {

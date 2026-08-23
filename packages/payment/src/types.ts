@@ -404,5 +404,5 @@ export interface WebhookAction {
  */
 export interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "unhandled";
+    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "unhandled";
 }

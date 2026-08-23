@@ -12,7 +12,7 @@ import { defineConfig } from "vitest/config";
  *    instruments the benches; locally it is a transparent pass-through).
  *  - Several packages (`@lunora/do`, `@lunora/d1`, `@lunora/runtime`,
  *    `@lunora/scheduler`) drive their main suite through the Cloudflare
- *    `vitest-pool-workers` and/or a `projects` config whose `include` is scoped
+ *    `vitest-plugin` and/or a `projects` config whose `include` is scoped
  *    to `__tests__/`. Benches must run in plain Node — workerd can't boot in CI
  *    — so they get this dedicated, pool-free config instead.
  *
