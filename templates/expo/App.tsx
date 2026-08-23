@@ -22,16 +22,29 @@ function Root(): ReactElement {
     // Bridge the better-auth Expo session into the Lunora client as a bearer
     // token — HTTP `Authorization` (`setAuthToken`) and the WS `?token=`
     // (`setWsToken`) — re-synced whenever the session changes (sign-in/out).
+    // `expoBearerToken` is async since better-auth 1.7.1, and an async function is
+    // not a valid effect cleanup return — so kick off a promise instead. The
+    // `cancelled` flag is load-bearing, not ceremony: two session changes in quick
+    // succession leave two reads in flight, and without it the SLOWER one wins and
+    // reinstates the previous session's token. React runs this cleanup before the
+    // next effect, so a superseded read can no longer apply.
     useEffect(() => {
-        // `expoBearerToken` is async since better-auth 1.7.1 (`getCookie` reads
-        // SecureStore asynchronously), so the effect kicks off a promise rather
-        // than returning one — an async function is not a valid cleanup return.
+        let cancelled = false;
+
         void (async () => {
             const token = await expoBearerToken(authClient);
+
+            if (cancelled) {
+                return;
+            }
 
             lunoraClient.setAuthToken(token);
             lunoraClient.setWsToken(token ?? undefined);
         })();
+
+        return () => {
+            cancelled = true;
+        };
     }, [session]);
 
     if (isPending) {

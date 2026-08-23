@@ -235,6 +235,23 @@ describe("auth audit trail", () => {
             expect(buildAuditEntry({ path: "/api/auth/two-factor/verify-backup-code" })?.event).toBe("sign-in");
         });
 
+        /**
+         * Every callback path prefix classifies, not just the core `/callback/:id`.
+         * The classifier matches the `/callback/` substring rather than enumerating
+         * prefixes, so a plugin that mounts its callback elsewhere is recorded
+         * instead of silently skipped — `oauth-popup`'s `/oauth2/callback/*` and
+         * `@better-auth/sso`'s `/sso/callback/:providerId` are the two that exist
+         * upstream today. Neither is reachable through `plugins.ts` yet; these pin
+         * that they classify correctly on the day one becomes reachable.
+         */
+        it("classifies an OAuth callback on any path prefix as `sign-in`", () => {
+            expect.assertions(3);
+
+            expect(buildAuditEntry({ path: "/api/auth/callback/github" })?.event).toBe("sign-in");
+            expect(buildAuditEntry({ path: "/api/auth/oauth2/callback/google" })?.event).toBe("sign-in");
+            expect(buildAuditEntry({ path: "/api/auth/sso/callback/okta" })?.event).toBe("sign-in");
+        });
+
         it("still classifies every credential/username/phone sign-in as plain `sign-in` (no regression)", () => {
             expect.assertions(3);
 

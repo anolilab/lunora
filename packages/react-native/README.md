@@ -133,12 +133,22 @@ function Root() {
 
     // `expoBearerToken` is async since better-auth 1.7.1, and an async function
     // is not a valid effect cleanup return — so kick off a promise instead.
+    // `cancelled` is load-bearing: two session changes in quick succession leave
+    // two reads in flight, and without it the slower one reinstates the previous
+    // session's token.
     useEffect(() => {
+        let cancelled = false;
+
         void (async () => {
             const token = await expoBearerToken(authClient);
+            if (cancelled) return;
             client.setAuthToken(token); // HTTP `Authorization: Bearer …`
             client.setWsToken(token ?? undefined); // WS `?token=…`
         })();
+
+        return () => {
+            cancelled = true;
+        };
     }, [session]);
 
     // …render the app

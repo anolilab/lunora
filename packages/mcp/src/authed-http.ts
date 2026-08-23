@@ -28,9 +28,9 @@
  * export const handleMcp = createAuthedMcpFetchHandler({
  *     protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"] }),
  *     server: (claims) => ({
- *         adminToken: env.LUNORA_ADMIN_TOKEN,
  *         // Writes need a second scope the read-only token does not carry.
  *         allowWrites: mcpTokenScopes(claims).has("lunora:write"),
+ *         token: env.LUNORA_ADMIN_TOKEN,
  *         url: env.LUNORA_URL,
  *     }),
  * });
