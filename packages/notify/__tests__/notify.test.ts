@@ -823,3 +823,117 @@ describe("web-push send-time DNS-rebinding guard", () => {
         expect(inner.sends).toHaveLength(2);
     });
 });
+
+describe("mixed-kind push routing", () => {
+    // `allowedPushOrigins` names the fixture origin so no DoH round-trip happens
+    // and routing is the only behavior under test.
+    const origins = { allowedPushOrigins: ["https://push.example"] };
+    const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
+
+    it("routes each target of a mixed `to` to its own provider", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+
+        const receipt = await router.send({ body: "b", to: [sub("ok"), "device-token-1"] });
+
+        // Each provider sees ONLY its own kind — an FCM token must never reach
+        // the Web Push transport (or the reverse).
+        expect(webPush.sends).toHaveLength(1);
+        expect(webPush.sends[0]?.to).toBe(sub("ok"));
+        expect(fcm.sends).toHaveLength(1);
+        expect(fcm.sends[0]?.to).toBe("device-token-1");
+        expect(receipt.success).toBe(true);
+    });
+
+    it("passes a single-kind array through to one provider unchanged", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+
+        await router.send({ body: "b", to: [sub("one"), sub("two")] });
+        await router.send({ body: "b", to: ["device-token-1", "device-token-2"] });
+
+        expect(webPush.sends).toHaveLength(1);
+        expect(webPush.sends[0]?.to).toStrictEqual([sub("one"), sub("two")]);
+        expect(fcm.sends).toHaveLength(1);
+        expect(fcm.sends[0]?.to).toStrictEqual(["device-token-1", "device-token-2"]);
+    });
+
+    it("carries both groups' message ids when both succeed", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+
+        const receipt = await router.send({ body: "b", to: [sub("ok"), "device-token-1"] });
+
+        // One receipt describes two provider calls: dropping either half's id
+        // leaves the caller holding a message id that names half the send.
+        expect(receipt.success).toBe(true);
+        expect((receipt.data as { messageId: string }).messageId).toBe("mock-1,mock-1");
+    });
+
+    it("refuses a mixed send with an unconfigured channel before delivering either half", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        // No `fcm` channel: the FCM half is undeliverable from the start.
+        const router = routingPushProvider({ ...origins, webPush: webPush.provider });
+
+        await expect(router.send({ body: "b", to: [sub("ok"), "device-token-1"] })).rejects.toThrow(/no `fcm` channel is configured/);
+
+        // Both channels are resolved before either send, so the throw leaves
+        // nothing delivered — a partial delivery reported as a total failure is
+        // the outcome the caller cannot recover from.
+        expect(webPush.sends).toHaveLength(0);
+    });
+
+    it("still attempts the other group when one transport throws", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockThrowingPushProvider();
+        const fcm = mockPushProvider();
+        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+
+        const receipt = await router.send({ body: "b", to: [sub("throw"), "device-token-1"] });
+
+        // A throwing transport must not cancel the sibling group's send.
+        expect(fcm.sends).toHaveLength(1);
+        expect(fcm.sends[0]?.to).toBe("device-token-1");
+        expect(receipt.success).toBe(false);
+    });
+
+    it("keeps both causes when both groups fail", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+
+        const receipt = await router.send({ body: "b", to: [sub("fail"), "fail-token"] });
+
+        expect(receipt.success).toBe(false);
+        expect((receipt.error as AggregateError).errors).toHaveLength(2);
+    });
+
+    it("does not let a succeeding group mask the other group's failure", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+
+        // The web-push target succeeds; the FCM token fails (mock 503).
+        const receipt = await router.send({ body: "b", to: [sub("ok"), "fail-token"] });
+
+        expect(webPush.sends).toHaveLength(1);
+        expect(fcm.sends).toHaveLength(1);
+        expect(receipt.success).toBe(false);
+    });
+});
