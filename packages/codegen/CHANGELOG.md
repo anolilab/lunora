@@ -1,3 +1,21 @@
+## @lunora/codegen [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.118...@lunora/codegen@1.0.0-alpha.119) (2026-08-23)
+
+### Features
+
+* **server:** close all four Convex primitive gaps — _commitSeq, untracked runQuery, .memory() + onShardInit, onQueryChange reactors ([#469](https://github.com/anolilab/lunora/issues/469)) ([75b0187](https://github.com/anolilab/lunora/commit/75b01872c06ae32f0174d2cc8385e78e373d9693))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.85
+* **@lunora/agent:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform:** upgraded to 1.0.0-alpha.15
+* **@lunora/queue:** upgraded to 1.0.0-alpha.31
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.35
+* **@lunora/do:** upgraded to 1.0.0-alpha.93
+* **@lunora/server:** upgraded to 1.0.0-alpha.79
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.34
+
 ## @lunora/codegen [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.117...@lunora/codegen@1.0.0-alpha.118) (2026-08-23)
 
 ### Bug Fixes
