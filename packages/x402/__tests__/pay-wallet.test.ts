@@ -222,6 +222,72 @@ describe("registerWallet", () => {
             vi.resetModules();
         }
     });
+
+    it("fails with install guidance when the @x402/evm peer is not installed", async () => {
+        vi.resetModules();
+        vi.doMock(import("@x402/evm/exact/client"), () => {
+            throw new Error("Cannot find package '@x402/evm'");
+        });
+
+        try {
+            const { registerWallet: registerWithoutPeer } = await import("../src/pay/wallet");
+            const client = new X402Client();
+            const evmSigner: ClientEvmSigner = { address: TEST_ADDRESS, signTypedData: () => Promise.resolve("0x") };
+            const config: X402PayConfig = { network: "base", policy: boundedPolicy, signer: { signer: evmSigner, type: "signer" } };
+
+            await expect(registerWithoutPeer(client, config, { getSecret: () => undefined })).rejects.toMatchObject({
+                code: "ENV_INVALID",
+                message: expect.stringMatching(/optional @x402\/evm \+ viem peers/),
+            });
+        } finally {
+            vi.doUnmock("@x402/evm/exact/client");
+            vi.resetModules();
+        }
+    });
+
+    it("rethrows an installed-but-broken peer's own error instead of blaming the install", async () => {
+        // Not a resolution failure: the module is present and throws while evaluating.
+        // Reporting "install the peer" here would name the wrong cause.
+        vi.resetModules();
+        vi.doMock(import("@x402/evm/exact/client"), () => {
+            throw new Error("Cannot read properties of undefined (reading 'crypto')");
+        });
+
+        try {
+            const { registerWallet: registerWithBrokenPeer } = await import("../src/pay/wallet");
+            const client = new X402Client();
+            const evmSigner: ClientEvmSigner = { address: TEST_ADDRESS, signTypedData: () => Promise.resolve("0x") };
+            const config: X402PayConfig = { network: "base", policy: boundedPolicy, signer: { signer: evmSigner, type: "signer" } };
+
+            // Not converted into install guidance — the peer's own failure surfaces.
+            await expect(registerWithBrokenPeer(client, config, { getSecret: () => undefined })).rejects.not.toMatchObject({ code: "ENV_INVALID" });
+        } finally {
+            vi.doUnmock("@x402/evm/exact/client");
+            vi.resetModules();
+        }
+    });
+
+    it("fails with install guidance when the @x402/svm peer is not installed", async () => {
+        vi.resetModules();
+        vi.doMock(import("@x402/svm/exact/client"), () => {
+            throw new Error("Cannot find package '@x402/svm'");
+        });
+
+        try {
+            const { registerWallet: registerWithoutPeer } = await import("../src/pay/wallet");
+            const client = new X402Client();
+            const svmSigner = await createKeyPairSignerFromPrivateKeyBytes(SVM_SEED, true);
+            const config: X402PayConfig = { network: "solana", policy: boundedPolicy, signer: { signer: svmSigner, type: "signer" } };
+
+            await expect(registerWithoutPeer(client, config, { getSecret: () => undefined })).rejects.toMatchObject({
+                code: "ENV_INVALID",
+                message: expect.stringMatching(/optional @x402\/svm \+ @solana\/kit peers/),
+            });
+        } finally {
+            vi.doUnmock("@x402/svm/exact/client");
+            vi.resetModules();
+        }
+    });
 });
 
 describe("createX402Pay", () => {

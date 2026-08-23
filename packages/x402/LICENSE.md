@@ -108,4 +108,22 @@ specific language governing permissions and limitations under the License.
 <!-- /DEPENDENCIES -->
 
 <!-- TYPE_DEPENDENCIES -->
+
+# Licenses of bundled types
+The published @lunora/x402 artifact additionally contains code with the following licenses:
+Apache-2.0
+
+# Bundled types:
+## @x402/evm
+License: Apache-2.0
+By: x402 Foundation
+Repository: https://github.com/x402-foundation/x402
+
+---------------------------------------
+
+## @x402/svm
+License: Apache-2.0
+By: x402 Foundation
+Repository: https://github.com/x402-foundation/x402
+
 <!-- /TYPE_DEPENDENCIES -->
