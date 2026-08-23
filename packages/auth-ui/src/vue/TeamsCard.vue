@@ -6,6 +6,7 @@
 // server reports them from the resolved table map instead.
 import { computed, ref } from "vue";
 
+import { rowActionLabel } from "../core/labels";
 import { createTeamsController } from "../core/teams";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
@@ -50,7 +51,13 @@ const onRemove = (id?: string): void => {
         <ul v-else class="lunora-auth-list">
             <li v-for="team in state.items" :key="team.id" class="lunora-auth-list__item">
                 <span class="lunora-auth-list__label">{{ team.name }}</span>
-                <button class="lunora-auth-button lunora-auth-button--danger" type="button" :disabled="state.busy" @click="onRemove(team.id)">
+                <button
+                    class="lunora-auth-button lunora-auth-button--danger"
+                    type="button"
+                    :disabled="state.busy"
+                    :aria-label="rowActionLabel(t.remove, team.name)"
+                    @click="onRemove(team.id)"
+                >
                     {{ t.remove }}
                 </button>
             </li>

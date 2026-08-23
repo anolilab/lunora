@@ -44,6 +44,7 @@ interface FunctionReference {
 
 ```ts
 interface RunFunctionOptions {
+    dedupId?: string;
     messageId?: string;
     shardKey?: string;
     timeoutMs?: number;

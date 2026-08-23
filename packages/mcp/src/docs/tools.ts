@@ -128,6 +128,32 @@ const readLimit = (raw: unknown): number => {
 };
 
 /**
+ * Reject `..`/`.` segments whether literal or percent-encoded. A residual `%`
+ * after one decode means double-encoding (`%252e`) — rejected too, since no
+ * documented slug contains a percent sign.
+ *
+ * A decoded backslash is rejected outright: `normalizeDocUrl` has already
+ * folded literal backslashes into `/` (they are path separators to the URL
+ * parser), so one surviving here arrived percent-encoded, and no documented
+ * slug contains a backslash.
+ */
+const assertNoDotSegments = (value: string, raw: string): void => {
+    for (const segment of value.split("/")) {
+        let decoded: string;
+
+        try {
+            decoded = decodeURIComponent(segment);
+        } catch {
+            throw new RangeError(`"url" contains a malformed percent-escape: ${raw}`);
+        }
+
+        if (decoded === ".." || decoded === "." || decoded.includes("%") || decoded.includes("\\")) {
+            throw new RangeError(`"url" must not contain ".." or encoded segments: ${raw}`);
+        }
+    }
+};
+
+/**
  * Normalize whatever a model passes as a page URL into the site-relative form
  * an index stores.
  *
@@ -141,10 +167,18 @@ const readLimit = (raw: unknown): number => {
  * this path to `/llms.mdx`, so `../../api/search` would walk back out of the
  * documentation tree and pull an unrelated path on the docs origin into the
  * model's context — harmless against a public site, less so against the
- * internal host a self-hosted `--docs-url` may point at.
+ * internal host a self-hosted `--docs-url` may point at. Percent-encoded
+ * forms (`%2e%2e`, doubled `%252e`) are rejected the same way: WHATWG URL
+ * parsing at fetch time decodes and collapses them into the very traversal
+ * the literal check would have caught.
  */
 const normalizeDocUrl = (raw: string): string => {
-    let value = raw.trim();
+    // Fold backslashes into `/` FIRST: WHATWG URL parsing treats them as path
+    // separators for special schemes, so `docs/..\..\admin` collapses exactly
+    // like `docs/../../admin` once `fetch` parses the concatenated URL. Folding
+    // up front means the traversal guard below — and the value we hand back —
+    // see the same path the parser will.
+    let value = raw.trim().replaceAll("\\", "/");
 
     // Strip an absolute origin: everything through the host, keeping the path.
     if (value.startsWith("http://") || value.startsWith("https://")) {
@@ -174,9 +208,7 @@ const normalizeDocUrl = (raw: string): string => {
         value = value.startsWith("docs/") ? `/${value}` : `/${DOCS_BASE_SEGMENT}/${value}`;
     }
 
-    if (value.split("/").includes("..")) {
-        throw new RangeError(`"url" must not contain ".." segments: ${raw}`);
-    }
+    assertNoDotSegments(value, raw);
 
     return value;
 };

@@ -8,6 +8,7 @@
         autoComplete,
         field,
         fields,
+        inputMode,
         label,
         name,
         type,
@@ -16,6 +17,8 @@
         autoComplete?: AutoFill;
         field: TField;
         fields: Record<TField, FieldState>;
+        /** Forwarded to `<Field>`; `"numeric"` for digit-only codes. */
+        inputMode?: "numeric";
         label: string;
         /** HTML `name` attribute; defaults to the field key. */
         name?: string;
@@ -26,6 +29,7 @@
 <Field
     {autoComplete}
     field={fields[field]}
+    {inputMode}
     {label}
     name={name ?? field}
     onBlur={() => {

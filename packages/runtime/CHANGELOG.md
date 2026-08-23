@@ -1,3 +1,17 @@
+## @lunora/runtime [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.68...@lunora/runtime@1.0.0-alpha.69) (2026-08-23)
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.33
+* **@lunora/platform:** upgraded to 1.0.0-alpha.15
+* **@lunora/do:** upgraded to 1.0.0-alpha.93
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.34
+
 ## @lunora/runtime [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.67...%40lunora%2Fruntime%401.0.0-alpha.68) (2026-08-19)
 
 ## @lunora/runtime [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.66...%40lunora%2Fruntime%401.0.0-alpha.67) (2026-08-18)

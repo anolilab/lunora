@@ -326,6 +326,16 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
 
     /**
+     * Set by `.commitOrdered()` (named `commitOrderedMode`, not `commitOrdered`,
+     * so the data field doesn't collide with the fluent `.commitOrdered()`
+     * builder method — same convention as `shardBy()`/`shardMode`). When `true`,
+     * every write to a row stamps `_commitSeq`: a per-shard integer allocated
+     * once per mutation and strictly increasing in commit order. Absent/`false`
+     * ⇒ rows carry no `_commitSeq`, as before.
+     */
+    commitOrderedMode?: boolean;
+
+    /**
      * Set by `.source(...)` (named `externalSource`, not `source`, so the data
      * field doesn't collide with the fluent `.source()` builder method — same
      * convention as `shardBy()`/`shardMode`). When present, the table is
@@ -364,6 +374,15 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     isPublic?: boolean;
 
     /**
+     * Set by `.memory()` (named `memoryMode`, not `memory`, so the data field
+     * doesn't collide with the fluent `.memory()` builder method — same
+     * convention as `shardBy()`/`shardMode`). When `true`, the table's rows are
+     * cleared every time the Durable Object is reconstructed, and its writes
+     * never reach the CDC changelog. Absent/`false` ⇒ an ordinary durable table.
+     */
+    memoryMode?: boolean;
+
+    /**
      * Set by `.ownedBy(field)` — the column holding the owning user's id (named
      * `ownerField`, a data field, rather than colliding with the fluent
      * `.ownedBy()` builder method — same convention as `shardBy()`/`shardMode`).
@@ -390,7 +409,9 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      * `.relations((r) => …)` builder method doesn't collide with this field.
      */
     relationMap: Record<string, RelationDefinition>;
+
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;
+
     shape: Shape;
 
     shardMode: ShardMode;
@@ -610,9 +631,56 @@ interface FunctionHandle<Kind extends "action" | "mutation" | "query" | "stream"
  * `RegisteredFunction<ArgsValidator, …>` constraint, because `handler`'s args
  * are in a contravariant position. Two inference sites it is.
  */
+
+/**
+ * Options for `ctx.runQuery`.
+ *
+ * Lunora's answer to Convex's `useStaleSnapshot`, and deliberately NOT a port of
+ * it. Convex needs that flag because a mutation there validates its whole read
+ * set at commit, so merely *reading* a hot append-only table manufactures OCC
+ * conflicts. Lunora has no such conflict class: its OCC is a compare-and-swap on
+ * the `__doc__` of each row a mutation actually WRITES (see `runGuardedWrite`),
+ * so a read costs a mutation nothing and there is nothing for a stale snapshot
+ * to relieve.
+ *
+ * What a read does cost here is REACTIVITY. Every table a live query touches
+ * enters its read footprint, and every write to any of those tables re-runs the
+ * subscription. A query that reads one hot table — an append-only audit log, a
+ * counter, a feed — therefore re-runs on every append even when the append
+ * cannot change its result. That is Lunora's version of the pressure Convex is
+ * relieving, and {@link RunQueryOptions.untracked} is the release valve.
+ */
+interface RunQueryOptions {
+    /**
+     * Run the query without recording its reads in the CALLER's read footprint.
+     * The subscription therefore does not re-run when the tables that query
+     * touched change.
+     *
+     * The result is exactly as fresh as a tracked call — same SQLite, same
+     * instant, no snapshot involved. The only thing given up is the invalidation
+     * edge, so use it when the read genuinely should not wake the subscriber
+     * (a monotonic counter rendered once, a config row, an audit tail whose
+     * growth is irrelevant to the result) — and never for data whose change
+     * should reach the client, which is what makes the subscription stale
+     * indefinitely rather than merely late.
+     *
+     * Scoped to the sub-query and nothing else: the untracked call runs on its
+     * own context, so a read interleaved on the caller's `ctx.db` while it is in
+     * flight still tracks normally. That is why this is an option on
+     * `ctx.runQuery` rather than a `ctx.db.untracked(...)` scope — a
+     * writer-wide flag would silently swallow a concurrent read's dependency
+     * (compare `meterExempt`'s documented interleaving caveat, which is
+     * tolerable for a resource meter and would not be here).
+     *
+     * No effect outside a subscription: a one-shot query records no footprint,
+     * so there is nothing to opt out of.
+     */
+    untracked?: boolean;
+}
+
 interface RunQuery {
-    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
-    <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args, options?: RunQueryOptions): Promise<R>;
 }
 
 /** `ctx.runMutation` — overloaded for the same reason as {@link RunQuery}. */
@@ -628,7 +696,16 @@ interface RunAction {
 }
 
 /** Which side of the WebSocket lifecycle a hook fires on. */
-type LifecycleEventKind = "connect" | "disconnect";
+
+/**
+ * Which lifecycle moment a hook fires on.
+ *
+ * `connect`/`disconnect` are per-SOCKET and fire many times over a shard's life.
+ * `init` is per-INSTANCE and fires once per cold start, before any handler runs
+ * — see {@link ShardInitEvent}. `reactor` is per-WRITE-FLUSH and fires only when
+ * a watched read's result changed — see `onQueryChange`.
+ */
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
 
 /**
  * The event a connection-lifecycle hook receives as its second argument. It is
@@ -649,9 +726,26 @@ interface LifecycleEvent {
 
 /**
  * A registered connection-lifecycle hook — an internal mutation tagged with the
- * lifecycle side it fires on. Produced by `onConnect` / `onDisconnect`.
+ * lifecycle side it fires on. Produced by `onConnect` / `onDisconnect` /
+ * `onShardInit`.
  */
 type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & { readonly lifecycle: LifecycleEventKind };
+
+/**
+ * The event an `onShardInit` hook receives.
+ *
+ * Deliberately thin, and deliberately NOT a {@link LifecycleEvent}: there is no
+ * socket here. An init hook fires because the Durable Object was constructed,
+ * not because anyone connected — so there is no `connectionId` to report and no
+ * user to attribute it to. The hook runs as a trusted system dispatch with no
+ * request identity, exactly like a cron tick; `ctx.auth` is anonymous and RLS
+ * does not apply. Derive whatever you need from `shardKey` and the shard's own
+ * durable tables, never from an ambient caller — there isn't one.
+ */
+interface ShardInitEvent {
+    /** The shard this Durable Object instance serves. */
+    readonly shardKey: string;
+}
 
 /**
  * A streaming query registration. Unlike {@link RegisteredFunction} the handler
@@ -2327,6 +2421,7 @@ export type {
     RegisteredStream,
     RelationDefinition,
     RestCacheConfig,
+    RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,
     Scheduler,
@@ -2335,6 +2430,7 @@ export type {
     SearchIndexDefinition,
     Secrets,
     SecretsStoreSecretLike,
+    ShardInitEvent,
     ShardMode,
     SpanEvaluation,
     SpanHandle,

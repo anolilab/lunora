@@ -23,7 +23,7 @@ parsing, and error-mapping contracts at speed.
 ## `workerd` project (real Cloudflare runtime)
 
 Boots the production `createWorker(...)` inside Miniflare via
-`@cloudflare/vitest-pool-workers`, with a tiny echo-style `TestShardDO`
+`@cloudflare/vitest-plugin`, with a tiny echo-style `TestShardDO`
 on the other side. Tests hit the worker through `SELF.fetch` and assert
 the round-trip through the genuine Cloudflare runtime.
 

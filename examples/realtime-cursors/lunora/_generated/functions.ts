@@ -50,6 +50,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  */
 installCompiledValidatorMap(lunora_cursors_0.joinRoom.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["roomId"] !== "string") return DEFER;
 if (typeof source["sessionId"] !== "string") return DEFER;
 if (typeof source["name"] !== "string") return DEFER;
@@ -58,11 +59,13 @@ return { "roomId": source["roomId"], "sessionId": source["sessionId"], "name": s
 });
 installCompiledValidatorMap(lunora_cursors_0.listCursors.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["roomId"] !== "string") return DEFER;
 return { "roomId": source["roomId"] };
 });
 installCompiledValidatorMap(lunora_cursors_0.updateCursor.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["roomId"] !== "string") return DEFER;
 if (typeof source["sessionId"] !== "string") return DEFER;
 if (typeof source["x"] !== "number" || !Number.isFinite(source["x"])) return DEFER;

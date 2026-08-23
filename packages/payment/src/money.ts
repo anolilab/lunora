@@ -55,7 +55,11 @@ export const isZeroDecimalCurrency = (currency: CurrencyCode): boolean => expone
  * @experimental
  */
 export const money = (minorUnits: bigint | number, currency: CurrencyCode): Money => {
-    const units = typeof minorUnits === "bigint" ? minorUnits : BigInt(Math.trunc(minorUnits));
+    if (typeof minorUnits === "number" && !Number.isSafeInteger(minorUnits)) {
+        throw new LunoraPaymentError("VALIDATION_ERROR", `money(): \`minorUnits\` must be a bigint or a safe integer (got ${String(minorUnits)})`);
+    }
+
+    const units = typeof minorUnits === "bigint" ? minorUnits : BigInt(minorUnits);
 
     return { currency: currency.toUpperCase(), minorUnits: units };
 };

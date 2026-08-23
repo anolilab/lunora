@@ -31,6 +31,7 @@ import authTrustedOriginsWildcard from "./lints/static/auth-trusted-origins-wild
 import browserAllowPrivateTargets from "./lints/static/browser-allow-private-targets";
 import browserUserUrlWithoutAllowlist from "./lints/static/browser-user-url-without-allowlist";
 import circularFk from "./lints/static/circular-fk";
+import commitOrderedHardDelete from "./lints/static/commit-ordered-hard-delete";
 import containerInstanceKeyFromUserInput from "./lints/static/container-instance-key-from-user-input";
 import containerOversizedInstance from "./lints/static/container-oversized-instance";
 import containerPublicInternet from "./lints/static/container-public-internet";
@@ -171,6 +172,7 @@ export { default as authTrustedOriginsWildcard } from "./lints/static/auth-trust
 export { default as browserAllowPrivateTargets } from "./lints/static/browser-allow-private-targets";
 export { default as browserUserUrlWithoutAllowlist } from "./lints/static/browser-user-url-without-allowlist";
 export { default as circularFk } from "./lints/static/circular-fk";
+export { default as commitOrderedHardDelete } from "./lints/static/commit-ordered-hard-delete";
 export { default as containerInstanceKeyFromUserInput } from "./lints/static/container-instance-key-from-user-input";
 export { default as containerOversizedInstance } from "./lints/static/container-oversized-instance";
 export { default as containerPublicInternet } from "./lints/static/container-public-internet";
@@ -317,6 +319,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     geoIndexUnused,
     exportSinkMisconfigured,
     ttlFieldNotTimestamp,
+    commitOrderedHardDelete,
     circularFk,
     unindexedForeignKey,
     unindexedRelationTarget,

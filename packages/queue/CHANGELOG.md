@@ -1,3 +1,14 @@
+## @lunora/queue [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.30...@lunora/queue@1.0.0-alpha.31) (2026-08-23)
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.15
+
 ## @lunora/queue [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/%40lunora%2Fqueue%401.0.0-alpha.29...%40lunora%2Fqueue%401.0.0-alpha.30) (2026-08-18)
 
 

@@ -28,6 +28,7 @@ import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import { migrateCdcLog, migrateCdcMeta } from "./ctx-db-cdc";
 import { migrateClientWatermark } from "./ctx-db-client-watermark";
+import { migrateCommitSeq } from "./ctx-db-commit-seq";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
 import { migrateSearchState } from "./ctx-db-search-state";
@@ -36,6 +37,7 @@ import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 import { migrateDurableStreams } from "./durable-stream";
 import { rankTableName, sortColumnName } from "./rank";
+import { migrateReactorState } from "./reactor-state";
 import { recordSchemaVersion } from "./schema-history";
 
 /** Create the secondary + `.unique()` expression indexes declared on a table. */
@@ -264,6 +266,21 @@ export const runShardMigrations = (
         // rides the same gate as the log it indexes into.
         migrateShapePokeCursor(sql);
     }
+
+    // Gated on the schema, not on a runtime flag: the `_commitSeq` counter is
+    // only allocated from by a `.commitOrdered()` table's write path, so a shard
+    // whose schema declares none never creates the table. `Object.values` over
+    // the table set is the whole probe — `.commitOrdered()` is a static schema
+    // fact, unlike CDC (a host option).
+    if (Object.values(schema.tables).some((table) => table.commitOrderedMode === true)) {
+        migrateCommitSeq(sql);
+    }
+
+    // Always present: a reactor's baseline must survive hibernation, and a
+    // `.reactor` can be declared without any schema change — so the table has to
+    // exist before the first flush, not when a schema flag says so. Empty (and
+    // free) on a shard that declares none.
+    migrateReactorState(sql);
 
     // Always present: the mutation-replay dedup table is independent of CDC and
     // costs nothing until the first id-bearing mutation writes to it.

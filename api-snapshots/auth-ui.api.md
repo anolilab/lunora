@@ -1011,6 +1011,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     deviceDeny: "Deny",
     deviceFailed: "That code is not valid or has expired.",
     deviceTitle: "Authorize device",
+    dismiss: "Dismiss",
     emailInvalid: "Enter a valid email address.",
     emailLabel: "Email",
     emailOtp: "Email me a code",
@@ -1031,6 +1032,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     inviteMember: "Invite member",
     lastUsed: "Last used",
     leaveOrganization: "Leave organization",
+    loading: "Loading…",
     magicLink: "Email me a link",
     magicLinkSent: "Check your email for a sign-in link.",
     members: "Members",
@@ -1502,6 +1504,7 @@ interface Localization {
     deviceDeny: string;
     deviceFailed: string;
     deviceTitle: string;
+    dismiss: string;
     emailInvalid: string;
     emailLabel: string;
     emailOtp: string;
@@ -1522,6 +1525,7 @@ interface Localization {
     inviteMember: string;
     lastUsed: string;
     leaveOrganization: string;
+    loading: string;
     magicLink: string;
     magicLinkSent: string;
     members: string;
@@ -4268,6 +4272,12 @@ const email = (value: string, localization: Localization): string | undefined =>
 };
 ```
 
+### `firstLabel` (const)
+
+```ts
+const firstLabel = (...candidates: ReadonlyArray<string | undefined>): string | undefined => candidates.find((candidate) => candidate !== undefined && candidate.trim() !== "");
+```
+
 ### `getToasts` (const)
 
 ```ts
@@ -4666,6 +4676,15 @@ const resolveThemeVariables = (theme?: (defaults: ThemeTokens) => ThemeTokens): 
         }
     }
     return variables;
+};
+```
+
+### `rowActionLabel` (const)
+
+```ts
+const rowActionLabel = (action: string, subject: string | undefined): string => {
+    const trimmed = subject?.trim();
+    return trimmed === undefined || trimmed === "" ? action : `${action}: ${trimmed}`;
 };
 ```
 
@@ -5978,6 +5997,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     deviceDeny: "Deny",
     deviceFailed: "That code is not valid or has expired.",
     deviceTitle: "Authorize device",
+    dismiss: "Dismiss",
     emailInvalid: "Enter a valid email address.",
     emailLabel: "Email",
     emailOtp: "Email me a code",
@@ -5998,6 +6018,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     inviteMember: "Invite member",
     lastUsed: "Last used",
     leaveOrganization: "Leave organization",
+    loading: "Loading…",
     magicLink: "Email me a link",
     magicLinkSent: "Check your email for a sign-in link.",
     members: "Members",
@@ -6535,6 +6556,7 @@ interface Localization {
     deviceDeny: string;
     deviceFailed: string;
     deviceTitle: string;
+    dismiss: string;
     emailInvalid: string;
     emailLabel: string;
     emailOtp: string;
@@ -6555,6 +6577,7 @@ interface Localization {
     inviteMember: string;
     lastUsed: string;
     leaveOrganization: string;
+    loading: string;
     magicLink: string;
     magicLinkSent: string;
     members: string;
@@ -9571,6 +9594,12 @@ const email = (value: string, localization: Localization): string | undefined =>
 };
 ```
 
+### `firstLabel` (const)
+
+```ts
+const firstLabel = (...candidates: ReadonlyArray<string | undefined>): string | undefined => candidates.find((candidate) => candidate !== undefined && candidate.trim() !== "");
+```
+
 ### `getToasts` (const)
 
 ```ts
@@ -9969,6 +9998,15 @@ const resolveThemeVariables = (theme?: (defaults: ThemeTokens) => ThemeTokens): 
         }
     }
     return variables;
+};
+```
+
+### `rowActionLabel` (const)
+
+```ts
+const rowActionLabel = (action: string, subject: string | undefined): string => {
+    const trimmed = subject?.trim();
+    return trimmed === undefined || trimmed === "" ? action : `${action}: ${trimmed}`;
 };
 ```
 

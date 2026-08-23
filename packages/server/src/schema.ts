@@ -112,6 +112,37 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
 
     /**
+     * Stamp every row with `_commitSeq` — a per-shard integer, allocated once
+     * per mutation and strictly increasing in **commit order**, refreshed on
+     * every write to the row (insert, patch, replace, and the marker flip a
+     * `.softDelete()` performs).
+     *
+     * `_creationTime` is wall-clock and therefore cannot order commits: the
+     * clock is read when the handler runs, the write lands when the transaction
+     * commits, and nothing ties those instants together. A changefeed paging on
+     * `_creationTime` can skip a row permanently. Paging on `_commitSeq`
+     * (`where: { _commitSeq: { gt: cursor } }, orderBy: ["_commitSeq"]`) cannot.
+     *
+     * It orders COMMITS, not rows: one mutation's rows share a value. A bounded
+     * page can therefore end mid-group, so a consumer must checkpoint at a
+     * sequence it has seen the whole of, never at the last row of a full page.
+     * An action's writes are the exception to the grouping — they commit
+     * independently, so each gets its own sequence.
+     *
+     * Ordered, not contiguous — read a gap as "nothing to see", never as loss.
+     * Per-shard, not global: two shards allocate independently, so a cursor is
+     * only meaningful against the shard it came from. Rejected on `.global()`
+     * tables, which have no shard-local transaction to allocate inside.
+     *
+     * **A hard delete is invisible to the feed.** The sequence lives on the row,
+     * so a physically removed row takes it along: the row stops appearing, but
+     * no event says it went away. Pair `.commitOrdered()` with `.softDelete()`
+     * when the feed must observe deletes — the tombstone flip is an UPDATE, so
+     * it advances the sequence and pages through like any other change.
+     */
+    commitOrdered: () => TableBuilder<Shape>;
+
+    /**
      * Mark this table as written outside Lunora's discoverable insert path —
      * by an adapter, a migration, or framework middleware (e.g. `@lunora/auth`'s
      * better-auth tables, `@lunora/ratelimit`'s store). Advisor insert-path lints
@@ -141,6 +172,37 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
         fields: ReadonlyArray<(keyof Shape & string) | (typeof SYSTEM_INDEX_FIELDS)[number]>,
         options?: { unique?: boolean },
     ) => TableBuilder<Shape>;
+
+    /**
+     * Declare this table EPHEMERAL — state the shard rebuilds rather than
+     * remembers.
+     *
+     * A memory table is a full `ctx.db` table: indexes, `where`, `orderBy`,
+     * pagination, relations, live queries. What it is not is durable. Its rows
+     * are wiped the moment the Durable Object is reconstructed — which happens
+     * on every eviction, and a WebSocket-hibernating shard is evicted often — so
+     * a memory table holds only what can be derived again: presence and cursors,
+     * a live participant list, a rate-limit window, an actor's scratch state.
+     *
+     * Pair it with `onShardInit` to rebuild whatever the app needs present.
+     * The framework guarantees the ordering: every memory table is cleared, and
+     * every init hook has run, before any handler can read one. Without a hook a
+     * memory table simply comes back empty, which is a correct state for
+     * presence and a wrong one for a cache someone is treating as authoritative.
+     *
+     * **On Cloudflare the rows still transit the DO's SQLite.** workerd exposes
+     * exactly one SQL handle and no memory-backed database, so `.memory()` buys
+     * the LIFETIME (and skips the CDC changelog, so an append-heavy presence
+     * table does not grow the op-log), not the write. Treat it as "state I am
+     * happy to lose", not as "state that is free to write" — see
+     * `PlatformCapabilities.memoryTables`, rated `emulated` for exactly this
+     * reason.
+     *
+     * Rejected alongside `.global()` (a D1 table is not this shard's to clear),
+     * `.commitOrdered()` (a sequence that resets is not a sequence), and
+     * `.source()` (an externally-materialized table is not ours to wipe).
+     */
+    memory: () => TableBuilder<Shape>;
 
     /**
      * Name the column holding the owning user's id, so "only the owner sees these
@@ -315,7 +377,9 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     const triggerBuilder = createTriggerBuilder<Shape>();
     const vectorIndexes: TableVectorIndex[] = [];
     let shardMode: ShardMode = { kind: "root" };
+    let isCommitOrdered = false;
     let isExternallyManaged = false;
+    let isMemory = false;
     let isPublic = false;
     let ownerField: string | undefined;
     let softDelete: { field: string } | undefined;
@@ -350,6 +414,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         get externalSource() {
             return externalSource;
         },
+        commitOrdered() {
+            isCommitOrdered = true;
+
+            return builder;
+        },
+        get commitOrderedMode() {
+            return isCommitOrdered;
+        },
         externallyManaged() {
             isExternallyManaged = true;
 
@@ -381,6 +453,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         },
         get indexes() {
             return indexes;
+        },
+        memory() {
+            isMemory = true;
+
+            return builder;
+        },
+        get memoryMode() {
+            return isMemory;
         },
         ownedBy(field) {
             ownerField = field;
@@ -858,7 +938,16 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
  * below (via `SYSTEM_INDEX_FIELDS_SET`) — declared once so the two can't
  * drift apart.
  */
-const SYSTEM_INDEX_FIELDS = ["_creationTime", "_id"] as const;
+const SYSTEM_INDEX_FIELDS = ["_commitSeq", "_creationTime", "_id"] as const;
+
+/**
+ * The `.commitOrdered()` system field. Typed off {@link SYSTEM_INDEX_FIELDS}
+ * rather than spelled independently, so the index guard below and the
+ * allow-list cannot drift apart — renaming the column in one place stops
+ * compiling in the other. (The annotation is explicit, not inferred, because
+ * `isolatedDeclarations` cannot resolve a cross-declaration reference.)
+ */
+const COMMIT_SEQ_FIELD: (typeof SYSTEM_INDEX_FIELDS)[0] = "_commitSeq";
 
 /**
  * Runtime lookup form of {@link SYSTEM_INDEX_FIELDS}. Typed `Set<string>`
@@ -1092,6 +1181,104 @@ const indexFieldsFromSchema = (schema: Schema): IndexFieldsByTable => {
     return result;
 };
 
+/**
+ * Reject `.memory()` alongside anything the per-restart `DELETE FROM` cannot
+ * keep consistent — another storage mode whose rows this shard does not own,
+ * or a companion that lives outside the base table and would be left
+ * describing rows that no longer exist.
+ *
+ * Enforced at `defineSchema` rather than in the builder because the chain
+ * order is arbitrary — `.memory().global()` and `.global().memory()` must
+ * both be caught, and only the assembled table knows both facts.
+ */
+const validateMemoryTables = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (!table.memoryMode) {
+            continue;
+        }
+
+        // Each of these is a promise `.memory()` cannot keep, not a style rule.
+        // The first three are semantic; the companion kinds after them are
+        // mechanical — clearing a memory table is a `DELETE FROM` on the base
+        // table, which leaves a search/geo/aggregate/rank companion (a separate
+        // table) and a vector index (an external store) still describing rows
+        // that no longer exist.
+        const conflicts: ReadonlyArray<readonly [boolean, string]> = [
+            [table.shardMode.kind === "global", ".global() — those rows live in D1, which this shard does not own and cannot clear"],
+            [
+                table.commitOrderedMode === true,
+                ".commitOrdered() — the counter resets with the table, so the sequence would restart and a consumer's cursor would silently skip everything after it",
+            ],
+            [
+                table.externalSource !== undefined,
+                ".source() — the table is materialized by the ingest loop, so wiping it on every eviction would fight the puller",
+            ],
+            [table.searchIndexes.length > 0, ".searchIndex() — the FTS shadow is a separate table that clearing the rows would leave stale"],
+            [table.geoIndexes.length > 0, ".geoIndex() — the geohash companion is a separate table that clearing the rows would leave stale"],
+            [table.aggregateIndexes.length > 0, ".aggregateIndex() — the counter companion is a separate table that clearing the rows would leave stale"],
+            [table.rankIndexes.length > 0, ".rankIndex() — the rank companion is a separate table that clearing the rows would leave stale"],
+            [table.vectorIndexes.length > 0, ".vectorize() — vectors live in an external index that a shard restart cannot clear"],
+        ];
+
+        const conflict = conflicts.find(([hit]) => hit)?.[1];
+
+        if (conflict !== undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: table "${tableName}" is both .memory() and ${conflict}. Plain .index() is supported; SQLite maintains it through the DELETE.`,
+            );
+        }
+    }
+};
+
+/**
+ * Reject `.commitOrdered()` on a `.global()` table.
+ *
+ * `_commitSeq` is allocated from the shard's `__commit_seq` counter inside the
+ * same `state.storage.transaction(...)` that writes the row — that shared
+ * boundary is the whole reason the value orders commits. A `.global()` table
+ * lives in D1 (or Hyperdrive), written through a different connection with no
+ * shard-local transaction to allocate inside, so the stamp would be a number
+ * with no ordering guarantee behind it. Failing here beats shipping a field
+ * whose contract silently does not hold.
+ *
+ * Also rejects an index over `_commitSeq` on a table that never opted in — see
+ * the guard for why that index would be dead rather than merely useless.
+ *
+ * Enforced at `defineSchema` rather than in the builder because the chain order
+ * is arbitrary — `.global().commitOrdered()` and `.commitOrdered().global()`
+ * must both be caught, and only the assembled table knows both facts.
+ */
+const validateCommitOrdered = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.commitOrderedMode) {
+            if (table.shardMode.kind === "global") {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineSchema: table "${tableName}" is both .global() and .commitOrdered(). \`_commitSeq\` is allocated inside the shard's write transaction, which a global (D1/Hyperdrive) table does not share — so the stamp would carry no commit-ordering guarantee. Drop one of the two.`,
+                );
+            }
+
+            continue;
+        }
+
+        // `_commitSeq` is in `SYSTEM_INDEX_FIELDS`, so `assertFieldInShape` accepts
+        // it on any table — but unlike `_id` and `_creationTime`, which every row
+        // carries, it is only stamped by the write path on a `.commitOrdered()`
+        // table. An index over it here would cover a field no row has: it builds,
+        // it validates, and it matches nothing. A dead index that reads as a
+        // working one is worse than a rejected schema.
+        for (const index of table.indexes) {
+            if (index.fields.includes(COMMIT_SEQ_FIELD)) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineSchema: table "${tableName}" index "${index.name}" names "${COMMIT_SEQ_FIELD}", but the table is not .commitOrdered() — no row carries that field, so the index would never match. Add .commitOrdered(), or drop the column from the index.`,
+                );
+            }
+        }
+    }
+};
+
 const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
@@ -1101,6 +1288,8 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     fillIndexTableNames(tables);
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
     validateExternalSources(tables);
+    validateCommitOrdered(tables);
+    validateMemoryTables(tables);
     validateIndexFields(tables);
 
     return withExtend({ tables, vectorIndexes });

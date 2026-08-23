@@ -492,6 +492,39 @@ const perMessageRunQueue = defineQueue({
 
 const DISPATCH_ENV = { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com" };
 
+/**
+ * A dispatch endpoint that models the shard's replay dedup faithfully: a cache
+ * keyed by the body's `id` ALONE — matching `(identity, mutationId)` in
+ * `packages/shard-engine/src/ctx-db-idempotency.ts`, which carries no function
+ * path, under the single `"system:"` identity every server-initiated dispatch
+ * shares. `executed` records only the calls that actually reached a handler, so
+ * a colliding id shows up as a MISSING execution rather than an error.
+ */
+const dedupingDispatchFetch = (): { executed: string[]; fetchImpl: typeof fetch } => {
+    const executed: string[] = [];
+    const cache = new Map<string, unknown>();
+
+    const fetchImpl = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        const { functionPath, id } = JSON.parse((init?.body ?? "{}") as string) as { functionPath: string; id?: string };
+
+        if (id !== undefined && cache.has(id)) {
+            return Response.json(cache.get(id));
+        }
+
+        executed.push(functionPath);
+
+        const result = { ran: functionPath };
+
+        if (id !== undefined) {
+            cache.set(id, result);
+        }
+
+        return Response.json(result);
+    }) as typeof fetch;
+
+    return { executed, fetchImpl };
+};
+
 describe("dispatchQueueBatch — poison message isolation (deterministic dispatch failure)", () => {
     it("acks the one attributed message on a branded 404 and retries every other UNDECIDED message (never processed, so never lost)", async () => {
         expect.assertions(5);
@@ -646,6 +679,72 @@ describe("dispatchQueueBatch — poison message isolation (deterministic dispatc
             m1: expect.objectContaining({ deadLettered: true, error: undefined, outcome: "retry" }),
             m2: expect.objectContaining({ deadLettered: false, error: expect.stringContaining("dispatch failed for m2"), outcome: "error" }),
         });
+    });
+
+    it("executes BOTH of a handler's `message.run` calls — one pinned id for every call would collide them in the shard's dedup table", async () => {
+        expect.assertions(3);
+
+        const { executed, fetchImpl } = dedupingDispatchFetch();
+
+        // The exact shape the shard sees: its dedup table is keyed
+        // `(identity, mutationId)` with no function path, and every
+        // server-initiated dispatch shares one identity — so if both calls
+        // carried the same id, `sendReceipt` would silently return
+        // `chargeCustomer`'s cached result and never run.
+        const queue = defineQueue({
+            handler: async (_context, b) => {
+                const m = b.messages[0]!;
+
+                await m.run({ __lunoraRef: "billing:chargeCustomer" });
+                await m.run({ __lunoraRef: "billing:sendReceipt" });
+            },
+        });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [captureMessage({ id: "m1" }, { id: "m1" })]),
+                { q: { definition: queue, exportName: "q" } },
+                { env: DISPATCH_ENV, fetchImpl },
+            ),
+        ).resolves.toBeUndefined();
+
+        expect(executed).toStrictEqual(["billing:chargeCustomer", "billing:sendReceipt"]);
+        // Distinct dedup ids are what keeps them apart.
+        expect(new Set(executed).size).toBe(2);
+    });
+
+    it("dedups each call to its own first-run result when the same message is redelivered — nothing double-applied, nothing skipped", async () => {
+        expect.assertions(4);
+
+        const { executed, fetchImpl } = dedupingDispatchFetch();
+
+        // The at-least-once shape: both calls succeed, then the handler throws,
+        // so the broker redelivers and the handler replays from the start.
+        const queue = defineQueue({
+            handler: async (_context, b) => {
+                const m = b.messages[0]!;
+
+                await m.run({ __lunoraRef: "billing:chargeCustomer" });
+                await m.run({ __lunoraRef: "billing:sendReceipt" });
+                throw new Error("batch failed after both calls");
+            },
+        });
+        const registry = { q: { definition: queue, exportName: "q" } };
+
+        await expect(dispatchQueueBatch(batch("q", [captureMessage({ id: "m1" }, { id: "m1" })]), registry, { env: DISPATCH_ENV, fetchImpl })).rejects.toThrow(
+            /batch failed/,
+        );
+
+        expect(executed).toStrictEqual(["billing:chargeCustomer", "billing:sendReceipt"]);
+
+        // Redelivery: same message id, higher attempt count. The counter
+        // restarts, so each call reproduces its own id and hits its own cached
+        // result — neither charge nor receipt is applied twice.
+        await expect(
+            dispatchQueueBatch(batch("q", [captureMessage({ id: "m1" }, { attempts: 2, id: "m1" })]), registry, { env: DISPATCH_ENV, fetchImpl }),
+        ).rejects.toThrow(/batch failed/);
+
+        expect(executed).toStrictEqual(["billing:chargeCustomer", "billing:sendReceipt"]);
     });
 
     it("still rethrows when the handler throws undefined (not a LunoraError, so never attributable)", async () => {

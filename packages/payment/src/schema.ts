@@ -28,6 +28,12 @@ const customers = defineTable({
     referenceId: v.string(),
 })
     .index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true })
+    // Not unique: one reference may legitimately hold a customer per provider (Stripe AND Polar).
+    // `upsertCustomer` MATCHES on `(provider, referenceId)`, so the steady state is one row per pair
+    // and a re-mint updates in place — but that is a convergence property, not an invariant: the
+    // match is a non-atomic find-then-insert, so two concurrent first-checkouts for one reference can
+    // still both insert. The reader (`getCustomerByReference`) takes the first match, and the next
+    // upsert collapses the pair back onto one row.
     .index("by_reference", ["referenceId"]);
 
 const subscriptions = defineTable({

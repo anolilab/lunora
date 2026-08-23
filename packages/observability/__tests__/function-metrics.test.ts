@@ -423,6 +423,51 @@ describe("time-series buckets", () => {
         expect(readFunctionMetricBuckets(sql, "new:fn").buckets).toHaveLength(1);
     });
 
+    it("issues the retention delete once per bucket window", () => {
+        expect.assertions(2);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        const execSpy = vi.spyOn(sql, "exec");
+        const deletes = () => execSpy.mock.calls.filter(([query]) => typeof query === "string" && query.includes("DELETE")).length;
+
+        recordFunctionMetric(sql, dispatch({ ts: 1_000_000 }));
+        recordFunctionMetric(sql, dispatch({ ts: 1_000_001 }));
+
+        // Same minute window: the second dispatch skips the prune entirely.
+        expect(deletes()).toBe(1);
+
+        recordFunctionMetric(sql, dispatch({ ts: 1_000_000 + FUNCTION_METRICS_BUCKET_MS }));
+
+        // A dispatch in a later window prunes again.
+        expect(deletes()).toBe(2);
+    });
+
+    it("still prunes a second path written in a window another path claimed", () => {
+        expect.assertions(2);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        const stale = 0;
+        const recent = FUNCTION_METRICS_BUCKET_MS * (FUNCTION_METRICS_BUCKET_RETENTION + 10);
+
+        // Both paths accumulate a bucket past the retention horizon.
+        recordFunctionMetric(sql, dispatch({ path: "busy:fn", ts: stale }));
+        recordFunctionMetric(sql, dispatch({ path: "quiet:fn", ts: stale }));
+
+        // `busy:fn` writes first in the recent window and would claim it for the
+        // whole handle under a handle-wide marker — while its DELETE only prunes
+        // its own path, leaving `quiet:fn`'s stale bucket to grow forever. The
+        // marker is per path, so `quiet:fn` still prunes on its own next write.
+        recordFunctionMetric(sql, dispatch({ path: "busy:fn", ts: recent }));
+        recordFunctionMetric(sql, dispatch({ path: "quiet:fn", ts: recent }));
+
+        expect(readFunctionMetricBuckets(sql, "busy:fn").buckets.map((bucket) => bucket.bucketMs)).toStrictEqual([recent]);
+        expect(readFunctionMetricBuckets(sql, "quiet:fn").buckets.map((bucket) => bucket.bucketMs)).toStrictEqual([recent]);
+    });
+
     it("returns every path's buckets when no path is given", () => {
         expect.assertions(1);
 

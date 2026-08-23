@@ -15,9 +15,10 @@ import type { ResourceState } from "../core/create-resource-controller";
 import type { DeviceAuthorizationActions, DeviceAuthorizationState } from "../core/device-authorization";
 import { createDeviceAuthorizationController } from "../core/device-authorization";
 import { isFlowEnabled } from "../core/flow-gate";
-import { ROLE_OPTIONS } from "../core/labels";
+import { ROLE_OPTIONS, rowActionLabel } from "../core/labels";
 import type { DeviceSessionsActions } from "../core/multi-session";
 import { createDeviceSessionsController } from "../core/multi-session";
+import { userLabel } from "../core/session";
 import type { TeamsActions } from "../core/teams";
 import { createTeamsController } from "../core/teams";
 import type { AuthDeviceSession, AuthTeam, FormActions, FormState } from "../core/types";
@@ -54,6 +55,7 @@ import { UserViewComponent } from "./user-button";
                                         class="lunora-auth-button lunora-auth-button--secondary"
                                         type="button"
                                         [disabled]="state().busy || entry.session?.token === undefined"
+                                        [attr.aria-label]="rowActionLabel(t.switchAccount, userLabel(entry.user))"
                                         (click)="setActive(entry.session?.token ?? '')"
                                     >
                                         {{ t.switchAccount }}
@@ -62,6 +64,7 @@ import { UserViewComponent } from "./user-button";
                                         class="lunora-auth-button lunora-auth-button--danger"
                                         type="button"
                                         [disabled]="state().busy || entry.session?.token === undefined"
+                                        [attr.aria-label]="rowActionLabel(t.signOut, userLabel(entry.user))"
                                         (click)="revoke(entry.session?.token ?? '')"
                                     >
                                         {{ t.signOut }}
@@ -79,6 +82,11 @@ import { UserViewComponent } from "./user-button";
     `,
 })
 class MultiSessionCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly userLabel = userLabel;
+
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly rowActionLabel = rowActionLabel;
     private readonly context = injectAuthUIContext();
     protected readonly enabled = computed(() => isFlowEnabled(this.context(), "multiSession", "MultiSessionCard"));
     protected readonly t = this.context().localization;
@@ -135,7 +143,7 @@ class MultiSessionCardComponent {
                                 <span class="lunora-auth-list__actions">
                                     <select
                                         class="lunora-auth-select"
-                                        [attr.aria-label]="t.roleLabel"
+                                        [attr.aria-label]="rowActionLabel(t.roleLabel, user.email)"
                                         [disabled]="state().busy || user.id === undefined"
                                         [value]="user.role ?? 'user'"
                                         (change)="setRole(user.id ?? '', $any($event.target).value)"
@@ -148,6 +156,7 @@ class MultiSessionCardComponent {
                                         class="lunora-auth-button lunora-auth-button--secondary"
                                         type="button"
                                         [disabled]="state().busy || user.id === undefined"
+                                        [attr.aria-label]="rowActionLabel(t.adminImpersonate, user.email)"
                                         (click)="impersonate(user.id ?? '')"
                                     >
                                         {{ t.adminImpersonate }}
@@ -156,6 +165,7 @@ class MultiSessionCardComponent {
                                         class="lunora-auth-button lunora-auth-button--danger"
                                         type="button"
                                         [disabled]="state().busy || user.id === undefined"
+                                        [attr.aria-label]="rowActionLabel(user.banned === true ? t.adminUnban : t.adminBan, user.email)"
                                         (click)="toggleBan(user.id ?? '', user.banned === true)"
                                     >
                                         {{ user.banned === true ? t.adminUnban : t.adminBan }}
@@ -173,6 +183,8 @@ class MultiSessionCardComponent {
     `,
 })
 class AdminUsersCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly rowActionLabel = rowActionLabel;
     private readonly context = injectAuthUIContext();
     protected readonly enabled = computed(() => isFlowEnabled(this.context(), "admin", "AdminUsersCard"));
     protected readonly t = this.context().localization;
@@ -305,6 +317,7 @@ class DeviceAuthorizationCardComponent implements OnInit {
                                     class="lunora-auth-button lunora-auth-button--danger"
                                     type="button"
                                     [disabled]="state().busy"
+                                    [attr.aria-label]="rowActionLabel(t.remove, team.name)"
                                     (click)="remove(team.id ?? '')"
                                 >
                                     {{ t.remove }}
@@ -325,6 +338,8 @@ class DeviceAuthorizationCardComponent implements OnInit {
     `,
 })
 class TeamsCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly rowActionLabel = rowActionLabel;
     private readonly context = injectAuthUIContext();
     /*
      * The only gate in the set that can flip *on* mid-life: teams are off until

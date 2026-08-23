@@ -22,7 +22,7 @@ const { actions, state } = useController(createEmailOtpController);
     <AuthCard v-if="enabled && state.step === 'verify'" :title="t.emailOtp" :description="t.emailOtpSent">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.verify">
             <FormBanner :error="state.formError" />
-            <Field :field="state.code" :label="t.codeLabel" name="code" autoComplete="one-time-code" @change="actions.setCode" />
+            <Field :field="state.code" :label="t.codeLabel" name="code" autoComplete="one-time-code" inputMode="numeric" @change="actions.setCode" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.twoFactor }}</SubmitButton>
         </form>
         <template #footer>

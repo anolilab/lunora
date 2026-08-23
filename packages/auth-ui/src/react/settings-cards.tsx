@@ -7,7 +7,7 @@ import { createChangeEmailController } from "../core/change-email";
 import { createChangePasswordController } from "../core/change-password";
 import { createDeleteAccountController } from "../core/delete-account";
 import { isFlowEnabled } from "../core/flow-gate";
-import { passkeyLabel, sessionLabel } from "../core/labels";
+import { passkeyLabel, rowActionLabel, sessionLabel } from "../core/labels";
 import { createPasskeysController } from "../core/passkeys";
 import { createProfileController } from "../core/profile";
 import { signOut } from "../core/session-actions";
@@ -102,7 +102,11 @@ const SessionsCard = (): ReactElement => {
 
     const body = ((): ReactElement => {
         if (state.loading) {
-            return <p className="lunora-auth-card__description">…</p>;
+            return (
+                <p className="lunora-auth-card__description" role="status">
+                    {t.loading}
+                </p>
+            );
         }
 
         if (state.items.length === 0) {
@@ -120,6 +124,7 @@ const SessionsCard = (): ReactElement => {
                             <span className="lunora-auth-list__label">{sessionLabel(session, t)}</span>
                             {token === undefined ? null : (
                                 <button
+                                    aria-label={rowActionLabel(t.revoke, sessionLabel(session, t))}
                                     className="lunora-auth-link"
                                     disabled={state.busy}
                                     onClick={() => {
@@ -173,7 +178,11 @@ const PasskeysCard = (): ReactElement | null => {
 
     const body = ((): ReactElement => {
         if (state.loading) {
-            return <p className="lunora-auth-card__description">…</p>;
+            return (
+                <p className="lunora-auth-card__description" role="status">
+                    {t.loading}
+                </p>
+            );
         }
 
         if (state.items.length === 0) {
@@ -190,6 +199,7 @@ const PasskeysCard = (): ReactElement | null => {
                             <span className="lunora-auth-list__label">{passkeyLabel(passkey, t)}</span>
                             {id === undefined ? null : (
                                 <button
+                                    aria-label={rowActionLabel(t.remove, passkeyLabel(passkey, t))}
                                     className="lunora-auth-link"
                                     disabled={state.busy}
                                     onClick={() => {

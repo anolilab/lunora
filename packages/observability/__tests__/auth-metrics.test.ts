@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
     AUTH_METRICS_BUCKET_MS,
@@ -77,6 +77,30 @@ describe("auth-metrics module", () => {
 
             // Physical upsert, one row per bucket.
             expect(database.raw(`SELECT COUNT(*) AS c FROM "${AUTH_METRICS_BUCKETS_TABLE}"`)[0]).toEqual({ c: 2 });
+        } finally {
+            database.close();
+        }
+    });
+
+    it("issues the retention delete once per bucket window", () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const execSpy = vi.spyOn(database.sql, "exec");
+            const deletes = () => execSpy.mock.calls.filter(([query]) => typeof query === "string" && query.includes("DELETE")).length;
+
+            recordAuthEvent(database.sql, { outcome: "ok", ts: 1000 });
+            recordAuthEvent(database.sql, { outcome: "fail", ts: 2000 });
+
+            // Same minute window: the second attempt skips the prune entirely.
+            expect(deletes()).toBe(1);
+
+            recordAuthEvent(database.sql, { outcome: "ok", ts: 1000 + AUTH_METRICS_BUCKET_MS });
+
+            // An attempt in a later window prunes again.
+            expect(deletes()).toBe(2);
         } finally {
             database.close();
         }

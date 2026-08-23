@@ -119,6 +119,21 @@ const MESSAGE_BUCKET_MAX = 160;
  */
 const MESSAGE_INPUT_MAX = 1024;
 
+/**
+ * Bounds for the stacktrace parser, mirroring {@link MESSAGE_INPUT_MAX}'s
+ * rationale: a stacktrace is attacker-influenced input (it can carry a
+ * user-supplied string in a frame name), and the parser runs on a
+ * single-threaded runtime. Real frame lines are under ~300 chars, V8's default
+ * `Error.stackTraceLimit` is 10, and a real frame has 1-2 parens — so these
+ * clamps are transparent for any well-formed stack while bounding the work a
+ * crafted one can force.
+ */
+const STACK_LINE_MAX = 1024;
+
+const STACK_FRAMES_MAX = 64;
+
+const STACK_PAREN_CANDIDATES_MAX = 32;
+
 export const messageBucketFor = (message: string | null | undefined): string => {
     if (!message) {
         return "";
@@ -229,7 +244,15 @@ const splitFramedLocation = (body: string): Frame | null => {
         return null;
     }
 
+    let candidates = 0;
+
     for (let index = body.indexOf("("); index > 0; index = body.indexOf("(", index + 1)) {
+        if (candidates === STACK_PAREN_CANDIDATES_MAX) {
+            return null;
+        }
+
+        candidates += 1;
+
         const separator = body[index - 1] ?? "";
 
         // The upstream `\s+` — the `(` must be preceded by whitespace, so an
@@ -251,11 +274,17 @@ const splitFramedLocation = (body: string): Frame | null => {
     return null;
 };
 
-const parseFrames = (stacktrace: string): Frame[] => {
+// Exported for tests only — not part of the package's public surface (index.ts does not re-export it).
+export const parseFrames = (stacktrace: string): Frame[] => {
     const out: Frame[] = [];
 
     for (const raw of stacktrace.split("\n")) {
-        const line = raw.trim();
+        if (out.length === STACK_FRAMES_MAX) {
+            break;
+        }
+
+        const trimmed = raw.trim();
+        const line = trimmed.length > STACK_LINE_MAX ? trimmed.slice(0, STACK_LINE_MAX) : trimmed;
 
         if (!line.startsWith("at ")) {
             continue;

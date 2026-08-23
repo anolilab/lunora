@@ -25,10 +25,10 @@ import { LunoraError } from "@lunora/errors";
 import type { x402Client } from "@x402/core/client";
 import type { ClientEvmSigner } from "@x402/evm";
 import type { ClientSvmSigner } from "@x402/svm";
-import type { PrivateKeyAccount } from "viem/accounts";
 
 import type { X402CdpSignerConfig, X402PayConfig } from "../config";
 import { isEvmNetwork, toCaip2 } from "../networks";
+import { importOptionalPeer } from "../optional-peer";
 
 /** Reads a secret by name; resolves `undefined` when unset. */
 type GetSecret = (name: string) => Promise<string | undefined> | string | undefined;
@@ -75,16 +75,10 @@ const assertSignerFamily = (signer: ClientEvmSigner | ClientSvmSigner, evm: bool
 const resolveCdpEvmAccount = async (signer: X402CdpSignerConfig, getSecret: GetSecret): Promise<ClientEvmSigner> => {
     // Load the optional peer first: if it is missing, a "not installed" error is
     // far more actionable than a "secret not set" one for the same misconfig.
-    let cdpModule: typeof import("@coinbase/cdp-sdk");
-
-    try {
-        cdpModule = await import("@coinbase/cdp-sdk");
-    } catch {
-        throw new LunoraError(
-            "ENV_INVALID",
-            'x402 pay: CDP-managed custody needs the optional @coinbase/cdp-sdk peer — install it, or use "raw-key"/"signer" custody instead.',
-        );
-    }
+    const { CdpClient } = await importOptionalPeer(
+        () => import("@coinbase/cdp-sdk"),
+        'x402 pay: CDP-managed custody needs the optional @coinbase/cdp-sdk peer — install it, or use "raw-key"/"signer" custody instead.',
+    );
 
     const [apiKeyId, apiKeySecret, walletSecret] = await Promise.all([
         requireSecret(getSecret, signer.apiKeyIdSecretName ?? "CDP_API_KEY_ID"),
@@ -92,7 +86,7 @@ const resolveCdpEvmAccount = async (signer: X402CdpSignerConfig, getSecret: GetS
         requireSecret(getSecret, signer.walletSecretName ?? "CDP_WALLET_SECRET"),
     ]);
 
-    const cdp = new cdpModule.CdpClient({ apiKeyId, apiKeySecret, walletSecret });
+    const cdp = new CdpClient({ apiKeyId, apiKeySecret, walletSecret });
 
     return cdp.evm.getOrCreateAccount({ name: signer.account });
 };
@@ -107,19 +101,24 @@ export interface WalletDeps {
 }
 
 /**
- * Resolve a viem `LocalAccount` from a raw private key. The key may be given with
- * or without the `0x` prefix. The account is a structural `ClientEvmSigner`
- * (`address` + `signTypedData`), so `@x402/evm` accepts it directly.
+ * Resolve a signer from a raw private key (a viem `LocalAccount` under the hood).
+ * The key may be given with or without the `0x` prefix. Typed as the structural
+ * `ClientEvmSigner` (`address` + `signTypedData`) rather than viem's own
+ * `PrivateKeyAccount` so the published declarations don't require the optional
+ * viem peer to type-check.
  * @experimental
  */
-export const resolveEvmAccount = async (privateKey: string): Promise<PrivateKeyAccount> => {
+export const resolveEvmAccount = async (privateKey: string): Promise<ClientEvmSigner> => {
     const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
 
     if (!HEX_PRIVATE_KEY.test(key)) {
         throw new LunoraError("ENV_INVALID", "x402 pay: the EVM wallet key must be a 32-byte hex private key (64 hex chars, optional 0x prefix).");
     }
 
-    const { privateKeyToAccount } = await import("viem/accounts");
+    const { privateKeyToAccount } = await importOptionalPeer(
+        () => import("viem/accounts"),
+        'x402 pay: raw-key EVM custody needs the optional viem peer — install it, or use "cdp"/"signer" custody instead.',
+    );
 
     return privateKeyToAccount(key as `0x${string}`);
 };
@@ -134,7 +133,11 @@ export const resolveEvmAccount = async (privateKey: string): Promise<PrivateKeyA
  */
 export const resolveSvmSigner = async (secret: string): Promise<ClientSvmSigner> => {
     const trimmed = secret.trim();
-    const { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes, getBase58Encoder } = await import("@solana/kit");
+
+    const { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes, getBase58Encoder } = await importOptionalPeer(
+        () => import("@solana/kit"),
+        'x402 pay: raw-key Solana custody needs the optional @solana/kit peer — install it, or pass a pre-built signer via "signer" custody instead.',
+    );
 
     let bytes: Uint8Array;
 
@@ -215,11 +218,17 @@ export const registerWallet = async (client: x402Client, config: X402PayConfig, 
     // Phase 2 — scheme: register the family's exact scheme with the resolved
     // signer. Written once per family; the family guard above keeps the cast safe.
     if (evm) {
-        const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+        const { registerExactEvmScheme } = await importOptionalPeer(
+            () => import("@x402/evm/exact/client"),
+            "x402 pay: EVM networks need the optional @x402/evm + viem peers — install them, or configure an SVM network.",
+        );
 
         registerExactEvmScheme(client, { networks: [network], signer: account as ClientEvmSigner });
     } else {
-        const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
+        const { registerExactSvmScheme } = await importOptionalPeer(
+            () => import("@x402/svm/exact/client"),
+            "x402 pay: SVM networks need the optional @x402/svm + @solana/kit peers — install them, or configure an EVM network.",
+        );
 
         registerExactSvmScheme(client, { networks: [network], signer: account as ClientSvmSigner });
     }
