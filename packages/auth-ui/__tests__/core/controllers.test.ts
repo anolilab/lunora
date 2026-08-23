@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AuthClient, AuthResponse, ControllerContext } from "../../src/core";
 import {
+    createActiveMemberController,
     createEmailOtpController,
     createForgotPasswordController,
+    createResendVerificationController,
     createResetPasswordController,
+    createSessionController,
     createSignInController,
     createSignUpController,
     createTwoFactorVerifyController,
@@ -265,5 +268,96 @@ describe(createEmailOtpController, () => {
         controller.actions.back();
 
         expect(controller.getState().step).toBe("request");
+    });
+});
+
+/**
+ * better-auth resolves HTTP failures as `{ data: null, error }` rather than
+ * throwing, so a 5xx from `/get-session` used to be indistinguishable from
+ * "signed out" everywhere the response wasn't `assertOk`-guarded.
+ */
+describe("errored getSession is an error, not signed-out", () => {
+    const erroredSession = (): ReturnType<typeof vi.fn> => vi.fn(() => fail("boom"));
+
+    it("session controller reports status error instead of an anonymous success", async () => {
+        expect.assertions(3);
+
+        const { context } = makeContext(stubClient({ getSession: erroredSession() }));
+        const controller = createSessionController(context);
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        expect(controller.getState().status).toBe("error");
+        expect(controller.getState().error).toBeDefined();
+        expect(controller.getState().user).toBeUndefined();
+    });
+
+    it("active-member reports status error instead of success with no role", async () => {
+        expect.assertions(2);
+
+        const { context } = makeContext(
+            stubClient({
+                getSession: erroredSession(),
+                organization: { getFullOrganization: vi.fn(() => ok({ id: "org-1", members: [] })) },
+            }),
+        );
+        const controller = createActiveMemberController(context);
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        expect(controller.getState().status).toBe("error");
+        expect(controller.getState().error).toBeDefined();
+    });
+
+    it("active-member reports no role, not an error, for a signed-out user", async () => {
+        expect.assertions(2);
+
+        // Signed out is a successful 200 with no user; the organization read
+        // then answers 401 for the same reason. Neither is an error state —
+        // nobody has a role in an organization when nobody is signed in.
+        const { context } = makeContext(
+            stubClient({
+                getSession: vi.fn(() => ok(null)),
+                organization: { getFullOrganization: vi.fn(() => fail("unauthorized")) },
+            }),
+        );
+        const controller = createActiveMemberController(context);
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        expect(controller.getState().status).toBe("success");
+        expect(controller.getState().role).toBeUndefined();
+    });
+
+    it("resend-verification prefill propagates the failure instead of seeding an empty string", async () => {
+        expect.assertions(2);
+
+        const onError = vi.fn();
+        const client = stubClient({ getSession: erroredSession(), sendVerificationEmail: vi.fn(() => ok({ status: true })) });
+        const context = resolveContext({ authClient: client, nav: { navigate: vi.fn(), replace: vi.fn() }, onError });
+        const controller = createResendVerificationController(context);
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        // The errored read reaches the form engine's error path (it used to be
+        // swallowed into `{ email: "" }`), and no field is marked seeded.
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(controller.getState().fields.email.value).toBe("");
     });
 });

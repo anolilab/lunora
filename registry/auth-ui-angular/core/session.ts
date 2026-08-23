@@ -14,7 +14,7 @@
  * provider, which is the only thing that changes a session in this UI.
  */
 import type { ControllerContext } from "./config";
-import { mapAuthError } from "./map-error";
+import { assertOk, mapAuthError } from "./map-error";
 import { createStore } from "./store";
 import type { AuthUser, Controller, FlowStatus } from "./types";
 
@@ -40,7 +40,10 @@ const createSessionController = (context: ControllerContext, options: { autoLoad
         store.update({ error: undefined, loading: true });
 
         try {
-            const response = await context.authClient.getSession();
+            // `assertOk`: better-auth resolves HTTP failures as `{ data: null,
+            // error }` rather than throwing, so without it a 5xx would render
+            // as "signed out" instead of reaching the catch below.
+            const response = assertOk(await context.authClient.getSession());
 
             // A signed-out user is a successful 200 with no user, not an error —
             // rendering an error banner in the avatar slot for "nobody is signed

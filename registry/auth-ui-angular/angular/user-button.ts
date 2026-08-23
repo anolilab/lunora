@@ -46,12 +46,12 @@ class UserAvatarComponent {
      */
     protected readonly failed = linkedSignal<string | undefined, boolean>({
         computation: () => false,
-        source: () => this.user()?.image,
+        source: () => this.user()?.image ?? undefined,
     });
 
     protected readonly initials = computed(() => userInitials(this.user()));
     protected readonly showImage = computed(() => {
-        const image = this.user()?.image;
+        const image = this.user()?.image ?? undefined;
 
         return image !== undefined && image !== "" && !this.failed();
     });

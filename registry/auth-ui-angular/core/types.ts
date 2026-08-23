@@ -25,7 +25,14 @@ interface AuthUser {
     email?: string;
     emailVerified?: boolean;
     id?: string;
-    image?: string;
+
+    /**
+     * Nullable, not merely optional: better-auth's user schema is
+     * `optional(nullable(string))` and its output builder writes an explicit
+     * `null` for a user who has never set an avatar. Typing this `string` made
+     * every `!== undefined` check silently admit `null`.
+     */
+    image?: string | null;
     name?: string;
 }
 
