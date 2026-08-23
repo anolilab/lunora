@@ -1,3 +1,14 @@
+## @lunora/auth [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.86...@lunora/auth@1.0.0-alpha.87) (2026-08-23)
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.79
+
 ## @lunora/auth [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/%40lunora%2Fauth%401.0.0-alpha.85...%40lunora%2Fauth%401.0.0-alpha.86) (2026-08-18)
 
 
