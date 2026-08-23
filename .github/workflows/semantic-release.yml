@@ -81,7 +81,7 @@
                   # `packageManager` field, so CI can't drift from the repo's version.
                   "run_install": false
 
-            - "name": "Use Node.js 22.14"
+            - "name": "Use Node.js 22.15"
               "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
               "with":
                   "node-version": "22.15"
@@ -189,6 +189,17 @@
                       git reset --hard "origin/${BRANCH}"
 
                       pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts
+
+                      # Assert the result is what the next push will demand. Lint and Tests
+                      # run on pull_request/merge_group only, so nothing validates the branch
+                      # tip that a release creates — the first thing to notice a lockfile the
+                      # branch cannot install is the NEXT push, failing in its setup step. This
+                      # check costs ~1s and moves that discovery here, where the cause is
+                      # obvious and the job that caused it is still the one reporting it.
+                      if ! pnpm install --frozen-lockfile --lockfile-only --ignore-scripts; then
+                          echo "::error::pnpm-lock.yaml still fails --frozen-lockfile after regeneration. Not pushing it: a lockfile the branch cannot install breaks every later push. The mismatch is printed above."
+                          exit 1
+                      fi
 
                       if git diff --quiet -- pnpm-lock.yaml; then
                           echo "pnpm-lock.yaml already matches the manifests on ${BRANCH}."
