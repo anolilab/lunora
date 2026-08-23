@@ -1,4 +1,4 @@
-import type { SecureStorageLike } from "@lunora/react-native/auth";
+import type { ExpoClientStorage } from "@lunora/react-native/auth";
 import { expoClient } from "@lunora/react-native/auth";
 import { createAuthClient } from "better-auth/react";
 import * as SecureStore from "expo-secure-store";
@@ -19,18 +19,27 @@ export const LUNORA_URL = process.env.EXPO_PUBLIC_LUNORA_URL ?? "http://localhos
  * session through `localStorage` instead. On native the session lives in the OS
  * keychain/keystore; on web the browser's cookie jar also carries it, so this
  * only needs to persist what `expoClient` reads back via `getCookie()`.
+ *
+ * better-auth 1.7 reads through the ASYNC pair (`getItemAsync` / `setItemAsync`)
+ * and keeps the sync pair for fast paths, so a store has to provide all four.
+ * `localStorage` is synchronous, so the async halves just wrap the sync ones.
  */
-const sessionStore: SecureStorageLike =
-    Platform.OS === "web"
-        ? {
-              getItem: (key) => (typeof localStorage === "undefined" ? null : localStorage.getItem(key)),
-              setItem: (key, value) => {
-                  if (typeof localStorage !== "undefined") {
-                      localStorage.setItem(key, value);
-                  }
-              },
-          }
-        : SecureStore;
+const webStorage: ExpoClientStorage = {
+    getItem: (key) => (typeof localStorage === "undefined" ? null : localStorage.getItem(key)),
+    getItemAsync: async (key) => (typeof localStorage === "undefined" ? null : localStorage.getItem(key)),
+    setItem: (key, value) => {
+        if (typeof localStorage !== "undefined") {
+            localStorage.setItem(key, value);
+        }
+    },
+    setItemAsync: async (key, value) => {
+        if (typeof localStorage !== "undefined") {
+            localStorage.setItem(key, value);
+        }
+    },
+};
+
+const sessionStore: ExpoClientStorage = Platform.OS === "web" ? webStorage : SecureStore;
 
 /**
  * better-auth React client wired for Expo. The Expo plugin persists the session

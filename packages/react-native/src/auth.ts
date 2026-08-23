@@ -1,17 +1,23 @@
-/**
- * The slice of a key/value store the better-auth Expo plugin needs — the shape
- * of `expo-secure-store` (a synchronous `getItem`, plus `setItem`). Pass Expo
- * `SecureStore` straight in.
- * @experimental
- */
-export interface SecureStorageLike {
-    getItem: (key: string) => null | string;
-    setItem: (key: string, value: string) => unknown;
-}
-
 // `expoBearerToken` lives in its own Expo-free module so it stays unit-testable
 // without loading `@better-auth/expo/client` (Expo native modules) below.
 export { default as expoBearerToken } from "./bearer";
+
+/**
+ * The slice of a key/value store the better-auth Expo plugin needs. Pass Expo
+ * `SecureStore` straight in.
+ *
+ * Re-exported from `@better-auth/expo/client` rather than restated here. This
+ * used to be a hand-written `SecureStorageLike` mirroring what upstream needed
+ * — two synchronous methods — and better-auth 1.7 moved the Expo storage
+ * integration to asynchronous `SecureStore` methods, so the real shape is now
+ * `getItem` + `getItemAsync` + `setItem` + `setItemAsync`. A hand-written
+ * mirror does not fail when upstream widens like that; it just silently
+ * describes a store the plugin will not accept. Re-exporting makes the
+ * compiler track it, which is the same lesson the `getCookie` shim taught in
+ * this file's history.
+ * @experimental
+ */
+export type { ExpoClientStorage } from "@better-auth/expo/client";
 
 // Re-export the better-auth Expo building blocks so a native app wires auth from
 // a single import (`@lunora/react-native/auth`) rather than reaching for
