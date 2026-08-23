@@ -300,6 +300,53 @@ describe("createStorage", () => {
         await expect(storage.getMetadata("")).rejects.toThrow(/non-empty/);
     });
 
+    it("head() returns the R2 object shape body-free, with the sha256 projection", async () => {
+        expect.assertions(6);
+
+        const checksum = new Uint8Array([0xde, 0xad, 0xbe, 0xef]).buffer;
+        const bucket = fakeBucket();
+
+        vi.spyOn(bucket, "head").mockImplementation(async (key) => {
+            if (key === "missing") {
+                return null;
+            }
+
+            return { checksums: { sha256: checksum }, etag: "etag-1", httpMetadata: { contentType: "video/mp4" }, key, size: 1024 };
+        });
+
+        const storage = createStorage({ bucket });
+        const object = await storage.head("clips/a.mp4");
+
+        // The fields a ranged HTTP response is built from: the FULL size, the
+        // validator, the content-type, and the RFC 9530 digest.
+        expect(object?.size).toBe(1024);
+        expect(object?.etag).toBe("etag-1");
+        expect(object?.httpMetadata?.contentType).toBe("video/mp4");
+        expect((object as { sha256Base64?: string } | null)?.sha256Base64).toBe("3q2+7w==");
+        // No body was pulled to learn any of it.
+        expect(bucket.get).not.toHaveBeenCalled();
+
+        await expect(storage.head("missing")).resolves.toBeNull();
+    });
+
+    it("head() falls back to a 0-length ranged get on a binding with no HEAD", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+
+        // `head` is optional on `R2BucketLike` — this models a binding or double
+        // that only implements `get`/`put`/`list`/`delete`.
+        delete bucket.head;
+
+        vi.spyOn(bucket, "get").mockImplementation(async (key) => ({ body: null, etag: "e", key, size: 99 }) as never);
+
+        const storage = createStorage({ bucket });
+        const object = await storage.head("k");
+
+        expect(object?.size).toBe(99);
+        expect(bucket.get).toHaveBeenCalledWith("k", { range: { length: 0 } });
+    });
+
     it("getMetadata() derives a hex sha256 from R2 checksums", async () => {
         expect.assertions(1);
 

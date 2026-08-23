@@ -26,25 +26,57 @@ const fakeObject = (bytes: Uint8Array, size: number, options: FakeObjectOptions)
     };
 };
 
+/** What each ctx double was asked to do, so a test can assert on the reads themselves. */
+interface StorageCalls {
+    /** One entry per `download`: the requested window, or `undefined` for a whole-object read. */
+    downloads: ({ length: number; offset: number } | undefined)[];
+    /** One entry per body-free `head`. */
+    heads: number;
+}
+
 /**
  * Build a ctx whose `download` mirrors R2's ranged-read contract: a plain
  * `download(key)` streams the whole object, while `download(key, { range })`
  * streams only the requested window (but still reports the full `size`). A fresh
- * stream is produced on every call so the two reads a range request makes don't
- * share a consumed body.
+ * stream is produced on every call so reads never share a consumed body. `head`
+ * mirrors R2's HEAD — the same metadata with no body at all.
+ *
+ * The returned `calls` record is what pins the round-trip count: a ranged
+ * request must never start a whole-object `download` just to learn the size.
  */
 const ctxWith = (bytes: Uint8Array | null, options: FakeObjectOptions = {}) => {
+    const calls: StorageCalls = { downloads: [], heads: 0 };
+
     return {
-        storage: {
-            download: async (_key: string, downloadOptions?: { range?: { length: number; offset: number } }) => {
-                if (bytes === null) {
-                    return null;
-                }
+        calls,
+        ctx: {
+            storage: {
+                download: async (_key: string, downloadOptions?: { range?: { length: number; offset: number } }) => {
+                    calls.downloads.push(downloadOptions?.range);
 
-                const range = downloadOptions?.range;
-                const slice = range ? bytes.subarray(range.offset, range.offset + range.length) : bytes;
+                    if (bytes === null) {
+                        return null;
+                    }
 
-                return fakeObject(slice, bytes.byteLength, options);
+                    const range = downloadOptions?.range;
+                    const slice = range ? bytes.subarray(range.offset, range.offset + range.length) : bytes;
+
+                    return fakeObject(slice, bytes.byteLength, options);
+                },
+                head: async (_key: string) => {
+                    calls.heads += 1;
+
+                    if (bytes === null) {
+                        return null;
+                    }
+
+                    const object = fakeObject(new Uint8Array(), bytes.byteLength, options);
+
+                    // A real HEAD carries no body at all — dropping it here is what
+                    // makes a test fail if `serveStorageObject` ever reads one off a
+                    // head result.
+                    return { ...object, body: undefined };
+                },
             },
         },
     };
@@ -56,7 +88,7 @@ describe("serveStorageObject", () => {
     it("returns 200 with full body + metadata headers when no Range is sent", async () => {
         expect.assertions(5);
 
-        const ctx = ctxWith(BODY, { contentType: "text/plain", etag: "abc", sha256Base64: "3q2+7w==" });
+        const { ctx } = ctxWith(BODY, { contentType: "text/plain", etag: "abc", sha256Base64: "3q2+7w==" });
         const response = await serveStorageObject(ctx, "k", new Request("https://x/k"));
 
         expect(response.status).toBe(200);
@@ -72,7 +104,7 @@ describe("serveStorageObject", () => {
     it("does not double-quote an already-quoted (weak) ETag", async () => {
         expect.assertions(1);
 
-        const ctx = ctxWith(BODY, { etag: 'W/"weak"' });
+        const { ctx } = ctxWith(BODY, { etag: 'W/"weak"' });
         const response = await serveStorageObject(ctx, "k", new Request("https://x/k"));
 
         expect(response.headers.get("etag")).toBe('W/"weak"');
@@ -81,7 +113,7 @@ describe("serveStorageObject", () => {
     it("rejects a CRLF-bearing Content-Type to prevent header injection", async () => {
         expect.assertions(2);
 
-        const ctx = ctxWith(BODY, { contentType: "text/html\r\nset-cookie: pwned=1" });
+        const { ctx } = ctxWith(BODY, { contentType: "text/html\r\nset-cookie: pwned=1" });
         const response = await serveStorageObject(ctx, "k", new Request("https://x/k"));
 
         // Falls back to the safe default rather than reflecting the injected value.
@@ -92,15 +124,61 @@ describe("serveStorageObject", () => {
     it("returns 404 when the object is absent", async () => {
         expect.assertions(1);
 
-        const response = await serveStorageObject(ctxWith(null), "missing", new Request("https://x/missing"));
+        const response = await serveStorageObject(ctxWith(null).ctx, "missing", new Request("https://x/missing"));
 
         expect(response.status).toBe(404);
+    });
+
+    it("resolves a range with one head + one ranged download, never a whole-object read", async () => {
+        expect.assertions(3);
+
+        const { calls, ctx } = ctxWith(BODY);
+
+        await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }));
+
+        expect(calls.heads).toBe(1);
+        // Exactly one download, and it is the window — not a full-object body
+        // fetched for its size and then thrown away.
+        expect(calls.downloads).toStrictEqual([{ length: 4, offset: 2 }]);
+        expect(calls.downloads).not.toContain(undefined);
+    });
+
+    it("skips the head entirely when no Range is sent", async () => {
+        expect.assertions(2);
+
+        const { calls, ctx } = ctxWith(BODY);
+
+        await serveStorageObject(ctx, "k", new Request("https://x/k"));
+
+        expect(calls.heads).toBe(0);
+        expect(calls.downloads).toStrictEqual([undefined]);
+    });
+
+    it("answers an unsatisfiable range from the head alone, with no download at all", async () => {
+        expect.assertions(2);
+
+        const { calls, ctx } = ctxWith(BODY);
+
+        await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=50-60" } }));
+
+        expect(calls.heads).toBe(1);
+        expect(calls.downloads).toStrictEqual([]);
+    });
+
+    it("returns 404 from the head when a ranged request names an absent object", async () => {
+        expect.assertions(2);
+
+        const { calls, ctx } = ctxWith(null);
+        const response = await serveStorageObject(ctx, "gone", new Request("https://x/gone", { headers: { range: "bytes=0-1" } }));
+
+        expect(response.status).toBe(404);
+        expect(calls.downloads).toStrictEqual([]);
     });
 
     it("returns 206 with Content-Range/Content-Length for a byte range", async () => {
         expect.assertions(4);
 
-        const ctx = ctxWith(BODY);
+        const { ctx } = ctxWith(BODY);
         const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }));
 
         expect(response.status).toBe(206);
@@ -115,7 +193,7 @@ describe("serveStorageObject", () => {
     it("clamps an open-ended range (bytes=7-) to the object end", async () => {
         expect.assertions(2);
 
-        const ctx = ctxWith(BODY);
+        const { ctx } = ctxWith(BODY);
         const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=7-" } }));
 
         expect(response.status).toBe(206);
@@ -125,7 +203,7 @@ describe("serveStorageObject", () => {
     it("serves a suffix range (bytes=-3) as the final bytes", async () => {
         expect.assertions(2);
 
-        const ctx = ctxWith(BODY);
+        const { ctx } = ctxWith(BODY);
         const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=-3" } }));
 
         expect(response.status).toBe(206);
@@ -135,7 +213,7 @@ describe("serveStorageObject", () => {
     it("returns 416 with Content-Range */size for an out-of-bounds range", async () => {
         expect.assertions(4);
 
-        const ctx = ctxWith(BODY, { contentType: "video/mp4", sha256Base64: "3q2+7w==" });
+        const { ctx } = ctxWith(BODY, { contentType: "video/mp4", sha256Base64: "3q2+7w==" });
         const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=50-60" } }));
 
         expect(response.status).toBe(416);
@@ -149,7 +227,7 @@ describe("serveStorageObject", () => {
     it("ignores a multi-range request and serves the whole object (200)", async () => {
         expect.assertions(1);
 
-        const ctx = ctxWith(BODY);
+        const { ctx } = ctxWith(BODY);
         const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=0-1,4-5" } }));
 
         expect(response.status).toBe(200);

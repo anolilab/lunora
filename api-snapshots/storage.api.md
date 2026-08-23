@@ -139,6 +139,7 @@ interface Storage {
     getPresignedUrl: (key: string, options?: PresignedUrlOptions) => Promise<string>;
     getSignedUrl: (key: string, options?: SignedUrlOptions) => Promise<string>;
     getUrl: (key: string) => string;
+    head: (key: string) => Promise<R2ObjectLike | null>;
     list: (prefix?: string, options?: ListOptions) => Promise<{
         cursor?: string;
         objects: R2ObjectLike[];
