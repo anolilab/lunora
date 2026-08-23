@@ -1,3 +1,14 @@
+## @lunora/storage [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.33...@lunora/storage@1.0.0-alpha.34) (2026-08-23)
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.15
+
 ## @lunora/storage [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.32...%40lunora%2Fstorage%401.0.0-alpha.33) (2026-08-18)
 
 
