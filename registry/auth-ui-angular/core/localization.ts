@@ -66,6 +66,7 @@ interface Localization {
     deviceDeny: string;
     deviceFailed: string;
     deviceTitle: string;
+    dismiss: string;
     emailInvalid: string;
     emailLabel: string;
     emailOtp: string;
@@ -86,6 +87,7 @@ interface Localization {
     inviteMember: string;
     lastUsed: string;
     leaveOrganization: string;
+    loading: string;
     magicLink: string;
     magicLinkSent: string;
     members: string;
@@ -244,6 +246,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     deviceDeny: "Deny",
     deviceFailed: "That code is not valid or has expired.",
     deviceTitle: "Authorize device",
+    dismiss: "Dismiss",
     emailInvalid: "Enter a valid email address.",
     emailLabel: "Email",
     emailOtp: "Email me a code",
@@ -264,6 +267,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     inviteMember: "Invite member",
     lastUsed: "Last used",
     leaveOrganization: "Leave organization",
+    loading: "Loading…",
     magicLink: "Email me a link",
     magicLinkSent: "Check your email for a sign-in link.",
     members: "Members",

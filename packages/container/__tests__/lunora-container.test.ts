@@ -361,17 +361,10 @@ describe("lunoraContainer lifecycle logging", () => {
         expect.assertions(1);
 
         vi.spyOn(console, "log").mockImplementation(() => {});
-        // `AbortSignal.timeout`'s real delay runs on the wall clock and isn't
-        // reachable by vitest's fake timers, so stub it to hand back an
-        // already-aborted signal — this exercises the same "the attempt was
-        // aborted" path a real timeout would take, without a real 30s wait.
-        vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
-            const controller = new AbortController();
-
-            controller.abort();
-
-            return controller.signal;
-        });
+        // The per-attempt deadline is a JS-land `setTimeout`
+        // (shared/abort-deadline.ts), so fake timers drive it directly:
+        // advancing to the readiness deadline fires the attempt's abort and
+        // the loop's own deadline check in one pass, without a real 30s wait.
         vi.useFakeTimers();
 
         const context = fakeDurableObjectContext({

@@ -1,3 +1,36 @@
+## @lunora/platform-node [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.19...@lunora/platform-node@1.0.0-alpha.20) (2026-08-23)
+
+### Features
+
+* **server:** close all four Convex primitive gaps — _commitSeq, untracked runQuery, .memory() + onShardInit, onQueryChange reactors ([#469](https://github.com/anolilab/lunora/issues/469)) ([75b0187](https://github.com/anolilab/lunora/commit/75b01872c06ae32f0174d2cc8385e78e373d9693))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.84
+* **@lunora/platform:** upgraded to 1.0.0-alpha.15
+* **@lunora/queue:** upgraded to 1.0.0-alpha.31
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.86
+* **@lunora/do:** upgraded to 1.0.0-alpha.93
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.20
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.69
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.34
+* **@lunora/storage:** upgraded to 1.0.0-alpha.34
+
+## @lunora/platform-node [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.18...@lunora/platform-node@1.0.0-alpha.19) (2026-08-21)
+
+### Bug Fixes
+
+* **platform-node:** index sockets by raw handle ([#465](https://github.com/anolilab/lunora/issues/465)) ([eb2968e](https://github.com/anolilab/lunora/commit/eb2968eae2b4826419fba497a8e742453c071aac))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.83
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.85
+* **@lunora/do:** upgraded to 1.0.0-alpha.92
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.33
+
 ## @lunora/platform-node [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/%40lunora%2Fplatform-node%401.0.0-alpha.17...%40lunora%2Fplatform-node%401.0.0-alpha.18) (2026-08-19)
 
 

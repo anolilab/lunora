@@ -32,6 +32,7 @@
 /* eslint-enable jsdoc/check-indentation, jsdoc/no-multi-asterisks */
 import { LunoraError } from "@lunora/errors";
 
+import { toBase64 } from "../../../../shared/base64";
 import type { InboundEmail, RawInboundEmail } from "./parse";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./shard";
 import { DEFAULT_ROOT_SHARD, postShardRpc } from "./shard";
@@ -194,26 +195,6 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
     /** Shard the function runs on. Defaults to the runtime's default root shard. */
     shardKey?: string;
 }
-
-/** Chunk size for {@link toBase64}: kept ≤ the arg-spread limit `String.fromCharCode` tolerates. */
-const BASE64_CHUNK = 0x80_00;
-
-/** Base64-encode raw bytes without relying on Node's `Buffer` (workerd-safe). */
-const toBase64 = (bytes: Uint8Array): string => {
-    let binary = "";
-
-    // Build the latin1 string in ≤32KB chunks — orders of magnitude faster than
-    // one `String.fromCodePoint` call per byte for multi-megabyte attachments,
-    // while staying under the argument-count limit of a single spread call.
-    for (let index = 0; index < bytes.length; index += BASE64_CHUNK) {
-        // eslint-disable-next-line unicorn/prefer-code-point -- byte values 0-255 -> latin1; fromCharCode is correct and faster here
-        binary += String.fromCharCode(...bytes.subarray(index, index + BASE64_CHUNK));
-    }
-
-    // `btoa` is available in both workerd and modern Node; it operates on the
-    // latin1 string built above.
-    return btoa(binary);
-};
 
 /**
  * Normalise an {@link InboundEmail} into a JSON-safe envelope for the RPC body.

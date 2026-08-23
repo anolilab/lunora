@@ -62,6 +62,9 @@ export interface PaymentStore {
      * last-writer-wins, and a replayed `set` is idempotent by construction.
      */
     sumUsage: (referenceId: string, featureId: string, since: number) => Promise<number>;
+
+    /** Period usage totals for many features in one read — the batch form of {@link PaymentStore.sumUsage}. */
+    sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, since: number) => Promise<ReadonlyMap<string, number>>;
     upsertCustomer: (customer: Customer) => Promise<void>;
     upsertPaymentSession: (session: PaymentSession) => Promise<void>;
     upsertSubscription: (subscription: Subscription) => Promise<void>;
@@ -175,6 +178,18 @@ export class MemoryPaymentStore implements PaymentStore {
         }
 
         return Promise.resolve(foldUsage(window));
+    }
+
+    public sumUsageByFeature(referenceId: string, featureIds: ReadonlyArray<string>, since: number): Promise<ReadonlyMap<string, number>> {
+        const buckets = new Map<string, UsageEvent[]>(featureIds.map((featureId) => [featureId, []]));
+
+        for (const event of this.usageEvents.values()) {
+            if (event.referenceId === referenceId && event.createdAt >= since) {
+                buckets.get(event.featureId)?.push(event);
+            }
+        }
+
+        return Promise.resolve(new Map([...buckets].map(([featureId, window]) => [featureId, foldUsage(window)])));
     }
 
     public upsertCustomer(customer: Customer): Promise<void> {

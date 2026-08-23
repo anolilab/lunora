@@ -220,9 +220,12 @@ class OfflineQueue {
         }
 
         const restored: QueuedMutation[] = [];
+        // Ids already queued or already restored — a Set keeps the dedupe O(n)
+        // over durable stores that legitimately exceed `maxItems`.
+        const seen = new Set(this.items.map((item) => item.id));
 
         for (const mutation of persisted) {
-            if (this.items.some((item) => item.id === mutation.id) || restored.some((item) => item.id === mutation.id)) {
+            if (seen.has(mutation.id)) {
                 continue;
             }
 
@@ -236,6 +239,9 @@ class OfflineQueue {
                 continue;
             }
 
+            // Added only on push — a version-gated record was never in
+            // `restored`, so a later duplicate of it must not be deduped.
+            seen.add(mutation.id);
             restored.push({
                 args: mutation.args,
                 clientId: mutation.clientId,

@@ -70,6 +70,22 @@ describe("assertGeneratable", () => {
 
         await expect(generateSdk(colliding, targets[0]!)).rejects.toThrow(/both generate/u);
     });
+
+    it("rejects a sibling function that collides with a query's dart watch member", async () => {
+        expect.assertions(1);
+
+        // The Dart target emits a second `watchList` Stream member for the query
+        // `list`; without the reservation this passes validation and emits
+        // `watchList` twice in one Dart class — "already defined".
+        const colliding: OpenRpcDocument = {
+            methods: [
+                { name: "messages:list", "x-lunora-function-kind": "query" },
+                { name: "messages:watchList", "x-lunora-function-kind": "mutation" },
+            ],
+        };
+
+        await expect(generateSdk(colliding, targets[0]!)).rejects.toThrow(/"messages:list".*"messages:watchList".*"WatchList".*Dart/su);
+    });
 });
 
 describe("wire types no model can carry", () => {

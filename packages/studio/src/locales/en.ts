@@ -14,6 +14,20 @@ import type { Messages } from "@lingui/core";
  * register it via `createStudioI18n(locale, { en: enMessages, de: deMessages })`.
  */
 const MESSAGE_IDS = [
+    "Reactors",
+    "Server-side onQueryChange reactors: what has run, what was suppressed, and what is failing.",
+    "Reactor",
+    "State",
+    "Ran",
+    "Suppressed",
+    "Errors",
+    "Watches",
+    "Last dispatch",
+    "No reactors declared",
+    "No reactor is declared in this deployment. Export an onQueryChange(select, handler) from lunora/ to run server-side logic when a query's result changes.",
+    "A reactor runs after a write flush, but only when the result of the query it watches actually changed — a trigger fires on a row write, a reactor fires on a result changing. Suppressed dispatches are the ones where the read re-ran and nothing had moved.",
+    "last dispatch failed",
+    "Live updates unavailable; showing the last reading.",
     "Agents",
     "Agent",
     "Threads",

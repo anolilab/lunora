@@ -10,6 +10,7 @@ import type { StopParams } from "@cloudflare/containers";
 import { Container } from "@cloudflare/containers";
 import { LunoraError } from "@lunora/errors";
 
+import { abortDeadline } from "../../../../shared/abort-deadline";
 import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
 import { emitContainerLifecycle } from "../lifecycle-event";
 import type { ContainerDefinition, ContainerReadinessCheck } from "../types";
@@ -346,16 +347,27 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             // signal, floored at one poll interval so the final attempt still gets a
             // fair window instead of an near-instant abort.
             const attemptTimeoutMs = Math.max(READINESS_POLL_INTERVAL_MS, deadline - Date.now());
+            // Per-attempt deadline via `shared/abort-deadline.ts` (explicit
+            // controller + timer, strongly held) rather than the weakly-held
+            // `AbortSignal.timeout` — see its docstring. Disposed after every
+            // attempt so a fast probe leaves no pending timer behind.
+            const attemptDeadline = abortDeadline(
+                undefined,
+                attemptTimeoutMs,
+                () => new DOMException(`readiness probe timed out after ${String(attemptTimeoutMs)}ms`, "TimeoutError"),
+            );
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- sequential poll: each probe waits on the previous attempt before retrying.
-                const response = await tcpPort.fetch(`http://container${path}`, { signal: AbortSignal.timeout(attemptTimeoutMs) });
+                const response = await tcpPort.fetch(`http://container${path}`, { signal: attemptDeadline.signal });
 
                 if (response.status === expectedStatus) {
                     return;
                 }
             } catch {
                 // Connection refused, app not up yet, or the attempt timed out — fall through and retry below.
+            } finally {
+                attemptDeadline.dispose();
             }
 
             if (Date.now() >= deadline) {

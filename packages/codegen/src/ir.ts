@@ -180,6 +180,14 @@ export interface ExternalSourceIR {
 
 export interface TableIR {
     /**
+     * `true` when the table chain carried `.commitOrdered()` — every row carries
+     * `_commitSeq`, a per-shard integer allocated once per mutation and strictly
+     * increasing in commit order. Optional: hand-built IR and tables that never
+     * called `.commitOrdered()` default it to `false`.
+     */
+    commitOrdered?: boolean;
+
+    /**
      * The `defineSchemaExtension` key that contributed this table, set when it
      * arrived through `defineSchema(...).extend(...)`. Absent for a table the app
      * declared itself.
@@ -223,6 +231,14 @@ export interface TableIR {
      * `false`.
      */
     isPublic?: boolean;
+
+    /**
+     * `true` when the table chain carried `.memory()` — its rows are cleared on
+     * every Durable Object cold start and never reach the CDC changelog.
+     * Optional: hand-built IR and tables that never called `.memory()` default it
+     * to `false`.
+     */
+    memory?: boolean;
     name: string;
     /** Rank indexes declared inline via `.rankIndex(name, …)`. */
     rankIndexes: ReadonlyArray<RankIndexIR>;
@@ -304,7 +320,7 @@ export interface FunctionIR {
      * it into the `LUNORA_LIFECYCLE_HOOKS` manifest keyed by this side. Absent on
      * ordinary functions.
      */
-    lifecycle?: "connect" | "disconnect";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
 
     /**
      * The `.output(validator)` declaration, when the chain has one.

@@ -44,7 +44,7 @@ const useBackupCode = ref(false);
     <AuthCard v-else-if="enabled" :title="t.twoFactor">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" />
-            <FormField :actions="actions" field="code" :fields="state.fields" :label="t.codeLabel" autoComplete="one-time-code" />
+            <FormField :actions="actions" field="code" :fields="state.fields" :label="t.codeLabel" autoComplete="one-time-code" inputMode="numeric" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.twoFactor }}</SubmitButton>
         </form>
         <template #footer>

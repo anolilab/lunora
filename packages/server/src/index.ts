@@ -38,8 +38,8 @@ export type {
 export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, serveStorageObject } from "./http";
 export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, IdentityValidation, InferIdentity } from "./identity";
 export { defineIdentity } from "./identity";
-export type { LifecycleHandler } from "./lifecycle";
-export { onConnect, onDisconnect } from "./lifecycle";
+export type { LifecycleHandler, ShardInitHandler } from "./lifecycle";
+export { onConnect, onDisconnect, onShardInit } from "./lifecycle";
 export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere } from "./list-args";
 export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, defineListArgs } from "./list-args";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskRegistry, MaskStrategy } from "./mask/index";
@@ -54,6 +54,8 @@ export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, Prese
 export { definePresence, PRESENCE_DEFAULT_TTL_MS, PRESENCE_TABLE, presenceExtension } from "./presence";
 export type { ProtectPublicOptions } from "./protect-public";
 export { protectPublic } from "./protect-public";
+export type { ReactorHandler, ReactorOutcome, ReactorSelect, RegisteredReactor } from "./reactors";
+export { onQueryChange } from "./reactors";
 export type {
     DefinePolicyInput,
     Permission,
@@ -148,12 +150,14 @@ export type {
     RegisteredStream,
     RelationDefinition,
     RestCacheConfig,
+    RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,
     Scheduler,
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,
+    ShardInitEvent,
     ShardMode,
     SpanEvaluation,
     SpanHandle,
