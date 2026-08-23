@@ -277,6 +277,11 @@ export interface CachedQuery {
     version?: string;
 }
 
+/** A stored read-cache row: the {@link CachedQuery} plus the key it is stored under. */
+export interface StoredQuery extends CachedQuery {
+    key: string;
+}
+
 /**
  * Durable store for the client read cache (Pillar 2): query results survive a
  * reload so reads hydrate from disk and render immediately while the socket
@@ -288,7 +293,7 @@ export interface QueryCacheAdapter {
     /** Drop every cached query (e.g. on logout / identity change). */
     clear: () => Promise<void>;
     /** Load every cached query — called once at startup to hydrate reads. */
-    load: () => Promise<(CachedQuery & { key: string })[]>;
+    load: () => Promise<StoredQuery[]>;
     /** Upsert one cached query by key (called when a subscription value advances). */
     put: (key: string, entry: CachedQuery) => Promise<void>;
     /** Remove one cached query by key. */
