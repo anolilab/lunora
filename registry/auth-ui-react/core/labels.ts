@@ -80,4 +80,36 @@ const providerLabel = (provider: string): string => {
         .join(" ");
 };
 
-export { passkeyLabel, PROVIDER_LABELS, providerLabel, ROLE_OPTIONS, sessionLabel, slugify };
+/**
+ * The accessible name for a per-row action button: what it does, plus which row
+ * it does it to.
+ *
+ * A list of ten "Remove" buttons has ten identical accessible names. Sighted
+ * users disambiguate them from the row they sit in, but a screen reader in focus
+ * mode announces the button alone — so "Remove" is all anyone tabbing through
+ * hears, on a control that deletes something. The row's own label is what tells
+ * them apart, and this is where it gets attached.
+ *
+ * Falls back to the bare action when a row has nothing to identify it by, which
+ * is no worse than the name it would otherwise have had.
+ */
+const rowActionLabel = (action: string, subject: string | undefined): string => {
+    const trimmed = subject?.trim();
+
+    return trimmed === undefined || trimmed === "" ? action : `${action}: ${trimmed}`;
+};
+
+/**
+ * The first of `candidates` that is actually something a person can read.
+ *
+ * The identity a row is known by is usually a chain of maybes — an OAuth
+ * client's name then its id, an invitation's organization then the email it was
+ * sent to. `??` is the wrong operator for that chain: a server that stores a
+ * name it never collected sends `""`, and `??` keeps it, so the row renders
+ * blank and its action is named after nothing. Whitespace behaves the same way
+ * and looks worse.
+ */
+const firstLabel = (...candidates: ReadonlyArray<string | undefined>): string | undefined =>
+    candidates.find((candidate) => candidate !== undefined && candidate.trim() !== "");
+
+export { firstLabel, passkeyLabel, PROVIDER_LABELS, providerLabel, ROLE_OPTIONS, rowActionLabel, sessionLabel, slugify };

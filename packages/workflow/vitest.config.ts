@@ -1,9 +1,9 @@
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
 // Mirror of the shared `tools/get-vitest-config` coverage block. The workers
 // pool relies on `defineConfig` (not the shared helper, which would break the
-// `@cloudflare/vitest-pool-workers` projects), so coverage is wired inline here.
+// `@cloudflare/vitest-plugin` projects), so coverage is wired inline here.
 const coverage = {
     ...coverageConfigDefaults,
     provider: "v8" as const,
@@ -27,7 +27,7 @@ const coverage = {
  * rationale behind the `LUNORA_WORKERD_TESTS=1` opt-in gate):
  *
  *  - `mocks`   — Node unit suite over context/dispatch doubles. Always on.
- *  - `workerd` — real workerd via `@cloudflare/vitest-pool-workers`: boots a
+ *  - `workerd` — real workerd via `@cloudflare/vitest-plugin`: boots a
  *                generated-style `LunoraWorkflow` entrypoint on the real
  *                Workflows engine and drives the typed `ctx.workflows` binding
  *                surface (see `__tests__/workerd/`).

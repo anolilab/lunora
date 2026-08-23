@@ -16,6 +16,8 @@ interface FormFieldProps<TField extends string> {
     actions: Pick<FormActions<TField>, "blur" | "setField">;
     autoComplete?: string;
     field: TField;
+    /** Forwarded to {@link Field}; `"numeric"` for digit-only codes. */
+    inputMode?: "numeric";
     label: string;
     /** HTML `name` attribute; defaults to the field key. */
     name?: string;
@@ -27,6 +29,7 @@ const FormField = <TField extends string>(props: FormFieldProps<TField>): JSX.El
     <Field
         autoComplete={props.autoComplete}
         field={props.state.fields[props.field]}
+        inputMode={props.inputMode}
         label={props.label}
         name={props.name ?? props.field}
         onBlur={() => {

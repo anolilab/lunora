@@ -23,7 +23,7 @@ and zero-setup but does not exercise the real workerd alarm scheduler.
 ## `workerd` project (real Durable Object alarms)
 
 Boots a real `SchedulerDO` inside Miniflare via
-`@cloudflare/vitest-pool-workers`. Tests drive the alarm path with
+`@cloudflare/vitest-plugin`. Tests drive the alarm path with
 `runDurableObjectAlarm()` from `cloudflare:test`, which short-circuits
 the wall clock so timers don't actually wait — but the runtime's own
 alarm-registration and dispatch machinery is the genuine article.

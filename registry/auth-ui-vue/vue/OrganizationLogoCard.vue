@@ -2,7 +2,7 @@
 // Upload an organization's logo. Rendered only when the app configured an
 // `avatar.upload` handler — without one, <OrganizationSettingsCard>'s logo URL
 // field is the fallback.
-import { useTemplateRef } from "vue";
+import { useId } from "vue";
 
 import { ACCEPT_ATTRIBUTE } from "../core/avatar";
 import { createOrganizationLogoController } from "../core/organization-logo";
@@ -24,24 +24,19 @@ const t = context.value.localization;
 // different id means a different card, not a new state.
 const organizationId = props.organizationId;
 const { actions, state } = useController((controllerContext) => createOrganizationLogoController(controllerContext, { organizationId }));
-const picker = useTemplateRef<HTMLInputElement>("picker");
+const pickerId = useId();
 
 const onPick = (event: Event): void => {
-    const file = (event.target as HTMLInputElement).files?.[0];
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
 
     // Clear the input so re-picking the same file after a failure still fires
     // `change` — browsers suppress it when the value is unchanged.
-    if (picker.value !== null) {
-        picker.value.value = "";
-    }
+    input.value = "";
 
     if (file) {
         void actions.upload(file);
     }
-};
-
-const onBrowse = (): void => {
-    picker.value?.click();
 };
 
 const onRemove = (): void => {
@@ -56,8 +51,18 @@ const onRemove = (): void => {
             <img v-if="state.logoUrl !== undefined && state.logoUrl !== ''" class="lunora-auth-avatar" alt="" :src="state.logoUrl" />
             <span v-else class="lunora-auth-avatar lunora-auth-avatar--initials" aria-hidden="true" />
             <div class="lunora-auth-avatar-row__actions">
-                <input ref="picker" class="lunora-auth-visually-hidden" type="file" :accept="ACCEPT_ATTRIBUTE" :aria-label="t.avatarUpload" @change="onPick" />
-                <button class="lunora-auth-button" type="button" :disabled="state.status === 'submitting'" @click="onBrowse">{{ t.avatarUpload }}</button>
+                <!-- A label wrapping the input — see AvatarCard.vue. -->
+                <label class="lunora-auth-button" :for="pickerId">
+                    <input
+                        :id="pickerId"
+                        class="lunora-auth-visually-hidden"
+                        type="file"
+                        :accept="ACCEPT_ATTRIBUTE"
+                        :disabled="state.status === 'submitting'"
+                        @change="onPick"
+                    />
+                    {{ t.avatarUpload }}
+                </label>
                 <button
                     v-if="state.logoUrl !== undefined && state.logoUrl !== ''"
                     class="lunora-auth-button lunora-auth-button--danger"
