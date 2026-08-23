@@ -58,6 +58,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  */
 installCompiledValidatorMap(lunora_messages_0.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
 let __has1 = false;
 let __val1;
@@ -70,6 +71,7 @@ return { "channelId": source["channelId"], ...(__has1 ? { "limit": __val1 } : {}
 });
 installCompiledValidatorMap(lunora_messages_0.purge.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
 return { "channelId": source["channelId"] };
 });

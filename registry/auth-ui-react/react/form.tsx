@@ -10,6 +10,8 @@ interface FormFieldProps<TField extends string> {
     actions: Pick<FormActions<TField>, "blur" | "setField">;
     autoComplete?: string;
     field: TField;
+    /** Forwarded to {@link Field}; `"numeric"` for digit-only codes. */
+    inputMode?: "numeric";
     label: string;
     /** HTML `name` attribute; defaults to the field key. */
     name?: string;
@@ -17,10 +19,11 @@ interface FormFieldProps<TField extends string> {
     type?: "email" | "password" | "text";
 }
 
-const FormField = <TField extends string>({ actions, autoComplete, field, label, name, state, type }: FormFieldProps<TField>): ReactElement => (
+const FormField = <TField extends string>({ actions, autoComplete, field, inputMode, label, name, state, type }: FormFieldProps<TField>): ReactElement => (
     <Field
         autoComplete={autoComplete}
         field={state.fields[field]}
+        inputMode={inputMode}
         label={label}
         name={name ?? field}
         onBlur={() => {

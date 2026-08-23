@@ -1,9 +1,9 @@
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig, coverageConfigDefaults } from "vitest/config";
 
 // Mirror of the shared `tools/get-vitest-config` coverage block. The workers
 // pool relies on `defineConfig` (not the shared helper, which would break the
-// `@cloudflare/vitest-pool-workers` projects), so coverage is wired inline here.
+// `@cloudflare/vitest-plugin` projects), so coverage is wired inline here.
 const coverage = {
     ...coverageConfigDefaults,
     provider: "v8" as const,
@@ -48,7 +48,7 @@ const coverage = {
  *  - `mocks`   — fast unit suite over fake WebSocket / fetch doubles, plain
  *               Node, always enabled.
  *  - `workerd` — Phase 3 verification gate. Spins up a real workerd via
- *               `@cloudflare/vitest-pool-workers`, mounts `@lunora/runtime` on
+ *               `@cloudflare/vitest-plugin`, mounts `@lunora/runtime` on
  *               top of `ShardDO`, and drives the standalone `LunoraClient`
  *               through `SELF.fetch`. Gated by `LUNORA_WORKERD_TESTS=1`
  *               because the pool needs unrestricted localhost-loopback

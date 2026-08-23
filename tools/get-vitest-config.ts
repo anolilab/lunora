@@ -21,7 +21,7 @@ export interface CoverageThresholds {
  * packages (client, container, d1, dispatch, do, queue, runtime, scheduler,
  * storage, workflow, x402) use inline `defineConfig` configs — not this
  * helper — because their `workerd` project runs without coverage (v8/
- * `node:inspector` is unsupported in `@cloudflare/vitest-pool-workers`), so a
+ * `node:inspector` is unsupported in `@cloudflare/vitest-plugin`), so a
  * floor keyed to THIS default would gate on a structurally incomplete number.
  * That does not make every workerd-gated package threshold-free: a package
  * whose non-workers project has stable, measured coverage may still pin its

@@ -52,6 +52,7 @@
 
 import type { FunctionCallStat, FunctionScanAttribution, SqlExec } from "@lunora/shard-engine";
 
+import { shouldPrune } from "./prune-marker";
 import { runSql } from "./run-sql";
 
 /** Reserved per-function accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -468,18 +469,26 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
         errorCount,
     );
 
-    // Bounded retention: keep only the most recent buckets for this path.
-    runSql(
-        sql,
-        `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"
-         WHERE path = ?
-           AND bucket_ms <= (
-            SELECT MAX(bucket_ms) - ? FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ?
-           )`,
-        input.path,
-        FUNCTION_METRICS_BUCKET_RETENTION * FUNCTION_METRICS_BUCKET_MS,
-        input.path,
-    );
+    // Bounded retention: keep only the most recent buckets for this path — run
+    // once per window instead of on every dispatch. The marker is scoped to
+    // `input.path` because the delete below is too: a handle-wide marker would
+    // let the window's first writer claim it for every path while pruning only
+    // its own, and a path that never lands a window's first write would then
+    // never be pruned at all. `admitPath` above caps the distinct paths, so the
+    // marker's key space is bounded by that cap.
+    if (shouldPrune(sql, bucket, input.path)) {
+        runSql(
+            sql,
+            `DELETE FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"
+             WHERE path = ?
+               AND bucket_ms <= (
+                SELECT MAX(bucket_ms) - ? FROM "${FUNCTION_METRICS_BUCKETS_TABLE}" WHERE path = ?
+               )`,
+            input.path,
+            FUNCTION_METRICS_BUCKET_RETENTION * FUNCTION_METRICS_BUCKET_MS,
+            input.path,
+        );
+    }
 
     // Causal attribution: one PK-keyed upsert per distinct full-scanned table.
     // Skipped entirely for the common indexed dispatch (empty `scannedTables`),

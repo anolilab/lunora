@@ -7,9 +7,11 @@
  * around: an idle DO is evicted from memory and woken on next access, rebuilding
  * all in-memory state from SQLite + the hibernated WebSocket's attachment.
  *
- * `@cloudflare/vitest-pool-workers@0.16.20`'s `evictDurableObject` /
- * `evictAllDurableObjects` (exported from `cloudflare:test`) let us drive exactly
- * that. Eviction tears down the instance — resetting in-memory state (the
+ * `evictDurableObject` / `evictAllDurableObjects`, exported from `cloudflare:test`
+ * by the Workers Vitest integration, let us drive exactly that. (The version that
+ * introduced them was pinned here when the package was still named
+ * `vitest-pool-workers`; the capability is what matters, and pinning a version to
+ * a package that has since been renamed only rots.) Eviction tears down the instance — resetting in-memory state (the
  * `subMemos` WeakMap, the per-instance subscriber bookkeeping, the migration
  * latch) while preserving durable storage — so what survives is only what was
  * persisted. With `webSockets: "hibernate"` (the default) the hibernatable

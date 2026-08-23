@@ -155,7 +155,8 @@ const subscriptionFromStripe = (input: unknown): Subscription => {
         provider: "stripe",
         quantity: firstQuantity(subscription) ?? 1,
         referenceId: readReferenceId(subscription) ?? "",
-        state: SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(subscription, "status") ?? ""] ?? "active",
+        // Fail closed: an unrecognized Stripe status is treated as non-entitling `past_due`.
+        state: SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(subscription, "status") ?? ""] ?? "past_due",
         updatedAt: now,
     };
 };
@@ -198,6 +199,21 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 };
             }
 
+            const paymentIntentId = readString(object, "payment_intent");
+
+            // Async payment methods can complete the session before a payment_intent id is
+            // attached. Capturing under the cs_… id here and the pi_… id on the later
+            // payment_intent.succeeded would create two rows for one payment — defer to
+            // payment_intent.succeeded, the authoritative capture, instead.
+            //
+            // Only when an intent is actually coming, though: a fully discounted session settles as
+            // `no_payment_required` and Stripe creates NO PaymentIntent for it, so deferring would
+            // drop the order entirely and an app fulfilling off `paymentSessions` would silently stop
+            // serving free orders. Those keep the cs_… id — the only id that payment ever has.
+            if (paymentIntentId === undefined && readString(object, "payment_status") !== "no_payment_required") {
+                return { ...base, type: "unhandled" };
+            }
+
             const amountTotal = readNumber(object, "amount_total");
 
             return {
@@ -205,7 +221,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 amount: amountTotal === undefined ? undefined : money(BigInt(Math.round(amountTotal)), currency),
                 customerId: readString(object, "customer"),
                 referenceId: readReferenceId(object),
-                sessionId: readString(object, "payment_intent") ?? readString(object, "id"),
+                sessionId: paymentIntentId ?? readString(object, "id"),
                 type: "payment.captured",
             };
         }
@@ -222,7 +238,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 quantity: firstQuantity(object),
                 referenceId: readReferenceId(object),
                 subscriptionId: readString(object, "id"),
-                type: stateToEventType(SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(object, "status") ?? ""]),
+                // Fail closed BEFORE `stateToEventType`: an unmapped status reaching it as `undefined`
+                // degrades to `subscription.updated`, a metadata patch that PRESERVES an existing
+                // `active` row — the same fail-open the snapshot mapper above closes.
+                type: stateToEventType(SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(object, "status") ?? ""] ?? "past_due"),
             };
         }
 

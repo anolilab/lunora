@@ -63,6 +63,7 @@ const TwoFactorSetupCard = (): JSX.Element => {
                             <Field
                                 autoComplete="one-time-code"
                                 field={state.code}
+                                inputMode="numeric"
                                 label={t.codeLabel}
                                 name="code"
                                 onBlur={() => undefined}
