@@ -150,22 +150,66 @@
             # each package.json (and any cross-package dependency ranges), but
             # @semantic-release/git only stages per-package assets — pnpm-lock.yaml lives at
             # the root and drifts. Frozen-lockfile installs on the next push then fail with
-            # ERR_PNPM_OUTDATED_LOCKFILE. Refresh here.
-            - "name": "Refresh pnpm-lock.yaml against released manifests"
-              "if": "success()"
+            # ERR_PNPM_OUTDATED_LOCKFILE, which blocks EVERY later push to the branch until
+            # a human regenerates the lockfile by hand. Refresh and push it here.
+            #
+            # This is a retry loop rather than a plain commit+push because the branch moves
+            # underneath the job: a release takes ~15 minutes, and any PR merged in that
+            # window advances the branch, so a single push loses the race with
+            # `! [rejected] (non-fast-forward)` — which is exactly how the lockfile went
+            # stale (run 32666543922: PR #457 landed mid-release, the sync commit was built
+            # on the pre-release tip, the push bounced, and every push after it failed at
+            # `pnpm install --frozen-lockfile`).
+            #
+            # Each attempt resets to the CURRENT remote tip before resolving, so the
+            # lockfile is always generated against the manifests that are actually on the
+            # branch — the release commits are already pushed by multi-semantic-release, and
+            # anything else merged meanwhile is honoured too.
+            #
+            # `!cancelled()` rather than `success()`: a release that fails partway has still
+            # pushed the release commits it completed, so the branch needs the sync more
+            # then, not less. The step commits nothing when the lockfile already matches.
+            - "name": "Sync pnpm-lock.yaml with released manifests"
+              "if": "!cancelled()"
               "shell": "bash"
               # --no-frozen-lockfile is intentional: this step exists to regenerate the
               # lockfile after multi-semantic-release bumps versions.
               # --ignore-scripts prevents any postinstall from running with the release
               # token in env (belt-and-suspenders alongside --lockfile-only).
-              "run": "pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts"
+              # core.hooksPath is neutralised here too: the step that disables the vis git
+              # hooks for release commits is skipped when an earlier step failed, and
+              # commitlint rejects this commit's `[skip ci]` header.
+              "env":
+                  "BRANCH": "${{ github.ref_name }}"
+              "run": |
+                  set -euo pipefail
 
-            - "name": "Commit refreshed lockfile"
-              "if": "success()"
-              "uses": "stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9" # v7.1.0
-              "with":
-                  "file_pattern": "pnpm-lock.yaml"
-                  "commit_message": "chore(deps): sync pnpm-lock.yaml with released manifests [skip ci]"
-                  "commit_user_name": "github-actions-shell"
-                  "commit_user_email": "github-actions[bot]@users.noreply.github.com"
-                  "commit_author": "github-actions-shell <github-actions[bot]@users.noreply.github.com>"
+                  for attempt in 1 2 3 4 5; do
+                      git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+                      git reset --hard "origin/${BRANCH}"
+
+                      pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts
+
+                      if git diff --quiet -- pnpm-lock.yaml; then
+                          echo "pnpm-lock.yaml already matches the manifests on ${BRANCH}."
+                          exit 0
+                      fi
+
+                      git -c core.hooksPath=/dev/null \
+                          -c "user.name=github-actions-shell" \
+                          -c "user.email=github-actions[bot]@users.noreply.github.com" \
+                          commit \
+                          --message "chore(deps): sync pnpm-lock.yaml with released manifests [skip ci]" \
+                          -- pnpm-lock.yaml
+
+                      if git push origin "HEAD:refs/heads/${BRANCH}"; then
+                          echo "Pushed the refreshed pnpm-lock.yaml on attempt ${attempt}."
+                          exit 0
+                      fi
+
+                      echo "Push rejected — ${BRANCH} moved during the release. Retrying."
+                      sleep "$((attempt * 5))"
+                  done
+
+                  echo "::error::Could not push the refreshed pnpm-lock.yaml after 5 attempts. ${BRANCH} is left with a lockfile that does not match its manifests, so every frozen-lockfile install on it will fail until it is regenerated (pnpm install --lockfile-only --no-frozen-lockfile) and pushed."
+                  exit 1
