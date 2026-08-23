@@ -71,7 +71,7 @@
         "aws4fetch": "catalog:storage"
     },
     "devDependencies": {
-        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
         "@types/node": "catalog:types",

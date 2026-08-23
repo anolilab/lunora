@@ -308,7 +308,7 @@ catalogs:
     # been done for 1.3.5: it needs a real Browser Rendering binding on a deployed
     # worker, so run it before relying on this in production.
     "@cloudflare/playwright": 1.3.5
-    "@cloudflare/vitest-pool-workers": ^0.21.0
+    "@cloudflare/vitest-plugin": ^1.0.0
     # PATCHED (patches/@cloudflare__workers-types@5.20260811.1.patch), and the patch
     # is version-pinned in `patchedDependencies` — regenerate it when bumping this.
     # Upstream declares `declare const Buffer: any` / `declare const process: any`,
@@ -852,7 +852,7 @@ minimumReleaseAgeExclude:
   - '@better-fetch/fetch@1.2.2'
   - '@cloudflare/flagship@0.4.2'
   - '@cloudflare/vite-plugin@1.40.1'
-  - '@cloudflare/vitest-pool-workers@0.16.12'
+  - '@cloudflare/vitest-plugin@1.0.0'
   - '@cloudflare/workers-types'
   - '@eslint-react/ast@5.8.17'
   - '@eslint-react/core@5.8.17'

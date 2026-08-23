@@ -2,7 +2,7 @@
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
         "moduleResolution": "bundler",
-        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types", "node"]
+        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"]
         // Intentionally no `outDir`/`rootDir` (matching `@lunora/do`): `lint:types` is
         // `tsc --noEmit` and the real build is packem (driven by package.json exports),
         // so neither is load-bearing. A set `rootDir` would raise TS6059 for the inlined

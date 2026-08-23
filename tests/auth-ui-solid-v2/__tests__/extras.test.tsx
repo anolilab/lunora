@@ -18,12 +18,18 @@ afterEach(() => {
 });
 
 describe("solid-v2 ErrorToaster", () => {
-    it("renders nothing until a toast is pushed", () => {
-        expect.assertions(2);
+    it("mounts the aria-live region before any toast arrives, empty", () => {
+        expect.assertions(3);
 
+        // Regression: the region was gated on `toasts().length > 0`, so the
+        // first toast was pushed before assistive tech was watching it — a live
+        // region only announces changes made AFTER it exists in the
+        // accessibility tree, so that first failure went unannounced.
         const { container } = render(() => <ErrorToaster />);
+        const toaster = container.querySelector(".lunora-auth-toaster");
 
-        expect(container.querySelector(".lunora-auth-toaster")).toBeNull();
+        expect(toaster).not.toBeNull();
+        expect(toaster?.getAttribute("aria-live")).toBe("polite");
 
         pushToast("Could not sign in with GitHub.");
         // Solid 2 commits writes on the microtask queue, so a synchronous

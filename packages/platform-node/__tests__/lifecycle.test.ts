@@ -244,6 +244,108 @@ describe("lifecycle disposers", () => {
 
             second.dispose();
         });
+
+        it("persists attachments written on a restored socket that never had a durable row", () => {
+            expect.assertions(1);
+
+            const path = join(workdir, "socket-restore-upsert.sqlite3");
+            const first = createNodeShardHost({ path });
+            const firstSockets = createNodeSocketHost(first.database);
+
+            // A synthetic id this host never durably tracked: restore must
+            // create the row, or the later write silently updates nothing.
+            const restored = firstSockets.restoreSocket("id-x", { seed: true });
+
+            restored.serializeAttachment({ roomId: "room-9" });
+
+            first.dispose();
+
+            const second = createNodeShardHost({ path });
+            const secondSockets = createNodeSocketHost(second.database);
+
+            expect(secondSockets.restoreSocket("id-x", undefined).deserializeAttachment()).toStrictEqual({ roomId: "room-9" });
+
+            second.dispose();
+        });
+
+        it("handleFor resolves each raw to its own handle and never matches a restored socket via undefined", () => {
+            expect.assertions(4);
+
+            const path = join(workdir, "socket-handle-for.sqlite3");
+            const host = createNodeShardHost({ path });
+            const sockets = createNodeSocketHost(host.database);
+
+            const raws = [{}, {}, {}];
+            const handles = raws.map((raw) => sockets.socket.accept(raw, undefined, []));
+
+            // A restored socket has `raw: undefined`; `handleFor(undefined)`
+            // must not resolve to it.
+            sockets.restoreSocket("restored-id", undefined);
+
+            for (const [index, raw] of raws.entries()) {
+                expect(sockets.socket.handleFor(raw)).toBe(handles[index]);
+            }
+
+            expect(sockets.socket.handleFor(undefined)).toBeUndefined();
+
+            host.dispose();
+        });
+
+        it("accepts a primitive raw socket without throwing or half-registering it", () => {
+            expect.assertions(3);
+
+            const path = join(workdir, "socket-primitive-raw.sqlite3");
+            const first = createNodeShardHost({ path });
+            const firstSockets = createNodeSocketHost(first.database);
+
+            // `SocketHost.accept` takes `unknown`, so a primitive is a
+            // conformant raw socket — and a WeakMap cannot be keyed on one.
+            const handle = firstSockets.socket.accept("raw-as-string", { roomId: "room-2" }, ["room-b"]);
+            const id = firstSockets.socket.idFor(handle);
+
+            // Registered in the runtime map and durably, not half of each.
+            expect(firstSockets.socket.getSockets("room-b").map((entry: SocketHandle) => firstSockets.socket.idFor(entry))).toStrictEqual([id]);
+            // Not resolvable by raw — the documented ceiling of the WeakMap index.
+            expect(firstSockets.socket.handleFor("raw-as-string")).toBeUndefined();
+
+            first.dispose();
+
+            const second = createNodeShardHost({ path });
+            const secondSockets = createNodeSocketHost(second.database);
+
+            expect(secondSockets.restoreSocket(id, undefined).deserializeAttachment()).toStrictEqual({ roomId: "room-2" });
+
+            second.dispose();
+        });
+
+        it("does not persist the restore fallback over a tracked socket's NULL attachment", () => {
+            expect.assertions(2);
+
+            const path = join(workdir, "socket-null-attachment.sqlite3");
+            const first = createNodeShardHost({ path });
+            const firstSockets = createNodeSocketHost(first.database);
+
+            // Accepted with no attachment: the row exists, its attachment is NULL.
+            const id = firstSockets.socket.idFor(firstSockets.socket.accept({}, undefined, []));
+
+            first.dispose();
+
+            const second = createNodeShardHost({ path });
+            const secondSockets = createNodeSocketHost(second.database);
+
+            // The fallback covers an id this host never tracked, so it may fill
+            // the runtime state — but it must not be written to the durable row.
+            expect(secondSockets.restoreSocket(id, { fallback: true }).deserializeAttachment()).toStrictEqual({ fallback: true });
+
+            second.dispose();
+
+            const third = createNodeShardHost({ path });
+            const thirdSockets = createNodeSocketHost(third.database);
+
+            expect(thirdSockets.restoreSocket(id, undefined).deserializeAttachment()).toBeUndefined();
+
+            third.dispose();
+        });
     });
 
     describe("close()", () => {

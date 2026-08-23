@@ -1,3 +1,4 @@
+import type { RenderResult } from "@testing-library/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +20,7 @@ const stubClient = (overrides: Partial<Record<string, unknown>> = {}): AuthClien
         ...overrides,
     }) as unknown as AuthClient;
 
-const renderWith = (client: AuthClient, node: ReactElement, config: Partial<AuthUIConfig> = {}): void => {
+const renderWith = (client: AuthClient, node: ReactElement, config: Partial<AuthUIConfig> = {}): RenderResult =>
     render(
         // `discover={false}` keeps these render tests off the network; discovery
         // itself is covered in __tests__/core/discovery.test.ts.
@@ -27,7 +28,6 @@ const renderWith = (client: AuthClient, node: ReactElement, config: Partial<Auth
             {node}
         </AuthUIProvider>,
     );
-};
 
 // One cross-suite teardown hook, deliberately at the top level.
 afterEach(() => {
@@ -41,9 +41,11 @@ describe("userButton", () => {
 
         renderWith(stubClient(), <UserButton />);
 
-        await waitFor(() => {
-            expect(screen.getByRole("button", { name: "Ada Lovelace" }).getAttribute("aria-haspopup")).toBe("true");
-        });
+        const trigger = await screen.findByRole("button", { name: "Ada Lovelace" });
+
+        // No `aria-haspopup`: this is a disclosure, and that attribute promises
+        // menu semantics with the arrow-key navigation to match.
+        expect(trigger.hasAttribute("aria-haspopup")).toBe(false);
     });
 
     it("opens and closes the menu, keeping aria-expanded honest", async () => {
@@ -96,7 +98,9 @@ describe("linkedAccountsCard", () => {
         renderWith(stubClient(), <LinkedAccountsCard />);
 
         await waitFor(() => {
-            expect(screen.getByRole("button", { name: "Remove" }).hasAttribute("disabled")).toBe(true);
+            // Named for its row, not just "Remove": ten identical unlink buttons
+            // are indistinguishable to anyone tabbing through them.
+            expect(screen.getByRole("button", { name: "Remove: GitHub" }).hasAttribute("disabled")).toBe(true);
         });
     });
 
@@ -116,7 +120,7 @@ describe("linkedAccountsCard", () => {
 
         await waitFor(() => {
             // Two rows, one unlink button — the credential row has none.
-            expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(1);
+            expect(screen.getAllByRole("button", { name: "Remove: GitHub" })).toHaveLength(1);
         });
     });
 
@@ -148,11 +152,15 @@ describe("avatarCard", () => {
         const upload = vi.fn(() => Promise.resolve("https://cdn.example.com/a.png"));
         const client = stubClient();
 
-        renderWith(client, <AvatarCard />, { avatar: { upload } });
+        const { container } = renderWith(client, <AvatarCard />, { avatar: { upload } });
 
         const file = new File(["x"], "a.png", { type: "image/png" });
 
-        fireEvent.change(screen.getByLabelText("Upload photo"), { target: { files: [file] } });
+        // Queried by selector, not by label: the input is deliberately out of
+        // the accessibility tree and the tab order, because the visible button
+        // beside it is the control — a focusable 1px-clipped input would be a
+        // second tab stop with nowhere visible to draw its focus ring.
+        fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [file] } });
 
         // Both assertions live inside the one `waitFor`: the accept-list check
         // is async now (it shares `isAcceptedImage` with the organization-logo
@@ -172,9 +180,9 @@ describe("avatarCard", () => {
         const upload = vi.fn(() => Promise.resolve("nope"));
         const client = stubClient();
 
-        renderWith(client, <AvatarCard />, { avatar: { maxSize: 10, upload } });
+        const { container } = renderWith(client, <AvatarCard />, { avatar: { maxSize: 10, upload } });
 
-        fireEvent.change(screen.getByLabelText("Upload photo"), {
+        fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
             target: { files: [new File(["much-larger-than-ten-bytes"], "a.png", { type: "image/png" })] },
         });
 

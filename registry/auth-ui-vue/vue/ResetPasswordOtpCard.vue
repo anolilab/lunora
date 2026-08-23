@@ -20,7 +20,7 @@ const { actions, state } = useController((context) => createResetPasswordOtpCont
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
             <FormField :actions="actions" field="email" :fields="state.fields" :label="t.emailLabel" type="email" autoComplete="email" />
-            <FormField :actions="actions" field="otp" :fields="state.fields" :label="t.codeLabel" autoComplete="one-time-code" />
+            <FormField :actions="actions" field="otp" :fields="state.fields" :label="t.codeLabel" autoComplete="one-time-code" inputMode="numeric" />
             <FormField :actions="actions" field="password" :fields="state.fields" :label="t.passwordLabel" type="password" autoComplete="new-password" />
             <FormField
                 :actions="actions"
