@@ -20,7 +20,7 @@
 {#if enabled}
     <AuthCard headingLevel={2} title={t.organizationSettings}>
         {#if $form.loading}
-            <p class="lunora-auth-card__description">…</p>
+            <p class="lunora-auth-card__description" role="status">{t.loading}</p>
         {:else}
             <form
                 class="lunora-auth-form"

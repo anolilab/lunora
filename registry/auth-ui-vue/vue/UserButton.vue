@@ -3,7 +3,9 @@
 // off it (passed as the default slot — links, an organization switcher, …).
 //
 // It is a disclosure rather than a `<menu>` because its contents are app-defined
-// and forcing those into menu item semantics would mislabel them. Escape and
+// and forcing those into menu item semantics would mislabel them. That is also
+// why the trigger carries no `aria-haspopup`: the attribute promises a menu, and
+// with it the arrow-key navigation a disclosure does not implement. Escape and
 // outside-click close it, and focus returns to the trigger, which is the part
 // hand-rolled dropdowns usually miss.
 import { onScopeDispose, ref, useId, useTemplateRef, watch } from "vue";
@@ -90,7 +92,6 @@ const onSignOut = (): void => {
             ref="trigger"
             class="lunora-auth-userbutton__trigger"
             type="button"
-            aria-haspopup="true"
             :aria-controls="open ? menuId : undefined"
             :aria-expanded="open"
             :aria-label="userLabel(state.user)"

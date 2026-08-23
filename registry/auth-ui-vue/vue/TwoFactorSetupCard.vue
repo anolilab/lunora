@@ -53,7 +53,7 @@ const secret = computed(() => totpSecret(state.value.totpUri));
             </ul>
         </template>
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.verify">
-            <Field :field="state.code" :label="t.codeLabel" name="code" autoComplete="one-time-code" @change="actions.setCode" />
+            <Field :field="state.code" :label="t.codeLabel" name="code" autoComplete="one-time-code" inputMode="numeric" @change="actions.setCode" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.twoFactor }}</SubmitButton>
         </form>
     </AuthCard>

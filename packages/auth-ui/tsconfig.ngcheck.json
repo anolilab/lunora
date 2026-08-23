@@ -1,0 +1,16 @@
+{
+    // Angular template type-checking. Plain `tsc` parses the `template:` string
+    // as a string and nothing more, so every binding in the Angular port — the
+    // one port whose markup lives inside TypeScript — went unchecked: a typo'd
+    // field or a wrong-typed argument reached a consumer's runtime. `ngc` with
+    // `strictTemplates` is what actually reads them.
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "noEmit": true
+    },
+    "angularCompilerOptions": {
+        "strictTemplates": true
+    },
+    "include": ["src/angular/**/*", "src/core/**/*"],
+    "exclude": []
+}
