@@ -46,6 +46,13 @@ const AuthCard = ({ children, description, footer, headingLevel = 1, title }: Au
 interface FieldProps {
     autoComplete?: string;
     field: FieldState;
+
+    /**
+     * The virtual keyboard to raise on touch devices. `"numeric"` for
+     * digit-only codes (TOTP, emailed OTPs); left unset for anything that can
+     * contain letters, such as backup codes and device codes.
+     */
+    inputMode?: "numeric";
     label: string;
     name: string;
     onBlur: () => void;
@@ -54,7 +61,7 @@ interface FieldProps {
     type?: "email" | "password" | "text";
 }
 
-const Field = ({ autoComplete, field, label, name, onBlur, onChange, placeholder, type = "text" }: FieldProps): ReactElement => {
+const Field = ({ autoComplete, field, inputMode, label, name, onBlur, onChange, placeholder, type = "text" }: FieldProps): ReactElement => {
     const id = useId();
     const errorId = `${id}-error`;
     const showError = field.touched && field.error !== undefined;
@@ -70,6 +77,7 @@ const Field = ({ autoComplete, field, label, name, onBlur, onChange, placeholder
                 autoComplete={autoComplete}
                 className="lunora-auth-field__input"
                 id={id}
+                inputMode={inputMode}
                 name={name}
                 onBlur={onBlur}
                 onChange={(event) => {
@@ -222,9 +230,15 @@ const Skeleton = ({ rows = 3 }: { rows?: number }): ReactElement => (
     </div>
 );
 
-/** A labelled visual separator ("or"). */
+/**
+ * A labelled visual separator ("or").
+ *
+ * The label is repeated as `aria-label` because a `separator` role makes its
+ * children presentational — the visible "or" is dropped from the accessibility
+ * tree, and naming the separator is the only way to get it back.
+ */
 const AuthDivider = ({ label = "or" }: { label?: string }): ReactElement => (
-    <div className="lunora-auth-divider" role="separator">
+    <div aria-label={label} className="lunora-auth-divider" role="separator">
         <span className="lunora-auth-divider__label">{label}</span>
     </div>
 );

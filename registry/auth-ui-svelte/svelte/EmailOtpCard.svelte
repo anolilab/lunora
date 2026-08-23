@@ -26,7 +26,15 @@
                 }}
             >
                 <FormBanner error={$flow.formError} />
-                <Field autoComplete="one-time-code" field={$flow.code} label={t.codeLabel} name="code" onBlur={() => {}} onChange={actions.setCode} />
+                <Field
+                    autoComplete="one-time-code"
+                    field={$flow.code}
+                    inputMode="numeric"
+                    label={t.codeLabel}
+                    name="code"
+                    onBlur={() => {}}
+                    onChange={actions.setCode}
+                />
                 <SubmitButton pending={$flow.status === "submitting"}>{t.twoFactor}</SubmitButton>
             </form>
             {#snippet footer()}

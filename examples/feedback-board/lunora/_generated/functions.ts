@@ -61,6 +61,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  */
 installCompiledValidatorMap(lunora_feedback_0.addComment.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["feedbackId"] !== "string") return DEFER;
 if (typeof source["authorName"] !== "string") return DEFER;
 let __has1 = false;
@@ -82,11 +83,13 @@ return { "feedbackId": source["feedbackId"], "authorName": source["authorName"],
 });
 installCompiledValidatorMap(lunora_feedback_0.comments.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["feedbackId"] !== "string") return DEFER;
 return { "feedbackId": source["feedbackId"] };
 });
 installCompiledValidatorMap(lunora_feedback_0.create.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
 if (typeof source["description"] !== "string") return DEFER;
 if (typeof source["authorName"] !== "string") return DEFER;
@@ -114,27 +117,32 @@ return { "title": source["title"], "description": source["description"], "author
 });
 installCompiledValidatorMap(lunora_feedback_0.get.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 return { "id": source["id"] };
 });
 installCompiledValidatorMap(lunora_feedback_0.myVotes.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["voterEmail"] !== "string") return DEFER;
 return { "voterEmail": source["voterEmail"] };
 });
 installCompiledValidatorMap(lunora_feedback_0.remove.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 return { "id": source["id"] };
 });
 installCompiledValidatorMap(lunora_feedback_0.toggleVote.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["feedbackId"] !== "string") return DEFER;
 if (typeof source["voterEmail"] !== "string") return DEFER;
 return { "feedbackId": source["feedbackId"], "voterEmail": source["voterEmail"] };
 });
 installCompiledValidatorMap(lunora_summaries_1.generate.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["limit"] !== undefined) {
@@ -146,11 +154,13 @@ return { ...(__has1 ? { "limit": __val1 } : {}) };
 });
 installCompiledValidatorMap(lunora_summaries_1.remove.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 return { "id": source["id"] };
 });
 installCompiledValidatorMap(lunora_summaries_1.store.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
 if (typeof source["summary"] !== "string") return DEFER;
 if (!Array.isArray(source["feedbackIds"])) return DEFER;

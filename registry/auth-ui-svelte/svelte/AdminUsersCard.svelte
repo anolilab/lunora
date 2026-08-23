@@ -9,7 +9,7 @@
 <script lang="ts">
     import { createAdminUsersController } from "../core/admin-users";
     import { isFlowEnabled } from "../core/flow-gate";
-    import { ROLE_OPTIONS } from "../core/labels";
+    import { ROLE_OPTIONS, rowActionLabel } from "../core/labels";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
@@ -51,7 +51,7 @@
                         </span>
                         <span class="lunora-auth-list__actions">
                             <select
-                                aria-label={t.roleLabel}
+                                aria-label={rowActionLabel(t.roleLabel, user.email)}
                                 class="lunora-auth-select"
                                 disabled={$res.busy || user.id === undefined}
                                 onchange={(event) => {
@@ -64,6 +64,7 @@
                                 {/each}
                             </select>
                             <button
+                                aria-label={rowActionLabel(t.adminImpersonate, user.email)}
                                 class="lunora-auth-button lunora-auth-button--secondary"
                                 disabled={$res.busy || user.id === undefined}
                                 onclick={() => {
@@ -74,6 +75,7 @@
                                 {t.adminImpersonate}
                             </button>
                             <button
+                                aria-label={rowActionLabel(user.banned === true ? t.adminUnban : t.adminBan, user.email)}
                                 class="lunora-auth-button lunora-auth-button--danger"
                                 disabled={$res.busy || user.id === undefined}
                                 onclick={() => {
