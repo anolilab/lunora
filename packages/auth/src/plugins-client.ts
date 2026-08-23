@@ -34,9 +34,15 @@
 // toggles (used by the scaffolded `lunora/auth-ui/client.ts`).
 export type { CreateLunoraAuthClientOptions, LunoraAuthClientPlugin, LunoraAuthPluginToggles } from "./auth-client-plugins";
 export { createLunoraAuthClient, lunoraAuthPlugins } from "./auth-client-plugins";
+// Client half of `apiKey` — `authClient.apiKey.create/list/delete`.
+export { apiKeyClient } from "@better-auth/api-key/client";
 // Client half of the `oauthProvider` plugin. Replaces `oidcClient`, which went with
 // the `oidcProvider` plugin better-auth removed in 1.7.
 export { oauthProviderClient } from "@better-auth/oauth-provider/client";
+// Client half of `oauthDeviceAuthorization` — drives the RFC 8628 polling loop
+// against a third-party provider's device endpoints. New in better-auth 1.7,
+// when the device grant was split out of `oauthProvider`.
+export { oauthDeviceAuthorizationClient } from "@better-auth/oauth-provider/client";
 // Passkey/WebAuthn ships its client half under `@better-auth/passkey/client`,
 // mirroring the server `passkey` re-export from `@lunora/auth/plugins`.
 export { passkeyClient } from "@better-auth/passkey/client";

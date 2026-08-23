@@ -24,10 +24,15 @@ function Root(): ReactElement {
     // token — HTTP `Authorization` (`setAuthToken`) and the WS `?token=`
     // (`setWsToken`) — re-synced whenever the session changes (sign-in/out).
     useEffect(() => {
-        const token = expoBearerToken(authClient);
+        // `expoBearerToken` is async since better-auth 1.7.1 (`getCookie` reads
+        // SecureStore asynchronously), so the effect kicks off a promise rather
+        // than returning one — an async function is not a valid cleanup return.
+        void (async () => {
+            const token = await expoBearerToken(authClient);
 
-        lunoraClient.setAuthToken(token);
-        lunoraClient.setWsToken(token ?? undefined);
+            lunoraClient.setAuthToken(token);
+            lunoraClient.setWsToken(token ?? undefined);
+        })();
     }, [session]);
 
     if (isPending) {

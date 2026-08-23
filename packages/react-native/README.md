@@ -131,10 +131,14 @@ import { client } from "./lunora";
 function Root() {
     const { data: session } = authClient.useSession();
 
+    // `expoBearerToken` is async since better-auth 1.7.1, and an async function
+    // is not a valid effect cleanup return — so kick off a promise instead.
     useEffect(() => {
-        const token = expoBearerToken(authClient);
-        client.setAuthToken(token); // HTTP `Authorization: Bearer …`
-        client.setWsToken(token ?? undefined); // WS `?token=…`
+        void (async () => {
+            const token = await expoBearerToken(authClient);
+            client.setAuthToken(token); // HTTP `Authorization: Bearer …`
+            client.setWsToken(token ?? undefined); // WS `?token=…`
+        })();
     }, [session]);
 
     // …render the app

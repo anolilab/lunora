@@ -171,10 +171,14 @@ import { client } from "./lunora";
 // inside a component that renders once the session is known:
 const { data: session } = authClient.useSession();
 
+// `expoBearerToken` is async since better-auth 1.7.1, and an async function is
+// not a valid effect cleanup return — so kick off a promise instead.
 useEffect(() => {
-    const token = expoBearerToken(authClient);
-    client.setAuthToken(token); // HTTP `Authorization: Bearer …`
-    client.setWsToken(token ?? undefined); // WS `?token=…`
+    void (async () => {
+        const token = await expoBearerToken(authClient);
+        client.setAuthToken(token); // HTTP `Authorization: Bearer …`
+        client.setWsToken(token ?? undefined); // WS `?token=…`
+    })();
 }, [session]);
 ```
 
@@ -221,6 +225,6 @@ better-auth's `bearer` plugin. The same wiring works unchanged on
 custom-header escape hatch; prefer a bearer token for better-auth sessions). An
 explicit `persistence`, `fetch`, or `WebSocket` takes precedence.
 
-`@lunora/react-native/auth` exports `expoBearerToken(authClient)` and re-exports
+`@lunora/react-native/auth` exports `expoBearerToken(authClient)` (async) and re-exports
 `expoClient`, `setupExpoFocusManager`, and `setupExpoOnlineManager` from
 `@better-auth/expo/client`.

@@ -94,7 +94,7 @@ export const client = createLunoraClient({
 
 // Sync the token into the client whenever the session changes (e.g. in an effect
 // keyed on `authClient.useSession()`):
-const token = expoBearerToken(authClient);
+const token = await expoBearerToken(authClient);
 client.setAuthToken(token);
 client.setWsToken(token ?? undefined);
 ```

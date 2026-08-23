@@ -929,12 +929,15 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     const hashed = await context_.password.hash(password);
 
                     await context_.internalAdapter.linkAccount({
-                        // 1.7 renamed `accountId` to `providerAccountId` and made `issuer`
-                        // required; for a local password account the issuer is derived
-                        // from the provider id rather than being a remote IdP.
+                        // 1.7 made `issuer` required and scoped an account by
+                        // `(issuer, accountId)` rather than `accountId` alone; for a local
+                        // password account the issuer is derived from the provider id
+                        // rather than being a remote IdP. (1.7.0's prereleases also
+                        // renamed the column to `providerAccountId`; GA reverted that, so
+                        // `accountId` is the field name again.)
+                        accountId: user.id,
                         issuer: createLocalAccountIssuer("credential"),
                         password: hashed,
-                        providerAccountId: user.id,
                         providerId: "credential",
                         userId: user.id,
                     });

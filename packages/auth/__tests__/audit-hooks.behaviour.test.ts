@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createAuth } from "../src/create-auth";
 
 /**
- * Plan 280 S0 — pins the better-auth `1.7.0-rc.2` after-hook contract that
+ * Plan 280 S0 — pins the better-auth `1.7.1` after-hook contract that
  * `audit-hooks.ts`'s classifier rewrite depends on, against a REAL better-auth
  * instance (in-memory adapter, no mocks). This suite is a gate: if any pinned
  * assumption below turns out false, the classifier design in the plan changes
@@ -118,7 +118,7 @@ const totpCode = (rawSecretBase32: string): string => {
 };
 /* eslint-enable no-bitwise */
 
-describe("better-auth 1.7.0-rc.2 after-hook contract (plan 280 S0 gate)", () => {
+describe("better-auth 1.7.1 after-hook contract (plan 280 S0 gate)", () => {
     let database: Record<string, unknown[]>;
 
     beforeEach(() => {
@@ -131,7 +131,7 @@ describe("better-auth 1.7.0-rc.2 after-hook contract (plan 280 S0 gate)", () => 
      * assumptions the plan named, but load-bearing for the whole feature):
      * `authAuditHook`'s handler ends with `return {};` — its own docblock
      * justifies this as "must return an object: returning `undefined` would
-     * throw". That justification is FALSE for `1.7.0-rc.2`, and the `{}` it
+     * throw". That justification is FALSE for `1.7.1`, and the `{}` it
      * returns instead is not inert: `runAfterHooks` (better-auth's
      * `dispatch.mjs`) treats ANY non-undefined value the handler resolves to
      * as the endpoint's new response and overwrites `context.context.returned`

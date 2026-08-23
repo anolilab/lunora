@@ -63,23 +63,48 @@
 export type { UiConfigOptions, UiConfigOrganization, UiConfigPayload } from "./ui-config";
 export { uiConfig } from "./ui-config";
 
-// OAuth-protected Model Context Protocol servers — pairs with `@lunora/mcp`.
-// better-auth 1.7 moved these out of its core barrel into `@better-auth/mcp`, and
-// renamed `withMcpAuth` to `requireMcpAuth` (`mcpHandler` is new alongside it).
-export { mcp, mcpHandler, requireMcpAuth } from "@better-auth/mcp";
+// Programmatic API keys: non-session credentials a user or service mints for
+// scripts, CI, and machine clients, with their own expiry, rate limits, and
+// permissions. Its own package rather than a `better-auth/plugins` subpath.
+export { apiKey } from "@better-auth/api-key";
+
+// OAuth-protected Model Context Protocol servers — pairs with `@lunora/mcp`,
+// whose `createAuthedMcpFetchHandler` mounts a Lunora MCP server behind
+// `requireMcpAuth`. better-auth 1.7 moved these out of its core barrel into
+// `@better-auth/mcp` and renamed `withMcpAuth` to `requireMcpAuth`.
+//
+// `requireMcpAuth(auth, handler, opts)` protects a route on the SAME deployment
+// as the authorization server: it reads issuer/JWKS/resource defaults off the
+// auth instance. `createMcpProtectedRequestHandler(options, handler)` is the
+// split-deployment form — a resource server that only holds verification
+// config, no auth instance. It replaced 1.7.0-rc's `mcpHandler`, which the GA
+// release dropped.
+export { createMcpProtectedRequestHandler, mcp, requireMcpAuth } from "@better-auth/mcp";
 
 // Turn your app into an OAuth/OpenID Connect provider other apps sign in with.
 // Replaces the `oidcProvider` plugin, which better-auth deprecated in 1.6 and
 // removed in 1.7; the factory is named `oauthProvider` in its new home.
 export { oauthProvider } from "@better-auth/oauth-provider";
+// The OAuth device authorization grant (RFC 8628) as an extension to the
+// provider above, for clients with no browser or no keyboard. 1.7 split it out
+// of `oauthProvider` into its own opt-in plugin, so a provider that does not
+// want the device endpoints no longer serves them. Distinct from the
+// `deviceAuthorization` re-export below, which is the device grant for THIS
+// app's own sign-in rather than for third-party OAuth clients.
+export { oauthDeviceAuthorization } from "@better-auth/oauth-provider";
 export { passkey } from "@better-auth/passkey";
 export { scim } from "@better-auth/scim";
 
-// `captcha` (Cloudflare Turnstile, reCAPTCHA, hCaptcha, captchafox) has no
-// dedicated `better-auth/plugins/<name>` subpath in better-auth's exports map —
-// it ships only via the `better-auth/plugins` barrel, so it is re-exported from
-// there rather than a per-plugin subpath like the others.
-export { captcha } from "better-auth/plugins";
+// `captcha` (Cloudflare Turnstile, reCAPTCHA, hCaptcha, captchafox), `lastLoginMethod`
+// and `oneTap` have no dedicated `better-auth/plugins/<name>` subpath in better-auth's
+// exports map — they ship only via the `better-auth/plugins` barrel, so they are
+// re-exported from there rather than a per-plugin subpath like the others.
+//
+// `lastLoginMethod` records which method a user last signed in with, so an auth UI can
+// highlight it on the next visit; `oneTap` is Google One Tap. Both had their client
+// halves in `./plugins-client` already, and a client plugin without its server half is
+// inert — these close that gap.
+export { captcha, lastLoginMethod, oneTap } from "better-auth/plugins";
 // Access-control builder (`createAccessControl`) — the companion to the `admin`
 // and `organization` plugins for defining custom roles/permissions.
 export { createAccessControl } from "better-auth/plugins/access";

@@ -21,6 +21,21 @@ const AGENT_RUN_INPUT_SCHEMA: ToolInputSchema;
 const AGENT_STATUS_TOOL_NAME = "lunora_agent_status";
 ```
 
+### `AuthedMcpFetchHandlerOptions` (interface)
+
+```ts
+interface AuthedMcpFetchHandlerOptions {
+    protect: McpAuthProtect;
+    server: AuthedMcpServerOptions;
+}
+```
+
+### `AuthedMcpServerOptions` (type)
+
+```ts
+type AuthedMcpServerOptions = ((claims: McpAccessTokenClaims) => LunoraMcpServerOptions | Promise<LunoraMcpServerOptions>) | LunoraMcpServerOptions;
+```
+
 ### `CallAgentToolOptions` (interface)
 
 ```ts
@@ -85,6 +100,16 @@ interface LunoraMcpServerOptions {
 }
 ```
 
+### `McpAccessTokenClaims` (interface)
+
+```ts
+interface McpAccessTokenClaims {
+    readonly [claim: string]: unknown;
+    readonly scope?: unknown;
+    readonly sub?: string;
+}
+```
+
 ### `McpAgentExposure` (interface)
 
 ```ts
@@ -93,6 +118,12 @@ interface McpAgentExposure {
     name: string;
     toolName?: string;
 }
+```
+
+### `McpAuthProtect` (type)
+
+```ts
+type McpAuthProtect = (handler: (request: Request, claims: McpAccessTokenClaims) => Promise<Response>) => McpFetchHandler;
 ```
 
 ### `McpFetchHandler` (type)
@@ -261,6 +292,12 @@ const connectLocalStdio: (options?: LocalMcpServerOptions) => Promise<Server>;
 const connectStdio: (options: LunoraMcpServerOptions) => Promise<Server>;
 ```
 
+### `createAuthedMcpFetchHandler` (const)
+
+```ts
+const createAuthedMcpFetchHandler: (options: AuthedMcpFetchHandlerOptions) => McpFetchHandler;
+```
+
 ### `createLocalMcpServer` (const)
 
 ```ts
@@ -295,6 +332,12 @@ const createToolServer: (info: McpServerInfo, tools: ReadonlyArray<McpTool>, res
 
 ```ts
 const localTools: (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraClient) => ReadonlyArray<McpTool>;
+```
+
+### `mcpTokenScopes` (const)
+
+```ts
+const mcpTokenScopes: (claims: McpAccessTokenClaims) => ReadonlySet<string>;
 ```
 
 ### `parseAgentsEnv` (const)

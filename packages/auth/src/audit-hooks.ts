@@ -79,10 +79,12 @@ interface AuditHookContext {
  * (`/sign-in/email`, `/sign-in/username`, `/sign-in/phone-number`, …) as
  * plain `sign-in`. They were NOT recorded at all before this change.
  *
- * `/oauth2/callback/*` is deliberately NOT matched here: it does not exist as
- * an endpoint in the pinned `1.7.0-rc.2` (checked against the installed
+ * `/oauth2/callback/*` is deliberately NOT matched here: no plugin `plugins.ts`
+ * re-exports registers it in the pinned `1.7.1` (checked against the installed
  * `better-auth` and `@better-auth/*` dist — generic-oauth reuses the core
- * `/callback/:id` endpoint, it does not register its own path). `@better-auth/sso`
+ * `/callback/:id` endpoint, it does not register its own path; the one dist hit
+ * for the path is inside `better-auth/plugins/oauth-popup`, which `plugins.ts`
+ * does not re-export). `@better-auth/sso`
  * does expose its own `/sso/callback/:providerId`, but `@lunora/auth`'s
  * `plugins.ts` does not currently re-export `sso` — recorded as a gap for a
  * follow-up (plan 280 §9 Q1), not matched here since it is unreachable through
