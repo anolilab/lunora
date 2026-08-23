@@ -66,7 +66,7 @@
             }}
         >
             <FormBanner error={$form.formError} />
-            <FormField {actions} autoComplete="one-time-code" field="code" fields={$form.fields} label={t.codeLabel} />
+            <FormField {actions} autoComplete="one-time-code" field="code" fields={$form.fields} inputMode="numeric" label={t.codeLabel} />
             <SubmitButton pending={$form.status === "submitting"}>{t.twoFactor}</SubmitButton>
         </form>
         {#snippet footer()}

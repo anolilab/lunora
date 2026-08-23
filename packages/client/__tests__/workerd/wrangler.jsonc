@@ -1,4 +1,4 @@
-// Minimal wrangler config used ONLY by `@cloudflare/vitest-pool-workers` to
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-plugin` to
 // boot the integration test worker. NOT for deployment.
 {
     "$schema": "../../../../node_modules/wrangler/config-schema.json",

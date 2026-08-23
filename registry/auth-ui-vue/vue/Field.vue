@@ -9,6 +9,12 @@ const props = withDefaults(
     defineProps<{
         autoComplete?: string;
         field: FieldState;
+        /**
+         * The virtual keyboard to raise on touch devices. `"numeric"` for
+         * digit-only codes (TOTP, emailed OTPs); left unset for anything that
+         * can contain letters, such as backup codes and device codes.
+         */
+        inputMode?: "numeric";
         label: string;
         name: string;
         placeholder?: string;
@@ -39,6 +45,7 @@ const showError = computed(() => props.field.touched && props.field.error !== un
             :type="type"
             :value="field.value"
             :autocomplete="autoComplete"
+            :inputmode="inputMode"
             :placeholder="placeholder"
             :aria-invalid="showError"
             :aria-describedby="showError ? errorId : undefined"

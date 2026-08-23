@@ -4,6 +4,7 @@
 import { computed } from "vue";
 
 import { isFlowEnabled } from "../core/flow-gate";
+import { firstLabel, rowActionLabel } from "../core/labels";
 import { createAuthorizedAppsController } from "../core/oauth-provider";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
@@ -34,8 +35,14 @@ const onRevoke = (consentId?: string): void => {
         <Skeleton v-if="state.loading" :rows="2" />
         <ul v-else class="lunora-auth-list">
             <li v-for="consent in state.items" :key="consent.id ?? consent.clientId" class="lunora-auth-list__item">
-                <span class="lunora-auth-list__label">{{ consent.clientName ?? consent.clientId }}</span>
-                <button class="lunora-auth-button lunora-auth-button--danger" type="button" :disabled="state.busy" @click="onRevoke(consent.id)">
+                <span class="lunora-auth-list__label">{{ firstLabel(consent.clientName, consent.clientId) }}</span>
+                <button
+                    class="lunora-auth-button lunora-auth-button--danger"
+                    type="button"
+                    :disabled="state.busy"
+                    :aria-label="rowActionLabel(t.revokeAccess, firstLabel(consent.clientName, consent.clientId))"
+                    @click="onRevoke(consent.id)"
+                >
                     {{ t.revokeAccess }}
                 </button>
             </li>

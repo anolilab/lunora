@@ -94,7 +94,7 @@ describe("solid-v2 AuthorizedAppsCard", () => {
             expect(screen.getByText("Acme")).toBeDefined();
         });
 
-        fireEvent.click(screen.getByRole("button", { name: "Revoke access" }));
+        fireEvent.click(screen.getByRole("button", { name: "Revoke access: Acme" }));
 
         await waitFor(() => {
             expect(fake.deleteConsent).toHaveBeenCalledWith({ id: "c1" });

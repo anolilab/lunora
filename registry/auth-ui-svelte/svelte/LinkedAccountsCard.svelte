@@ -8,7 +8,7 @@
 -->
 <script lang="ts">
     import { createAccountsController, linkableProviders, NON_SOCIAL_PROVIDERS } from "../core/accounts";
-    import { providerLabel } from "../core/labels";
+    import { providerLabel, rowActionLabel } from "../core/labels";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
@@ -38,6 +38,7 @@
                     -->
                     {#if !NON_SOCIAL_PROVIDERS.has(account.providerId ?? "")}
                         <button
+                            aria-label={rowActionLabel(t.remove, providerLabel(account.providerId ?? ""))}
                             class="lunora-auth-button lunora-auth-button--danger"
                             disabled={$res.busy || $res.items.length <= 1}
                             onclick={() => {

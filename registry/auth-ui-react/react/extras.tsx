@@ -3,11 +3,12 @@
 /* eslint-disable no-secrets/no-secrets -- JSDoc names the `<OrganizationSettingsCard>` component, not a credential. */
 
 import type { ReactElement } from "react";
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useSyncExternalStore } from "react";
 
 import { ACCEPT_ATTRIBUTE } from "../core/avatar";
 import type { CaptchaProvider } from "../core/captcha";
 import { renderCaptcha } from "../core/captcha";
+import { DEFAULT_LOCALIZATION } from "../core/localization";
 import { promptOneTap } from "../core/one-tap";
 import { createOrganizationLogoController } from "../core/organization-logo";
 import { dismissToast, getToasts, subscribeToasts } from "../core/toast";
@@ -28,7 +29,16 @@ import { useController } from "./use-controller";
  * null : …}` did) means that very first toast lands before assistive tech is
  * watching the region, so it goes unannounced.
  */
-const ErrorToaster = (): ReactElement => {
+interface ErrorToasterProps {
+    /**
+     * The dismiss button's accessible name. A prop rather than a read of the
+     * provider's `localization`, because the toaster is mounted in the app
+     * shell and must keep working outside `<AuthUIProvider>`.
+     */
+    dismissLabel?: string;
+}
+
+const ErrorToaster = ({ dismissLabel = DEFAULT_LOCALIZATION.dismiss }: ErrorToasterProps = {}): ReactElement => {
     const toasts = useSyncExternalStore(subscribeToasts, getToasts, getToasts);
 
     return (
@@ -39,7 +49,7 @@ const ErrorToaster = (): ReactElement => {
                 <div className="lunora-auth-toast" key={toast.id} role="status">
                     <span className="lunora-auth-toast__message">{toast.message}</span>
                     <button
-                        aria-label="Dismiss"
+                        aria-label={dismissLabel}
                         className="lunora-auth-toast__dismiss"
                         onClick={() => {
                             dismissToast(toast.id);
@@ -125,6 +135,7 @@ const OrganizationLogoCard = ({ organizationId }: OrganizationLogoCardProps = {}
     const { localization: t } = context;
     const [state, actions] = useController((context_) => createOrganizationLogoController(context_, { organizationId }), [organizationId]);
     const inputRef = useRef<HTMLInputElement | null>(null);
+    const pickerId = useId();
 
     const onPick = (event: { target: { files?: FileList | null } }): void => {
         const file = event.target.files?.[0];
@@ -152,24 +163,19 @@ const OrganizationLogoCard = ({ organizationId }: OrganizationLogoCardProps = {}
                     <img alt="" className="lunora-auth-avatar" src={state.logoUrl} />
                 )}
                 <div className="lunora-auth-avatar-row__actions">
-                    <input
-                        accept={ACCEPT_ATTRIBUTE}
-                        aria-label={t.avatarUpload}
-                        className="lunora-auth-visually-hidden"
-                        onChange={onPick}
-                        ref={inputRef}
-                        type="file"
-                    />
-                    <button
-                        className="lunora-auth-button"
-                        disabled={state.status === "submitting"}
-                        onClick={() => {
-                            inputRef.current?.click();
-                        }}
-                        type="button"
-                    >
+                    {/* A label wrapping the input — see <AvatarCard>. */}
+                    <label className="lunora-auth-button" htmlFor={pickerId}>
+                        <input
+                            accept={ACCEPT_ATTRIBUTE}
+                            className="lunora-auth-visually-hidden"
+                            disabled={state.status === "submitting"}
+                            id={pickerId}
+                            onChange={onPick}
+                            ref={inputRef}
+                            type="file"
+                        />
                         {t.avatarUpload}
-                    </button>
+                    </label>
                     {state.logoUrl === undefined || state.logoUrl === "" ? null : (
                         <button
                             className="lunora-auth-button lunora-auth-button--danger"
@@ -188,5 +194,5 @@ const OrganizationLogoCard = ({ organizationId }: OrganizationLogoCardProps = {}
     );
 };
 
-export type { CaptchaProps, OrganizationLogoCardProps };
+export type { CaptchaProps, ErrorToasterProps, OrganizationLogoCardProps };
 export { Captcha, ErrorToaster, OneTap, OrganizationLogoCard };
