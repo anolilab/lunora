@@ -6,8 +6,9 @@ import { createBackupCodesController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
 import { createDeviceAuthorizationController } from "../core/device-authorization";
 import { isFlowEnabled } from "../core/flow-gate";
-import { ROLE_OPTIONS } from "../core/labels";
+import { ROLE_OPTIONS, rowActionLabel } from "../core/labels";
 import { createDeviceSessionsController } from "../core/multi-session";
+import { userLabel } from "../core/session";
 import { createTeamsController } from "../core/teams";
 import { FormField, onSubmit } from "./form";
 import { AuthCard, Field, FormBanner, Skeleton, SubmitButton } from "./primitives";
@@ -44,6 +45,7 @@ const MultiSessionCard = (): JSX.Element => {
                                 <UserView compact user={entry.user} />
                                 <span class="lunora-auth-list__actions">
                                     <button
+                                        aria-label={rowActionLabel(t.switchAccount, userLabel(entry.user))}
                                         class="lunora-auth-button lunora-auth-button--secondary"
                                         disabled={state.busy || entry.session?.token === undefined}
                                         onClick={() => {
@@ -54,6 +56,7 @@ const MultiSessionCard = (): JSX.Element => {
                                         {t.switchAccount}
                                     </button>
                                     <button
+                                        aria-label={rowActionLabel(t.signOut, userLabel(entry.user))}
                                         class="lunora-auth-button lunora-auth-button--danger"
                                         disabled={state.busy || entry.session?.token === undefined}
                                         onClick={() => {
@@ -122,7 +125,7 @@ const AdminUsersCard = (): JSX.Element => {
                                 </span>
                                 <span class="lunora-auth-list__actions">
                                     <select
-                                        aria-label={t.roleLabel}
+                                        aria-label={rowActionLabel(t.roleLabel, user.email)}
                                         class="lunora-auth-select"
                                         disabled={state.busy || user.id === undefined}
                                         onChange={(event) => {
@@ -133,6 +136,7 @@ const AdminUsersCard = (): JSX.Element => {
                                         <For each={roles}>{(role) => <option value={role}>{role}</option>}</For>
                                     </select>
                                     <button
+                                        aria-label={rowActionLabel(t.adminImpersonate, user.email)}
                                         class="lunora-auth-button lunora-auth-button--secondary"
                                         disabled={state.busy || user.id === undefined}
                                         onClick={() => {
@@ -143,6 +147,7 @@ const AdminUsersCard = (): JSX.Element => {
                                         {t.adminImpersonate}
                                     </button>
                                     <button
+                                        aria-label={rowActionLabel(user.banned === true ? t.adminUnban : t.adminBan, user.email)}
                                         class="lunora-auth-button lunora-auth-button--danger"
                                         disabled={state.busy || user.id === undefined}
                                         onClick={() => {
@@ -262,6 +267,7 @@ const TeamsCard = (): JSX.Element => {
                             <li class="lunora-auth-list__item">
                                 <span class="lunora-auth-list__label">{team.name}</span>
                                 <button
+                                    aria-label={rowActionLabel(t.remove, team.name)}
                                     class="lunora-auth-button lunora-auth-button--danger"
                                     disabled={state.busy}
                                     onClick={() => {

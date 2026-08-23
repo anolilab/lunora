@@ -152,6 +152,24 @@ describe("studioPlugin", () => {
         return { end, response };
     };
 
+    it("serves the token-bearing document with no-store and no ETag", () => {
+        expect.assertions(3);
+
+        const middleware = installMiddleware("localhost");
+        const { end, response } = makeResponse();
+
+        middleware({ url: STUDIO_PATH }, response, vi.fn<() => void>());
+
+        const headers = Object.fromEntries((response.setHeader as ReturnType<typeof vi.fn>).mock.calls as [string, string][]);
+
+        // The document embeds the admin token, so it must not be cacheable at
+        // all — `no-store`, and never an ETag (a cached 304 for a token-bearing
+        // document would be its own bug).
+        expect(headers["Cache-Control"]).toBe("no-store");
+        expect(headers.ETag).toBeUndefined();
+        expect(end).toHaveBeenCalledTimes(1);
+    });
+
     it("handles the static asset routes rather than passing them through", () => {
         expect.assertions(5);
 

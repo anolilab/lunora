@@ -42,6 +42,16 @@ interface AsyncStoragePersistenceOptions {
 }
 ```
 
+### `AsyncStorageQueryCacheOptions` (interface)
+
+```ts
+interface AsyncStorageQueryCacheOptions {
+    key?: string;
+    maxEntries?: number;
+    storage: AsyncStorageLike;
+}
+```
+
 ### `AuthCapabilities` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -1015,9 +1025,7 @@ interface Preloaded<T = unknown> {
 ```ts
 interface QueryCacheAdapter {
     clear: () => Promise<void>;
-    load: () => Promise<(CachedQuery & {
-        key: string;
-    })[]>;
+    load: () => Promise<StoredQuery[]>;
     put: (key: string, entry: CachedQuery) => Promise<void>;
     remove: (key: string) => Promise<void>;
 }
@@ -1244,6 +1252,14 @@ interface StorageObject {
     key: string;
     size: number;
     uploaded?: number | string;
+}
+```
+
+### `StoredQuery` (interface)
+
+```ts
+interface StoredQuery extends CachedQuery {
+    key: string;
 }
 ```
 
@@ -1475,6 +1491,12 @@ const applyDelta: (current: unknown, delta: MutationDelta) => Record<string, unk
 
 ```ts
 const createAsyncStoragePersistence: (options: AsyncStoragePersistenceOptions) => PersistenceAdapter;
+```
+
+### `createAsyncStorageQueryCache` (const)
+
+```ts
+const createAsyncStorageQueryCache: (options: AsyncStorageQueryCacheOptions) => QueryCacheAdapter;
 ```
 
 ### `createCallRunner` (const)

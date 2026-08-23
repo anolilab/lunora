@@ -53,10 +53,13 @@ describe("solid-v2 MultiSessionCard", () => {
         renderCard(() => <MultiSessionCard />, listClient());
         await settle();
 
-        const [switchWithToken, switchWithout] = screen.getAllByRole("button", { name: "Switch to this account" });
-        const [signOutWithToken, signOutWithout] = screen.getAllByRole("button", { name: "Sign out" });
+        // Matched by prefix: each row's action is named for the account it acts
+        // on, so a list of identical "Switch to this account" buttons is not
+        // what a screen reader hears any more.
+        const [switchWithToken, switchWithout] = screen.getAllByRole("button", { name: /^Switch to this account: / });
+        const [signOutWithToken, signOutWithout] = screen.getAllByRole("button", { name: /^Sign out: / });
 
-        expect(switchWithToken).not.toBeDisabled();
+        expect(switchWithToken).toHaveAccessibleName("Switch to this account: ada@example.com");
         expect(signOutWithToken).not.toBeDisabled();
         expect(switchWithout).toBeDisabled();
         expect(signOutWithout).toBeDisabled();
@@ -70,11 +73,13 @@ describe("solid-v2 AdminUsersCard", () => {
         renderCard(() => <AdminUsersCard />, listClient());
         await settle();
 
-        const [impersonateWithId, impersonateWithout] = screen.getAllByRole("button", { name: "Impersonate" });
-        const [banWithId, banWithout] = screen.getAllByRole("button", { name: "Ban" });
+        const [impersonateWithId, impersonateWithout] = screen.getAllByRole("button", { name: /^Impersonate: / });
+        const [banWithId, banWithout] = screen.getAllByRole("button", { name: /^Ban: / });
 
+        // Ban and impersonate are the two row actions where an ambiguous name is
+        // actually dangerous, so assert this one carries its user.
+        expect(banWithId).toHaveAccessibleName("Ban: ada@example.com");
         expect(impersonateWithId).not.toBeDisabled();
-        expect(banWithId).not.toBeDisabled();
         expect(impersonateWithout).toBeDisabled();
         expect(banWithout).toBeDisabled();
     });

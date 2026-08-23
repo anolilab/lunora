@@ -1,3 +1,4 @@
+import { singleBlobStore } from "./single-blob-store";
 import type { PersistedMutation, PersistenceAdapter } from "./types";
 
 /**
@@ -28,66 +29,37 @@ const DEFAULT_KEY = "lunora:offline-mutations";
  * so enqueue order is preserved and `load()` returns freshly-parsed records that
  * callers can't alias.
  *
- * AsyncStorage has no transactions, so every read-modify-write is funnelled
- * through a single promise chain — concurrent `append`/`remove` calls run one at
- * a time and can't clobber each other's writes.
+ * AsyncStorage has no transactions, so every read-modify-write runs through
+ * {@link singleBlobStore}'s serialized chain — concurrent `append`/`remove`
+ * calls run one at a time and can't clobber each other's writes.
  */
 const createAsyncStoragePersistence = (options: AsyncStoragePersistenceOptions): PersistenceAdapter => {
-    const { storage } = options;
-    const key = options.key ?? DEFAULT_KEY;
-
-    // Serialize all access so a read-modify-write isn't interleaved with another.
-    let chain: Promise<unknown> = Promise.resolve();
-    const serialize = <T>(run: () => Promise<T>): Promise<T> => {
-        const next = chain.then(run, run);
-
-        chain = next.then(
-            () => undefined,
-            () => undefined,
-        );
-
-        return next;
-    };
+    const blob = singleBlobStore(options.storage, options.key ?? DEFAULT_KEY);
 
     const readAll = async (): Promise<PersistedMutation[]> => {
-        const raw = await storage.getItem(key);
+        const parsed = await blob.read();
 
-        if (raw === null) {
-            return [];
-        }
-
-        try {
-            const parsed = JSON.parse(raw) as PersistedMutation[];
-
-            return Array.isArray(parsed) ? parsed : [];
-        } catch {
-            // Corrupt payload (partial write, hand-edited store) — start clean
-            // rather than wedging every load. The lost writes are unrecoverable
-            // either way.
-            return [];
-        }
+        return Array.isArray(parsed) ? (parsed as PersistedMutation[]) : [];
     };
-
-    const writeAll = (mutations: PersistedMutation[]): Promise<void> => storage.setItem(key, JSON.stringify(mutations));
 
     return {
         append: (mutation) =>
-            serialize(async () => {
+            blob.serialize(async () => {
                 const mutations = await readAll();
 
                 mutations.push(mutation);
 
-                await writeAll(mutations);
+                await blob.write(mutations);
             }),
-        clear: () => serialize(() => storage.removeItem(key)),
-        load: () => serialize(readAll),
+        clear: blob.clear,
+        load: () => blob.serialize(readAll),
         remove: (id) =>
-            serialize(async () => {
+            blob.serialize(async () => {
                 const mutations = await readAll();
                 const remaining = mutations.filter((mutation) => mutation.id !== id);
 
                 if (remaining.length !== mutations.length) {
-                    await writeAll(remaining);
+                    await blob.write(remaining);
                 }
             }),
     };

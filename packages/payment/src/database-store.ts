@@ -260,7 +260,36 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             return foldUsage(window);
         },
 
-        upsertCustomer: async (customer) => upsert("customers", { provider: customer.provider, providerCustomerId: customer.id }, customerToRow(customer)),
+        sumUsageByFeature: async (referenceId, featureIds, since) => {
+            // NOTE: one read of the reference's full lifetime ledger, filtered and bucketed in
+            // memory — O(events) total instead of O(events) per feature. For hot metered features,
+            // add a per-period rollup row (or a createdAt-range query) so old periods aren't
+            // re-scanned on every read.
+            const rows = await database.findMany("usageEvents", { referenceId });
+            const buckets = new Map<string, { createdAt: number; idempotencyKey: string; mode: "add" | "set"; quantity: number }[]>(
+                featureIds.map((featureId) => [featureId, []]),
+            );
+
+            for (const row of rows) {
+                if (readNumber(row, "createdAt") < since) {
+                    continue;
+                }
+
+                buckets.get(typeof row["featureId"] === "string" ? row["featureId"] : "")?.push({
+                    createdAt: readNumber(row, "createdAt"),
+                    idempotencyKey: typeof row["idempotencyKey"] === "string" ? row["idempotencyKey"] : "",
+                    mode: row["mode"] === "set" ? ("set" as const) : ("add" as const),
+                    quantity: readNumber(row, "quantity"),
+                });
+            }
+
+            return new Map([...buckets].map(([featureId, window]) => [featureId, foldUsage(window)]));
+        },
+
+        // Keyed on `(provider, referenceId)` — the same key `getCustomerByReference` reads and the
+        // memory store writes — so a re-mint (race or provider-side customer replacement) updates the
+        // reference's row in place instead of forking a second row the read path can never find.
+        upsertCustomer: async (customer) => upsert("customers", { provider: customer.provider, referenceId: customer.referenceId }, customerToRow(customer)),
 
         upsertPaymentSession: async (session) =>
             upsert("paymentSessions", { provider: session.provider, providerSessionId: session.id }, sessionToRow(session)),

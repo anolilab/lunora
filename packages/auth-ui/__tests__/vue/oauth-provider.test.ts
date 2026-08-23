@@ -101,7 +101,7 @@ describe("vue AuthorizedAppsCard", () => {
             expect(screen.getByText("Acme")).toBeDefined();
         });
 
-        await fireEvent.click(screen.getByRole("button", { name: "Revoke access" }));
+        await fireEvent.click(screen.getByRole("button", { name: "Revoke access: Acme" }));
 
         expect(fake.deleteConsent).toHaveBeenCalledWith({ id: "c1" });
     });

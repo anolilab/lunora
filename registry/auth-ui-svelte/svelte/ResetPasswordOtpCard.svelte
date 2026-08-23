@@ -28,7 +28,7 @@
     >
         <FormBanner error={$form.formError} success={$form.successMessage} />
         <FormField {actions} autoComplete="email" field="email" fields={$form.fields} label={t.emailLabel} type="email" />
-        <FormField {actions} autoComplete="one-time-code" field="otp" fields={$form.fields} label={t.codeLabel} />
+        <FormField {actions} autoComplete="one-time-code" field="otp" fields={$form.fields} inputMode="numeric" label={t.codeLabel} />
         <FormField {actions} autoComplete="new-password" field="password" fields={$form.fields} label={t.passwordLabel} type="password" />
         <FormField {actions} autoComplete="new-password" field="confirmPassword" fields={$form.fields} label={t.confirmPasswordLabel} type="password" />
         <SubmitButton pending={$form.status === "submitting"}>{t.resetPassword}</SubmitButton>

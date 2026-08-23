@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { Notification, NotificationProviders, Provider, PushPayload } from "@visulima/notification";
+import type { Notification, NotificationProviders, NotificationResult, Provider, PushPayload, Result } from "@visulima/notification";
 import { createNotification } from "@visulima/notification";
 import { circuitBreakerMiddleware, retryMiddleware } from "@visulima/notification/middleware";
 import type { FcmConfig } from "@visulima/notification/providers/fcm";
@@ -110,6 +110,53 @@ const assertPushTargetResolvable = async (endpoint: string, allowedPushOrigins?:
     }
 };
 
+/**
+ * Fold two successful group sends into one `NotificationResult`.
+ *
+ * A mixed-kind push is two provider calls, but the caller gets one receipt — so
+ * every field that identifies a delivery has to carry BOTH halves or the receipt
+ * silently describes half the send. `messageId`/`provider` join, `response`
+ * keeps both bodies, `sent` is the conjunction, and `timestamp` is the later of
+ * the two (the moment the whole send finished).
+ */
+const mergeSendResults = (first: NotificationResult, second: NotificationResult): NotificationResult => {
+    const providers = [first.provider, second.provider].filter((provider) => provider !== undefined);
+    const recipients = [...(first.recipients ?? []), ...(second.recipients ?? [])];
+
+    return {
+        ...first,
+        messageId: [first.messageId, second.messageId].join(","),
+        response: [first.response, second.response],
+        sent: first.sent && second.sent,
+        timestamp: new Date(Math.max(first.timestamp.getTime(), second.timestamp.getTime())),
+        ...(providers.length > 0 ? { provider: providers.join(",") } : {}),
+        ...(recipients.length > 0 ? { recipients } : {}),
+    };
+};
+
+/**
+ * Fold the two group outcomes of a mixed-kind push into the single `Result` the
+ * caller gets back.
+ *
+ * Nothing may be dropped in the fold: two successes merge their delivery data
+ * (or the receipt names only half the send), two failures keep both causes, and
+ * a mixed outcome reports the failure — a partially delivered send is never
+ * reported as a success.
+ */
+const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<NotificationResult>): Result<NotificationResult> => {
+    if (!webPush.success || !fcm.success) {
+        if (webPush.success || fcm.success) {
+            return webPush.success ? fcm : webPush;
+        }
+
+        return { error: new AggregateError([webPush.error, fcm.error], "@lunora/notify: both push target groups failed"), success: false };
+    }
+
+    const data = webPush.data === undefined || fcm.data === undefined ? (webPush.data ?? fcm.data) : mergeSendResults(webPush.data, fcm.data);
+
+    return data === undefined ? { success: true } : { data, success: true };
+};
+
 /** Options for {@link routingPushProvider}. */
 export interface RoutingPushOptions {
     /**
@@ -152,15 +199,11 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
         },
         isAvailable: () => (options.webPush ?? options.fcm) !== undefined,
         send: async (payload) => {
-            // ROUTING is on the first target — the endpoint IS the decision, present
-            // means web push, absent means FCM — because `ctx.push`'s own fan-out
-            // (`deliver`) sends exactly one target per call.
-            //
-            // The SSRF re-check, though, must cover EVERY target: `notify.send()`
-            // hands a caller-shaped message straight to the engine, so a
-            // multi-recipient push `to` does reach this router, and the provider
-            // POSTs all of them. Guarding only `to[0]` would let every later entry
-            // walk past the rebinding check — the one place it is enforced.
+            // The SSRF re-check must cover EVERY target: `notify.send()` hands a
+            // caller-shaped message straight to the engine, so a multi-recipient
+            // push `to` does reach this router, and the provider POSTs all of
+            // them. Guarding only `to[0]` would let every later entry walk past
+            // the rebinding check — the one place it is enforced.
             const targets = Array.isArray(payload.to) ? payload.to : [payload.to];
             const endpoints = targets.map((entry) => webPushEndpoint(entry));
 
@@ -171,7 +214,55 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
                 }
             }
 
-            return pick(endpoints[0]).send(payload);
+            // ROUTING is per target — the endpoint IS the decision, present means
+            // web push, absent means FCM. `ctx.push`'s own fan-out (`deliver`)
+            // sends exactly one target per call, but the `notify.send()` path
+            // above can carry a mixed-kind `to`, so the targets are partitioned
+            // and each group goes to its own provider — routing the whole send by
+            // one target's kind would hand FCM tokens to the Web Push transport
+            // (or the reverse). A single-kind `to` passes through unchanged.
+            const webPushTargets = targets.filter((_, index) => endpoints[index] !== undefined);
+            const fcmTargets = targets.filter((_, index) => endpoints[index] === undefined);
+            const sampleEndpoint = endpoints.find((endpoint) => endpoint !== undefined);
+
+            if (fcmTargets.length === 0 && sampleEndpoint !== undefined) {
+                return pick(sampleEndpoint).send(payload);
+            }
+
+            if (webPushTargets.length === 0) {
+                return pick(undefined).send(payload);
+            }
+
+            // Mixed kinds: narrow `to` per group, keeping the scalar-vs-array
+            // shape convention the payload type uses.
+            const narrowed = (group: typeof targets): PushPayload => {
+                return { ...payload, to: group.length === 1 && group[0] !== undefined ? group[0] : group };
+            };
+
+            // Resolve BOTH providers before sending EITHER group: `pick` throws
+            // for an unconfigured channel, and throwing that after the other
+            // group had already been POSTed would report a partial delivery as a
+            // total failure. Failing here means nothing was sent at all.
+            const webPushChannel = pick(sampleEndpoint);
+            const fcmChannel = pick(undefined);
+
+            // `allSettled`, not two sequential awaits: one transport failing must
+            // not stop the other group from being attempted at all. The `async`
+            // wrapper matters — `Provider.send` returns `MaybePromise`, so a
+            // provider that throws SYNCHRONOUSLY would otherwise escape past
+            // `allSettled` (which only catches rejections) and take the sibling
+            // group's send down with it.
+            const attempt = async (channel: Provider<unknown, PushPayload>, group: typeof targets): Promise<Result<NotificationResult>> =>
+                channel.send(narrowed(group));
+
+            const settled = await Promise.allSettled([attempt(webPushChannel, webPushTargets), attempt(fcmChannel, fcmTargets)]);
+            const [webPushResult, fcmResult] = settled.map((entry): Result<NotificationResult> =>
+                entry.status === "fulfilled" ? entry.value : { error: entry.reason, success: false },
+            ) as [Result<NotificationResult>, Result<NotificationResult>];
+
+            // One receipt describes two sends — see `mergeGroupResults` for what
+            // the fold must preserve.
+            return mergeGroupResults(webPushResult, fcmResult);
         },
     };
 };
