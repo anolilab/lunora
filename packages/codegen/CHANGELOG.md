@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.117...@lunora/codegen@1.0.0-alpha.118) (2026-08-23)
+
+### Bug Fixes
+
+* **codegen:** harden sdk names and compiled reads ([#437](https://github.com/anolilab/lunora/issues/437)) ([816ac0a](https://github.com/anolilab/lunora/commit/816ac0a2bf05a990ee72fd6694aca2ad0c8ec0c1))
+
 ## @lunora/codegen [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/%40lunora%2Fcodegen%401.0.0-alpha.116...%40lunora%2Fcodegen%401.0.0-alpha.117) (2026-08-19)
 
 
