@@ -66,16 +66,60 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
 
         const adapter = makeAdapter();
 
-        await adapter.append(mutation("a", { args: { title: "hi" }, shardKey: "room-1" }));
+        await adapter.append(
+            mutation("a", {
+                args: { title: "hi" },
+                clientId: "client-1",
+                identity: "user-1",
+                shardKey: "room-1",
+                version: "v3",
+            }),
+        );
 
         const [loaded] = await adapter.load();
 
-        expect(loaded).toEqual({
+        // `toStrictEqual` so an adapter that drops keys or invents explicit
+        // `undefined` keys fails — this is the cross-adapter contract.
+        expect(loaded).toStrictEqual({
             args: { title: "hi" },
+            clientId: "client-1",
             functionPath: "posts:create",
             id: "a",
+            identity: "user-1",
             shardKey: "room-1",
+            version: "v3",
         });
+    });
+
+    it("load() keeps optional fields absent (not explicit undefined) when unset", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a"));
+
+        const [loaded] = await adapter.load();
+
+        // Absence, not explicit `undefined`, is the contract — the AsyncStorage
+        // adapter's JSON round-trip drops `undefined` keys, so the others must
+        // not invent them.
+        expect(loaded).toStrictEqual({
+            args: { id: "a" },
+            functionPath: "posts:create",
+            id: "a",
+        });
+    });
+
+    it("load() preserves clientId, version, and identity", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a", { clientId: "c-1", identity: "u-1", version: "v2" }));
+
+        const [loaded] = await adapter.load();
+
+        expect(loaded).toMatchObject({ clientId: "c-1", identity: "u-1", version: "v2" });
     });
 
     it("remove() drops a single mutation by id and leaves the rest in order", async () => {

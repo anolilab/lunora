@@ -1,5 +1,5 @@
 /**
- * Test entry-point Worker for the `@cloudflare/vitest-pool-workers` Miniflare
+ * Test entry-point Worker for the `@cloudflare/vitest-plugin` Miniflare
  * runtime.
  *
  * The pool boots this worker inside a real `workerd` process. Our tests then

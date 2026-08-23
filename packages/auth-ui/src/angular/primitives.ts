@@ -98,6 +98,7 @@ const nextId = (prefix: string): string => {
                 [attr.name]="name()"
                 [type]="type()"
                 [attr.autocomplete]="autoComplete() ?? null"
+                [attr.inputmode]="inputMode() ?? null"
                 [attr.placeholder]="placeholder() ?? null"
                 [attr.aria-invalid]="showError()"
                 [attr.aria-describedby]="showError() ? errorId : null"
@@ -116,6 +117,13 @@ class AuthFieldComponent {
     readonly blurred = output();
     readonly changed = output<string>();
     readonly field = input.required<FieldState>();
+
+    /**
+     * The virtual keyboard to raise on touch devices. `"numeric"` for
+     * digit-only codes (TOTP, emailed OTPs); left unset for anything that can
+     * contain letters, such as backup codes and device codes.
+     */
+    readonly inputMode = input<"numeric">();
     readonly label = input.required<string>();
     readonly name = input.required<string>();
     readonly placeholder = input<string>();
@@ -228,13 +236,19 @@ class SkeletonComponent {
     protected readonly rowIndexes = computed(() => Array.from({ length: this.rows() }, (_unused, index) => index));
 }
 
-/** A labelled visual separator ("or"). */
+/**
+ * A labelled visual separator ("or").
+ *
+ * The label is repeated as `aria-label` because a `separator` role makes its
+ * children presentational — the visible "or" is dropped from the accessibility
+ * tree, and naming the separator is the only way to get it back.
+ */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-auth-divider",
     standalone: true,
     template: `
-        <div class="lunora-auth-divider" role="separator">
+        <div class="lunora-auth-divider" role="separator" [attr.aria-label]="label()">
             <span class="lunora-auth-divider__label">{{ label() }}</span>
         </div>
     `,

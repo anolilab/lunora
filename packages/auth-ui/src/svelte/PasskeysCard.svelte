@@ -1,6 +1,6 @@
 <script lang="ts">
     import { isFlowEnabled } from "../core/flow-gate";
-    import { passkeyLabel } from "../core/labels";
+    import { passkeyLabel, rowActionLabel } from "../core/labels";
     import { createPasskeysController } from "../core/passkeys";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
@@ -21,7 +21,7 @@
     <AuthCard headingLevel={2} title={t.passkeys}>
         <FormBanner error={$res.error} />
         {#if $res.loading}
-            <p class="lunora-auth-card__description">…</p>
+            <p class="lunora-auth-card__description" role="status">{t.loading}</p>
         {:else if $res.items.length === 0}
             <p class="lunora-auth-card__description">{t.passkeysEmpty}</p>
         {:else}
@@ -32,6 +32,7 @@
                         <span class="lunora-auth-list__label">{passkeyLabel(passkey, t)}</span>
                         {#if id !== undefined}
                             <button
+                                aria-label={rowActionLabel(t.remove, passkeyLabel(passkey, t))}
                                 class="lunora-auth-link"
                                 disabled={$res.busy}
                                 onclick={() => {

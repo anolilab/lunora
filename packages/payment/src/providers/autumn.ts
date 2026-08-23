@@ -287,7 +287,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 referenceId: customerId,
                 subscriptionId:
                     customerId === undefined ? undefined : autumnSubscriptionId(customerId, readAny(product, "id", "product_id", "productId") ?? ""),
-                type: stateToEventType(SUBSCRIPTION_STATE_BY_AUTUMN_STATUS[status ?? ""]),
+                // Fail closed before `stateToEventType` — an unmapped status must not degrade to a
+                // state-preserving metadata patch.
+                type: stateToEventType(SUBSCRIPTION_STATE_BY_AUTUMN_STATUS[status ?? ""] ?? "past_due"),
             };
         }
         // Money movement — Autumn surfaces settled invoices/payments.

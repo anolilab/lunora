@@ -338,9 +338,11 @@ export interface SearchPagePlan {
 /**
  * Validate a `.paginate()` call against a search query and resolve it to an
  * offset window. Rejects the bounded (`endCursor`) form — relevance order has
- * no stable range boundary to pin — and refuses to page past
- * {@link MAX_SEARCH_SCAN} rather than quietly reporting `isDone` at the cap,
- * which would read as "no more matches" when the truth is "no more reachable".
+ * no stable range boundary to pin — and refuses any page that reaches
+ * {@link MAX_SEARCH_SCAN} or past it: a page must end below the cap so the
+ * one-row probe that makes `hasMore` an observation still fits, rather than
+ * quietly reporting `isDone` at the cap, which would read as "no more
+ * matches" when the truth is "no more reachable".
  */
 export const planSearchPage = (options: { cursor?: null | string; endCursor?: null | string; numItems: number }): SearchPagePlan => {
     if (typeof options.endCursor === "string") {
@@ -350,6 +352,13 @@ export const planSearchPage = (options: { cursor?: null | string; endCursor?: nu
         );
     }
 
+    if (!Number.isFinite(options.numItems)) {
+        // Math.floor(NaN) is NaN and NaN compares false against the cap, so a
+        // non-finite page size would sail past the boundary guard and come
+        // back as a bogus empty terminal page. Refuse it up front.
+        throw new LunoraError("BAD_REQUEST", `search pagination needs a finite numItems, got ${String(options.numItems)}`);
+    }
+
     const numberItems = Math.max(0, Math.floor(options.numItems));
     const offset = options.cursor ? parseSearchCursor(options.cursor) : 0;
 
@@ -357,10 +366,10 @@ export const planSearchPage = (options: { cursor?: null | string; endCursor?: nu
         throw invalidCursor();
     }
 
-    if (offset + numberItems > MAX_SEARCH_SCAN) {
+    if (offset + numberItems >= MAX_SEARCH_SCAN) {
         throw new LunoraError(
             "BAD_REQUEST",
-            `search pagination reaches past the ${String(MAX_SEARCH_SCAN)}-document limit (offset ${String(offset)} + ${String(numberItems)} requested) — narrow the query or the filters instead`,
+            `search pagination reaches the ${String(MAX_SEARCH_SCAN)}-document limit (offset ${String(offset)} + ${String(numberItems)} requested) — a page must end below the cap so the probe row that answers \`hasMore\` still fits: retry with numItems ${String(Math.max(1, MAX_SEARCH_SCAN - offset - 1))} or fewer, or narrow the query or the filters instead`,
         );
     }
 

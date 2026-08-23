@@ -1,11 +1,11 @@
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
 import { DEFAULT_COVERAGE_THRESHOLDS } from "../../tools/get-vitest-config";
 
 // Mirror of the shared `tools/get-vitest-config` coverage block. The workers pool
 // relies on `defineConfig` (not the shared helper, which would break the
-// `@cloudflare/vitest-pool-workers` projects), so coverage is wired inline here.
+// `@cloudflare/vitest-plugin` projects), so coverage is wired inline here.
 const coverage = {
     ...coverageConfigDefaults,
     provider: "v8" as const,
@@ -34,7 +34,7 @@ const coverage = {
  *
  *  - `node`    — the unit suites over the better-auth wrapper (adapter, audit,
  *                email guard, plugin surface). Always on.
- *  - `workerd` — real workerd via `@cloudflare/vitest-pool-workers`, proving the
+ *  - `workerd` — real workerd via `@cloudflare/vitest-plugin`, proving the
  *                enterprise-auth plugins load in the runtime they ship to:
  *                `@better-auth/sso` statically imports `samlify` +
  *                `node:crypto`'s `X509Certificate`, so a Node-only pass says

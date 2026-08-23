@@ -57,6 +57,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  */
 installCompiledValidatorMap(lunora_drafts_1.save.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["id"] !== undefined) {
@@ -70,11 +71,13 @@ return { ...(__has1 ? { "id": __val1 } : {}), "title": source["title"], "body": 
 });
 installCompiledValidatorMap(lunora_posts_2.get.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 return { "id": source["id"] };
 });
 installCompiledValidatorMap(lunora_posts_2.publish.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
 let __has1 = false;
@@ -88,11 +91,13 @@ return { "title": source["title"], "body": source["body"], ...(__has1 ? { "image
 });
 installCompiledValidatorMap(lunora_posts_2.requestImageUpload.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["contentType"] !== "string") return DEFER;
 return { "contentType": source["contentType"] };
 });
 installCompiledValidatorMap(lunora_posts_2.search.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["text"] !== "string") return DEFER;
 let __has1 = false;
 let __val1;

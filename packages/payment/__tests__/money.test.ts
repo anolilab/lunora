@@ -23,6 +23,28 @@ describe("money", () => {
         expect(zeroMoney("gbp")).toEqual({ currency: "GBP", minorUnits: 0n });
     });
 
+    it("rejects fractional and non-finite amounts instead of truncating (regression)", () => {
+        expect.assertions(4);
+
+        // `money(19.99, "USD")` used to silently truncate to 19 minor units — a 99% under-charge.
+        expect(() => money(19.99, "USD")).toThrow(LunoraPaymentError);
+
+        let thrown: unknown;
+
+        try {
+            money(19.99, "USD");
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toMatchObject({ code: "VALIDATION_ERROR" });
+
+        // NaN used to throw a bare RangeError from BigInt(); it must be a LunoraPaymentError.
+        expect(() => money(Number.NaN, "USD")).toThrow(LunoraPaymentError);
+        // Negative integers stay legal — refund math needs them.
+        expect(money(-500, "USD")).toEqual({ currency: "USD", minorUnits: -500n });
+    });
+
     it("adds and subtracts same-currency amounts", () => {
         expect.assertions(2);
 

@@ -6,8 +6,16 @@
     reach here, so nothing is announced twice.
 -->
 <script lang="ts">
+    import { DEFAULT_LOCALIZATION } from "../core/localization";
     import type { Toast } from "../core/toast";
     import { dismissToast, getToasts, subscribeToasts } from "../core/toast";
+
+    /*
+     * The dismiss button's accessible name is a prop rather than a read of the
+     * provider's `localization`, because the toaster is mounted in the app shell
+     * and must keep working outside `<AuthUIProvider>`.
+     */
+    let { dismissLabel = DEFAULT_LOCALIZATION.dismiss }: { dismissLabel?: string } = $props();
 
     /*
      * The store is module-level (see `core/toast.ts`), not a controller bound to
@@ -41,7 +49,7 @@
         <div class="lunora-auth-toast" role="status">
             <span class="lunora-auth-toast__message">{toast.message}</span>
             <button
-                aria-label="Dismiss"
+                aria-label={dismissLabel}
                 class="lunora-auth-toast__dismiss"
                 onclick={() => {
                     dismissToast(toast.id);
