@@ -271,7 +271,7 @@ interface FunctionIR {
     };
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
-    lifecycle?: "connect" | "disconnect";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     output?: ValidatorIR;
     returnType: string;
     visibility?: "internal" | "public";
@@ -841,6 +841,7 @@ interface StorageRulesMetadataIR {
 
 ```ts
 interface TableIR {
+    commitOrdered?: boolean;
     extensionKey?: string;
     externallyManaged?: boolean;
     externalSource?: ExternalSourceIR;
@@ -848,6 +849,7 @@ interface TableIR {
     globalBackend?: "d1" | "hyperdrive";
     indexes: ReadonlyArray<IndexIR>;
     isPublic?: boolean;
+    memory?: boolean;
     name: string;
     rankIndexes: ReadonlyArray<RankIndexIR>;
     relations: ReadonlyArray<RelationIR>;

@@ -1,0 +1,205 @@
+---
+title: Commit ordering
+description: Declare .commitOrdered() so every row carries _commitSeq — a per-shard sequence that orders commits, and the cursor a changefeed can page on without ever skipping a row.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/occ
+    - to: /docs/concepts/system-tables
+    - to: /docs/concepts/local-first
+---
+
+Every document carries `_creationTime`. It is a wall-clock instant, and wall
+clock does **not** order commits.
+
+The clock is read when your handler runs. The write lands when the transaction
+commits. Nothing ties those two instants together, so two mutations can be
+stamped in one order and commit in the other. That is fine for "when was this
+made?" and quietly wrong for anything that pages through changes:
+
+```ts
+// A changefeed with a hole in it.
+const { page: changed } = await ctx.db.orders.findMany({
+    where: { _creationTime: { gt: cursor } },
+    orderBy: [{ _creationTime: "asc" }],
+});
+```
+
+A row stamped `t=100` that commits _after_ a consumer has already advanced its
+cursor past `100` will never be returned by that query again. The consumer does
+not error, retry, or notice. It simply never sees the row.
+
+`.commitOrdered()` closes that window.
+
+## Declaring it
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export default defineSchema({
+    orders: defineTable({
+        deskId: v.string(),
+        status: v.string(),
+    })
+        .commitOrdered()
+        .index("by_desk", ["deskId"]),
+});
+```
+
+Every row on the table now carries `_commitSeq` alongside `_id` and
+`_creationTime`, and the generated `Doc<"orders">` includes it.
+
+## What `_commitSeq` guarantees
+
+It is a **per-shard integer**, allocated **once per mutation**, and **strictly
+increasing in commit order**.
+
+The ordering is not a best effort. The counter is bumped inside the same
+`state.storage.transaction(...)` that writes the rows it stamps, and a Durable
+Object executes one event at a time — so allocation order _is_ commit order,
+with no lock of ours in the path. Rows written by the same mutation share a
+value and therefore compare equal.
+
+That makes this query complete:
+
+```ts
+export const changesSince = internalQuery({
+    args: { cursor: v.number() },
+    handler: async (ctx, { cursor }) =>
+        ctx.db.orders.findMany({
+            where: { _commitSeq: { gt: cursor } },
+            orderBy: [{ _commitSeq: "asc" }],
+        }),
+});
+```
+
+Store the highest `_commitSeq` you have processed; ask for everything above it.
+Nothing can commit into the gap behind you.
+
+An action is the exception to "once per mutation". Actions are not wrapped in a
+storage transaction — their external I/O cannot be rolled back — so each write
+an action makes commits on its own and gets its own sequence. That is the
+correct behaviour for the same reason: two writes that do not commit together
+must not share a sequence, or a consumer could checkpoint after the first and
+never be offered the second.
+
+### Checkpoint on a sequence boundary, not a row
+
+`_commitSeq` orders **commits**, not rows, and a mutation that writes several
+rows gives all of them the same value. That is usually what you want — you can
+process a mutation's writes as a unit — but it means the sequence is not a row
+cursor, and a **bounded page can end in the middle of a group**:
+
+```ts
+// Rows A, B, C all committed together with _commitSeq = 5.
+const { page } = await ctx.db.orders.findMany({
+    limit: 2, // ← returns A and B
+    where: { _commitSeq: { gt: cursor } },
+    orderBy: [{ _commitSeq: "asc" }],
+});
+// Checkpointing at 5 here loses C forever: the next query asks for `> 5`.
+```
+
+<Callout type="warn">Never checkpoint at the sequence of the **last row on a full page**. Advance only to a sequence you have seen the whole of.</Callout>
+
+The rule in practice:
+
+- **Short page** (fewer rows than `limit`): you have drained the feed. Checkpoint
+  at the last row's `_commitSeq`.
+- **Full page**: drop the trailing partial group. Process rows up to the last
+  sequence _change_ in the page and checkpoint there.
+- **Every row on a full page shares one sequence**: you cannot make progress at
+  this page size. Raise the limit — one mutation's rows have to fit in a page.
+
+```ts
+const { page: rows } = await ctx.db.orders.findMany({
+    limit: PAGE,
+    where: { _commitSeq: { gt: cursor } },
+    orderBy: [{ _commitSeq: "asc" }],
+});
+
+const last = rows.at(-1);
+const complete = rows.length < PAGE ? rows : rows.filter((row) => row._commitSeq !== last?._commitSeq);
+
+if (rows.length === PAGE && complete.length === 0) {
+    throw new Error("one commit exceeds the page size — raise PAGE");
+}
+
+// Process `complete`, then checkpoint at its last `_commitSeq`.
+```
+
+### Or page on a composite cursor
+
+If you would rather not think about groups, carry `(_commitSeq, _id)` as the
+cursor and let the tie-breaker do the work:
+
+```ts
+const { page: rows } = await ctx.db.orders.findMany({
+    limit: PAGE,
+    orderBy: [{ _commitSeq: "asc" }, { _id: "asc" }],
+    where: {
+        OR: [{ _commitSeq: { gt: seq } }, { AND: [{ _commitSeq: seq }, { _id: { gt: id } }] }],
+    },
+});
+
+// Checkpoint at the last row, wherever the page ended.
+const last = rows.at(-1);
+```
+
+This is exact at any page size — a page may split a commit and nothing is lost,
+because `_id` orders the rows within one sequence. It costs a second cursor
+field and a wider predicate, so prefer group-boundary checkpointing when you
+want to process each commit as a unit, and this when you just want rows.
+
+`_commitSeq` lives in the stored document rather than a dedicated column, so it
+is orderable, filterable, and indexable like any other field — and adding
+`.commitOrdered()` to a table that already holds data needs no migration.
+
+## Refreshed on every write
+
+A row's `_commitSeq` is stamped on `insert`, `patch`, and `replace` — and on the
+tombstone flip a `.softDelete()` performs. It always reflects the mutation that
+**last wrote** the row, not the one that created it. That is what makes it a
+changefeed cursor rather than a creation stamp.
+
+## Three things it is not
+
+<Callout type="warn">
+    **A hard delete is invisible.** The sequence lives *on* the row, so physically removing the row takes its sequence with it. The row stops appearing in the
+    feed, but no event ever says it went away — a consumer holding a materialized copy will keep serving it forever.
+</Callout>
+
+Pair the table with `.softDelete()` when the feed has to express deletes: the
+tombstone flip is mechanically an `UPDATE`, so it advances `_commitSeq` and pages
+through like any other change.
+
+```ts
+orders: defineTable({ deskId: v.string(), status: v.string() })
+    .commitOrdered()
+    .softDelete(),
+```
+
+The `commit_ordered_hard_delete` advisor warns when you declare one without the
+other. It is a warning rather than an error because an append-only table — an
+event log, an audit trail, a ledger — never deletes anything, and has no delete
+to express.
+
+**It is not contiguous.** Treat the sequence as _ordered_, never as a dense
+counter. A gap means "nothing to see", never "something was lost".
+
+**It is per-shard, not global.** Under `.shardBy()`, two shards allocate
+independently and their sequences say nothing about each other — a cursor is only
+meaningful against the shard it came from. `.global()` tables live in D1 with no
+shard-local transaction to allocate inside, so `defineSchema` rejects
+`.commitOrdered()` on them (in either chain order).
+
+## When to reach for it
+
+Anything that consumes changes rather than reading current state: an outbox, a
+sync/replication cursor, an export pipeline, an audit stream, or a client
+catching up after being offline. If the consumer's correctness depends on never
+skipping a row, it wants `_commitSeq`.
+
+If you are only reading current state — a UI list, a lookup, a report — you do
+not need it, and a live query already keeps you current without any cursor at
+all.

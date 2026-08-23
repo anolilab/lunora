@@ -40,6 +40,7 @@ type StudioTab =
     | "permissions"
     | "pitr"
     | "queues"
+    | "reactors"
     | "realtime"
     | "rls"
     | "schedule"

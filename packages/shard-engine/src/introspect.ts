@@ -96,6 +96,7 @@ const ADMIN_FUNCTIONS = {
     ignoreIssue: "__lunora_admin__:ignoreIssue",
     importShard: "__lunora_admin__:importShard",
     listFlags: "__lunora_admin__:listFlags",
+    listReactors: "__lunora_admin__:listReactors",
     listQueues: "__lunora_admin__:listQueues",
     lintSql: "__lunora_admin__:lintSql",
     listTables: "__lunora_admin__:listTables",
@@ -567,6 +568,62 @@ interface FlagsResult {
     configured: boolean;
     /** Each discovered flag evaluated under the request's targeting context. */
     flags: FlagEvaluation[];
+}
+
+/**
+ * One `onQueryChange` reactor, surfaced by `__lunora_admin__:listReactors` for
+ * the studio's Reactors panel.
+ *
+ * Joined from two sources on purpose. `path` comes from the generated manifest,
+ * so a reactor that has been declared but never dispatched still appears —
+ * `state: "idle"` with zero counters, which is a materially different thing from
+ * a reactor that runs and is quiet. Everything else comes from `__reactor_state`
+ * and is therefore durable across hibernation, unlike the DO's in-memory metrics.
+ */
+interface ReactorMetadata {
+    /**
+     * Dispatches that ended in a contained throw. A non-zero count with a recent
+     * `lastRanAt` means the reactor is failing every flush and its baseline is
+     * deliberately frozen, so it is being retried rather than skipped.
+     */
+    errors: number;
+
+    /** Redacted message of the most recent contained failure, when there is one. */
+    lastError?: string;
+
+    /** Wall-clock millis of the last dispatch, run or suppressed; absent when never dispatched. */
+    lastRanAt?: number;
+
+    /** The reactor's registered function path — its stable identity across deploys. */
+    path: string;
+
+    /** Dispatches where the digest changed and the app handler ran. */
+    runs: number;
+
+    /**
+     * `"idle"` — declared, never dispatched. `"active"` — has run at least once.
+     * `"failing"` — its most recent dispatch threw.
+     */
+    state: "active" | "failing" | "idle";
+
+    /**
+     * Dispatches where `select` re-ran but the digest matched, so the handler did
+     * not. Read against `runs`: a high ratio means writes keep re-evaluating a
+     * read they cannot change, and the `select` wants narrowing or an index.
+     */
+    suppressed: number;
+
+    /**
+     * The read footprint learned from the last dispatch — the tables whose writes
+     * can wake this reactor. Absent when it has never run, which the engine reads
+     * as "touches everything".
+     */
+    tables?: ReadonlyArray<string>;
+}
+
+/** Payload of a `__lunora_admin__:listReactors` call: every declared reactor, sorted by path. */
+interface ReactorsResult {
+    reactors: ReactorMetadata[];
 }
 
 /**
@@ -1757,6 +1814,8 @@ export type {
     OrderByClause,
     QueueMetadata,
     QueuesResult,
+    ReactorMetadata,
+    ReactorsResult,
     ReadTablePageOptions,
     RlsPoliciesResult,
     RlsPolicyMetadata,
