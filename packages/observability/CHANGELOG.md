@@ -1,3 +1,10 @@
+## @lunora/observability [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.34...@lunora/observability@1.0.0-alpha.35) (2026-08-24)
+
+
+### Dependencies
+
+* **@lunora/fingerprint:** upgraded to 1.0.0-alpha.8
+
 ## @lunora/observability [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.33...@lunora/observability@1.0.0-alpha.34) (2026-08-23)
 
 ### Performance Improvements
