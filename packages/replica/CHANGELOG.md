@@ -1,3 +1,9 @@
+## @lunora/replica [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.57...@lunora/replica@1.0.0-alpha.58) (2026-08-24)
+
+### Bug Fixes
+
+* **replica:** correct pk affinity and id binds ([#444](https://github.com/anolilab/lunora/issues/444)) ([0c68fc7](https://github.com/anolilab/lunora/commit/0c68fc7ee2774679ee47e88f5d7cca164502d6fb)), closes [#inferPkAffinity](https://github.com/anolilab/lunora/issues/inferPkAffinity)
+
 ## @lunora/replica [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.56...@lunora/replica@1.0.0-alpha.57) (2026-08-23)
 
 
