@@ -1,3 +1,34 @@
+## @lunora/bindings [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.34...@lunora/bindings@1.0.0-alpha.35) (2026-08-24)
+
+### ⚠ BREAKING CHANGES
+
+* **storage:** Storage.getPresignedUrl / buildPresignedUrl now
+throw a VALIDATION_ERROR (400) at mint time for an explicit
+out-of-range expiresInSeconds instead of silently clamping it to a
+different lifetime. Per input class, old behaviour -> new behaviour:
+
+  - NaN / Infinity: minted a 900s URL   -> throws
+  - 0 or negative:  minted a 1s URL     -> throws
+  - 0 < value < 1:  minted a 1s URL     -> throws (floors to 0)
+  - value > 604800: minted a 604800s URL -> throws
+  - absent:         900s (unchanged)
+  - 1 .. 604800:    honoured (unchanged, ceiling still inclusive)
+
+A handler forwarding a user- or config-supplied TTL that previously
+served a clamped URL now fails the mutation/action instead. Callers
+that relied on the clamp must clamp before calling, or catch
+VALIDATION_ERROR. Already-minted URLs are unaffected — verification
+is unchanged.
+
+
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **storage:** validate signed-url ttl and base path uniformly ([#449](https://github.com/anolilab/lunora/issues/449)) ([cd830bb](https://github.com/anolilab/lunora/commit/cd830bb17b9a0e0932dff71fcef967a2e2aa97cc))
+
 ## @lunora/bindings [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.33...@lunora/bindings@1.0.0-alpha.34) (2026-08-24)
 
 ### Bug Fixes
