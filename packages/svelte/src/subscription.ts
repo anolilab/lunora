@@ -1,10 +1,12 @@
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import type { Readable } from "svelte/store";
 import { readable, writable } from "svelte/store";
 
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
+import type { ReactiveArgs } from "./query";
+import { subscribeReactiveArgs } from "./subscribe-reactive-args";
 
 interface SubscriptionStoreOptions {
     onError?: (error: Error) => void;
@@ -27,18 +29,22 @@ interface SubscriptionHandle<T> {
  * Passing `"skip"` as `args` keeps the stores connected but the subscription
  * dormant (`data` stays `undefined`). Pass an explicit `client` as the first
  * argument to bypass the ambient context (useful in tests).
+ *
+ * `args` may also be a `Readable` store: each emission tears down the previous
+ * subscription and opens a fresh one; a `"skip"` emission tears down without
+ * re-opening and resets `data` to `undefined`.
  */
-function subscription<F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options?: SubscriptionStoreOptions): SubscriptionHandle<ReturnOf<F>>;
+function subscription<F extends FunctionReference>(function_: F, args: ReactiveArgs<F>, options?: SubscriptionStoreOptions): SubscriptionHandle<ReturnOf<F>>;
 function subscription<F extends FunctionReference>(
     client: LunoraClient,
     function_: F,
-    args: ArgsOf<F> | "skip",
+    args: ReactiveArgs<F>,
     options?: SubscriptionStoreOptions,
 ): SubscriptionHandle<ReturnOf<F>>;
 function subscription<F extends FunctionReference>(
     clientOrFunction: F | LunoraClient,
-    functionOrArgs: F | ArgsOf<F> | "skip",
-    argsOrOptions?: ArgsOf<F> | SubscriptionStoreOptions | "skip",
+    functionOrArgs: F | ReactiveArgs<F>,
+    argsOrOptions?: SubscriptionStoreOptions | ReactiveArgs<F>,
     maybeOptions?: SubscriptionStoreOptions,
 ): SubscriptionHandle<ReturnOf<F>> {
     // Resolve overloads: when the second argument is a FunctionReference, the
@@ -46,7 +52,7 @@ function subscription<F extends FunctionReference>(
     const hasExplicitClient = !isFunctionReference(clientOrFunction);
     const client = hasExplicitClient ? clientOrFunction : getLunoraClient();
     const functionRef = (hasExplicitClient ? functionOrArgs : clientOrFunction) as F;
-    const args = (hasExplicitClient ? argsOrOptions : functionOrArgs) as ArgsOf<F> | "skip";
+    const args = (hasExplicitClient ? argsOrOptions : functionOrArgs) as ReactiveArgs<F>;
     const options = (hasExplicitClient ? maybeOptions : (argsOrOptions as SubscriptionStoreOptions | undefined)) ?? {};
 
     const { shardKey, onError } = options;
@@ -59,29 +65,37 @@ function subscription<F extends FunctionReference>(
         // `onReset` (clearing `data`) and returns a no-op teardown without opening
         // a socket — so the reset path below is reachable, unlike a local early
         // return that would make it dead code.
-        const unsubscribe = createQuerySubscription(
-            client,
-            functionRef,
-            args,
-            {
-                onData: (value: ReturnOf<F>) => {
-                    set(value);
-                    errorStore.set(undefined);
+        const open = (resolved: ArgsOf<F> | "skip"): Unsubscribe => {
+            // Each emission starts from a clean slate: drop the error the
+            // previous args produced before opening the new subscription.
+            errorStore.set(undefined);
+
+            return createQuerySubscription(
+                client,
+                functionRef,
+                resolved,
+                {
+                    onData: (value: ReturnOf<F>) => {
+                        set(value);
+                        errorStore.set(undefined);
+                    },
+                    onError: (subscriptionError) => {
+                        const error = new Error(subscriptionError.message);
+                        errorStore.set(error);
+                        onError?.(error);
+                    },
+                    onReset: () => {
+                        set(undefined);
+                    },
                 },
-                onError: (subscriptionError) => {
-                    const error = new Error(subscriptionError.message);
-                    errorStore.set(error);
-                    onError?.(error);
-                },
-                onReset: () => {
-                    set(undefined);
-                },
-            },
-            { shardKey },
-        );
+                { shardKey },
+            );
+        };
+
+        const stopArgs = subscribeReactiveArgs<ArgsOf<F> | "skip">(args, open);
 
         return () => {
-            unsubscribe();
+            stopArgs();
             errorStore.set(undefined);
         };
     });
