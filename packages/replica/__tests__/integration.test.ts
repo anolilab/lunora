@@ -283,6 +283,19 @@ describe(applyDiffToDb, () => {
         expect(rows.find((r: Row) => r.id === "new")?.val).toBe("hello");
         expect(rows.find((r: Row) => r.id === "keep")?.val).toBe("updated");
     });
+
+    it("is a no-op for empty diffs, empty-data changes, and unknown change types", () => {
+        expect.assertions(1);
+
+        const adapter = createTestAdapter();
+        adapter.exec("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)");
+        adapter.exec("INSERT INTO users (id, name) VALUES (?, ?)", ["1", "alice"]);
+
+        applyDiffToDb(adapter, createTableDiff("users", []));
+        applyDiffToDb(adapter, createTableDiff("users", [{ type: "insert", data: {} }, { type: "update", id: "1", data: {} }, { type: "truncate" } as never]));
+
+        expect(adapter.query("SELECT * FROM users")).toHaveLength(1);
+    });
 });
 
 describe(applyDiffsToDb, () => {

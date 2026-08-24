@@ -393,6 +393,24 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         expect(() => mirror.query("SELECT 1 AS one")).toThrow();
     });
 
+    // close() also drops change subscribers, so a closed-and-rebuilt mirror
+    // (schema reset, sign-out, HMR) does not keep the old listeners — and the
+    // component trees their closures capture — alive for the lifetime of the
+    // dead mirror object. Nothing observable exists post-close without
+    // reopening, so assert behaviorally: unsubscribing after close is safe.
+    it("close drops change subscribers; unsubscribe is safe to call after close", () => {
+        expect.assertions(1);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+        const unsubscribe = mirror.onChange(() => {});
+
+        mirror.close();
+
+        expect(() => {
+            unsubscribe();
+        }).not.toThrow();
+    });
+
     // REPLICA-06: maxEventLogEntries bounds the mirror's internal event log
     // — a long run of applied diffs does not grow it unboundedly.
     it("maxEventLogEntries caps the mirror's event log over a long run", () => {
@@ -533,6 +551,126 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
             );
 
             expect(mirror.query<{ id: string }>("SELECT id FROM events ORDER BY id")).toStrictEqual([{ id: "1" }, { id: "2" }]);
+        });
+
+        // Plan 402 companion: the row id is bound in every DELETE/UPDATE, so
+        // it must be normalized like every other bound value — before this,
+        // a non-bindable id (boolean/object/undefined in an untrusted server
+        // payload) threw inside the transaction and rolled back the whole
+        // batch, unrelated rows included.
+        it("a batch containing a delete with a non-bindable id still applies the rest of the batch", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("events", [
+                    { data: { id: "keep-1", label: "kept" }, type: "insert" },
+                    // A boolean id normalizes to 1 and matches nothing here.
+                    { id: true as never, type: "delete" },
+                ]),
+            );
+
+            expect(mirror.query<{ id: string }>("SELECT id FROM events")).toStrictEqual([{ id: "keep-1" }]);
+        });
+
+        // Schema version 3: the primary key's affinity is inferred from the
+        // first observed id too — a version-2 mirror declared it TEXT and
+        // sorted/range-filtered numeric ids lexicographically.
+        it("declares a numeric primary key with numeric affinity so ORDER BY id sorts numerically", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("items", [
+                    { data: { id: 1 }, type: "insert" },
+                    { data: { id: 2 }, type: "insert" },
+                    { data: { id: 9 }, type: "insert" },
+                    { data: { id: 10 }, type: "insert" },
+                ]),
+            );
+
+            // A version-2 (TEXT pk) mirror returned 1, 10, 2, 9.
+            expect(mirror.query<{ id: number }>("SELECT id FROM items ORDER BY id")).toStrictEqual([{ id: 1 }, { id: 2 }, { id: 9 }, { id: 10 }]);
+        });
+
+        it("compares a numeric primary key numerically in WHERE", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(
+                createTableDiff("items", [
+                    { data: { id: 1 }, type: "insert" },
+                    { data: { id: 2 }, type: "insert" },
+                    { data: { id: 9 }, type: "insert" },
+                    { data: { id: 10 }, type: "insert" },
+                ]),
+            );
+
+            // Lexicographically "10" < "5" — only numeric affinity gets {9, 10}.
+            expect(mirror.query<{ id: number }>("SELECT id FROM items WHERE id > ? ORDER BY id", [5])).toStrictEqual([{ id: 9 }, { id: 10 }]);
+        });
+
+        it("infers the pk affinity from change.id when the first diff carries only deletes", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            // A delete-only diff still creates the (pk-only) table; the id on
+            // the delete is the only observable pk value.
+            mirror.applyDiff(createTableDiff("gone", [{ id: 7 as never, type: "delete" }]));
+
+            const [row] = mirror.query<{ type: string }>("SELECT type FROM pragma_table_info('gone') WHERE name = 'id'");
+
+            // `INT`, not `INTEGER` — see the rowid-alias note in
+            // #ensureTableSchema; both carry INTEGER affinity.
+            expect(row?.type).toBe("INT");
+        });
+
+        // A numeric-pk table must still accept a later non-numeric id. Under
+        // the rowid-alias form (`INTEGER PRIMARY KEY`) SQLite rejects one with
+        // `datatype mismatch`, aborting the transaction and rolling back the
+        // whole diff — unrelated rows included.
+        it("a numeric-pk table still accepts a later non-numeric id without aborting the batch", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(createTableDiff("mixed", [{ data: { id: 1 }, type: "insert" }]));
+            mirror.applyDiff(
+                createTableDiff("mixed", [
+                    { data: { id: "abc" }, type: "insert" },
+                    { data: { id: 2 }, type: "insert" },
+                ]),
+            );
+
+            expect(mirror.query<{ id: number | string }>("SELECT id FROM mixed ORDER BY id")).toStrictEqual([{ id: 1 }, { id: 2 }, { id: "abc" }]);
+        });
+
+        it("falls back to change.id when an update's data does not carry the pk", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(createTableDiff("notes", [{ data: { body: "x" }, id: "n1", type: "update" }]));
+
+            const [row] = mirror.query<{ type: string }>("SELECT type FROM pragma_table_info('notes') WHERE name = 'id'");
+
+            expect(row?.type).toBe("TEXT");
+        });
+
+        it("still declares a string primary key TEXT", () => {
+            expect.assertions(1);
+
+            const mirror = new LocalMirror({ db: makeAdapter() });
+
+            mirror.applyDiff(createTableDiff("named", [{ data: { id: "a" }, type: "insert" }]));
+
+            const [row] = mirror.query<{ type: string }>("SELECT type FROM pragma_table_info('named') WHERE name = 'id'");
+
+            expect(row?.type).toBe("TEXT");
         });
     });
 
