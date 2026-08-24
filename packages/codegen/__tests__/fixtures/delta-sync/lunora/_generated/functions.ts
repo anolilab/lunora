@@ -30,6 +30,13 @@ export interface RegisteredLunoraFunction {
      * `AbortSignal` as a third argument — the runtime drives it frame-by-frame.
      */
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
+    /**
+     * The lifecycle moment a hook fires on, when this registration came from
+     * `onConnect`/`onDisconnect`/`onShardInit`/`onQueryChange`. Read at
+     * dispatch to decide whether the function runs system-trusted: `init` and
+     * `reactor` have no caller identity, so RLS has no user to scope to.
+     */
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
 }
@@ -50,12 +57,14 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  */
 installCompiledValidatorMap(lunora_notes_0.add.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
 if (typeof source["boardId"] !== "string") return DEFER;
 return { "body": source["body"], "boardId": source["boardId"] };
 });
 installCompiledValidatorMap(lunora_notes_0.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["boardId"] !== "string") return DEFER;
 return { "boardId": source["boardId"] };
 });
@@ -72,14 +81,19 @@ export const LUNORA_SHAPES: Record<string, RegisteredShape> = {
 };
 
 /**
- * Connection-lifecycle manifest: the function paths the generated ShardDO
- * dispatches when a client's WebSocket connects (`connect`) or disconnects
- * (`disconnect`). Each path also resolves through {@link LUNORA_FUNCTIONS}; the
- * DO runs every hook under the socket's verified identity via system dispatch.
+ * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
+ * client's WebSocket connects (`connect`) or disconnects (`disconnect`), once
+ * per Durable Object instance before any handler runs (`init`), and after a
+ * write flush when a watched read's result changed (`reactor`). Each path also
+ * resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
+ * socket's verified identity; `init` and `reactor` have no caller, so they run
+ * anonymous — all via system dispatch.
  */
-export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[] } = {
+export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[]; reactor: readonly string[] } = {
     connect: [],
     disconnect: [],
+    init: [],
+    reactor: [],
 };
 
 /**
