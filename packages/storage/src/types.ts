@@ -21,7 +21,7 @@ export interface R2S3Credentials {
 
 /** Options for {@link Storage.getPresignedUrl}. */
 export interface PresignedUrlOptions {
-    /** Seconds the URL stays valid; clamped to [1, 604800]. Default 900. */
+    /** Seconds the URL stays valid: 1 to 604800 (7 days); an out-of-range value throws. Default 900. */
     expiresInSeconds?: number;
     /** HTTP method the URL authorizes. Default `GET`. */
     method?: "GET" | "PUT";

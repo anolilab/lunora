@@ -179,6 +179,20 @@ describe("buildSignedImageUrl / verifySignedImageUrl", () => {
         expect(result.key).toBe("a.png");
     });
 
+    it("accepts a multi-trailing-slash baseUrl and still verifies", async () => {
+        expect.assertions(3);
+
+        // A pathname of only slashes (`//`) is not a subpath — the builder
+        // collapses it to the bare origin, same as `@lunora/storage`'s
+        // `buildSignedUrl`, so the two guards agree on what counts as "no path".
+        const url = await buildSignedImageUrl({ baseUrl: "https://cdn.acme.test//", key: "a.png", secret: SECRET });
+        const result = await verifySignedImageUrl(url, SECRET);
+
+        expect(new URL(url).pathname).toBe("/a.png");
+        expect(result.valid).toBe(true);
+        expect(result.key).toBe("a.png");
+    });
+
     it("rejects a key containing a raw newline at sign time (BINDINGS-01)", async () => {
         expect.assertions(1);
 

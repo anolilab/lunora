@@ -99,31 +99,34 @@ describe("buildPresignedUrl", () => {
         expect(url).toBe(referenceUrl("x.bin", "GET", 900, "acc123.eu.r2.cloudflarestorage.com"));
     });
 
-    it("clamps the expiry to the 1..604800 second window", async () => {
-        expect.assertions(2);
+    it.each([0, -5, 0.5, Number.NaN, Number.POSITIVE_INFINITY, 604_801])(
+        "rejects an explicit invalid expiresInSeconds (%s) instead of clamping",
+        async (expiresInSeconds) => {
+            expect.assertions(1);
 
-        const tooLong = await buildPresignedUrl({ credentials: CREDENTIALS, expiresInSeconds: 999_999, key: "x", now: () => FIXED_NOW });
-        const tooShort = await buildPresignedUrl({ credentials: CREDENTIALS, expiresInSeconds: 0, key: "x", now: () => FIXED_NOW });
+            // A caller asking for e.g. a 30-day URL must get an error, not a
+            // silently shortened 7-day URL that expires mid-transfer; likewise 0
+            // must not mint a 1-second URL. Matches `buildSignedUrl`'s posture.
+            await expect(buildPresignedUrl({ credentials: CREDENTIALS, expiresInSeconds, key: "x", now: () => FIXED_NOW })).rejects.toMatchObject({
+                code: "VALIDATION_ERROR",
+                status: 400,
+            });
+        },
+    );
 
-        expect(tooLong).toContain("X-Amz-Expires=604800");
-        expect(tooShort).toContain("X-Amz-Expires=1");
+    it("accepts the 604800-second (7-day) ceiling exactly", async () => {
+        expect.assertions(1);
+
+        const url = await buildPresignedUrl({ credentials: CREDENTIALS, expiresInSeconds: 604_800, key: "x", now: () => FIXED_NOW });
+
+        expect(url).toContain("X-Amz-Expires=604800");
     });
 
-    it("defaults the expiry to 900 seconds", async () => {
+    it("defaults the expiry to 900 seconds when expiresInSeconds is absent", async () => {
         expect.assertions(1);
 
         const url = await buildPresignedUrl({ credentials: CREDENTIALS, key: "x", now: () => FIXED_NOW });
 
-        expect(url).toContain("X-Amz-Expires=900");
-    });
-
-    it.each([Number.NaN, Number.POSITIVE_INFINITY])("falls back to the default expiry for a non-finite expiresInSeconds (%s)", async (expiresInSeconds) => {
-        expect.assertions(2);
-
-        const url = await buildPresignedUrl({ credentials: CREDENTIALS, expiresInSeconds, key: "x", now: () => FIXED_NOW });
-
-        // Never mint a broken `X-Amz-Expires=NaN`/`=Infinity` URL.
-        expect(url).not.toMatch(/X-Amz-Expires=(NaN|Infinity)/u);
         expect(url).toContain("X-Amz-Expires=900");
     });
 });
