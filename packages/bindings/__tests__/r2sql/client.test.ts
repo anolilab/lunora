@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createR2Sql, R2SqlError } from "../../src/r2sql/client";
 import { sql } from "../../src/r2sql/sql";
@@ -165,5 +165,96 @@ describe("helpers", () => {
 
         expect(JSON.parse(fetchImpl.mock.calls[0]![1]?.body as string).query).toBe("SELECT DISTINCT region FROM sales.orders LIMIT 10");
         expect(out.rows).toEqual([{ region: "North" }]);
+    });
+});
+
+describe("timeout", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    // A fetch that never settles until its signal aborts — the stalled-endpoint shape.
+    const hungFetch = () =>
+        vi.fn<typeof globalThis.fetch>(
+            async (_url, init) =>
+                new Promise<Response>((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(new DOMException("The operation was aborted.", "AbortError"));
+                    });
+                }),
+        );
+
+    it("aborts a hung fetch after the default 60s as a 504 R2SqlError naming the deadline", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const client = createR2Sql({ accountId: "a", apiToken: "t", bucket: "b", fetch: hungFetch() });
+        const caught = client.query("SELECT 1").catch((error_: unknown) => error_);
+
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        const error = await caught;
+
+        expect(error).toBeInstanceOf(R2SqlError);
+        expect((error as R2SqlError).status).toBe(504);
+        expect(String(error)).toMatch(/timed out after 60000ms/);
+    });
+
+    it("honours a timeoutMs override", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        const client = createR2Sql({ accountId: "a", apiToken: "t", bucket: "b", fetch: hungFetch(), timeoutMs: 5 });
+        const caught = client.query("SELECT 1").catch((error_: unknown) => error_);
+
+        await vi.advanceTimersByTimeAsync(5);
+
+        expect(String(await caught)).toMatch(/timed out after 5ms/);
+    });
+
+    it("leaves no pending timer behind a fast response", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const { client } = setup();
+
+        await expect(client.query("SELECT 1")).resolves.toBeDefined();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("keeps the real status when the deadline fires while reading an error body", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        // A 403 whose body never arrives: the status is the diagnosis, so it
+        // must not be masked as a 504 "timed out".
+        const fetchImpl = vi.fn<typeof globalThis.fetch>(
+            async (_url, init) =>
+                ({
+                    ok: false,
+                    status: 403,
+                    // Headers arrived, the body never does — the real runtime
+                    // rejects the pending read once the signal aborts.
+                    text: async () =>
+                        new Promise<string>((_resolve, reject) => {
+                            init?.signal?.addEventListener("abort", () => {
+                                reject(new DOMException("The operation was aborted.", "AbortError"));
+                            });
+                        }),
+                }) as unknown as Response,
+        );
+        const client = createR2Sql({ accountId: "a", apiToken: "bad", bucket: "b", fetch: fetchImpl, timeoutMs: 5 });
+        const caught = client.query("SELECT 1").catch((error_: unknown) => error_);
+
+        await vi.advanceTimersByTimeAsync(5);
+
+        const error = await caught;
+
+        expect((error as R2SqlError).status).toBe(403);
+        expect(String(error)).not.toMatch(/timed out/);
     });
 });

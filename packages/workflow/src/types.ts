@@ -274,6 +274,16 @@ export interface StepDefinition<A extends StepArgsValidator = StepArgsValidator,
 export interface RunStepOptions {
     /** Override the step's declared durability config for this call. */
     config?: WorkflowStepConfigLike;
+
+    /**
+     * Override the durable step name for this call. Cloudflare keys a durable
+     * step by name **and occurrence** (`step.count` counts the calls made under
+     * one name in a run), so reusing a name in a loop is fine and each
+     * occurrence caches independently — this is for giving a call its own
+     * addressable name, e.g. to target it with `instance.restart({ from })`.
+     * Must be deterministic across replays, like any step name.
+     */
+    name?: string;
 }
 
 /**

@@ -1,3 +1,14 @@
+## @lunora/bindings [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.33...@lunora/bindings@1.0.0-alpha.34) (2026-08-24)
+
+### Bug Fixes
+
+* **bindings:** gate ctx.images, bound sql fetches ([#448](https://github.com/anolilab/lunora/issues/448)) ([a6bf09e](https://github.com/anolilab/lunora/commit/a6bf09e0d1348af5deda061d63164cc47a9059e9))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.16
+
 ## @lunora/bindings [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.32...@lunora/bindings@1.0.0-alpha.33) (2026-08-23)
 
 
