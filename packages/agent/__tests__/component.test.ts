@@ -1124,6 +1124,57 @@ describe("concurrency guard", () => {
         await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" })).rejects.toThrow(IN_FLIGHT_PATTERN);
     });
 
+    it("does not reclaim an awaiting_input thread at the 13h run horizon (a slow approver is the normal HITL case)", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+        await callMutation(functions.agentPatchThread, ctx, { instanceId: "wf-a", status: "awaiting_input" });
+
+        // Overnight-and-then-some: stale past ABANDONED_RUN_MS (13h) but far
+        // inside the approval horizon. The hibernating instance still owns the
+        // thread — reclaiming here would re-stamp `instanceId` and make the
+        // pending approval permanently unresolvable.
+        const thread = rows.get("agent_threads")?.[0] as Record<string, unknown>;
+
+        thread["updatedAt"] = Date.now() - 14 * 60 * 60 * 1000;
+
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1" })).rejects.toThrow(IN_FLIGHT_PATTERN);
+    });
+
+    it("still reclaims an awaiting_input thread once the approval horizon passes (a dead instance must not hold it forever)", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+        await callMutation(functions.agentPatchThread, ctx, { instanceId: "wf-a", status: "awaiting_input" });
+
+        const thread = rows.get("agent_threads")?.[0] as Record<string, unknown>;
+
+        thread["updatedAt"] = Date.now() - 15 * 24 * 60 * 60 * 1000;
+
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1" })).resolves.toStrictEqual({
+            outcome: "continued",
+        });
+        expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-b");
+    });
+
+    it("still reclaims a running thread at the 13h horizon (the parked-corpse reaper is unchanged)", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+
+        const thread = rows.get("agent_threads")?.[0] as Record<string, unknown>;
+
+        thread["updatedAt"] = Date.now() - 14 * 60 * 60 * 1000;
+
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1" })).resolves.toStrictEqual({
+            outcome: "continued",
+        });
+        expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-b");
+    });
+
     it("(AGENT-02) rejects an id-less dispatch onto a running thread under a live prior instance", async () => {
         const { functions } = agentComponent();
         const { ctx } = fakeDatabase();
