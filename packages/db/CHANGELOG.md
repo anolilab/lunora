@@ -1,3 +1,9 @@
+## @lunora/db [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.59...@lunora/db@1.0.0-alpha.60) (2026-08-24)
+
+### Bug Fixes
+
+* **db:** scope shard checkpoints by identity ([#434](https://github.com/anolilab/lunora/issues/434)) ([aef4e69](https://github.com/anolilab/lunora/commit/aef4e69779b203868c42782aafeadd29f4d96abb))
+
 ## @lunora/db [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.58...@lunora/db@1.0.0-alpha.59) (2026-08-23)
 
 
