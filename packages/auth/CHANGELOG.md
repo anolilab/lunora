@@ -1,3 +1,9 @@
+## @lunora/auth [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.87...@lunora/auth@1.0.0-alpha.88) (2026-08-24)
+
+### Features
+
+* **auth:** upgrade better-auth to 1.7.1 and gate MCP on its OAuth ([#472](https://github.com/anolilab/lunora/issues/472)) ([7f17a35](https://github.com/anolilab/lunora/commit/7f17a35ba36d85163dd099e464a560b874190049))
+
 ## @lunora/auth [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.86...@lunora/auth@1.0.0-alpha.87) (2026-08-23)
 
 ### Build System
