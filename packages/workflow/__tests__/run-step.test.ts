@@ -399,3 +399,39 @@ describe("createRunStep", () => {
         await expect(runStep(step, {})).rejects.toBe(portable);
     });
 });
+
+describe("durable step names", () => {
+    it("runs one StepDefinition repeatedly, and honors a per-call `name` override", async () => {
+        expect.assertions(4);
+
+        // Cloudflare keys a durable step by (name, type, occurrence) — `step.count`
+        // is "how many times step.do has been called with this name in the current
+        // run" — so a loop reusing one step name is a supported pattern and each
+        // occurrence caches independently. `name` is an opt-in override for callers
+        // who want distinct, addressable step names (e.g. for `instance.restart`).
+        const { calls, runStep } = make();
+        const greet = defineStep("greet", {
+            args: { name: v.string() },
+            handler: async (_ctx, { name }) => `hello ${name}`,
+        });
+
+        await expect(runStep(greet, { name: "ada" })).resolves.toBe("hello ada");
+        await expect(runStep(greet, { name: "bob" })).resolves.toBe("hello bob");
+        await expect(runStep(greet, { name: "cy" }, { name: "greet:2" })).resolves.toBe("hello cy");
+        expect(calls.map((call) => call.name)).toStrictEqual(["greet", "greet", "greet:2"]);
+    });
+
+    it("rejects a reserved framework name from either the override or the definition, without dispatching", async () => {
+        expect.assertions(3);
+
+        const { calls, runStep } = make();
+        const greet = defineStep("greet", { args: {}, handler: async () => "ok" });
+        // The resolved name is checked, so omitting the override does not slip past.
+        const reserved = defineStep("lunora:spawn:x", { args: {}, handler: async () => "ok" });
+
+        // `lunora:*` is the fan-out protocol's own durable-step namespace.
+        await expect(runStep(greet, {}, { name: "lunora:spawn:x" })).rejects.toThrow(/reserved/);
+        await expect(runStep(reserved, {})).rejects.toThrow(/reserved/);
+        expect(calls).toStrictEqual([]);
+    });
+});

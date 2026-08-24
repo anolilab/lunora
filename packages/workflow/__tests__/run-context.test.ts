@@ -2,8 +2,9 @@ import { v } from "@lunora/values";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineWorkflowEvent } from "../src/define-event";
+import { defineStep } from "../src/define-step";
 import { createWorkflowRunContext } from "../src/run-context";
-import type { WorkflowEventLike, WorkflowStepLike } from "../src/types";
+import type { WorkflowEventLike, WorkflowStepContextLike, WorkflowStepLike } from "../src/types";
 
 const okResponse = (body: string): Response => new Response(body, { status: 200 });
 
@@ -69,6 +70,48 @@ describe("createWorkflowRunContext", () => {
 
         await expect(ctx.waitForEvent(orderApproved)).resolves.toStrictEqual({ approvedBy: "u1" });
         expect(waitForEvent).toHaveBeenCalledWith("event:order-approved", expect.objectContaining({ type: "order-approved" }));
+    });
+
+    it("runs one step repeatedly in a loop, as Cloudflare's (name, type, occurrence) step identity allows", async () => {
+        expect.assertions(2);
+
+        // A loop over items reusing one step name is a documented Workflows
+        // pattern: `step.count` counts the occurrences of a name within a run,
+        // and each occurrence caches independently. The context must not get in
+        // the way of it.
+        const names: string[] = [];
+        const step = {
+            do: async (name: string, callback: unknown) => {
+                names.push(name);
+
+                return (callback as (context: WorkflowStepContextLike) => Promise<unknown>)({
+                    attempt: 1,
+                    config: {},
+                    step: { count: names.filter((seen) => seen === name).length, name },
+                });
+            },
+            sleep: async () => undefined,
+            sleepUntil: async () => undefined,
+            waitForEvent: async () => {
+                return { payload: {}, type: "x" };
+            },
+        } as unknown as WorkflowStepLike;
+
+        const ctx = createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", step });
+        const processItem = defineStep("processItem", {
+            args: { item: v.string() },
+            handler: async (_stepContext, { item }) => `done:${item}`,
+        });
+
+        const results: string[] = [];
+
+        for (const item of ["a", "b", "c"]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential by design: this is the loop-over-items pattern under test
+            results.push(await ctx.runStep(processItem, { item }));
+        }
+
+        expect(results).toStrictEqual(["done:a", "done:b", "done:c"]);
+        expect(names).toStrictEqual(["processItem", "processItem", "processItem"]);
     });
 
     it("spawning a workflow with no matching WORKFLOW_* binding throws a helpful error", async () => {
