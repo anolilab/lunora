@@ -1,11 +1,7 @@
-# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
-
-# Nightly full-suite verification. PRs run `vis affected` in test.yml, so
-# unchanged packages can go stale between merges — this scheduled workflow
-# re-verifies the whole matrix daily: the full unit-test suite for every
-# package (no `affected` filter), all workerd integration suites, and the e2e
-# suite unconditionally (no paths-filter). Not a required check — a nightly
-# failure is a canary, it must never block a PR.
+# Nightly full-suite verification: PRs only run `vis affected`, so unchanged
+# packages go stale between merges. Everything here runs unfiltered — every
+# package's tests, all workerd suites, e2e. Never a required check; a nightly
+# failure is a canary, not a blocker.
 
 "name": "Nightly"
 
@@ -51,24 +47,16 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # Full build (not `affected`) so every package's dist exists for
-            # the full test run.
+            # Full build, not `affected`, so every package's dist exists.
             - "name": "Build packages"
               "run": "pnpm run build:packages"
 
-            # Full suite, no `affected` filter. workerd stays off here (the
-            # dedicated `test-workerd` job below covers it) and coverage is
-            # not collected — the nightly is a pass/fail canary, Codecov is
-            # fed by the PR-path test.yml run. The `test` script includes the
-            # studio package (unit + jsdom component projects) — the old
-            # component-suite hang is fixed, so no extra studio step is needed.
+            # workerd stays off (the job below covers it) and no coverage is
+            # collected — this is a pass/fail canary, and Codecov is fed by test.yml.
             - "name": "Run all tests"
               "run": "pnpm run test"
 
-    # Same design as the `test-workerd` job in test.yml (see the comments
-    # there): real workerd via @cloudflare/vitest-plugin, coverage off
-    # (v8/node:inspector is unsupported in the pool), one matrix leg per
-    # gated package.
+    # Same design as test.yml's `test-workerd` job — see the comments there.
     "test-workerd":
         "name": "Workerd integration (${{ matrix.package }})"
         "runs-on": "ubuntu-latest"
@@ -107,8 +95,7 @@
               "run": |
                   pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
 
-    # Same job as test.yml's `e2e`, minus the paths-filter gate — the
-    # nightly always runs it.
+    # test.yml's `e2e` without the paths-filter gate.
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
         "runs-on": "ubuntu-latest"
@@ -133,10 +120,8 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # See test.yml: the E2E global setup boots the playground's Vite
-            # dev server from built dist, so packages build first; the package
-            # build (CPU/disk) and the browser download (network) bottleneck on
-            # different resources and run concurrently.
+            # See test.yml for why the packages build first and why the build and
+            # the browser download overlap.
             - "parallel":
                   - "name": "Build packages"
                     "run": "pnpm run build:packages"
@@ -158,12 +143,10 @@
                   "path": "tests/e2e/playwright-report"
                   "retention-days": 7
 
-    # The template matrix is path-gated on PRs (see .github/file-filters.yml), and
-    # that filter deliberately excludes `packages/**` — it would fire on nearly
-    # every PR for a 40-minute job. But the drift it protects against comes from
-    # exactly there: the unlisted `vue-demi` build script that broke every
-    # scaffold's first `pnpm install` arrived as a transitive dependency of
-    # `@lunora/client`, a package the PR filter does not watch. So the unfiltered
+    # On PRs this matrix is path-gated and the filter excludes `packages/**`, since a
+    # 40-minute job would fire on nearly every PR. But that is exactly where the drift
+    # comes from — the `vue-demi` build script that broke every scaffold's first
+    # install arrived as a transitive dependency of @lunora/client. So the unfiltered
     # run belongs here, where a failure is a canary rather than a blocker.
     "templates-full":
         "name": "Template scaffold matrix"
@@ -189,11 +172,9 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `build:packages:prod`, not `build:packages`. The matrix packs
-            # `dist/` into tarballs, and the plain `build` target is a packem
-            # *development* build that keeps `react/jsx-dev-runtime` — a Next
-            # production prerender then dies with `jsxDEV is not a function`.
-            # Users install the production build, so that is what to test.
+            # `:prod` because the matrix packs `dist/` into tarballs, and a development
+            # build keeps `react/jsx-dev-runtime`, killing a Next production prerender
+            # with `jsxDEV is not a function`.
             - "name": "Build packages (production artifacts)"
               "run": "pnpm run build:packages:prod"
 
