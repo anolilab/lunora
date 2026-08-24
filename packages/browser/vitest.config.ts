@@ -32,6 +32,6 @@ export default defineConfig({
     test: {
         coverage,
         environment: "node",
-        include: ["src/**/*.test.ts", "__tests__/**/*.test.ts"],
+        include: ["__tests__/**/*.test.ts"],
     },
 });

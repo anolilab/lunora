@@ -92,6 +92,8 @@ export interface PlatformCapabilities {
          * host either populates or does not.
          */
         identityProxy?: Capability;
+        /** Image transforms (resize/format/optimize) via an Images binding. */
+        images?: Capability;
         /** Key-value storage (KV / Redis / DynamoDB). */
         keyValueStore?: Capability;
         /** Local SQL execution inside a shard. */
@@ -230,6 +232,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: { level: "native", note: "Workers AI" },
         browser: { level: "native", note: "Browser Rendering" },
+        images: { level: "native", note: "Cloudflare Images binding" },
         containers: {
             level: "native",
             note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container image serves",
@@ -356,6 +359,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
         ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
+        images: { level: "unsupported", note: "No Images-equivalent binding implemented" },
         containers: {
             level: "unsupported",
             note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec to run a command in either",

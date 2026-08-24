@@ -639,6 +639,23 @@ export interface AgentConfig {
     activeTools?: ReadonlyArray<string>;
 
     /**
+     * How long a human-in-the-loop tool approval may stay pending before the
+     * run stops waiting — a Cloudflare Workflows duration: milliseconds, or a
+     * `"<n> <unit>"` string like `"3 days"` (the unit set is the host's, so a
+     * typo is a compile error). Default `"3 days"`.
+     *
+     * On timeout the call is treated as REJECTED (the run records why and
+     * continues down the normal rejection path), so a run whose approver never
+     * answers ends instead of hibernating forever.
+     *
+     * CLAMPED to one week. A longer wait would outlive the thread's
+     * abandoned-run horizon, letting a new run reclaim the thread while the
+     * approval is still pending — which is the exact failure this timeout
+     * exists to prevent, so it cannot be configured back into existence.
+     */
+    approvalTimeout?: `${number} ${"day" | "hour" | "minute" | "month" | "second" | "week" | "year"}${"s" | ""}` | number;
+
+    /**
      * Automatic thread-history compaction. When the persisted history exceeds
      * `maxMessages`, the loop summarizes the older messages (all but the most
      * recent `keepRecent`, default `ceil(maxMessages / 2)`) into one system-message
@@ -998,6 +1015,12 @@ export interface AgentFunctionPaths {
      * next queued run in the same mutation.
      */
     completeRun: string;
+
+    /**
+     * The internal `agents:agentDeleteMessage` mutation the loop dispatches to
+     * retire the HITL approval marker once the decision has landed.
+     */
+    deleteMessage: string;
     ensureThread: string;
     /** The internal `agents:agentEpisodeRecall` query the loop dispatches for an episodic-kind read. */
     episodeRecall: string;
