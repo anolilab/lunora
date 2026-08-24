@@ -1,6 +1,6 @@
 import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
 import type { PaginationResult } from "@lunora/client/pagination";
-import { get } from "svelte/store";
+import { get, writable } from "svelte/store";
 import { describe, expect, it, vi } from "vitest";
 
 import { infiniteQuery, paginatedQuery } from "../src/paginated-query";
@@ -573,6 +573,86 @@ describe("paginatedQuery — stableWireKey page keys (plan 285)", () => {
 
         expect(fake.subscribeCalls).toHaveLength(1);
         expect(get(status)).toBe("LoadingFirstPage");
+
+        stopStatus();
+        stopResults();
+    });
+});
+
+describe("paginatedQuery with reactive args", () => {
+    const createTrackingClient = () => {
+        const unsubCallCount = { value: 0 };
+        const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void }[] = [];
+
+        const client = {
+            subscribe: (_fn: FunctionReference, args: Record<string, unknown>, callback: (data: unknown) => void) => {
+                subscribeCalls.push({ args, callback });
+
+                return () => {
+                    unsubCallCount.value += 1;
+                };
+            },
+        } as unknown as LunoraClient;
+
+        return { client, subscribeCalls, unsubCallCount };
+    };
+
+    it("an args emission tears down the old pages and rebuilds against the new args", async () => {
+        const { client, subscribeCalls, unsubCallCount } = createTrackingClient();
+        const argsStore = writable<Record<string, unknown> | "skip">({ room: "a" });
+
+        const { results, status } = paginatedQuery(client, fn, argsStore, { initialNumItems: NUM_ITEMS });
+
+        const stopStatus = status.subscribe(() => {});
+        const stopResults = results.subscribe(() => {});
+
+        expect(subscribeCalls).toHaveLength(1);
+        expect(subscribeCalls[0]?.args).toMatchObject({ room: "a" });
+
+        subscribeCalls[0]?.callback({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+
+        expect(get(results)).toStrictEqual(firstPageItems);
+
+        argsStore.set({ room: "b" });
+        await flushAsync();
+
+        // The old page subscription closed; a fresh first-page subscription
+        // opened against the new args with pagination reset to page one.
+        expect(unsubCallCount.value).toBe(1);
+        expect(subscribeCalls).toHaveLength(2);
+        expect(subscribeCalls[1]?.args).toMatchObject({
+            paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS },
+            room: "b",
+        });
+        expect(get(status)).toBe("LoadingFirstPage");
+        expect(get(results)).toStrictEqual([]);
+
+        stopStatus();
+        stopResults();
+    });
+
+    it("a 'skip' emission tears down without re-opening", async () => {
+        const { client, subscribeCalls, unsubCallCount } = createTrackingClient();
+        const argsStore = writable<Record<string, unknown> | "skip">({ room: "a" });
+
+        const { results, status } = paginatedQuery(client, fn, argsStore, { initialNumItems: NUM_ITEMS });
+
+        const stopStatus = status.subscribe(() => {});
+        const stopResults = results.subscribe(() => {});
+
+        subscribeCalls[0]?.callback({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+
+        expect(get(results)).toStrictEqual(firstPageItems);
+
+        argsStore.set("skip");
+        await flushAsync();
+
+        expect(unsubCallCount.value).toBe(1);
+        expect(subscribeCalls).toHaveLength(1);
+        expect(get(status)).toBe("LoadingFirstPage");
+        expect(get(results)).toStrictEqual([]);
 
         stopStatus();
         stopResults();

@@ -8,6 +8,7 @@ const encoder = new TextEncoder();
 const NO_BINDING_PATTERN = /no Workflow binding/u;
 const TRANSIENT_FAILURE_PATTERN = /temporarily unavailable/u;
 const BRANCH_MARKER_PATTERN = /reserved workflow branch-marker key/u;
+const HASHED_SLACK_ID_PATTERN = /^slack-[0-9a-f]{16}$/u;
 
 const bytesToHex = (bytes: Uint8Array): string => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -299,6 +300,47 @@ describe(dispatchAgentChannel, () => {
         expect(created).toStrictEqual([{ input: "hi", threadKey: "t" }]);
     });
 
+    it("keys long ids by hash: same first 60 chars but different tails stay distinct, identical ids dedupe", async () => {
+        const receivedIds: (string | undefined)[] = [];
+        const binding = {
+            create: async (options?: { id?: string; params?: unknown }): Promise<{ id: string }> => {
+                receivedIds.push(options?.id);
+
+                return { id: options?.id ?? "wf-1" };
+            },
+            get: async (): Promise<never> => {
+                throw new Error("unused");
+            },
+        };
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "hi", threadKey: "t" };
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        // 70-char ids sharing their first 60 chars — the old sanitize-then-truncate
+        // scheme collapsed these to one key, silently swallowing the second event.
+        const shared = "E".repeat(60);
+        const bodyA = JSON.stringify({ event: {}, event_id: `${shared}AAAAAAAAAA` });
+        const bodyB = JSON.stringify({ event: {}, event_id: `${shared}BBBBBBBBBB` });
+
+        await handler(await slackRequest(secret, bodyA), env);
+        await handler(await slackRequest(secret, bodyB), env);
+        await handler(await slackRequest(secret, bodyA), env);
+
+        expect(receivedIds).toHaveLength(3);
+        // `slack-` + 16 hex chars, distinct across distinct ids, stable across redeliveries.
+        expect(receivedIds[0]).toMatch(HASHED_SLACK_ID_PATTERN);
+        expect(receivedIds[1]).toMatch(HASHED_SLACK_ID_PATTERN);
+        expect(receivedIds[0]).not.toBe(receivedIds[1]);
+        expect(receivedIds[2]).toBe(receivedIds[0]);
+    });
+
     it("rethrows a non-duplicate create failure so the provider redelivers (not a silent 200)", async () => {
         // A binding whose create() always fails with a transient/service error —
         // NOT a duplicate-instance rejection. The handler must surface it (reject)
@@ -340,7 +382,7 @@ describe(dispatchAgentChannel, () => {
         };
         const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
         const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
-        // An empty (but present) event_id sanitizes to no dedup key — each delivery
+        // An empty (but present) event_id gives no dedup key — each delivery
         // must start its own run rather than collapsing to a single "slack-" id.
         const body = JSON.stringify({ event: {}, event_id: "" });
 
