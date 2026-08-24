@@ -55,9 +55,10 @@
                   "GIT_AUTHOR_NAME": "GitHub Actions Shell"
                   "EMAIL": "github-actions[bot]@users.noreply.github.com"
 
-            # semantic-release fetches notes itself, but only the refs it expects. Fetch
-            # them all so every tag can be mapped to its channel and no already-published
-            # version is released twice.
+            # Deliberate redundancy: semantic-release fetches notes itself, but a run
+            # cancelled mid-push can leave a tag without its channel note. Fetching every
+            # notes ref keeps each @lunora/*@<ver> tag mappable to its channel, so an
+            # already-published version is never released twice.
             - "name": "Fetch semantic-release notes"
               "shell": "bash"
               "run": "git fetch origin '+refs/notes/*:refs/notes/*'"
