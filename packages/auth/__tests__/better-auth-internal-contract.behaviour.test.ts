@@ -77,7 +77,7 @@ describe("@better-auth/core/db/internal contract", () => {
         const [accountIndex] = indexesByTable.get("account") ?? [];
 
         // `columns` (physical), not `fields` (logical) — the DDL quotes these directly.
-        expect(accountIndex?.columns).toStrictEqual(["issuer", "providerAccountId"]);
+        expect(accountIndex?.columns).toStrictEqual(["issuer", "accountId"]);
         expect(accountIndex?.name).toBeTypeOf("string");
         expect(accountIndex?.unique).toBe(true);
     });

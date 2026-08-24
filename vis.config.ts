@@ -167,6 +167,28 @@ export default defineConfig({
                         description: "Form field name misread as a generic secret by kingfisher.generic.5",
                         regexes: ["^confirmPassword$", "^currentPassword$", "^newPassword$"], // secret-scanner:allow
                     },
+                    // A plan document describing an auth change quotes the code it
+                    // is about, and `kingfisher.generic.4` (Generic Password) reads
+                    // two of those quotations as secrets: a backticked source path
+                    // with a line range, and a backticked type name. Neither is a
+                    // value at all — same "credential-shaped name, no value" class
+                    // as the two above.
+                    //
+                    // The line range is matched as `\d+-\d+` rather than the exact
+                    // digits the scanner extracted. Pinning the digits would be
+                    // truer to the extracted text, but it would also re-break this
+                    // gate for the whole repository the next time someone edits
+                    // `admin.ts` and updates the citation — and a scanner that
+                    // fails on an unrelated line-number change teaches people to
+                    // stop reading it.
+                    {
+                        description: "Source path with a line range, quoted in a plan document, misread as a generic secret by kingfisher.generic.4",
+                        regexes: ["^/auth/src/admin\\.ts:\\d+-\\d+`\\)$"],
+                    },
+                    {
+                        description: "Error-type name quoted in a plan document, misread as a generic secret by kingfisher.generic.4",
+                        regexes: ["^`LunoraAuthAdminError`$"],
+                    },
                 ],
             },
         },

@@ -1289,6 +1289,10 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 Re-exported from `better-auth` — signature tracked at its source.
 
+### `apiKey` (function)
+
+Re-exported from `@better-auth/api-key` — signature tracked at its source.
+
 ### `bearer` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
@@ -1300,6 +1304,10 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `createAccessControl` (function)
 
 Re-exported from `better-auth` — signature tracked at its source.
+
+### `createMcpProtectedRequestHandler` (const)
+
+Re-exported from `@better-auth/mcp` — signature tracked at its source.
 
 ### `customSession` (const)
 
@@ -1325,15 +1333,15 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 Re-exported from `better-auth` — signature tracked at its source.
 
+### `lastLoginMethod` (const)
+
+Re-exported from `better-auth` — signature tracked at its source.
+
 ### `magicLink` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
 
 ### `mcp` (const)
-
-Re-exported from `@better-auth/mcp` — signature tracked at its source.
-
-### `mcpHandler` (const)
 
 Re-exported from `@better-auth/mcp` — signature tracked at its source.
 
@@ -1345,9 +1353,17 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 Re-exported from `better-auth` — signature tracked at its source.
 
+### `oauthDeviceAuthorization` (function)
+
+Re-exported from `@better-auth/oauth-provider` — signature tracked at its source.
+
 ### `oauthProvider` (const)
 
 Re-exported from `@better-auth/oauth-provider` — signature tracked at its source.
+
+### `oneTap` (const)
+
+Re-exported from `better-auth` — signature tracked at its source.
 
 ### `oneTimeToken` (const)
 
@@ -1387,7 +1403,7 @@ Re-exported from `better-auth` — signature tracked at its source.
 const uiConfig: (options?: UiConfigOptions) => BetterAuthPlugin;
 ```
 
-### `username` (const)
+### `username` (function)
 
 Re-exported from `better-auth` — signature tracked at its source.
 
@@ -1439,6 +1455,10 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 Re-exported from `better-auth` — signature tracked at its source.
 
+### `apiKeyClient` (const)
+
+Re-exported from `@better-auth/api-key` — signature tracked at its source.
+
 ### `createLunoraAuthClient` (const)
 
 ```ts
@@ -1486,6 +1506,10 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `multiSessionClient` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
+
+### `oauthDeviceAuthorizationClient` (const)
+
+Re-exported from `@better-auth/oauth-provider` — signature tracked at its source.
 
 ### `oauthProviderClient` (const)
 

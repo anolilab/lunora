@@ -126,6 +126,54 @@ describe("createTwoFactorSetupController", () => {
         expect(controller.getState().step).toBe("enabled");
     });
 
+    it("clears the enable password once enrollment starts, so it cannot pre-satisfy disable", async () => {
+        expect.assertions(1);
+
+        const client = stubClient();
+        const controller = createTwoFactorSetupController(makeContext(client));
+
+        controller.actions.setPassword("secret1234");
+        await controller.actions.enable();
+
+        expect(controller.getState().password.value).toBe("");
+    });
+
+    it("drops the spent code and TOTP secret after verify, keeping the backup codes", async () => {
+        expect.assertions(3);
+
+        const client = stubClient();
+        const controller = createTwoFactorSetupController(makeContext(client));
+
+        controller.actions.setPassword("secret1234");
+        await controller.actions.enable();
+        controller.actions.setCode("123456");
+        await controller.actions.verify();
+
+        expect(controller.getState().code.value).toBe("");
+        expect(controller.getState().totpUri).toBeUndefined();
+        // The one-time backup codes stay visible — the user still has to save them.
+        expect(controller.getState().backupCodes).toStrictEqual(["aaa", "bbb"]);
+    });
+
+    it("requires the password to be retyped before disable right after enable + verify", async () => {
+        expect.assertions(2);
+
+        const client = stubClient();
+        const controller = createTwoFactorSetupController(makeContext(client));
+
+        controller.actions.setPassword("secret1234");
+        await controller.actions.enable();
+        controller.actions.setCode("123456");
+        await controller.actions.verify();
+
+        // The security regression: without re-authentication, disable must fail
+        // validation rather than reach the client.
+        await controller.actions.disable();
+
+        expect(client.twoFactor.disable as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+        expect(controller.getState().password.error).toBeDefined();
+    });
+
     it("disables and resets to the start step", async () => {
         expect.assertions(2);
 

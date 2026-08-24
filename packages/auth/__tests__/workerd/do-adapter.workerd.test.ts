@@ -89,7 +89,10 @@ describe("lunoraDoAdapter in workerd", () => {
         // primitive repeatedly rather than once at construction.
         const deactivation = await patch(false);
 
-        expect(deactivation.status).toBe(204);
+        // 200 with the modified resource, per RFC 7644 §3.5.2 — better-auth 1.7.1
+        // switched from the empty 204 its prereleases returned. Same assertion as
+        // the node-side `scim-provisioning.behaviour.test.ts`.
+        expect(deactivation.status).toBe(200);
 
         const deactivated = await scimFetch(`/Users/${id}`, "GET");
 

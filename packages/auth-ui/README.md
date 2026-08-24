@@ -154,10 +154,11 @@ a Miniflare-backed worker.
 
 ## Not included
 
-**API keys.** better-auth still ships no `apiKey` plugin as of 1.7.0-rc.2, and
-there is no `@better-auth/api-key` package — so there is no endpoint to build a
-card against. `PluginFlags.apiKey` exists as an explicit-only escape hatch for an
-app running a fork or a later release; nothing sets it automatically.
+**API keys.** `@better-auth/api-key` exists as of the 1.7 line and is re-exported
+as `apiKey` from `@lunora/auth/plugins` (client half `apiKeyClient`), so the
+endpoints a card would call now exist — but no card is built against them yet.
+`PluginFlags.apiKey` stays an explicit-only escape hatch until one is; nothing
+sets it automatically.
 
 Account-select on the OAuth consent flow (choosing _which_ signed-in account to
 authorize with) — it needs the `multiSession` plugin and the oauth-provider

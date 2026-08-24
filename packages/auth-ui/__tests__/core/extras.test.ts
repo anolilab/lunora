@@ -3,10 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CAPTCHA_HEADER, captchaHeaders, dismissToast, getToasts, pushToast, resetToasts, setCaptchaToken, subscribeToasts } from "../../src/core";
 
 // One cross-suite teardown hook, deliberately at the top level.
+let restoreLocation: (() => void) | undefined;
+
 afterEach(() => {
     resetToasts();
     setCaptchaToken(undefined);
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    restoreLocation?.();
+    restoreLocation = undefined;
 });
 
 describe("toast store", () => {
@@ -266,6 +271,23 @@ describe("redirectTo reaches every sign-in transport", () => {
     });
 });
 
+/**
+ * Replace `globalThis.location` with a spy-bearing object and register its
+ * restore with the top-level afterEach. jsdom's own `location.assign` is a
+ * non-configurable "not implemented" stub, so it cannot be spied on directly.
+ */
+const stubLocationAssign = (): ReturnType<typeof vi.fn> => {
+    const assign = vi.fn();
+    const original = globalThis.location;
+
+    Object.defineProperty(globalThis, "location", { configurable: true, value: { assign, search: "" }, writable: true });
+    restoreLocation = () => {
+        Object.defineProperty(globalThis, "location", { configurable: true, value: original, writable: true });
+    };
+
+    return assign;
+};
+
 describe("oauth-provider consent", () => {
     it("labels known scopes and shows unknown ones verbatim", async () => {
         expect.assertions(2);
@@ -324,6 +346,74 @@ describe("oauth-provider consent", () => {
         // authorization code.
         expect(replace).not.toHaveBeenCalled();
         expect(controller.getState().error).toBeDefined();
+    });
+
+    it("hands the absolute consent redirectURI to the browser, not the framework router", async () => {
+        expect.assertions(2);
+
+        const { createConsentController, resolveContext } = await import("../../src/core");
+
+        const assign = stubLocationAssign();
+        const replace = vi.fn();
+        const context = resolveContext({
+            authClient: {
+                getSession: vi.fn(),
+                oauth2: {
+                    consent: vi.fn(() => Promise.resolve({ data: { redirectURI: "https://client.example/cb?code=abc123" }, error: null })),
+                    getConsent: vi.fn(() => Promise.resolve({ data: { clientName: "Acme", scope: "openid" }, error: null })),
+                },
+            } as never,
+            nav: { navigate: vi.fn(), replace },
+            plugins: { oauthProvider: true },
+        });
+
+        const controller = createConsentController(context, { consentId: "c1" });
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        await controller.actions.accept();
+
+        // A framework router (SvelteKit `goto`, vue-router, …) cannot navigate
+        // off-origin — the authorization code would never reach the client.
+        expect(replace).not.toHaveBeenCalled();
+        expect(assign).toHaveBeenCalledWith("https://client.example/cb?code=abc123");
+    });
+
+    it("routes an in-app consent redirect path through the framework router", async () => {
+        expect.assertions(2);
+
+        const { createConsentController, resolveContext } = await import("../../src/core");
+
+        const assign = stubLocationAssign();
+        const replace = vi.fn();
+        const context = resolveContext({
+            authClient: {
+                getSession: vi.fn(),
+                oauth2: {
+                    consent: vi.fn(() => Promise.resolve({ data: { redirectURI: "/done" }, error: null })),
+                    getConsent: vi.fn(() => Promise.resolve({ data: { clientName: "Acme", scope: "openid" }, error: null })),
+                },
+            } as never,
+            nav: { navigate: vi.fn(), replace },
+            plugins: { oauthProvider: true },
+        });
+
+        const controller = createConsentController(context, { consentId: "c1" });
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        await controller.actions.accept();
+
+        expect(replace).toHaveBeenCalledWith("/done");
+        expect(assign).not.toHaveBeenCalled();
     });
 });
 

@@ -4013,8 +4013,10 @@ class LunoraClient {
         this.pendingCacheWrites.clear();
 
         // Writes are independent; fire them together and swallow individual
-        // failures (a quota error on one key must not drop the others).
-        await Promise.allSettled(batch.map(([key, entry]) => queryCache.put(key, entry)));
+        // failures (a quota error on one key must not drop the others). Each
+        // `put` is deferred into promise-land so a synchronously-throwing
+        // adapter is captured per-entry too, not allowed to escape `.map()`.
+        await Promise.allSettled(batch.map(async ([key, entry]) => queryCache.put(key, entry)));
     }
 
     /** Derive the aggregate status from the per-shard socket states. */

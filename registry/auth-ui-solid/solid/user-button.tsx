@@ -21,7 +21,7 @@ interface UserAvatarProps {
 
 const UserAvatar = (props: UserAvatarProps): JSX.Element => {
     const [failed, setFailed] = createSignal(false);
-    const image = (): string | undefined => props.user?.image;
+    const image = (): string | undefined => props.user?.image ?? undefined;
 
     // A new user means a new image URL, so a previous failure must not stick to
     // it. Deferred, because the initial run would only re-clear a fresh signal.
@@ -97,7 +97,9 @@ const UserView = (props: UserViewProps): JSX.Element => (
  *
  * It is a disclosure rather than a `<menu>` because its contents are app-defined
  * — links, an organization switcher, a theme row — and forcing those into menu
- * item semantics would mislabel them. Escape and outside-click close it, and
+ * item semantics would mislabel them. That is also why the trigger carries no
+ * `aria-haspopup`: the attribute promises a menu, and with it the arrow-key
+ * navigation a disclosure does not implement. Escape and outside-click close it, and
  * focus returns to the trigger, which is the part hand-rolled dropdowns usually
  * miss.
  */
@@ -183,7 +185,6 @@ const UserButton = (props: UserButtonProps): JSX.Element => {
                         <button
                             aria-controls={open() ? menuId : undefined}
                             aria-expanded={open()}
-                            aria-haspopup="true"
                             aria-label={userLabel(user())}
                             class="lunora-auth-userbutton__trigger"
                             onClick={() => {

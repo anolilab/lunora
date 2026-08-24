@@ -1,3 +1,16 @@
+## @lunora/payment [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.80...@lunora/payment@1.0.0-alpha.81) (2026-08-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.79
+
+## @lunora/payment [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.79...@lunora/payment@1.0.0-alpha.80) (2026-08-23)
+
+### Bug Fixes
+
+* **payment:** harden webhook sync and money paths ([#435](https://github.com/anolilab/lunora/issues/435)) ([b8687b0](https://github.com/anolilab/lunora/commit/b8687b0772aa7a9f417cd61fd11f6b1c9f12d71e))
+
 ## @lunora/payment [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/%40lunora%2Fpayment%401.0.0-alpha.78...%40lunora%2Fpayment%401.0.0-alpha.79) (2026-08-18)
 
 

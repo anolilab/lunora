@@ -114,6 +114,7 @@ const SEARCH_VALIDATORS: Partial<Record<StudioTab, (search: Record<string, unkno
 };
 const PitrPanel = lazyNamed(() => import("../features/database/pitr-panel"), "PitrPanel");
 const FlagsPanel = lazy(() => import("../features/flags/flags-panel"));
+const ReactorsPanel = lazy(() => import("../features/reactors/reactors-panel"));
 const FunctionRunner = lazyNamed(() => import("../features/functions/function-runner"), "FunctionRunner");
 const FunctionStatsPanel = lazyNamed(() => import("../features/functions/function-stats"), "FunctionStatsPanel");
 const IssuesPanel = lazy(() => import("../features/issues/issues-panel"));
@@ -315,6 +316,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     permissions: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8 2.2 2.2L15 9.5M8.5 16h7" />,
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
     queues: <path d="M4 6h16M4 10h16M4 14h10M4 18h10m4-2 3 2-3 2v-4Z" />,
+    reactors: <path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-14.7-3M4 15a8 8 0 0 0 14.7 3" />,
     realtime: <path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 12v8m0-8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />,
     rls: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3ZM8.5 10h7M8.5 13h7" />,
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
@@ -348,7 +350,21 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
     {
         key: "observability",
-        tabs: ["issues", "logs", "traces", "evals", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health", "deploymentHealth"],
+        tabs: [
+            "issues",
+            "logs",
+            "traces",
+            "evals",
+            "audit",
+            "realtime",
+            "reactors",
+            "fanout",
+            "containers",
+            "metrics",
+            "analytics",
+            "health",
+            "deploymentHealth",
+        ],
     },
     { key: "advisors", tabs: ["advisorHealth", "security", "rls", "permissions", "insights"] },
     { key: "operations", tabs: ["schedule", "mail", "drains", "notifications", "payments", "flags"] },
@@ -458,6 +474,7 @@ const TABS = exhaustiveRouteTabs([
     "logs",
     "traces",
     "evals",
+    "reactors",
     "realtime",
     "fanout",
     "mail",
@@ -1005,6 +1022,7 @@ const buildRouter = ({
         files: <FileBrowser />,
         kv: <KvBrowser />,
         flags: <FlagsPanel initialShardKey={initialShardKey} />,
+        reactors: <ReactorsPanel initialShardKey={initialShardKey} />,
         functions: (
             <div className="flex flex-col gap-8">
                 <FunctionStatsPanel functions={functions} initialShardKey={initialShardKey} />

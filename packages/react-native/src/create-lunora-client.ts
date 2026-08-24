@@ -1,4 +1,4 @@
-import { createAsyncStoragePersistence, LunoraClient } from "@lunora/client";
+import { createAsyncStoragePersistence, createAsyncStorageQueryCache, LunoraClient } from "@lunora/client";
 
 import type { AuthHeadersFactory, CreateLunoraClientOptions } from "./types";
 
@@ -55,7 +55,7 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
 
 /**
  * Construct a `LunoraClient` tuned for React Native / Expo — a thin wrapper over
- * `new LunoraClient(options)` that fills in the two things a browser gets for
+ * `new LunoraClient(options)` that fills in the three things a browser gets for
  * free but React Native does not.
  *
  * First, a durable offline queue: pass `storage` (React Native `AsyncStorage`,
@@ -64,7 +64,12 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
  * IndexedDB, which React Native lacks, so without this the queue lives only in
  * memory and is lost on reload.
  *
- * Second, credentialed requests: pass `getAuthHeaders` and the returned headers
+ * Second, a durable read cache: the same `storage` also backs the query cache
+ * through `createAsyncStorageQueryCache`, so cached reads render immediately
+ * after a restart while the socket reconnects — mirroring the browser's
+ * IndexedDB-backed default.
+ *
+ * Third, credentialed requests: pass `getAuthHeaders` and the returned headers
  * ride both the HTTP RPC path and the WebSocket upgrade, since React Native has
  * no cookie jar to attach a session implicitly.
  *
@@ -92,9 +97,11 @@ export const createLunoraClient = (options: CreateLunoraClientOptions): LunoraCl
 
     return new LunoraClient({
         ...rest,
-        // Auto-wire AsyncStorage persistence unless the caller passed an explicit
-        // `persistence` (including `false` to opt out).
+        // Auto-wire AsyncStorage persistence and the durable read cache unless
+        // the caller passed an explicit adapter (including `false` to opt out —
+        // `false ?? x` short-circuits to `false`).
         persistence: rest.persistence ?? (storage ? createAsyncStoragePersistence({ storage }) : undefined),
+        queryCache: rest.queryCache ?? (storage ? createAsyncStorageQueryCache({ storage }) : undefined),
         fetch: authedFetch,
         WebSocket: authedWebSocket,
     });

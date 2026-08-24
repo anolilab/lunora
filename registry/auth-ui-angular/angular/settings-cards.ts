@@ -14,7 +14,7 @@ import type { ResourceState } from "../core/create-resource-controller";
 import type { DeleteAccountField } from "../core/delete-account";
 import { createDeleteAccountController } from "../core/delete-account";
 import { isFlowEnabled } from "../core/flow-gate";
-import { passkeyLabel, sessionLabel } from "../core/labels";
+import { passkeyLabel, rowActionLabel, sessionLabel } from "../core/labels";
 import { createPasskeysController } from "../core/passkeys";
 import type { ProfileField } from "../core/profile";
 import { createProfileController } from "../core/profile";
@@ -189,7 +189,7 @@ class DeleteAccountCardComponent {
         <lunora-auth-card [title]="t.sessions" [headingLevel]="2">
             <lunora-auth-banner [error]="state().error" />
             @if (state().loading) {
-                <p class="lunora-auth-card__description">…</p>
+                <p class="lunora-auth-card__description" role="status">{{ t.loading }}</p>
             } @else if (state().items.length === 0) {
                 <p class="lunora-auth-card__description">{{ t.sessionsEmpty }}</p>
             } @else {
@@ -198,7 +198,13 @@ class DeleteAccountCardComponent {
                         <li class="lunora-auth-list__item">
                             <span class="lunora-auth-list__label">{{ sessionLabel(session, t) }}</span>
                             @if (session.token !== undefined) {
-                                <button class="lunora-auth-link" type="button" [disabled]="state().busy" (click)="actions.revoke(session.token!)">
+                                <button
+                                    class="lunora-auth-link"
+                                    type="button"
+                                    [disabled]="state().busy"
+                                    [attr.aria-label]="rowActionLabel(t.revoke, sessionLabel(session, t))"
+                                    (click)="actions.revoke(session.token!)"
+                                >
                                     {{ t.revoke }}
                                 </button>
                             }
@@ -213,6 +219,8 @@ class DeleteAccountCardComponent {
     `,
 })
 class SessionsCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly rowActionLabel = rowActionLabel;
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createSessionsController, { context: this.context });
@@ -238,7 +246,7 @@ class SessionsCardComponent {
             <lunora-auth-card [title]="t.passkeys" [headingLevel]="2">
                 <lunora-auth-banner [error]="state().error" />
                 @if (state().loading) {
-                    <p class="lunora-auth-card__description">…</p>
+                    <p class="lunora-auth-card__description" role="status">{{ t.loading }}</p>
                 } @else if (state().items.length === 0) {
                     <p class="lunora-auth-card__description">{{ t.passkeysEmpty }}</p>
                 } @else {
@@ -247,7 +255,13 @@ class SessionsCardComponent {
                             <li class="lunora-auth-list__item">
                                 <span class="lunora-auth-list__label">{{ passkeyLabel(passkey, t) }}</span>
                                 @if (passkey.id !== undefined) {
-                                    <button class="lunora-auth-link" type="button" [disabled]="state().busy" (click)="remove(passkey.id!)">
+                                    <button
+                                        class="lunora-auth-link"
+                                        type="button"
+                                        [disabled]="state().busy"
+                                        [attr.aria-label]="rowActionLabel(t.remove, passkeyLabel(passkey, t))"
+                                        (click)="remove(passkey.id!)"
+                                    >
                                         {{ t.remove }}
                                     </button>
                                 }
@@ -264,6 +278,8 @@ class SessionsCardComponent {
     `,
 })
 class PasskeysCardComponent {
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected readonly rowActionLabel = rowActionLabel;
     private readonly context = injectAuthUIContext();
     protected readonly enabled = computed(() => isFlowEnabled(this.context(), "passkey", "PasskeysCard"));
     protected readonly t = this.context().localization;

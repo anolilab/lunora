@@ -46,12 +46,12 @@ class UserAvatarComponent {
      */
     protected readonly failed = linkedSignal<string | undefined, boolean>({
         computation: () => false,
-        source: () => this.user()?.image,
+        source: () => this.user()?.image ?? undefined,
     });
 
     protected readonly initials = computed(() => userInitials(this.user()));
     protected readonly showImage = computed(() => {
-        const image = this.user()?.image;
+        const image = this.user()?.image ?? undefined;
 
         return image !== undefined && image !== "" && !this.failed();
     });
@@ -98,7 +98,9 @@ const nextId = (prefix: string): string => {
  *
  * It is a disclosure rather than a `<menu>` because its contents are app-defined
  * — links, an organization switcher, a theme row — and forcing those into menu
- * item semantics would mislabel them. Escape and outside-click close it, and
+ * item semantics would mislabel them. That is also why the trigger carries no
+ * `aria-haspopup`: the attribute promises a menu, and with it the arrow-key
+ * navigation a disclosure does not implement. Escape and outside-click close it, and
  * focus returns to the trigger, which is the part hand-rolled dropdowns usually
  * miss.
  *
@@ -131,7 +133,6 @@ const nextId = (prefix: string): string => {
                     class="lunora-auth-userbutton__trigger"
                     type="button"
                     #trigger
-                    aria-haspopup="true"
                     [attr.aria-controls]="open() ? menuId : null"
                     [attr.aria-expanded]="open()"
                     [attr.aria-label]="userLabel(session().user)"

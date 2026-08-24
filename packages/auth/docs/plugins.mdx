@@ -35,12 +35,14 @@ import {
     genericOAuth,
     haveIBeenPwned,
     jwt,
+    lastLoginMethod,
     magicLink,
     mcp,
-    mcpHandler,
     multiSession,
+    oauthDeviceAuthorization,
     oauthProvider,
     oAuthProxy,
+    oneTap,
     oneTimeToken,
     organization,
     passkey,
@@ -59,16 +61,18 @@ behaviour and the full option reference are better-auth's, linked per row.
 
 ### Sign-in methods
 
-| Export        | What it adds                                                                                    | Reference                                                                          |
-| ------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `passkey`     | WebAuthn passkeys (Face ID, fingerprint, security keys) for passwordless login or a 2nd factor. | [better-auth: passkey](https://www.better-auth.com/docs/plugins/passkey)           |
-| `twoFactor`   | TOTP authenticator apps plus backup codes for two-factor auth.                                  | [better-auth: 2FA](https://www.better-auth.com/docs/plugins/2fa)                   |
-| `magicLink`   | Passwordless sign-in by emailing a one-time login link.                                         | [better-auth: magic link](https://www.better-auth.com/docs/plugins/magic-link)     |
-| `emailOTP`    | Email a one-time numeric code to verify an address or sign in.                                  | [better-auth: email OTP](https://www.better-auth.com/docs/plugins/email-otp)       |
-| `phoneNumber` | Phone-number sign-in and verification over SMS OTP.                                             | [better-auth: phone number](https://www.better-auth.com/docs/plugins/phone-number) |
-| `username`    | A unique username as a login identifier alongside email.                                        | [better-auth: username](https://www.better-auth.com/docs/plugins/username)         |
-| `anonymous`   | Throwaway guest sessions you can upgrade to a real account later.                               | [better-auth: anonymous](https://www.better-auth.com/docs/plugins/anonymous)       |
-| `siwe`        | Sign-In with Ethereum (wallet-based auth).                                                      | [better-auth: SIWE](https://www.better-auth.com/docs/plugins/siwe)                 |
+| Export            | What it adds                                                                                    | Reference                                                                                    |
+| ----------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `passkey`         | WebAuthn passkeys (Face ID, fingerprint, security keys) for passwordless login or a 2nd factor. | [better-auth: passkey](https://www.better-auth.com/docs/plugins/passkey)                     |
+| `twoFactor`       | TOTP authenticator apps plus backup codes for two-factor auth.                                  | [better-auth: 2FA](https://www.better-auth.com/docs/plugins/2fa)                             |
+| `magicLink`       | Passwordless sign-in by emailing a one-time login link. See the 1.7 cleanup note below.         | [better-auth: magic link](https://www.better-auth.com/docs/plugins/magic-link)               |
+| `emailOTP`        | Email a one-time numeric code to verify an address or sign in. See the 1.7 cleanup note below.  | [better-auth: email OTP](https://www.better-auth.com/docs/plugins/email-otp)                 |
+| `phoneNumber`     | Phone-number sign-in and verification over SMS OTP.                                             | [better-auth: phone number](https://www.better-auth.com/docs/plugins/phone-number)           |
+| `username`        | A unique username as a login identifier alongside email.                                        | [better-auth: username](https://www.better-auth.com/docs/plugins/username)                   |
+| `anonymous`       | Throwaway guest sessions you can upgrade to a real account later.                               | [better-auth: anonymous](https://www.better-auth.com/docs/plugins/anonymous)                 |
+| `siwe`            | Sign-In with Ethereum (wallet-based auth).                                                      | [better-auth: SIWE](https://www.better-auth.com/docs/plugins/siwe)                           |
+| `oneTap`          | Google One Tap — the in-page account chooser, no redirect.                                      | [better-auth: One Tap](https://www.better-auth.com/docs/plugins/one-tap)                     |
+| `lastLoginMethod` | Record which method a user last signed in with, so the UI can highlight it next visit.          | [better-auth: last login method](https://www.better-auth.com/docs/plugins/last-login-method) |
 
 ### Accounts, orgs, and access
 
@@ -82,16 +86,17 @@ behaviour and the full option reference are better-auth's, linked per row.
 
 ### Tokens and machine clients
 
-| Export                                  | What it adds                                                                                                                                                  | Reference                                                                                          |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `bearer`                                | Accept the session token as an `Authorization: Bearer` header instead of a cookie (native / CLI clients).                                                     | [better-auth: bearer](https://www.better-auth.com/docs/plugins/bearer)                             |
-| `jwt`                                   | Issue verifiable JWTs with a JWKS endpoint for services that expect a token.                                                                                  | [better-auth: JWT](https://www.better-auth.com/docs/plugins/jwt)                                   |
-| `oauthProvider`                         | Turn your app into an OAuth/OpenID Connect provider other apps sign in with. Replaces `oidcProvider`, removed in better-auth 1.7.                             | [better-auth: OAuth provider](https://www.better-auth.com/docs/plugins/oauth-provider)             |
-| `genericOAuth`                          | Add any OAuth2 / OIDC provider beyond the built-in social ones.                                                                                               | [better-auth: generic OAuth](https://www.better-auth.com/docs/plugins/generic-oauth)               |
-| `oAuthProxy`                            | Route OAuth callbacks through one stable URL (useful for preview / branch deploys).                                                                           | [better-auth: OAuth proxy](https://www.better-auth.com/docs/plugins/oauth-proxy)                   |
-| `oneTimeToken`                          | Issue and verify single-use tokens (short-lived hand-off links).                                                                                              | [better-auth: one-time token](https://www.better-auth.com/docs/plugins/one-time-token)             |
-| `deviceAuthorization`                   | OAuth 2.0 device grant for CLIs, TVs, and other input-constrained clients.                                                                                    | [better-auth: device authorization](https://www.better-auth.com/docs/plugins/device-authorization) |
-| `mcp` / `requireMcpAuth` / `mcpHandler` | OAuth-protect a Model Context Protocol server. Pairs with [`@lunora/mcp`](/docs/packages/mcp). `withMcpAuth` was renamed `requireMcpAuth` in better-auth 1.7. | [better-auth: MCP](https://www.better-auth.com/docs/plugins/mcp)                                   |
+| Export                                                        | What it adds                                                                                                                                                                                                                                                                                                                                                                                                      | Reference                                                                                          |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `bearer`                                                      | Accept the session token as an `Authorization: Bearer` header instead of a cookie (native / CLI clients).                                                                                                                                                                                                                                                                                                         | [better-auth: bearer](https://www.better-auth.com/docs/plugins/bearer)                             |
+| `jwt`                                                         | Issue verifiable JWTs with a JWKS endpoint for services that expect a token.                                                                                                                                                                                                                                                                                                                                      | [better-auth: JWT](https://www.better-auth.com/docs/plugins/jwt)                                   |
+| `oauthProvider`                                               | Turn your app into an OAuth/OpenID Connect provider other apps sign in with. Replaces `oidcProvider`, removed in better-auth 1.7.                                                                                                                                                                                                                                                                                 | [better-auth: OAuth provider](https://www.better-auth.com/docs/plugins/oauth-provider)             |
+| `genericOAuth`                                                | Add any OAuth2 / OIDC provider beyond the built-in social ones.                                                                                                                                                                                                                                                                                                                                                   | [better-auth: generic OAuth](https://www.better-auth.com/docs/plugins/generic-oauth)               |
+| `oAuthProxy`                                                  | Route OAuth callbacks through one stable URL (useful for preview / branch deploys).                                                                                                                                                                                                                                                                                                                               | [better-auth: OAuth proxy](https://www.better-auth.com/docs/plugins/oauth-proxy)                   |
+| `oneTimeToken`                                                | Issue and verify single-use tokens (short-lived hand-off links).                                                                                                                                                                                                                                                                                                                                                  | [better-auth: one-time token](https://www.better-auth.com/docs/plugins/one-time-token)             |
+| `deviceAuthorization`                                         | OAuth 2.0 device grant for CLIs, TVs, and other input-constrained clients.                                                                                                                                                                                                                                                                                                                                        | [better-auth: device authorization](https://www.better-auth.com/docs/plugins/device-authorization) |
+| `oauthDeviceAuthorization`                                    | The device grant (RFC 8628) for third-party clients of the `oauthProvider` above. Split out of `oauthProvider` in better-auth 1.7, so a provider that does not want the device endpoints no longer serves them.                                                                                                                                                                                                   | [better-auth: OAuth provider](https://www.better-auth.com/docs/plugins/oauth-provider)             |
+| `mcp` / `requireMcpAuth` / `createMcpProtectedRequestHandler` | OAuth-protect a Model Context Protocol server. Pairs with [`@lunora/mcp`](/docs/packages/mcp), whose `createAuthedMcpFetchHandler` mounts a Lunora MCP server behind `requireMcpAuth`. `withMcpAuth` was renamed `requireMcpAuth` in better-auth 1.7; `createMcpProtectedRequestHandler` is the split-deployment form (a resource server with no auth instance) and replaced 1.7.0-rc's short-lived `mcpHandler`. | [better-auth: MCP](https://www.better-auth.com/docs/plugins/mcp)                                   |
 
 ### Abuse protection
 
@@ -100,10 +105,17 @@ behaviour and the full option reference are better-auth's, linked per row.
 | `captcha`        | Gate sensitive auth endpoints with Turnstile, reCAPTCHA, hCaptcha, or captchafox. See [CAPTCHA / Turnstile](#captcha--turnstile). | [better-auth: captcha](https://www.better-auth.com/docs/plugins/captcha)        |
 | `haveIBeenPwned` | Reject passwords found in the Have I Been Pwned breach corpus (k-anonymity check).                                                | [better-auth: HIBP](https://www.better-auth.com/docs/plugins/have-i-been-pwned) |
 
+<Callout type="warn">
+    **Passwordless recovery changed in better-auth 1.7.** Once a magic link or an email OTP proves the user controls the mailbox, better-auth can delete
+    credentials that were never proven and revoke that user's older sessions. That closes a real takeover path — an attacker who registered a password against
+    someone else's address before it was verified — but it also means a legitimate user who signs in by magic link can find an earlier unverified password gone
+    and other devices signed out. Neither plugin is affected until you enable the behaviour; check its options before turning it on for an existing user base.
+</Callout>
+
 <Callout type="info">
-`captcha` has no dedicated `better-auth/plugins/<name>`
-subpath. They ship via the `better-auth/plugins` barrel, and `@lunora/auth/plugins`
-re-exports them from there.
+`captcha`, `lastLoginMethod`, and `oneTap` have no dedicated
+`better-auth/plugins/<name>` subpath. They ship via the `better-auth/plugins`
+barrel, and `@lunora/auth/plugins` re-exports them from there.
 </Callout>
 
 Anything else better-auth ships, or a community plugin like Polar, keeps

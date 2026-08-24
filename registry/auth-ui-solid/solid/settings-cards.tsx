@@ -5,7 +5,7 @@ import { createChangeEmailController } from "../core/change-email";
 import { createChangePasswordController } from "../core/change-password";
 import { createDeleteAccountController } from "../core/delete-account";
 import { isFlowEnabled } from "../core/flow-gate";
-import { passkeyLabel, sessionLabel } from "../core/labels";
+import { passkeyLabel, rowActionLabel, sessionLabel } from "../core/labels";
 import { createPasskeysController } from "../core/passkeys";
 import { createProfileController } from "../core/profile";
 import { signOut } from "../core/session-actions";
@@ -110,6 +110,7 @@ const SessionsCard = (): JSX.Element => {
                                             {/* `Show` hands the narrowed value to the callback — no cast needed. */}
                                             {(token) => (
                                                 <button
+                                                    aria-label={rowActionLabel(t.revoke, sessionLabel(session, t))}
                                                     class="lunora-auth-link"
                                                     disabled={state.busy}
                                                     onClick={() => {
@@ -129,7 +130,9 @@ const SessionsCard = (): JSX.Element => {
                 }
                 when={state.loading}
             >
-                <p class="lunora-auth-card__description">…</p>
+                <p class="lunora-auth-card__description" role="status">
+                    {t.loading}
+                </p>
             </Show>
             <button
                 class="lunora-auth-button lunora-auth-button--secondary"
@@ -168,7 +171,14 @@ const PasskeysCard = (): JSX.Element => {
     return (
         <AuthCard headingLevel={2} title={t.passkeys}>
             <FormBanner error={state.error} />
-            <Show fallback={<p class="lunora-auth-card__description">…</p>} when={!state.loading}>
+            <Show
+                fallback={
+                    <p class="lunora-auth-card__description" role="status">
+                        {t.loading}
+                    </p>
+                }
+                when={!state.loading}
+            >
                 <Show fallback={<p class="lunora-auth-card__description">{t.passkeysEmpty}</p>} when={state.items.length > 0}>
                     <ul class="lunora-auth-list">
                         <For each={state.items}>
@@ -179,6 +189,7 @@ const PasskeysCard = (): JSX.Element => {
                                         {/* `Show` hands the narrowed value to the callback — no cast needed. */}
                                         {(id) => (
                                             <button
+                                                aria-label={rowActionLabel(t.remove, passkeyLabel(passkey, t))}
                                                 class="lunora-auth-link"
                                                 disabled={state.busy}
                                                 onClick={() => {

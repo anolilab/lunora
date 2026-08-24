@@ -88,11 +88,23 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
 
     const debounceMs = options.debounceMs ?? 300;
     let searchTimer: ReturnType<typeof setTimeout> | undefined;
+    let searchResolve: (() => void) | undefined;
 
     const clearSearchTimer = (): void => {
         if (searchTimer !== undefined) {
             clearTimeout(searchTimer);
             searchTimer = undefined;
+        }
+
+        // Settle the superseded (or destroyed) debounce's promise — to `void`,
+        // without refetching; only the last keystroke's promise performs the
+        // fetch. Left pending, every `await setSearch(...)` but the last would
+        // hang forever.
+        if (searchResolve !== undefined) {
+            const resolve = searchResolve;
+
+            searchResolve = undefined;
+            resolve();
         }
     };
 
@@ -132,8 +144,10 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
                 }
 
                 return new Promise<void>((resolve) => {
+                    searchResolve = resolve;
                     searchTimer = setTimeout(() => {
                         searchTimer = undefined;
+                        searchResolve = undefined;
                         resolve(resource.refetch());
                     }, debounceMs);
                 });

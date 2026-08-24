@@ -21,9 +21,17 @@
  * server remotely over Streamable HTTP with `createMcpFetchHandler` (a
  * Workers-ready `Request` → `Response` handler), or build a server
  * programmatically with `createLunoraMcpServer` and connect any transport.
+ *
+ * A remote endpoint is reachable by anyone who knows its URL, and the tools
+ * carry the deployment's admin bearer — so for a public deployment use
+ * `createAuthedMcpFetchHandler` instead, which mounts the same server behind
+ * better-auth's MCP OAuth gate (`requireMcpAuth` from `@lunora/auth/plugins`)
+ * and can scope tool exposure to the access token's own scopes.
  */
 export type { CallAgentToolOptions, McpAgentExposure } from "./agent-tools";
 export { AGENT_RUN_INPUT_SCHEMA, AGENT_STATUS_TOOL_NAME, agentToolDefinitions, callAgentTool, parseAgentsEnv } from "./agent-tools";
+export type { AuthedMcpFetchHandlerOptions, AuthedMcpServerOptions, McpAccessTokenClaims, McpAuthProtect } from "./authed-http";
+export { createAuthedMcpFetchHandler, mcpTokenScopes } from "./authed-http";
 export type { McpServerInfo, McpTool } from "./compose";
 export { createToolServer } from "./compose";
 export type { McpFetchHandler } from "./http";

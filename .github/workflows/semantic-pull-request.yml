@@ -1,5 +1,3 @@
-# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
-
 "name": "Semantic Pull Request"
 
 "on": # yamllint disable-line rule:truthy
@@ -16,15 +14,11 @@
 
 "jobs":
     "semantic-pull-request":
-        # The `merge_group` trigger above exists only so this required check
-        # reports a status in the merge queue — a job skipped by `if` counts as
-        # passing, whereas a workflow that never triggers leaves the queue entry
-        # stuck on "Expected". The validation itself must not run there:
-        # amannn/action-semantic-pull-request hard-errors with "This action can
-        # only be invoked in `pull_request_target` or `pull_request` events"
-        # because a merge group has no PR to infer. The title was already
-        # validated on the PR and cannot change once queued, so re-checking it
-        # here would be redundant even if the action supported it.
+        # The `merge_group` trigger exists only so this required check reports a status
+        # in the queue: a job skipped by `if` counts as passing, while a workflow that
+        # never triggers leaves the entry stuck on "Expected". The action itself cannot
+        # run there — a merge group has no PR to infer — and the title was already
+        # validated on the PR and cannot change once queued.
         "if": "github.event_name != 'merge_group'"
         "permissions":
             "pull-requests": "write" # to analyze PRs (amannn/action-semantic-pull-request)
@@ -58,14 +52,9 @@
                       test
 
             - "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
-              # When the previous steps fail, the workflow would stop. By adding this
-              # condition you can continue the execution with the populated error message.
               "if": "always() && (steps.lint_pr_title.outputs.error_message != null)"
-              # Posting the comment is a courtesy, not the check. A bad title already
-              # failed `lint_pr_title` above, so the job stays red either way; without
-              # this, an unreachable API turns a *passing* title into a red required
-              # check (seen on #410: "self-signed certificate" from behind the
-              # harden-runner egress proxy).
+              # Only reached once `lint_pr_title` has already failed, so the comment is
+              # a courtesy and must not add a second failure of its own.
               "continue-on-error": true
               "with":
                   "header": "pr-title-lint-error"
@@ -80,11 +69,11 @@
                       ${{ steps.lint_pr_title.outputs.error_message }}
                       ```
 
-              # Delete a previous comment when the issue has been resolved
             - "if": "${{ steps.lint_pr_title.outputs.error_message == null }}"
               "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
-              # Same reasoning: this step only clears a stale error comment on an
-              # already-passing title. It must never be able to fail the check.
+              # The mirror image: this one runs when the title PASSES, so an unreachable
+              # comment API here would turn a green check red — as it did on #410, with a
+              # self-signed certificate from behind the harden-runner egress proxy.
               "continue-on-error": true
               "with":
                   "header": "pr-title-lint-error"

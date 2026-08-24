@@ -6,6 +6,8 @@
 import { computed } from "vue";
 
 import { isFlowEnabled } from "../core/flow-gate";
+import { rowActionLabel } from "../core/labels";
+import { userLabel } from "../core/session";
 import { createDeviceSessionsController } from "../core/multi-session";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
@@ -47,6 +49,7 @@ const onRevoke = (token?: string): void => {
                         class="lunora-auth-button lunora-auth-button--secondary"
                         type="button"
                         :disabled="state.busy || entry.session?.token === undefined"
+                        :aria-label="rowActionLabel(t.switchAccount, userLabel(entry.user))"
                         @click="onSetActive(entry.session?.token)"
                     >
                         {{ t.switchAccount }}
@@ -55,6 +58,7 @@ const onRevoke = (token?: string): void => {
                         class="lunora-auth-button lunora-auth-button--danger"
                         type="button"
                         :disabled="state.busy || entry.session?.token === undefined"
+                        :aria-label="rowActionLabel(t.signOut, userLabel(entry.user))"
                         @click="onRevoke(entry.session?.token)"
                     >
                         {{ t.signOut }}

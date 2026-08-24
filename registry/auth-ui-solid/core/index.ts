@@ -48,7 +48,7 @@ export type {
     UserInvitationsController,
 } from "./invitations";
 export { createAcceptInvitationController, createUserInvitationsController } from "./invitations";
-export { passkeyLabel, providerLabel, ROLE_OPTIONS, sessionLabel, slugify } from "./labels";
+export { firstLabel, passkeyLabel, providerLabel, ROLE_OPTIONS, rowActionLabel, sessionLabel, slugify } from "./labels";
 export { LAST_LOGIN_METHOD_COOKIE, LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, LAST_METHOD_PASSKEY, readLastLoginMethod } from "./last-login-method";
 export type { Localization } from "./localization";
 export { DEFAULT_LOCALIZATION, resolveLocalization } from "./localization";

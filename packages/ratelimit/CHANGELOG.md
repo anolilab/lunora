@@ -1,3 +1,9 @@
+## @lunora/ratelimit [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.24...@lunora/ratelimit@1.0.0-alpha.25) (2026-08-22)
+
+### Bug Fixes
+
+* **ratelimit:** read-only store misuse fails loud ([#446](https://github.com/anolilab/lunora/issues/446)) ([be86484](https://github.com/anolilab/lunora/commit/be86484e14b5669a4eb6ff1e8b30a5e973c968bc))
+
 ## @lunora/ratelimit [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/%40lunora%2Fratelimit%401.0.0-alpha.23...%40lunora%2Fratelimit%401.0.0-alpha.24) (2026-08-18)
 
 

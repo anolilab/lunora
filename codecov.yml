@@ -1,7 +1,6 @@
 "github_checks":
     "annotations": true
 
-# Always comment on PRs, always create new comments
 "comment":
     "layout": "newheader, diff, flags, files"
     "require_changes": false # if true: only post the comment if coverage changes
@@ -11,7 +10,6 @@
     "show_critical_paths": true # new option to labeled critical files
     "hide_comment_details": true # collapse all the "detailed info" for the PR comment
 
-# Require a minimum coverage for the codecov/project PR check
 "coverage":
     "status":
         "patch":

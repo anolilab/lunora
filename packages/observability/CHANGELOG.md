@@ -1,3 +1,32 @@
+## @lunora/observability [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.34...@lunora/observability@1.0.0-alpha.35) (2026-08-24)
+
+
+### Dependencies
+
+* **@lunora/fingerprint:** upgraded to 1.0.0-alpha.8
+
+## @lunora/observability [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.33...@lunora/observability@1.0.0-alpha.34) (2026-08-23)
+
+### Performance Improvements
+
+* **observability:** prune buckets once per window ([#456](https://github.com/anolilab/lunora/issues/456)) ([9543110](https://github.com/anolilab/lunora/commit/95431104f072ecb9c9a6caea55bfb91cdb5deb2e))
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.34
+
+## @lunora/observability [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.32...@lunora/observability@1.0.0-alpha.33) (2026-08-21)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.33
+
 ## @lunora/observability [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/%40lunora%2Fobservability%401.0.0-alpha.31...%40lunora%2Fobservability%401.0.0-alpha.32) (2026-08-19)
 
 

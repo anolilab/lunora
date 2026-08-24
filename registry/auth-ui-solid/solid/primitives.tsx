@@ -56,6 +56,13 @@ const AuthCard = (props: AuthCardProps): JSX.Element => (
 interface FieldProps {
     autoComplete?: string;
     field: FieldState;
+
+    /**
+     * The virtual keyboard to raise on touch devices. `"numeric"` for
+     * digit-only codes (TOTP, emailed OTPs); left unset for anything that can
+     * contain letters, such as backup codes and device codes.
+     */
+    inputMode?: "numeric";
     label: string;
     name: string;
     onBlur: () => void;
@@ -80,6 +87,7 @@ const Field = (props: FieldProps): JSX.Element => {
                 autocomplete={props.autoComplete}
                 class="lunora-auth-field__input"
                 id={id}
+                inputmode={props.inputMode}
                 name={props.name}
                 onBlur={() => {
                     props.onBlur();
@@ -220,9 +228,15 @@ const Skeleton = (props: { rows?: number }): JSX.Element => (
     </div>
 );
 
-/** A labelled visual separator ("or"). */
+/**
+ * A labelled visual separator ("or").
+ *
+ * The label is repeated as `aria-label` because a `separator` role makes its
+ * children presentational — the visible "or" is dropped from the accessibility
+ * tree, and naming the separator is the only way to get it back.
+ */
 const AuthDivider = (props: { label?: string }): JSX.Element => (
-    <div class="lunora-auth-divider" role="separator">
+    <div aria-label={props.label ?? "or"} class="lunora-auth-divider" role="separator">
         <span class="lunora-auth-divider__label">{props.label ?? "or"}</span>
     </div>
 );

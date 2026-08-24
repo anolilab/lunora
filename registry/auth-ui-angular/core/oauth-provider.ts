@@ -25,6 +25,7 @@ import type { ControllerContext } from "./config";
 import type { ResourceState } from "./create-resource-controller";
 import { createResourceController } from "./create-resource-controller";
 import { assertOk, mapAuthError } from "./map-error";
+import { isSafeRedirect } from "./redirect-to";
 import { createStore } from "./store";
 import type { Controller, FlowStatus, OAuthConsent, OAuthPendingConsent } from "./types";
 
@@ -106,7 +107,25 @@ const createConsentController = (context: ControllerContext, options: ConsentOpt
             }
 
             store.update({ status: "success" });
-            context.nav.replace(redirect);
+
+            /*
+             * `redirectURI` is the relying party's absolute callback URL
+             * carrying the authorization code, and better-auth returns it only
+             * after matching it against that client's registered redirect URIs
+             * — so it is server-vetted, not user input. It still cannot go
+             * through the app router: SvelteKit's `goto` rejects an off-origin
+             * URL and vue-router resolves it as an in-app path, either way the
+             * code never reaches the client. Hence the split, written out here
+             * rather than shared as a helper: an unguarded `location.assign`
+             * that a caller could reach with a `redirectTo` query parameter is
+             * an open redirect, and this is the one call site whose input is
+             * vetted by the authorization server.
+             */
+            if (isSafeRedirect(redirect)) {
+                context.nav.replace(redirect);
+            } else {
+                globalThis.location.assign(redirect);
+            }
         } catch (error) {
             context.onError?.(error);
             store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), status: "error" });

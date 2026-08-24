@@ -96,6 +96,7 @@ const TwoFactorSetupCard = (): ReactElement | null => {
                     <Field
                         autoComplete="one-time-code"
                         field={state.code}
+                        inputMode="numeric"
                         label={t.codeLabel}
                         name="code"
                         onBlur={() => undefined}

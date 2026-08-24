@@ -1,3 +1,93 @@
+## @lunora/hyperdrive [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.85...@lunora/hyperdrive@1.0.0-alpha.86) (2026-08-23)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.34
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.86
+
+## @lunora/hyperdrive [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.84...@lunora/hyperdrive@1.0.0-alpha.85) (2026-08-21)
+
+### ⚠ BREAKING CHANGES
+
+* **search-core:** an exact-boundary page request
+(offset + numItems === 1024) now throws BAD_REQUEST instead of
+returning a final page. A ≤1024-match corpus paged right up to the cap
+previously got a correct last page; it now gets the same refusal every
+other cap-reaching request already got, because without the probe row
+the page cannot answer hasMore truthfully. The test that asserted the
+boundary page succeeded encoded the bug and now expects the throw;
+consumer test regexes tracking the error message were updated to match.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* chore(search-core): align manifest with sibling conventions
+
+Pin @lunora/errors to 1.0.0-alpha.22 like every sibling in the
+platform/runtime cluster (runtime, do, shard-engine, d1, sql-store),
+so the pin moves with the release tooling instead of floating on
+workspace:*. Add the fallow:audit / fallow:dead-code / fallow:health
+scripts and the fallow devDependency so the package joins the repo's
+dead-code and health gates, and add @vitest/coverage-v8 so the
+already-declared test:coverage script can actually run.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* fix(search-core): reject non-finite page sizes
+
+Math.floor(NaN) is NaN and NaN >= MAX_SEARCH_SCAN is false, so a NaN
+numItems slid past both the normalization and the cap guard and came
+back as a bogus empty terminal page instead of an error. planSearchPage
+now refuses any non-finite numItems with the same BAD_REQUEST family
+before normalizing; the cap boundary behavior is unchanged for finite
+input. Adds a NaN regression test beside the boundary cases.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* fix(search-core): keep the errors dep on workspace:*
+
+The exact-version pins on intra-repo dependencies work because
+multi-semantic-release rewrites them on every release — as
+pnpm-workspace.yaml documents. @lunora/search-core is private with no
+.releaserc.json, so nothing rewrites its manifest: an exact pin
+resolves locally only while packages/errors happens to sit at that
+version, and the next @lunora/errors release would put the local
+package outside the range, make preferWorkspacePackages inert, and
+resolve the registry tarball instead — which then gets inlined into
+@lunora/server, @lunora/do and @lunora/sql-store, all of which bundle
+this package. The lockfile records `specifier: workspace:*` either way,
+so CI would not catch the flip. Private packages stay on workspace:*,
+as @lunora/auth-ui already does.
+
+Also make the scan-cap refusal actionable: the error now names the
+largest numItems that would still leave room for the probe row, since a
+power-of-two page walk lands its final page exactly on the cap and the
+caller otherwise has to guess. Two comments describing the old
+report-isDone-at-the-cap behaviour are corrected to match.
+* **search-core:** a search page ending exactly on the 1024-document scan
+cap now throws BAD_REQUEST instead of returning a final page. This hits
+the last page of any walk whose sizes divide the cap — numItems 512 at
+offset 512, 256 at 768, 128 at 896, 64 at 960, 32 at 992, and so on.
+Such a page cannot fetch the probe row that distinguishes "exactly this
+many matches" from "far more", so its isDone was a guess reported as
+fact; the error now names the page size to retry with.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+### Bug Fixes
+
+* **search-core:** refuse the capped boundary page ([#464](https://github.com/anolilab/lunora/issues/464)) ([86bfa63](https://github.com/anolilab/lunora/commit/86bfa631be8d7eabe4399b138b44dc85bf1026d6))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.33
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.85
+
 ## @lunora/hyperdrive [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/%40lunora%2Fhyperdrive%401.0.0-alpha.83...%40lunora%2Fhyperdrive%401.0.0-alpha.84) (2026-08-19)
 
 

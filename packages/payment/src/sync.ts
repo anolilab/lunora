@@ -3,7 +3,9 @@
  *
  * Flow: claim the event id (inbound idempotency) → map the action to an FSM transition → upsert
  * if legal, otherwise no-op. Duplicate and out-of-order webhooks are absorbed here, not by the
- * caller.
+ * caller — with one exception: an event whose target row does not exist yet reports `"orphaned"`,
+ * which the HTTP layer answers with a 500 to request ONE redelivery (bounded below), because
+ * absorbing it would burn the event id before the row it patches exists.
  */
 import { LunoraPaymentError } from "./errors";
 import { addMoney, compareMoney, zeroMoney } from "./money";
@@ -27,6 +29,12 @@ const SUBSCRIPTION_STATE_BY_TYPE: Partial<Record<WebhookActionType, Subscription
     "subscription.past_due": "past_due",
     "subscription.paused": "paused",
 };
+
+/**
+ * Prefix for the companion claim that bounds an orphaned event to a single retry. Claimed in the same
+ * dedupe store as real event ids, so the bound survives isolate restarts without a second store.
+ */
+const ORPHAN_RETRY_MARKER = "orphan-retry:";
 
 const SUBSCRIPTION_ACTION_BY_TYPE: Partial<Record<WebhookActionType, SubscriptionAction>> = {
     "subscription.active": "activate",
@@ -148,8 +156,11 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
 
     // A pure metadata change (price / quantity / cancel-at-period-end) with no state transition.
     if (action.type === "subscription.updated") {
+        // Out-of-order delivery: the row this event patches doesn't exist yet. Surface a distinct
+        // reason so the caller releases the event claim and the provider retries after the create
+        // event lands — dropping it as `unhandled` would burn the event id and lose the update.
         if (!existing) {
-            return { applied: false, reason: "unhandled" };
+            return { applied: false, reason: "orphaned" };
         }
 
         await store.upsertSubscription({
@@ -255,6 +266,27 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, ob
         await store.releaseEvent(action.provider, action.eventId);
 
         throw error;
+    }
+
+    if (result.reason === "orphaned") {
+        // The row this event patches doesn't exist yet (out-of-order delivery). Release the claim so
+        // the provider's retry re-processes it after the create event lands — otherwise the id is
+        // burned and the update is lost.
+        //
+        // BOUNDED, because the row may never appear: a subscription created before the integration
+        // existed, a store/tenant reset, or a completed-but-unpaid checkout whose
+        // `customer.subscription.created` never arrives. Retrying such an event forever makes the
+        // provider hammer the endpoint until it disables it (Stripe gives up after ~3 days), taking
+        // every other event down with it. A companion marker in the same claim store records that the
+        // event has already had its retry; the second sighting keeps the claim and acknowledges, so
+        // the event stops rather than the endpoint. The observer sees `reason: "unhandled"` for it.
+        const retryable = await store.markEventProcessed(action.provider, `${ORPHAN_RETRY_MARKER}${action.eventId}`);
+
+        if (retryable) {
+            await store.releaseEvent(action.provider, action.eventId);
+        } else {
+            result = { applied: false, reason: "unhandled" };
+        }
     }
 
     notifyObserver(observer, { action: action.type, eventId: action.eventId, provider: action.provider, reason: result.reason, type: "webhook.applied" });

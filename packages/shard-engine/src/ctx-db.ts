@@ -58,7 +58,9 @@ import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIn
 import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
+import { allocateCommitSeq, COMMIT_SEQ_FIELD } from "./ctx-db-commit-seq";
 import { createCompanionSync } from "./ctx-db-companions";
+import { isMemoryTable } from "./ctx-db-memory";
 import type { RankPageDeps } from "./ctx-db-rank-page";
 import { computeRankPage } from "./ctx-db-rank-page";
 import { SCAN_DEP } from "./dependency-tracker";
@@ -263,6 +265,25 @@ interface CtxDbOptions {
     headroom?: TransactionHeadroomTracker;
 
     idGenerator?: IdGenerator;
+
+    /**
+     * Does the host currently have an atomic write boundary open?
+     *
+     * Read only by `_commitSeq` allocation, and it is what keeps that sequence
+     * honest. Inside a transaction every write commits together, so ONE sequence
+     * describes the whole unit and the rows compare equal. Outside one — an
+     * action, which the generated dispatch deliberately does not wrap because its
+     * external I/O cannot be rolled back — each write commits on its own, so each
+     * needs its own sequence. Sharing one across independently-committed writes
+     * is the failure this exists to prevent: a consumer that checkpoints after
+     * seeing the first write would never be offered the rest, since they carry a
+     * sequence it has already passed.
+     *
+     * Absent ⇒ treated as NOT in a transaction, i.e. a fresh sequence per write.
+     * That is the conservative direction: more sequences than strictly needed
+     * costs a consumer nothing, while too few silently drops rows.
+     */
+    inTransaction?: () => boolean;
 
     /**
      * Upper bound on the number of join keys a single relation-crossing `where`
@@ -1880,6 +1901,67 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const broadcast = options.broadcast ?? (() => undefined);
 
     /**
+     * This mutation's `_commitSeq`, allocated on first use and reused for every
+     * subsequent commit-ordered write.
+     *
+     * Closure-scoped to THIS writer instance, which is what makes the value a
+     * commit sequence rather than a row counter: every dispatch builds a fresh
+     * `createShardCtxDb(...)` (see the generated `buildCtx`), so the memo's
+     * lifetime is exactly one mutation and every row that mutation writes
+     * compares equal. Allocating per row instead would break the one property
+     * consumers depend on — that rows committed together sort together.
+     */
+    let commitSeq: number | undefined;
+
+    /**
+     * Is an atomic write boundary open right now? Absent option ⇒ `false`, so a
+     * caller that does not report its transaction state gets a sequence per
+     * write rather than one shared across writes that may not commit together.
+     */
+    const inTransaction = (): boolean => options.inTransaction?.() === true;
+
+    /**
+     * The `_commitSeq` entry to spread into a row image about to be written —
+     * empty for a table that did not declare `.commitOrdered()`.
+     *
+     * Returns a spreadable fragment rather than mutating the caller's object so
+     * the stamp lands where the image is CONSTRUCTED. Every write path builds
+     * its image in one expression (`documentWithMeta` / `merged` / `replaced`),
+     * and spreading here puts the field in front of everything downstream — the
+     * encoded blob, the companion sync, the CDC entry, the broadcast delta, the
+     * before/after triggers, and `onWrite` — so they all agree on what was
+     * persisted. Spread position matters on the update paths: it must come after
+     * `...existing` / `...patch` so the previous write's sequence is replaced
+     * rather than carried forward.
+     *
+     * Allocating this early means a `before` trigger that aborts the write has
+     * already burned a sequence — harmless, because inside a transaction the
+     * allocation and the abort share `state.storage.transaction(...)` and the
+     * counter row rolls back with everything else.
+     *
+     * **The memo is transaction-scoped, not writer-scoped.** Reusing it across
+     * writes is only sound while those writes commit together. A mutation is
+     * wrapped in one storage transaction, so every row it writes shares a
+     * sequence and compares equal — the property a consumer relies on to process
+     * a mutation as a unit. An ACTION is deliberately not wrapped (its external
+     * I/O cannot be rolled back), so its writes commit independently; reusing one
+     * sequence there would let a consumer checkpoint after the first write and
+     * never be offered the rest, because they carry a sequence it has already
+     * passed. Outside a transaction each write therefore allocates its own.
+     */
+    const commitSeqFields = (tableName: string): Record<string, number> => {
+        if (schema.tables[tableName]?.commitOrderedMode !== true) {
+            return {};
+        }
+
+        if (commitSeq === undefined || !inTransaction()) {
+            commitSeq = allocateCommitSeq(sql);
+        }
+
+        return { [COMMIT_SEQ_FIELD]: commitSeq };
+    };
+
+    /**
      * The index positions a written row occupies, unioned across the images
      * supplied. Callers pass BOTH the before- and after-image of a patch: a
      * row that moves between slices must wake subscribers on the slice it left
@@ -2041,7 +2123,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
     /** Append a post-image to the changelog when CDC is enabled; a no-op otherwise. */
     const recordCdc = (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): void => {
-        if (cdcEnabled) {
+        // A `.memory()` table never reaches the changelog. Its rows do not
+        // survive the next eviction, so a CDC consumer replaying them would
+        // materialize state the shard itself no longer believes in — and the log
+        // is append-only with no `trimCdcChanges` caller in `ShardDO`, so a
+        // heartbeat-rate presence table would grow it without bound for the life
+        // of the shard. Live queries are unaffected: subscription refresh is
+        // driven by the changed-table set, not by CDC.
+        if (cdcEnabled && !isMemoryTable(schema.tables[table])) {
             appendCdcChange(sql, clock(), table, id, op, doc);
         }
     };
@@ -2864,7 +2953,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // (its companion carries no marker column but the read filters on
                 // it); the aggregate companion instead drops the row below, since
                 // `syncAggregates` gates both sides on liveness.
-                const merged: Record<string, unknown> = { ...existing, [softField]: clock(), _id: id };
+                // A soft delete is mechanically an UPDATE, so it is a write to
+                // the row and advances `_commitSeq` like any other — otherwise a
+                // changefeed paging on the sequence would never observe the
+                // tombstone and would keep serving a row its source considers gone.
+                const merged: Record<string, unknown> = { ...existing, ...commitSeqFields(tableName), [softField]: clock(), _id: id };
 
                 runGuardedWrite(
                     sql,
@@ -3477,7 +3570,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // raw-forwarded client payload can't backdate/forward-date the row.
             const creationTime = insertOptions?.allowExplicitId && typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
-            const documentWithMeta: Record<string, unknown> = { ...withDefaults, _creationTime: creationTime, _id: id };
+            const documentWithMeta: Record<string, unknown> = { ...withDefaults, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
 
             // `before` sees a shallow copy so an abort-only handler can't reassign
             // the row's top-level fields before they persist. Nested values are
@@ -3569,7 +3662,21 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Build every row up front: column defaults + a minted (or, for trusted
             // import, an explicit) id. **No `.check()` validators and no before/after
             // triggers run** — the caller vouches for the data; that is the "unsafe".
-            const rows = documents.map((document) => {
+            // One `_commitSeq` per CHUNK, not per row. Each chunk below is a single
+            // atomic multi-row INSERT, and a sequence identifies a commit rather
+            // than a row — so rows that land together must compare equal, which is
+            // what lets a consumer treat a sequence as an indivisible unit. Stamping
+            // inside the `map` would give every row in one commit its own sequence.
+            // Inside a transaction `commitSeqFields` memoizes, so all chunks share
+            // the transaction's single sequence; outside one, each chunk gets its own
+            // because each chunk is its own commit.
+            const chunkSeqFields: Record<string, number>[] = [];
+
+            for (let start = 0; start < documents.length; start += INSERT_CHUNK_ROWS) {
+                chunkSeqFields.push(commitSeqFields(tableName));
+            }
+
+            const rows = documents.map((document, index) => {
                 const withDefaults = applyInsertDefaults(definition, document, auth);
                 const id = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
                 // Gate `_creationTime` behind the same `allowExplicitId` opt-in as
@@ -3577,7 +3684,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const creationTime =
                     batchOptions?.allowExplicitId === true && typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
-                return { creationTime, document: { ...withDefaults, _creationTime: creationTime, _id: id }, id };
+                const documentWithMeta: Record<string, unknown> = {
+                    ...withDefaults,
+                    ...chunkSeqFields[Math.floor(index / INSERT_CHUNK_ROWS)],
+                    _creationTime: creationTime,
+                    _id: id,
+                };
+
+                return { creationTime, document: documentWithMeta, id };
             });
 
             // Charge the batch BEFORE it is written. `onWrite` fires per row
@@ -3726,7 +3840,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // would silently strip them, deleting the field instead of updating it.
             assertNoExplicitUndefined("patch", patch);
 
-            const merged = { ...existing, ...patch, _id: id };
+            const merged = { ...existing, ...patch, ...commitSeqFields(tableName), _id: id };
 
             applyOnUpdate(tableDefinition, patch, merged, auth);
 
@@ -4149,7 +4263,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mutation path mints from `clock()` so a forged document
             // `_creationTime` can't overwrite the persisted timestamp.
             const creationTime = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
-            const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
+            const replaced: Record<string, unknown> = { ...document, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
 
             applyOnUpdate(tableDefinition, document, replaced, auth);
 

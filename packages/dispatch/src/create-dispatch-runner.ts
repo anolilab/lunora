@@ -10,6 +10,7 @@
  */
 import { isLunoraError, LunoraError } from "@lunora/errors";
 
+import { abortDeadline } from "../../../shared/abort-deadline";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
 
@@ -229,13 +230,17 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
         // body reads further down: a slow/hanging origin can stall AFTER
         // headers arrive (so the outer `await fetchImpl` already resolved),
         // and the deadline must still fire on the pending body read, not
-        // reset a fresh window for it.
-        const timeoutSignal = AbortSignal.timeout(timeoutMs);
+        // reset a fresh window for it. `shared/abort-deadline.ts` (explicit
+        // controller + timer, strongly held) rather than the weakly-held
+        // `AbortSignal.timeout` — see its docstring for why the built-in can
+        // silently never fire. Disposed in the `finally` below, AFTER the body
+        // reads, so a fast response leaves no pending timer.
+        const deadline = abortDeadline(undefined, timeoutMs, () => new DOMException(`dispatch timed out after ${String(timeoutMs)}ms`, "TimeoutError"));
 
-        // A timed-out `AbortSignal.timeout` rejects (or, for a body read,
-        // makes the stream reject) with the signal's `reason` — a
-        // `DOMException` named `TimeoutError` (not `AbortError`, reserved for
-        // an explicit caller-triggered abort) — map that to the same
+        // A fired deadline rejects (or, for a body read, makes the stream
+        // reject) with the signal's `reason` — a `DOMException` named
+        // `TimeoutError` (not `AbortError`, reserved for an explicit
+        // caller-triggered abort) — map that to the same
         // retryable 503 `LunoraError` regardless of which await it hit.
         // Anything else (network failure, DNS, a malformed body) rethrows
         // as-is. `never` return, called as `return rethrowAsTimeoutOrOriginal(error)`
@@ -253,56 +258,67 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
 
         let response: Response;
 
+        // One `finally` around the ENTIRE fetch + body-read region: the signal
+        // (and its timer) must stay live for the `response.text()` calls below,
+        // not just the initial fetch — disposing after headers alone would
+        // reset the deadline for the body, the half most likely to stall.
         try {
-            response = await fetchImpl(url, {
-                body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
-                headers,
-                method: "POST",
-                // `AbortSignal.timeout`'s internal timer is unref'd, so it never
-                // keeps the process alive on its own — no manual
-                // AbortController/setTimeout/clearTimeout needed (mirrors
-                // container/src/otel.ts's OTLP send and the CLI's fetch-timeout
-                // call sites).
-                signal: timeoutSignal,
-            });
-        } catch (error: unknown) {
-            return rethrowAsTimeoutOrOriginal(error);
-        }
-
-        if (!response.ok) {
-            let errorBody: string;
-
             try {
-                errorBody = await response.text();
+                response = await fetchImpl(url, {
+                    // `id` is the receiver's at-least-once dedup key: the worker's
+                    // dispatch endpoint forwards it to the shard as the replay-dedup
+                    // `mutationId`, so a redelivered dispatch of the same call is
+                    // applied once. Deliberately `dedupId`, never `messageId` — the
+                    // shard keys dedup on `(identity, mutationId)` with no function
+                    // path, so a per-MESSAGE id reused across a handler's several
+                    // calls would make the second call return the first's cached
+                    // result. `JSON.stringify` omits the key when unset.
+                    body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, id: runOptions.dedupId, shardKey: runOptions.shardKey }),
+                    headers,
+                    method: "POST",
+                    signal: deadline.signal,
+                });
             } catch (error: unknown) {
                 return rethrowAsTimeoutOrOriginal(error);
             }
 
-            throw toDispatchError(label, response.status, errorBody, runOptions.messageId);
-        }
+            if (!response.ok) {
+                let errorBody: string;
 
-        let text: string;
+                try {
+                    errorBody = await response.text();
+                } catch (error: unknown) {
+                    return rethrowAsTimeoutOrOriginal(error);
+                }
 
-        try {
-            text = await response.text();
-        } catch (error: unknown) {
-            return rethrowAsTimeoutOrOriginal(error);
-        }
+                throw toDispatchError(label, response.status, errorBody, runOptions.messageId);
+            }
 
-        if (text.length === 0) {
-            return undefined;
-        }
+            let text: string;
 
-        try {
-            return JSON.parse(text);
-        } catch {
-            // A non-empty body that isn't valid JSON can't be a function's
-            // JSON-encoded return value — it's a malformed response (an
-            // intermediary's HTML error page, a misconfigured proxy). Surface it
-            // instead of handing the raw text back as the "return value".
-            throw new LunoraError("INTERNAL", `${label}: function dispatch returned a non-JSON body (${String(response.status)}): ${text}`, {
-                status: response.status,
-            });
+            try {
+                text = await response.text();
+            } catch (error: unknown) {
+                return rethrowAsTimeoutOrOriginal(error);
+            }
+
+            if (text.length === 0) {
+                return undefined;
+            }
+
+            try {
+                return JSON.parse(text);
+            } catch {
+                // A non-empty body that isn't valid JSON can't be a function's
+                // JSON-encoded return value — it's a malformed response (an
+                // intermediary's HTML error page, a misconfigured proxy). Surface it
+                // instead of handing the raw text back as the "return value".
+                throw new LunoraError("INTERNAL", `${label}: function dispatch returned a non-JSON body (${String(response.status)}): ${text}`, {
+                    status: response.status,
+                });
+            }
+        } finally {
+            deadline.dispose();
         }
     };
 };

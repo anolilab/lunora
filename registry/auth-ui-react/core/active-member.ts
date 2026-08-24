@@ -11,7 +11,7 @@
  * deciding that whatever this returns.
  */
 import type { ControllerContext } from "./config";
-import { mapAuthError } from "./map-error";
+import { assertOk, mapAuthError } from "./map-error";
 import { createStore } from "./store";
 import type { Controller, FlowStatus } from "./types";
 
@@ -36,12 +36,33 @@ const createActiveMemberController = (context: ControllerContext, options: { aut
         store.update({ error: undefined, loading: true });
 
         try {
-            const [session, organization] = await Promise.all([context.authClient.getSession(), context.authClient.organization.getFullOrganization()]);
+            // Still one round trip, not two: the organization read is fired
+            // alongside the session and only *checked* once there is a session
+            // to check it for.
+            const [session, organization] = await Promise.all([
+                context.authClient.getSession().then(assertOk),
+                context.authClient.organization.getFullOrganization(),
+            ]);
             const userId = session.data?.user?.id;
-            const role = organization.data?.members?.find((member) => member.userId === userId)?.role;
 
-            // No active organization is a normal state, not an error — a user
-            // who has not picked one yet simply has no role in one.
+            /*
+             * Signed out is a normal state, not an error — nobody has a role in
+             * an organization when nobody is signed in, and the organization
+             * read answers 401 for exactly that reason. Asserting it here would
+             * turn "signed out" into an error banner in a gated menu.
+             */
+            if (userId === undefined) {
+                store.update({ loading: false, role: undefined, status: "success" });
+
+                return;
+            }
+
+            // `assertOk`: past this point the read *should* have worked, so a
+            // failure must surface as an error rather than as "no role".
+            const role = assertOk(organization).data?.members?.find((member) => member.userId === userId)?.role;
+
+            // No active organization is a normal state too — a user who has not
+            // picked one yet simply has no role in one.
             store.update({ loading: false, role, status: "success" });
         } catch (error) {
             context.onError?.(error);

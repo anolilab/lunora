@@ -25,7 +25,7 @@
      */
     let failedImage = $state<string | undefined>(undefined);
 
-    const image = $derived(user?.image);
+    const image = $derived(user?.image ?? undefined);
     const showImage = $derived(image !== undefined && image !== "" && failedImage !== image);
     const style = $derived(`height:${size}px;width:${size}px`);
 </script>

@@ -10,6 +10,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import type { AbortDeadline } from "../../../shared/abort-deadline";
+import { abortDeadline } from "../../../shared/abort-deadline";
 import { readCapped } from "./read-capped";
 
 /**
@@ -157,47 +159,13 @@ const toExecResult = (parsed: unknown): ContainerExecResult | undefined => {
     };
 };
 
-/** A resolved exec deadline: the signal to send, plus the timer teardown. */
-interface ExecDeadline {
-    /** Clear the deadline timer. Always call it, or a fast response leaves a pending timer behind. */
-    dispose: () => void;
-    /** The signal to hand `fetch`, or `undefined` when the call is unbounded. */
-    signal: AbortSignal | undefined;
-}
-
 /**
- * Combine a caller's `signal` with a `timeoutMs` deadline.
- *
- * Deliberately an explicit `AbortController` + `setTimeout` rather than
- * `AbortSignal.timeout(ms)`. The built-in is **weakly held**: nothing in the
- * platform keeps the returned signal alive, so once the only strong reference
- * goes out of scope the signal can be collected and the deadline **silently
- * never fires** — a caller's `timeoutMs` becomes an unbounded call. That is not
- * theoretical: written with `AbortSignal.timeout` this failed roughly three runs
- * in eight, hanging until the test runner's own timeout. A controller captured
- * by the timer callback is strongly reachable for exactly as long as the timer
- * is pending, which is the lifetime we actually want.
- *
- * `dispose` is the other half: without it a call that answers in 5ms leaves a
- * 120s timer pending.
+ * Combine a caller's `signal` with a `timeoutMs` deadline. Thin wrapper over
+ * `shared/abort-deadline.ts` (which carries the weak-hold rationale for why
+ * this is not `AbortSignal.timeout`), supplying the exec-specific abort reason.
  */
-const execDeadline = (signal: AbortSignal | undefined, timeoutMs: number | undefined): ExecDeadline => {
-    if (timeoutMs === undefined) {
-        return { dispose: () => {}, signal };
-    }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-        controller.abort(new LunoraError("INTERNAL", `ctx.containers: exec timed out after ${String(timeoutMs)}ms`));
-    }, timeoutMs);
-
-    return {
-        dispose: () => {
-            clearTimeout(timer);
-        },
-        signal: signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]),
-    };
-};
+const execDeadline = (signal: AbortSignal | undefined, timeoutMs: number | undefined): AbortDeadline =>
+    abortDeadline(signal, timeoutMs, () => new LunoraError("INTERNAL", `ctx.containers: exec timed out after ${String(timeoutMs)}ms`));
 
 /**
  * Build `ContainerHandle.exec` over a handle's own `fetch`, so the exec

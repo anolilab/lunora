@@ -6,6 +6,8 @@
 -->
 <script lang="ts">
     import { isFlowEnabled } from "../core/flow-gate";
+    import { rowActionLabel } from "../core/labels";
+    import { userLabel } from "../core/session";
     import { createDeviceSessionsController } from "../core/multi-session";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
@@ -32,6 +34,7 @@
                         <UserView compact user={entry.user} />
                         <span class="lunora-auth-list__actions">
                             <button
+                                aria-label={rowActionLabel(t.switchAccount, userLabel(entry.user))}
                                 class="lunora-auth-button lunora-auth-button--secondary"
                                 disabled={$res.busy || entry.session?.token === undefined}
                                 onclick={() => {
@@ -42,6 +45,7 @@
                                 {t.switchAccount}
                             </button>
                             <button
+                                aria-label={rowActionLabel(t.signOut, userLabel(entry.user))}
                                 class="lunora-auth-button lunora-auth-button--danger"
                                 disabled={$res.busy || entry.session?.token === undefined}
                                 onclick={() => {
