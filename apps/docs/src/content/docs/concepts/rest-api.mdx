@@ -200,6 +200,22 @@ cache key itself. Two requests that differ on any of them can never share an ent
 
 Only a `200` is stored, and a response carrying `Set-Cookie` is skipped.
 
+### Opting out
+
+Pass `restEdgeCache: null` to `createWorker` to keep the surface headers-only —
+the declared `Cache-Control` still goes out and browsers and any CDN in front
+still honour it, but nothing is written to the colo:
+
+```ts
+export default createWorker({
+    // …schema, functions…
+    restEdgeCache: null,
+});
+```
+
+A host with no cache of its own needs no opt-out: there is nothing to find, and
+the surface degrades to the same headers-only behaviour.
+
 ## OpenAPI
 
 The exposed surface is described by the generated OpenAPI 3.1 document, so

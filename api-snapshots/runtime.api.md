@@ -2220,6 +2220,7 @@ interface WorkerOptions {
     requireEphemeralWsToken?: boolean;
     resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     resolveTableSharding?: AdminTableResolver;
+    restEdgeCache?: HttpCacheLike | null;
     restRateLimit?: RestRateLimit;
     routes?: Record<string, Route>;
     sampling?: TraceSamplingConfig;

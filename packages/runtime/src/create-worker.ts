@@ -1,4 +1,5 @@
 import { isLunoraError, toErrorBody } from "@lunora/errors";
+import type { HttpCacheLike } from "@lunora/platform";
 
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
@@ -1171,6 +1172,17 @@ interface WorkerOptions {
      * bucket rows; when omitted, every row routes to the default shard.
      */
     resolveTableSharding?: AdminTableResolver;
+
+    /**
+     * The shared HTTP cache a REST `cache` policy is stored in and served from.
+     *
+     * Defaults to the host's own (`caches.default` on Cloudflare), which is what
+     * makes `.expose({ rest: true, cache })` store anything at all. Pass `null` to
+     * keep the surface headers-only — the declared `Cache-Control` still goes out,
+     * but nothing is written to the colo. A host with no cache needs no opt-out:
+     * `rest-edge-cache` finds none and degrades to the same behaviour.
+     */
+    restEdgeCache?: HttpCacheLike | null;
 
     /**
      * Optional per-request rate-limit gate for the opt-in public REST surface
@@ -4537,6 +4549,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         functions: options.functions ?? {},
         invoke: invokeExposed,
         readJsonBody: readJsonBodyWithLimit,
+        // `null` is a meaningful value here (the explicit opt-out), so it is
+        // forwarded when PRESENT rather than when truthy.
+        ...(options.restEdgeCache === undefined ? {} : { edgeCache: options.restEdgeCache }),
         ...(options.restRateLimit ? { rateLimit: options.restRateLimit } : {}),
     });
 

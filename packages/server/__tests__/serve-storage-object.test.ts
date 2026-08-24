@@ -175,6 +175,31 @@ describe("serveStorageObject", () => {
         expect(calls.downloads).toStrictEqual([]);
     });
 
+    it("builds the 206 headers from the head, not the ranged read — one coherent representation", async () => {
+        expect.assertions(3);
+
+        // Model an object replaced between the two reads: the head sees the
+        // representation the window was resolved against, the ranged read sees a
+        // newer one. The validator, digest and Content-Range total must all
+        // describe the SAME representation, or the response lies about what it is.
+        const ctx = {
+            storage: {
+                download: async (_key: string) => {
+                    return { ...fakeObject(BODY.subarray(2, 6), 10, { etag: "new", sha256Base64: "AAAA" }) };
+                },
+                head: async (_key: string) => {
+                    return { ...fakeObject(new Uint8Array(), 10, { etag: "old", sha256Base64: "3q2+7w==" }), body: undefined };
+                },
+            },
+        };
+
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }));
+
+        expect(response.headers.get("etag")).toBe('"old"');
+        expect(response.headers.get("repr-digest")).toBe("sha-256=:3q2+7w==:");
+        expect(response.headers.get("content-range")).toBe("bytes 2-5/10");
+    });
+
     it("returns 206 with Content-Range/Content-Length for a byte range", async () => {
         expect.assertions(4);
 
