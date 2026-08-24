@@ -3049,10 +3049,8 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
 
     return {
         build: `
-            const flags: import("${flagsSpecifier}").LunoraFlags = createFlags({
-                hooks: flagsConfig.hooks,
-                logger: flagsConfig.logger,
-                provider: () => config.flags?.(env) ?? flagsConfig.provider(env),
+            const flags: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
+                provider: () => config.flags?.(env),
                 targetingKey: () => flagsConfig.identify?.({ identity: identity ?? null, userId: userId ?? null }),
             });
 `,
@@ -3170,10 +3168,8 @@ const emitFlagsOverrides = (
 
     const clientBuild = (targetingKey: string): string => `
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const flags: import("${flagsSpecifier}").LunoraFlags = createFlags({
-                hooks: flagsConfig.hooks,
-                logger: flagsConfig.logger,
-                provider: () => config.flags?.(env) ?? flagsConfig.provider(env),
+            const flags: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
+                provider: () => config.flags?.(env),
                 targetingKey: ${targetingKey},
             });`;
 
