@@ -1,3 +1,9 @@
+## @lunora/seed [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.78...@lunora/seed@1.0.0-alpha.79) (2026-08-24)
+
+### Bug Fixes
+
+* **seed:** respect unique columns when seeding ([#457](https://github.com/anolilab/lunora/issues/457)) ([37f5157](https://github.com/anolilab/lunora/commit/37f515701408b456a68cfa6f1e3a1c0231691b64))
+
 ## @lunora/seed [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.77...@lunora/seed@1.0.0-alpha.78) (2026-08-23)
 
 
