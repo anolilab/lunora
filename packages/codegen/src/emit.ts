@@ -333,7 +333,12 @@ const emitDataModel = (schema: SchemaIR): string => {
                 .join("\n");
             const body = fields ? `\n${fields}\n` : "";
 
-            return `export interface Doc_${table.name} {\n    _id: Id<"${table.name}">;\n    _creationTime: number;${body}}`;
+            // `_commitSeq` is minted by the write path on a `.commitOrdered()`
+            // table only, so it is rendered per-table rather than alongside the
+            // two unconditional system fields.
+            const commitSeq = table.commitOrdered === true ? "\n    _commitSeq: number;" : "";
+
+            return `export interface Doc_${table.name} {\n    _id: Id<"${table.name}">;\n    _creationTime: number;${commitSeq}${body}}`;
         })
         .join("\n\n");
 
@@ -2379,14 +2384,15 @@ export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
  */
 
 /**
- * Build the `LUNORA_LIFECYCLE_HOOKS` manifest body: the connect/disconnect
- * function-path arrays the generated ShardDO iterates on socket open/close. Each
+ * Build the `LUNORA_LIFECYCLE_HOOKS` manifest body: the connect/disconnect/init
+ * function-path arrays the generated ShardDO iterates — the first two on socket
+ * open/close, `init` once per instance before any handler runs. Each
  * entry is the same `${namespace}:${fn}` key the function lands under in
  * `LUNORA_FUNCTIONS`, so the DO dispatches a hook by path like any other
  * registered function. Functions arrive pre-sorted, so the arrays are stable.
  */
-const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connect: string[]; disconnect: string[] } => {
-    const manifest: { connect: string[]; disconnect: string[] } = { connect: [], disconnect: [] };
+const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connect: string[]; disconnect: string[]; init: string[]; reactor: string[] } => {
+    const manifest: { connect: string[]; disconnect: string[]; init: string[]; reactor: string[] } = { connect: [], disconnect: [], init: [], reactor: [] };
 
     for (const definition of functions) {
         if (!definition.lifecycle) {
@@ -2493,6 +2499,13 @@ export interface RegisteredLunoraFunction {
      * \`AbortSignal\` as a third argument — the runtime drives it frame-by-frame.
      */
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
+    /**
+     * The lifecycle moment a hook fires on, when this registration came from
+     * \`onConnect\`/\`onDisconnect\`/\`onShardInit\`/\`onQueryChange\`. Read at
+     * dispatch to decide whether the function runs system-trusted: \`init\` and
+     * \`reactor\` have no caller identity, so RLS has no user to scope to.
+     */
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** \`"internal"\` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
 }
@@ -2504,14 +2517,19 @@ ${agentRegistry.prelude}${sandboxRegistry.prelude}
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBodyWithAgents}};
 ${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}
 /**
- * Connection-lifecycle manifest: the function paths the generated ShardDO
- * dispatches when a client's WebSocket connects (\`connect\`) or disconnects
- * (\`disconnect\`). Each path also resolves through {@link LUNORA_FUNCTIONS}; the
- * DO runs every hook under the socket's verified identity via system dispatch.
+ * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
+ * client's WebSocket connects (\`connect\`) or disconnects (\`disconnect\`), once
+ * per Durable Object instance before any handler runs (\`init\`), and after a
+ * write flush when a watched read's result changed (\`reactor\`). Each path also
+ * resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
+ * socket's verified identity; \`init\` and \`reactor\` have no caller, so they run
+ * anonymous — all via system dispatch.
  */
-export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[] } = {
+export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[]; reactor: readonly string[] } = {
     connect: [${lifecycleHooks.connect.map((path) => JSON.stringify(path)).join(", ")}],
     disconnect: [${lifecycleHooks.disconnect.map((path) => JSON.stringify(path)).join(", ")}],
+    init: [${lifecycleHooks.init.map((path) => JSON.stringify(path)).join(", ")}],
+    reactor: [${lifecycleHooks.reactor.map((path) => JSON.stringify(path)).join(", ")}],
 };
 
 /**
@@ -2850,6 +2868,9 @@ const buildTableColumns = (schema: SchemaIR): Record<string, EmittedColumn[]> =>
         const columns: EmittedColumn[] = [
             { name: "_id", optional: false, pk: true, type: "id" },
             { name: "_creationTime", optional: false, type: "number" },
+            // Runtime-minted like the two above, but only on a `.commitOrdered()`
+            // table — the diagram must not show a column the rows don't carry.
+            ...(table.commitOrdered === true ? [{ name: "_commitSeq", optional: false, type: "number" } satisfies EmittedColumn] : []),
         ];
 
         for (const [field, validator] of Object.entries(table.shape)) {
@@ -4269,6 +4290,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // Hyperdrive into this DO's SQLite by the poll alarm. Everything below is gated on
     // this, so a schema with no sourced table emits a byte-identical `shard.ts`.
     const hasSourcedTables = schema.tables.some((table) => table.externalSource !== undefined);
+    const hasMemoryTables = schema.tables.some((table) => table.memory === true);
 
     if (hasD1Global && hasHyperdriveGlobal) {
         // Mixing backends needs a per-table routing writer (id-addressed ops must
@@ -4389,7 +4411,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, buildReprojectionMigration, ${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         // `TraceRefLike` rides along with the source imports: the poll override
         // takes the alarm's trace so its contained failures are correlated, and
         // `@lunora/do` projects it structurally rather than re-exporting the
@@ -4588,8 +4610,20 @@ ${vectorNamespaceField}
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
-                enforceRls: true,
+                // A dispatch with NO caller identity runs system-trusted: RLS scopes
+                // rows to a user, and these have no user to scope to. This is the tier
+                // migrations, imports and the external-source poll loop already run in
+                // (see \`adminWriterPrelude\`). Only \`onShardInit\` and \`onQueryChange\`
+                // reach it; \`onConnect\`/\`onDisconnect\` carry a verified identity and
+                // stay guarded like any request.
+                enforceRls: options.trusted !== true,
                 headroom: options.headroom ?? this.transactionHeadroom(),
+                // A live predicate, not a flag: the transaction opens AFTER this ctx
+                // is built (a mutation dispatch wraps the handler), so only a call-time
+                // read reports the truth. \`_commitSeq\` reuses one sequence across
+                // writes only while they commit together — an action is not wrapped, so
+                // each of its writes allocates its own.
+                inTransaction: () => this.isInTransaction(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
                 onReadRange: options.onReadRange,${hasVectors ? "\n                onWrite," : ""}
@@ -4609,6 +4643,8 @@ ${vectorNamespaceField}
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see \`databaseOptions\`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -4711,6 +4747,30 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
     // `pullExternalSourceTick` in @lunora/do (query under `tenantBy(shardKey)` →
     // id-lift → diff → apply through the validated CDC writer). System-owned (alarm
     // tier, no request identity), so it never loosens `ctx.sql`'s action-only contract.
+    // Once-per-instance init: empty every `.memory()` table, then fire the
+    // `onShardInit` manifest. The base awaits this at every runtime entry point
+    // (fetch / webSocketMessage / webSocketClose / alarm) before user code runs,
+    // so a handler can never observe a memory table between the eviction that
+    // emptied it and the hooks that refill it.
+    //
+    // Always emitted, even with no hooks and no memory tables: `dispatchShardInit`
+    // iterates an empty manifest and costs nothing, and gating it at emit time
+    // would mean a project that adds its first `onShardInit` to a shard generated
+    // before this flag existed silently never fires it. The `clearMemoryTables`
+    // call IS gated — it is only meaningful with a memory table, and leaving it out
+    // keeps the import off shards that have none.
+    //
+    // `ensureMigrated()` runs first because the clear is a `DELETE FROM` and the
+    // table has to exist: on a cold start this is the earliest code to touch SQL,
+    // ahead of the dispatch that would normally have migrated.
+    const shardInitOverride = `
+        protected override async runShardInit(): Promise<void> {
+            this.ensureMigrated();
+${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema as unknown as SchemaLike);\n" : ""}
+            await this.dispatchShardInit();
+        }
+`;
+
     /* eslint-disable no-secrets/no-secrets -- the emitted `pullExternalSourceIncrementalTick(this.sql …)` poll-loop call is a dense generated identifier, not a credential */
     const externalSourceOverride = hasSourcedTables
         ? `
@@ -5064,7 +5124,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // The main \`/rpc\` path always supplies one; \`dispatchLifecycle\` /
             // \`handleRunAs\` don't mint their own and omit it, so they keep the
             // prior fallback behavior unchanged.
-            const ctx = this.buildCtx({ functionPath, headroom });
+            const ctx = this.buildCtx({ functionPath, headroom, trusted: registered.lifecycle === "init" });
 
             // A mutation's writes must commit all-or-nothing: wrap its dispatch in
             // the DO's BEGIN/COMMIT span so any throw (a validator, an RLS denial,
@@ -5137,9 +5197,46 @@ ${relationFanout.override}
             };
         }
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
-        protected override lifecycleHookPaths(event: "connect" | "disconnect"): readonly string[] {
+        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
+${shardInitOverride}
+        // One \`onQueryChange\` dispatch. Mirrors \`executeSubscription\` — the
+        // socket-terminated half of the same reactivity — and differs only in who
+        // consumes the result: the base's \`dispatchReactors\` stores the digest as
+        // the new baseline and the footprint as the "should I even re-run this"
+        // gate, instead of pushing a frame down a socket.
+        //
+        // Wrapped in \`runInTransaction\` because a reactor handler is a mutation
+        // and its writes must commit all-or-nothing. Safe to open here: the refresh
+        // drain runs OUTSIDE any dispatch transaction (it is post-flush background
+        // work), so this never nests.
+        //
+        // NO identity is threaded, and the ctx is built \`trusted\`. A reactor fires
+        // because data moved, not because anyone asked, so there is no user for RLS
+        // to scope to — it runs in the same system tier as migrations and the
+        // external-source poll loop. Inheriting the shared per-request identity
+        // would instead run an app's reactor as whichever user happened to write
+        // last, which is worse than running it as nobody.
+        protected override async runReactor(functionPath: string, previousDigest?: string): Promise<{ digest: string; ran: boolean; tables: readonly string[] } | undefined> {
+            const registered = LUNORA_FUNCTIONS[functionPath];
+
+            if (!registered || registered.kind !== "mutation") {
+                return undefined;
+            }
+
+            this.ensureMigrated();
+
+            const footprint = createReadFootprint();
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
+            const outcome = (await this.runInTransaction(async () => registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>))) as {
+                digest: string;
+                ran: boolean;
+            };
+
+            return { digest: outcome.digest, ran: outcome.ran, tables: [...footprint.tables] };
+        }
+
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
             return LUNORA_TABLE_REFS[table];
@@ -5402,7 +5499,7 @@ ${adminWriterPrelude}
             this.migrated = true;
         }
 
-        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void } = {}): unknown {
+        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
             // refresh — both run in deferred/interleaved contexts), use it by
@@ -5484,7 +5581,25 @@ ${notifyBuild}
 ${isActionLine}${actionOnlyBlock}
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);
             ctx.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx);
-            ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("query", reference.__lunoraRef, fnArgs, ctx);
+            // \`ctx.runQuery(ref, args, { untracked: true })\` runs the sub-query on
+            // its OWN context, built without the read-footprint hooks — so its
+            // reads never enter this subscription's footprint and a write to the
+            // tables it touched does not re-run us. Everything else is inherited:
+            // \`functionPath\` (log/metric attribution), \`headroom\` (the sub-query
+            // must not escape this dispatch's resource ceiling), and — load-bearing
+            // — the identity BY VALUE. Omitting identity would let \`buildCtx\` fall
+            // back to the shared per-request fields, which a concurrent RPC may
+            // have re-set, and an RLS-scoped sub-query would then read as the wrong
+            // user. A tracked call keeps sharing \`ctx\` exactly as before.
+            ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) =>
+                dispatchRun(
+                    "query",
+                    reference.__lunoraRef,
+                    fnArgs,
+                    runOptions?.untracked === true
+                        ? this.buildCtx({ functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId } })
+                        : ctx,
+                );
 
             return ctx;
         }

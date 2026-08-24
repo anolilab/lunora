@@ -21,7 +21,7 @@ interface UserAvatarProps {
 
 const UserAvatar = (props: UserAvatarProps): JSX.Element => {
     const [failed, setFailed] = createSignal(false);
-    const image = (): string | undefined => props.user?.image;
+    const image = (): string | undefined => props.user?.image ?? undefined;
 
     // A new user means a new image URL, so a previous failure must not stick to
     // it. Deferred, because the initial run would only re-clear a fresh signal.

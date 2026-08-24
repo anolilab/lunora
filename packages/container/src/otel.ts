@@ -20,6 +20,7 @@
  * The OTLP/JSON wire encoding is shared with the worker `otlpSink` via
  * `shared/otlp.ts` — one contract, bundler-inlined into both packages.
  */
+import { abortDeadline } from "../../../shared/abort-deadline";
 import type { OtlpResourceAttributes } from "../../../shared/otlp";
 import {
     encodeAttribute,
@@ -332,12 +333,21 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
         // e.g. an invalid URL), so the tracked chain never rejects and telemetry never
         // breaks the container.
         const dispatch = async (): Promise<void> => {
+            // The deadline bounds the POST: a hung collector aborts after
+            // `timeoutMs` instead of pinning this send in `inflight` and
+            // stalling `flush()`. `shared/abort-deadline.ts` (explicit
+            // controller + timer, strongly held) rather than `AbortSignal.timeout`,
+            // whose weakly-held signal can be collected and silently never fire —
+            // see its docstring. `dispose()` in the `finally` clears the timer on
+            // a fast send.
+            const deadline = abortDeadline(
+                undefined,
+                timeoutMs,
+                () => new DOMException(`OTLP export to ${url} timed out after ${String(timeoutMs)}ms`, "TimeoutError"),
+            );
+
             try {
-                // `AbortSignal.timeout` bounds the POST: a hung collector aborts
-                // after `timeoutMs` instead of pinning this send in `inflight` and
-                // stalling `flush()`. Its internal timer is unref'd, so it never
-                // keeps the container process alive on its own.
-                const response = await fetchImpl(url, { body: JSON.stringify(body), headers, method: "POST", signal: AbortSignal.timeout(timeoutMs) });
+                const response = await fetchImpl(url, { body: JSON.stringify(body), headers, method: "POST", signal: deadline.signal });
 
                 // A non-2xx collector response (bad token, wrong base path, payload
                 // too large, 5xx) is a real send failure the caller must be able to
@@ -357,6 +367,8 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
                 }
             } catch (error) {
                 options.onError?.(error);
+            } finally {
+                deadline.dispose();
             }
         };
 

@@ -10,6 +10,18 @@ import { LunoraError } from "@lunora/errors";
 import type { StorageRemapReport } from "./storage-remap";
 import { remapStorageReferences } from "./storage-remap";
 
+/**
+ * A validated `{ table, doc }` import envelope. `table` is `string` because
+ * {@link createRowTransformer}'s parser has already thrown for anything else —
+ * carrying that proof in the type is what keeps the rewrite half from
+ * re-checking it.
+ */
+interface ImportEnvelope {
+    [key: string]: unknown;
+    doc?: unknown;
+    table: string;
+}
+
 interface RowTransformConfig {
     /**
      * A foreign source's path rewrite, applied to the same parsed document as
@@ -57,11 +69,14 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
         return JSON.stringify({ doc: parsedDocument, table });
     };
 
-    const remapEnvelope = (trimmed: string, lineNumber: number): string => {
-        let parsed: Record<string, unknown>;
+    const parseEnvelope = (trimmed: string, lineNumber: number): ImportEnvelope => {
+        // Deliberately `unknown`: `JSON.parse` returns any JSON value, and typing
+        // it as an object up front is what let a `null` line reach a property
+        // read and throw a bare TypeError.
+        let parsed: unknown;
 
         try {
-            parsed = JSON.parse(trimmed) as Record<string, unknown>;
+            parsed = JSON.parse(trimmed);
         } catch (error: unknown) {
             // Without this the operator gets a bare `Unexpected token …` with no
             // way to find the offending line in a multi-GB NDJSON file, while
@@ -75,15 +90,27 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
             );
         }
 
-        if (typeof parsed["table"] !== "string") {
+        // The shape check comes first because `JSON.parse("null")` is a
+        // SUCCESSFUL parse, and reading `["table"]` off `null` is the one input
+        // that throws a bare TypeError with no line number — the failure this
+        // whole path exists to remove. Scalars and arrays read as `undefined`
+        // and would reach the same error anyway; they are grouped here so one
+        // message covers every "not an envelope" line.
+        const envelope = parsed === null || typeof parsed !== "object" || Array.isArray(parsed) ? undefined : (parsed as Record<string, unknown>);
+
+        if (envelope === undefined || typeof envelope["table"] !== "string") {
             throw new LunoraError("INTERNAL", `line ${String(lineNumber)}: import envelope is missing a string \`table\``);
         }
 
-        if (parsed["doc"] !== null && typeof parsed["doc"] === "object" && !Array.isArray(parsed["doc"])) {
-            let document = parsed["doc"] as Record<string, unknown>;
+        return envelope as ImportEnvelope;
+    };
+
+    const remapEnvelope = (parsed: ImportEnvelope): string => {
+        if (parsed.doc !== null && typeof parsed.doc === "object" && !Array.isArray(parsed.doc)) {
+            let document = parsed.doc as Record<string, unknown>;
 
             if (storageIdMap !== undefined) {
-                const remap = remapStorageReferences(document, storageIdMap, parsed["table"], storageColumns);
+                const remap = remapStorageReferences(document, storageIdMap, parsed.table, storageColumns);
 
                 document = remap.document;
                 report.rewritten += remap.rewritten;
@@ -93,9 +120,11 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
 
             // Rebuild from the parsed envelope so any field beyond
             // `{ table, doc }` survives the rewrite.
-            parsed["doc"] = remapDocument === undefined ? document : remapDocument(document, parsed["table"]);
+            return JSON.stringify({ ...parsed, doc: remapDocument === undefined ? document : remapDocument(document, parsed.table) });
         }
 
+        // Reached when `doc` is absent, null or an array: nothing to rewrite,
+        // but this is the remap path, which re-serialises either way.
         return JSON.stringify(parsed);
     };
 
@@ -110,10 +139,13 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
             return wrapBareDocument(trimmed, lineNumber);
         }
 
-        // Every envelope is parsed when a rewrite is configured — a storage id or
-        // an object path can sit in a plain column, which no substring of the
-        // line announces. With neither, the line goes through untouched.
-        return storageIdMap === undefined && remapDocument === undefined ? trimmed : remapEnvelope(trimmed, lineNumber);
+        // Every envelope is parsed, so a corrupted line fails with its line
+        // number instead of as a whole-batch server error. With no rewrite
+        // configured the ORIGINAL string goes through — re-serialising an
+        // unmodified line would churn key order/whitespace for nothing.
+        const parsed = parseEnvelope(trimmed, lineNumber);
+
+        return storageIdMap === undefined && remapDocument === undefined ? trimmed : remapEnvelope(parsed);
     };
 };
 

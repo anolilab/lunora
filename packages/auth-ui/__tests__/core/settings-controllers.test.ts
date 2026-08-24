@@ -104,6 +104,51 @@ describe("createProfileController", () => {
         // caller passing a live session value would otherwise fight the prefill.
         expect(getSession).not.toHaveBeenCalled();
     });
+
+    it("saves for a user with no avatar, whose image arrives as null", async () => {
+        expect.assertions(2);
+
+        // better-auth sends `image: null` for a user who has never set one.
+        // Seeded as a value it makes the field uncontrolled and `submit`'s
+        // `.trim()` throw, so the form can never be saved.
+        const getSession = vi.fn(() => ok({ user: { image: null, name: "Grace" } }));
+        const client = stubClient({ getSession });
+        const { context } = makeContext(client);
+        const controller = createProfileController(context);
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        expect(controller.getState().fields.image.value).toBe("");
+
+        await controller.actions.submit();
+
+        expect(client.updateUser as ReturnType<typeof vi.fn>).toHaveBeenCalledWith({ image: undefined, name: "Grace" });
+    });
+
+    it("propagates an errored session read instead of blanking the fields", async () => {
+        expect.assertions(2);
+
+        const getSession = vi.fn(() => Promise.resolve({ data: null, error: { message: "boom", status: 500 } }));
+        const onError = vi.fn();
+        const client = stubClient({ getSession });
+        const context = resolveContext({ authClient: client, nav: { navigate: vi.fn(), replace: vi.fn() }, onError });
+        const controller = createProfileController(context);
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        // The errored read reaches the form engine's error path — it used to be
+        // swallowed into `{ image: "", name: "" }`.
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(controller.getState().fields.name.value).toBe("");
+    });
 });
 
 describe("createChangeEmailController", () => {

@@ -23,7 +23,7 @@ interface UserAvatarProps {
 
 const UserAvatar = ({ size = 32, user }: UserAvatarProps): ReactElement => {
     const [failed, setFailed] = useState(false);
-    const image = user?.image;
+    const image = user?.image ?? undefined;
 
     /*
      * A new user means a new image URL, so a previous failure must not stick to

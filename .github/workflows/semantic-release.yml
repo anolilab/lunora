@@ -1,5 +1,3 @@
-# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
-
 "name": "Semantic Release"
 
 "on": # yamllint disable-line rule:truthy
@@ -9,13 +7,11 @@
         "branches": ["main", "alpha", "next", "beta"]
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
-# Release runs must NEVER be cancelled mid-flight. multi-semantic-release pushes
-# a git tag AND a per-tag channel note (refs/notes/semantic-release-<tag>) for each
-# package; cancelling between those pushes leaves a tag whose channel note is missing.
-# A later run then can't map that tag to the `alpha` channel (get-last-release filters
-# prerelease tags by note channel), decides "no previous release", recomputes
-# 1.0.0-alpha.1, and dies on `git tag` (exit 128) because the tag already exists.
-# Queue release runs instead of cancelling them so each completes its tag+note+publish.
+# Never cancel an in-progress release (GitHub may still replace a run that is only
+# pending). Each package gets a git tag AND a channel note
+# (refs/notes/semantic-release-<tag>); a run cancelled between those two pushes leaves
+# a tag with no note, which the next run reads as "never released" — it then recomputes
+# an existing version and dies on `git tag`.
 "concurrency":
     "group": "${{ github.workflow }}-${{ github.ref }}"
     "cancel-in-progress": false
@@ -41,16 +37,10 @@
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
-              # SECURITY TODO: this job holds NPM_TOKEN + a GitHub PAT, so a compromised
-              # dependency could exfiltrate them. `audit` only logs egress. A maintainer
-              # should switch to `egress-policy: block` with a verified allowlist once the
-              # full set of endpoints is confirmed from an audit run. Known-required hosts:
-              #   - registry.npmjs.org      (npm publish)
-              #   - github.com              (git push tags/commits)
-              #   - api.github.com          (GitHub releases / issue + PR comments)
-              #   - objects.githubusercontent.com (release asset/object downloads)
-              # Not switched to `block` here because the complete allowlist cannot be
-              # verified offline and an incomplete allowlist would break the release.
+              # SECURITY TODO: this job holds NPM_TOKEN + a GitHub PAT, and `audit` only
+              # logs egress. Switching to `block` needs an allowlist confirmed from a real
+              # audit run — an incomplete one breaks the release. Known-required hosts:
+              # registry.npmjs.org, github.com, api.github.com, objects.githubusercontent.com.
               "with":
                   "egress-policy": "audit"
 
@@ -65,11 +55,10 @@
                   "GIT_AUTHOR_NAME": "GitHub Actions Shell"
                   "EMAIL": "github-actions[bot]@users.noreply.github.com"
 
-            # Belt-and-suspenders: semantic-release fetches notes itself, but a release
-            # run cancelled mid-push (historically) could leave a tag without its channel
-            # note. Re-fetch ALL notes refs explicitly so get-last-release can map every
-            # @lunora/*@<ver> tag to its `alpha`/`beta`/`next` channel and never re-release
-            # an already-published version. Static command — no untrusted input.
+            # Deliberate redundancy: semantic-release fetches notes itself, but a run
+            # cancelled mid-push can leave a tag without its channel note. Fetching every
+            # notes ref keeps each @lunora/*@<ver> tag mappable to its channel, so an
+            # already-published version is never released twice.
             - "name": "Fetch semantic-release notes"
               "shell": "bash"
               "run": "git fetch origin '+refs/notes/*:refs/notes/*'"
@@ -81,7 +70,7 @@
                   # `packageManager` field, so CI can't drift from the repo's version.
                   "run_install": false
 
-            - "name": "Use Node.js 22.14"
+            - "name": "Use Node.js 22.15"
               "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
               "with":
                   "node-version": "22.15"
@@ -114,24 +103,18 @@
                   "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
 
             - "name": "Build packages"
-              # Build everything before releasing — multi-semantic-release uses each package's
-              # files: in package.json to publish, and those typically include dist/.
-              #
-              # `build:prod` (packem --production), NOT `build` (--development): a dev build
-              # ships the React dev JSX runtime and dev-only branches, which crash consumers
-              # whose bundler stubs `react/jsx-dev-runtime` in production. That is exactly what
-              # `@lunora/react@1.0.0-alpha.31` did on npm.
+              # dist/ is what gets published, so it has to exist before the release.
+              # `build:prod`, never `build`: a development build ships the React dev JSX
+              # runtime and crashes consumers whose bundler stubs it — shipped once already,
+              # as @lunora/react@1.0.0-alpha.31.
               "run": "pnpm run build:packages:prod"
 
             - "name": "Verify no development-build artifacts"
               "run": "pnpm run dist:check"
 
-            # The vis git hooks (commitlint, secret scan, staged lint) are installed
-            # by the `prepare` script during install. They must NOT run on
-            # multi-semantic-release's machine-generated `chore(release): …` commits
-            # — commitlint rejects their long, changelog-bearing headers (the
-            # release aborted on `@lunora/analytics`'s 108-char header). Disable
-            # hooks for the rest of this job.
+            # `prepare` installed the vis hooks during install. commitlint rejects the
+            # long changelog-bearing headers of machine-generated `chore(release):` commits,
+            # so the hooks have to be off for the rest of this job.
             - "name": "Disable git hooks for release commits"
               "run": "git config core.hooksPath /dev/null"
 
@@ -146,26 +129,62 @@
                   "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
               "run": "pnpm exec multi-semantic-release"
 
-            # multi-semantic-release pushes per-package `chore(release)` commits that bump
-            # each package.json (and any cross-package dependency ranges), but
-            # @semantic-release/git only stages per-package assets — pnpm-lock.yaml lives at
-            # the root and drifts. Frozen-lockfile installs on the next push then fail with
-            # ERR_PNPM_OUTDATED_LOCKFILE. Refresh here.
-            - "name": "Refresh pnpm-lock.yaml against released manifests"
-              "if": "success()"
+            # The release bumps every package.json, but @semantic-release/git stages only
+            # per-package assets — the root pnpm-lock.yaml drifts, and a drifted lockfile
+            # fails `--frozen-lockfile`, blocking every later push to the branch.
+            #
+            # Retried against a re-fetched tip because the branch moves underneath the job:
+            # a release takes ~15 minutes, and a PR merged in that window makes a single
+            # push lose the race non-fast-forward. Resolving after the reset also means the
+            # lockfile matches whatever else landed meanwhile.
+            #
+            # `!cancelled()`, not `success()`: a release that failed partway still pushed the
+            # commits it completed, so the branch needs the sync more then, not less.
+            - "name": "Sync pnpm-lock.yaml with released manifests"
+              "if": "!cancelled()"
               "shell": "bash"
-              # --no-frozen-lockfile is intentional: this step exists to regenerate the
-              # lockfile after multi-semantic-release bumps versions.
-              # --ignore-scripts prevents any postinstall from running with the release
-              # token in env (belt-and-suspenders alongside --lockfile-only).
-              "run": "pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts"
+              # --ignore-scripts keeps postinstall away from the release token. hooksPath is
+              # re-neutralised below because the step that disables the hooks is skipped when
+              # an earlier step failed.
+              "env":
+                  "BRANCH": "${{ github.ref_name }}"
+              "run": |
+                  set -euo pipefail
 
-            - "name": "Commit refreshed lockfile"
-              "if": "success()"
-              "uses": "stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9" # v7.1.0
-              "with":
-                  "file_pattern": "pnpm-lock.yaml"
-                  "commit_message": "chore(deps): sync pnpm-lock.yaml with released manifests [skip ci]"
-                  "commit_user_name": "github-actions-shell"
-                  "commit_user_email": "github-actions[bot]@users.noreply.github.com"
-                  "commit_author": "github-actions-shell <github-actions[bot]@users.noreply.github.com>"
+                  for attempt in 1 2 3 4 5; do
+                      git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+                      git reset --hard "origin/${BRANCH}"
+
+                      pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts
+
+                      # Lint and Tests never run on push, so nothing else checks the tip a
+                      # release creates. Without this, a lockfile the branch cannot install
+                      # surfaces one push later, in an unrelated job's setup step.
+                      if ! pnpm install --frozen-lockfile --lockfile-only --ignore-scripts; then
+                          echo "::error::pnpm-lock.yaml still fails --frozen-lockfile after regeneration (mismatch above). Not pushing it."
+                          exit 1
+                      fi
+
+                      if git diff --quiet -- pnpm-lock.yaml; then
+                          echo "pnpm-lock.yaml already matches the manifests on ${BRANCH}."
+                          exit 0
+                      fi
+
+                      git -c core.hooksPath=/dev/null \
+                          -c "user.name=github-actions-shell" \
+                          -c "user.email=github-actions[bot]@users.noreply.github.com" \
+                          commit \
+                          --message "chore(deps): sync pnpm-lock.yaml with released manifests [skip ci]" \
+                          -- pnpm-lock.yaml
+
+                      if git push origin "HEAD:refs/heads/${BRANCH}"; then
+                          echo "Pushed the refreshed pnpm-lock.yaml on attempt ${attempt}."
+                          exit 0
+                      fi
+
+                      echo "Push rejected — ${BRANCH} moved during the release. Retrying."
+                      sleep "$((attempt * 5))"
+                  done
+
+                  echo "::error::Could not push the refreshed pnpm-lock.yaml after 5 attempts. Every frozen-lockfile install on ${BRANCH} will fail until someone runs 'pnpm install --lockfile-only --no-frozen-lockfile' and pushes the result."
+                  exit 1

@@ -253,6 +253,7 @@ interface PlatformCapabilities {
         ai?: Capability;
         analytics?: Capability;
         browser?: Capability;
+        commitOrderedTables?: Capability;
         containers?: Capability;
         crossShardFanout?: Capability;
         durableStreams?: Capability;
@@ -262,12 +263,14 @@ interface PlatformCapabilities {
         keyValueStore?: Capability;
         localSql?: Capability;
         mail?: Capability;
+        memoryTables?: Capability;
         objectStorage?: Capability;
         objectStorageBackups?: Capability;
         pipelines?: Capability;
         queues?: Capability;
         scheduler?: Capability;
         secrets?: Capability;
+        serverReactors?: Capability;
         shardAlarms?: Capability;
         shardedState?: Capability;
         shardPlacement?: Capability;

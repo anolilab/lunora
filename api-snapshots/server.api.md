@@ -845,7 +845,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
 ```
 
 ### `LifecycleHandler` (type)
@@ -1491,6 +1491,27 @@ interface RankSortKey {
 }
 ```
 
+### `ReactorHandler` (type)
+
+```ts
+type ReactorHandler<T> = (context: MutationCtx, result: T) => Promise<void> | void;
+```
+
+### `ReactorOutcome` (interface)
+
+```ts
+interface ReactorOutcome {
+    digest: string;
+    ran: boolean;
+}
+```
+
+### `ReactorSelect` (type)
+
+```ts
+type ReactorSelect<T> = (context: QueryCtx) => Promise<T> | T;
+```
+
 ### `ReadOnlyStorage` (interface)
 
 ```ts
@@ -1563,6 +1584,14 @@ interface RegisteredMutator<Args extends ValidatorMap = ValidatorMap, ServerCont
 
 ```ts
 type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
+```
+
+### `RegisteredReactor` (type)
+
+```ts
+type RegisteredReactor = RegisteredFunction<Record<string, never>, ReactorOutcome, "mutation"> & {
+    readonly lifecycle: "reactor";
+};
 ```
 
 ### `RegisteredShape` (interface)
@@ -1646,6 +1675,14 @@ interface Role {
     readonly description?: string;
     readonly name: string;
     readonly permissions?: ReadonlyArray<Permission | string>;
+}
+```
+
+### `RunQueryOptions` (interface)
+
+```ts
+interface RunQueryOptions {
+    untracked?: boolean;
 }
 ```
 
@@ -1758,6 +1795,20 @@ interface ShapeReadWhereRequest {
     readonly tablePublic: boolean;
     readonly userId: null | string;
 }
+```
+
+### `ShardInitEvent` (interface)
+
+```ts
+interface ShardInitEvent {
+    readonly shardKey: string;
+}
+```
+
+### `ShardInitHandler` (type)
+
+```ts
+type ShardInitHandler = (context: MutationCtx, event: ShardInitEvent) => Promise<void> | void;
 ```
 
 ### `ShardMode` (type)
@@ -1942,6 +1993,7 @@ type SystemTableName = "_scheduled_functions" | "_storage";
 ```ts
 interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
+    commitOrdered: () => TableBuilder<Shape>;
     externallyManaged: () => TableBuilder<Shape>;
     geoIndex: (name: string, options: {
         field: keyof Shape & string;
@@ -1953,6 +2005,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     index: (name: string, fields: ReadonlyArray<(keyof Shape & string) | (typeof SYSTEM_INDEX_FIELDS)[number]>, options?: {
         unique?: boolean;
     }) => TableBuilder<Shape>;
+    memory: () => TableBuilder<Shape>;
     ownedBy: (field: keyof Shape & string) => TableBuilder<Shape>;
     public: () => TableBuilder<Shape>;
     rankIndex: (name: string, options: InlineRankIndexOptions<Shape>) => TableBuilder<Shape>;
@@ -1982,11 +2035,13 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
 ```ts
 interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
+    commitOrderedMode?: boolean;
     externalSource?: ExternalSourceDefinition;
     geoIndexes: ReadonlyArray<GeoIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;
     isExternallyManaged?: boolean;
     isPublic?: boolean;
+    memoryMode?: boolean;
     ownerField?: string;
     rankIndexes: ReadonlyArray<RankIndexDefinition>;
     relationMap: Record<string, RelationDefinition>;
@@ -2795,6 +2850,18 @@ const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
 
 ```ts
 const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
+```
+
+### `onQueryChange` (const)
+
+```ts
+const onQueryChange: <T>(select: ReactorSelect<T>, handler: ReactorHandler<T>) => RegisteredReactor;
+```
+
+### `onShardInit` (const)
+
+```ts
+const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook;
 ```
 
 ### `presenceExtension` (const)
@@ -4485,7 +4552,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
 ```
 
 ### `LogFields` (type)
@@ -4721,6 +4788,14 @@ interface RelationDefinition {
 type RestCacheConfig = RestCachePolicy;
 ```
 
+### `RunQueryOptions` (interface)
+
+```ts
+interface RunQueryOptions {
+    untracked?: boolean;
+}
+```
+
 ### `ScheduledFunctionDoc` (interface)
 
 ```ts
@@ -4820,6 +4895,14 @@ interface Secrets {
 ```ts
 interface SecretsStoreSecretLike {
     get: () => Promise<string>;
+}
+```
+
+### `ShardInitEvent` (interface)
+
+```ts
+interface ShardInitEvent {
+    readonly shardKey: string;
 }
 ```
 
@@ -4959,11 +5042,13 @@ type SystemTableName = "_scheduled_functions" | "_storage";
 ```ts
 interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
+    commitOrderedMode?: boolean;
     externalSource?: ExternalSourceDefinition;
     geoIndexes: ReadonlyArray<GeoIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;
     isExternallyManaged?: boolean;
     isPublic?: boolean;
+    memoryMode?: boolean;
     ownerField?: string;
     rankIndexes: ReadonlyArray<RankIndexDefinition>;
     relationMap: Record<string, RelationDefinition>;

@@ -1,3 +1,13 @@
+## @lunora/container [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.32...@lunora/container@1.0.0-alpha.33) (2026-08-24)
+
+### Bug Fixes
+
+* **dispatch:** idempotent retries, real deadlines ([#455](https://github.com/anolilab/lunora/issues/455)) ([c92909a](https://github.com/anolilab/lunora/commit/c92909af851553f9b63cf5d1ad0844550fbc3cc0))
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
 ## @lunora/container [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/%40lunora%2Fcontainer%401.0.0-alpha.31...%40lunora%2Fcontainer%401.0.0-alpha.32) (2026-08-18)
 
 ## @lunora/container [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/%40lunora%2Fcontainer%401.0.0-alpha.30...%40lunora%2Fcontainer%401.0.0-alpha.31) (2026-08-14)

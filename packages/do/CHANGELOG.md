@@ -1,3 +1,29 @@
+## @lunora/do [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.93...@lunora/do@1.0.0-alpha.94) (2026-08-24)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.35
+
+## @lunora/do [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.92...@lunora/do@1.0.0-alpha.93) (2026-08-23)
+
+### Features
+
+* **server:** close all four Convex primitive gaps — _commitSeq, untracked runQuery, .memory() + onShardInit, onQueryChange reactors ([#469](https://github.com/anolilab/lunora/issues/469)) ([75b0187](https://github.com/anolilab/lunora/commit/75b01872c06ae32f0174d2cc8385e78e373d9693))
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.34
+* **@lunora/platform:** upgraded to 1.0.0-alpha.15
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.20
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.34
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.33
+
 ## @lunora/do [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.91...@lunora/do@1.0.0-alpha.92) (2026-08-21)
 
 

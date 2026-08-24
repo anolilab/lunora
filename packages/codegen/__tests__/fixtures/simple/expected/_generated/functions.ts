@@ -30,6 +30,13 @@ export interface RegisteredLunoraFunction {
      * `AbortSignal` as a third argument — the runtime drives it frame-by-frame.
      */
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
+    /**
+     * The lifecycle moment a hook fires on, when this registration came from
+     * `onConnect`/`onDisconnect`/`onShardInit`/`onQueryChange`. Read at
+     * dispatch to decide whether the function runs system-trusted: `init` and
+     * `reactor` have no caller identity, so RLS has no user to scope to.
+     */
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
 }
@@ -70,14 +77,19 @@ return { "channelId": source["channelId"] };
 });
 
 /**
- * Connection-lifecycle manifest: the function paths the generated ShardDO
- * dispatches when a client's WebSocket connects (`connect`) or disconnects
- * (`disconnect`). Each path also resolves through {@link LUNORA_FUNCTIONS}; the
- * DO runs every hook under the socket's verified identity via system dispatch.
+ * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
+ * client's WebSocket connects (`connect`) or disconnects (`disconnect`), once
+ * per Durable Object instance before any handler runs (`init`), and after a
+ * write flush when a watched read's result changed (`reactor`). Each path also
+ * resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
+ * socket's verified identity; `init` and `reactor` have no caller, so they run
+ * anonymous — all via system dispatch.
  */
-export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[] } = {
+export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[]; reactor: readonly string[] } = {
     connect: [],
     disconnect: [],
+    init: [],
+    reactor: [],
 };
 
 /**

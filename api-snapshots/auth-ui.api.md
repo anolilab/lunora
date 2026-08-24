@@ -739,7 +739,7 @@ interface AuthUser {
     email?: string;
     emailVerified?: boolean;
     id?: string;
-    image?: string;
+    image?: string | null;
     name?: string;
 }
 ```
@@ -2443,7 +2443,7 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
         }
         store.update({ error: undefined, status: "submitting" });
         try {
-            const session = await context.authClient.getSession();
+            const session = assertOk(await context.authClient.getSession());
             if (!session.data?.user) {
                 const invited = store.get().invitation?.email;
                 const parameters: Record<string, string> = { redirectTo: currentPath() };
@@ -2521,9 +2521,16 @@ const createActiveMemberController = (context: ControllerContext, options: {
     const refetch = async (): Promise<void> => {
         store.update({ error: undefined, loading: true });
         try {
-            const [session, organization] = await Promise.all([context.authClient.getSession(), context.authClient.organization.getFullOrganization()]);
+            const [session, organization] = await Promise.all([
+                context.authClient.getSession().then(assertOk),
+                context.authClient.organization.getFullOrganization(),
+            ]);
             const userId = session.data?.user?.id;
-            const role = organization.data?.members?.find((member) => member.userId === userId)?.role;
+            if (userId === undefined) {
+                store.update({ loading: false, role: undefined, status: "success" });
+                return;
+            }
+            const role = assertOk(organization).data?.members?.find((member) => member.userId === userId)?.role;
             store.update({ loading: false, role, status: "success" });
         }
         catch (error) {
@@ -2560,10 +2567,16 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
     }, { autoLoad: options.autoLoad, initialExtra: { search: "" } });
     const debounceMs = options.debounceMs ?? 300;
     let searchTimer: ReturnType<typeof setTimeout> | undefined;
+    let searchResolve: (() => void) | undefined;
     const clearSearchTimer = (): void => {
         if (searchTimer !== undefined) {
             clearTimeout(searchTimer);
             searchTimer = undefined;
+        }
+        if (searchResolve !== undefined) {
+            const resolve = searchResolve;
+            searchResolve = undefined;
+            resolve();
         }
     };
     const afterSessionSwap = async (run: () => Promise<boolean>): Promise<void> => {
@@ -2586,8 +2599,10 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
                     return resource.refetch();
                 }
                 return new Promise<void>((resolve) => {
+                    searchResolve = resolve;
                     searchTimer = setTimeout(() => {
                         searchTimer = undefined;
+                        searchResolve = undefined;
                         resolve(resource.refetch());
                     }, debounceMs);
                 });
@@ -2809,7 +2824,12 @@ const createConsentController = (context: ControllerContext, options: ConsentOpt
                 return;
             }
             store.update({ status: "success" });
-            context.nav.replace(redirect);
+            if (isSafeRedirect(redirect)) {
+                context.nav.replace(redirect);
+            }
+            else {
+                globalThis.location.assign(redirect);
+            }
         }
         catch (error) {
             context.onError?.(error);
@@ -3488,9 +3508,16 @@ const createProfileController = (context: ControllerContext, options: ProfileOpt
         prefill: seeded
             ? undefined
             : async (context_) => {
-                const session = await context_.authClient.getSession();
+                const session = assertOk(await context_.authClient.getSession());
                 const user = session.data?.user;
-                return { image: user?.image ?? "", name: user?.name ?? "" };
+                const values: Partial<Record<ProfileField, string>> = {};
+                if (typeof user?.image === "string") {
+                    values.image = user.image;
+                }
+                if (typeof user?.name === "string") {
+                    values.name = user.name;
+                }
+                return values;
             },
         submit: async (values, context_) => {
             const image = values.image.trim();
@@ -3511,8 +3538,9 @@ const createResendVerificationController = (context: ControllerContext, options:
     fields: { email: { initial: options.initialEmail ?? "", validate: (value, _values, localization) => emailValidator(value, localization) } },
     prefill: options.initialEmail === undefined
         ? async (context_) => {
-            const session = await context_.authClient.getSession();
-            return { email: session.data?.user?.email ?? "" };
+            const session = assertOk(await context_.authClient.getSession());
+            const email = session.data?.user?.email;
+            return typeof email === "string" ? { email } : {};
         }
         : undefined,
     submit: async (values, context_) => {
@@ -3653,7 +3681,7 @@ const createSessionController = (context: ControllerContext, options: {
     const refetch = async (): Promise<void> => {
         store.update({ error: undefined, loading: true });
         try {
-            const response = await context.authClient.getSession();
+            const response = assertOk(await context.authClient.getSession());
             store.update({ loading: false, settled: true, status: "success", user: response.data?.user });
         }
         catch (error) {
@@ -3901,7 +3929,7 @@ const createTwoFactorSetupController = (context: ControllerContext): TwoFactorSe
         store.update({ error: undefined, password: { ...state.password, error: undefined }, status: "submitting" });
         try {
             const { data } = assertOk(await context.authClient.twoFactor.enable({ password: state.password.value }));
-            store.update({ backupCodes: data?.backupCodes ?? [], status: "idle", step: "verify", totpUri: data?.totpURI });
+            store.update({ backupCodes: data?.backupCodes ?? [], password: emptyField(), status: "idle", step: "verify", totpUri: data?.totpURI });
         }
         catch (error_) {
             fail(error_, context.localization.genericError);
@@ -3917,7 +3945,7 @@ const createTwoFactorSetupController = (context: ControllerContext): TwoFactorSe
         store.update({ code: { ...state.code, error: undefined }, error: undefined, status: "submitting" });
         try {
             assertOk(await context.authClient.twoFactor.verifyTotp({ code: state.code.value.trim() }));
-            store.update({ status: "success", step: "enabled" });
+            store.update({ code: emptyField(), status: "success", step: "enabled", totpUri: undefined });
         }
         catch (error_) {
             fail(error_, context.localization.twoFactorFailed);
@@ -5631,7 +5659,7 @@ interface AuthUser {
     email?: string;
     emailVerified?: boolean;
     id?: string;
-    image?: string;
+    image?: string | null;
     name?: string;
 }
 ```
@@ -7737,7 +7765,7 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
         }
         store.update({ error: undefined, status: "submitting" });
         try {
-            const session = await context.authClient.getSession();
+            const session = assertOk(await context.authClient.getSession());
             if (!session.data?.user) {
                 const invited = store.get().invitation?.email;
                 const parameters: Record<string, string> = { redirectTo: currentPath() };
@@ -7815,9 +7843,16 @@ const createActiveMemberController = (context: ControllerContext, options: {
     const refetch = async (): Promise<void> => {
         store.update({ error: undefined, loading: true });
         try {
-            const [session, organization] = await Promise.all([context.authClient.getSession(), context.authClient.organization.getFullOrganization()]);
+            const [session, organization] = await Promise.all([
+                context.authClient.getSession().then(assertOk),
+                context.authClient.organization.getFullOrganization(),
+            ]);
             const userId = session.data?.user?.id;
-            const role = organization.data?.members?.find((member) => member.userId === userId)?.role;
+            if (userId === undefined) {
+                store.update({ loading: false, role: undefined, status: "success" });
+                return;
+            }
+            const role = assertOk(organization).data?.members?.find((member) => member.userId === userId)?.role;
             store.update({ loading: false, role, status: "success" });
         }
         catch (error) {
@@ -7854,10 +7889,16 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
     }, { autoLoad: options.autoLoad, initialExtra: { search: "" } });
     const debounceMs = options.debounceMs ?? 300;
     let searchTimer: ReturnType<typeof setTimeout> | undefined;
+    let searchResolve: (() => void) | undefined;
     const clearSearchTimer = (): void => {
         if (searchTimer !== undefined) {
             clearTimeout(searchTimer);
             searchTimer = undefined;
+        }
+        if (searchResolve !== undefined) {
+            const resolve = searchResolve;
+            searchResolve = undefined;
+            resolve();
         }
     };
     const afterSessionSwap = async (run: () => Promise<boolean>): Promise<void> => {
@@ -7880,8 +7921,10 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
                     return resource.refetch();
                 }
                 return new Promise<void>((resolve) => {
+                    searchResolve = resolve;
                     searchTimer = setTimeout(() => {
                         searchTimer = undefined;
+                        searchResolve = undefined;
                         resolve(resource.refetch());
                     }, debounceMs);
                 });
@@ -8103,7 +8146,12 @@ const createConsentController = (context: ControllerContext, options: ConsentOpt
                 return;
             }
             store.update({ status: "success" });
-            context.nav.replace(redirect);
+            if (isSafeRedirect(redirect)) {
+                context.nav.replace(redirect);
+            }
+            else {
+                globalThis.location.assign(redirect);
+            }
         }
         catch (error) {
             context.onError?.(error);
@@ -8782,9 +8830,16 @@ const createProfileController = (context: ControllerContext, options: ProfileOpt
         prefill: seeded
             ? undefined
             : async (context_) => {
-                const session = await context_.authClient.getSession();
+                const session = assertOk(await context_.authClient.getSession());
                 const user = session.data?.user;
-                return { image: user?.image ?? "", name: user?.name ?? "" };
+                const values: Partial<Record<ProfileField, string>> = {};
+                if (typeof user?.image === "string") {
+                    values.image = user.image;
+                }
+                if (typeof user?.name === "string") {
+                    values.name = user.name;
+                }
+                return values;
             },
         submit: async (values, context_) => {
             const image = values.image.trim();
@@ -8805,8 +8860,9 @@ const createResendVerificationController = (context: ControllerContext, options:
     fields: { email: { initial: options.initialEmail ?? "", validate: (value, _values, localization) => emailValidator(value, localization) } },
     prefill: options.initialEmail === undefined
         ? async (context_) => {
-            const session = await context_.authClient.getSession();
-            return { email: session.data?.user?.email ?? "" };
+            const session = assertOk(await context_.authClient.getSession());
+            const email = session.data?.user?.email;
+            return typeof email === "string" ? { email } : {};
         }
         : undefined,
     submit: async (values, context_) => {
@@ -8947,7 +9003,7 @@ const createSessionController = (context: ControllerContext, options: {
     const refetch = async (): Promise<void> => {
         store.update({ error: undefined, loading: true });
         try {
-            const response = await context.authClient.getSession();
+            const response = assertOk(await context.authClient.getSession());
             store.update({ loading: false, settled: true, status: "success", user: response.data?.user });
         }
         catch (error) {
@@ -9195,7 +9251,7 @@ const createTwoFactorSetupController = (context: ControllerContext): TwoFactorSe
         store.update({ error: undefined, password: { ...state.password, error: undefined }, status: "submitting" });
         try {
             const { data } = assertOk(await context.authClient.twoFactor.enable({ password: state.password.value }));
-            store.update({ backupCodes: data?.backupCodes ?? [], status: "idle", step: "verify", totpUri: data?.totpURI });
+            store.update({ backupCodes: data?.backupCodes ?? [], password: emptyField(), status: "idle", step: "verify", totpUri: data?.totpURI });
         }
         catch (error_) {
             fail(error_, context.localization.genericError);
@@ -9211,7 +9267,7 @@ const createTwoFactorSetupController = (context: ControllerContext): TwoFactorSe
         store.update({ code: { ...state.code, error: undefined }, error: undefined, status: "submitting" });
         try {
             assertOk(await context.authClient.twoFactor.verifyTotp({ code: state.code.value.trim() }));
-            store.update({ status: "success", step: "enabled" });
+            store.update({ code: emptyField(), status: "success", step: "enabled", totpUri: undefined });
         }
         catch (error_) {
             fail(error_, context.localization.twoFactorFailed);

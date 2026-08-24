@@ -5,6 +5,8 @@ import { copycat, setHashKey } from "./copycat";
 import { generateValue } from "./generate-value";
 import type { FieldSpec } from "./introspect";
 import { fkParentClosure, introspectSchema, orderTables } from "./introspect";
+import type { UniqueDeal } from "./unique-value";
+import { planUniqueDeal } from "./unique-value";
 
 /**
  * The pure, I/O-free core of seeding. {@link seedPlan} introspects a schema,
@@ -136,16 +138,29 @@ const fkPool = (
  */
 const cellInput = (seed: number, table: string, index: number, column: string): ReadonlyArray<unknown> => [seed, table, index, column];
 
+/** Everything one cell's generation depends on beyond the column itself. */
+interface RowContext {
+    /** Ids that already exist in the target store, keyed by table. */
+    existingIds: Readonly<Record<string, ReadonlyArray<string>>>;
+    /** Ids generated so far this run, keyed by table. */
+    idsByTable: ReadonlyMap<string, ReadonlyArray<string>>;
+    /** The row's ABSOLUTE index — the `indexOffset` base plus its position in this batch. */
+    index: number;
+    /** The copycat hash seed for this cell (see {@link cellInput}). */
+    input: ReadonlyArray<unknown>;
+    /** The row's position WITHIN this call, independent of any offset. */
+    localIndex: number;
+    /** Wall-clock reference for time-valued columns. */
+    now: number;
+    table: string;
+    /** How each `.unique()` column deals its values, keyed by column name (see {@link planUniqueDeals}). */
+    uniqueDeals: ReadonlyMap<string, UniqueDeal>;
+}
+
 /** Generate a single column value, resolving foreign keys against seeded and pre-existing parents. */
-const generateField = (
-    field: FieldSpec,
-    table: string,
-    input: ReadonlyArray<unknown>,
-    localIndex: number,
-    idsByTable: ReadonlyMap<string, ReadonlyArray<string>>,
-    existingIds: Readonly<Record<string, ReadonlyArray<string>>>,
-    now: number,
-): unknown => {
+const generateField = (field: FieldSpec, context: RowContext): unknown => {
+    const { existingIds, idsByTable, index, input, localIndex, now, table, uniqueDeals } = context;
+
     if (field.fkTable !== undefined) {
         const pool = fkPool(field, table, localIndex, idsByTable, existingIds);
 
@@ -164,7 +179,63 @@ const generateField = (
         return undefined;
     }
 
+    const deal = field.unique ? uniqueDeals.get(field.name) : undefined;
+
+    if (deal !== undefined) {
+        // Derived from the ABSOLUTE index, and `planUniqueDeals` has already
+        // proven the deal's capacity covers every index this batch reaches.
+        return deal.valueAt(index, () => generateValue(field.validator, field.name, input, now));
+    }
+
     return generateValue(field.validator, field.name, input, now);
+};
+
+/**
+ * Decide how every `.unique()` column of one table deals its values, and fail
+ * fast when a column cannot produce as many distinct values as the batch asks
+ * for — otherwise the collision only surfaces later as a raw UNIQUE-constraint
+ * error with no attribution to the column.
+ *
+ * Capacity is checked against `offset + count`, NOT `count`: values are dealt by
+ * ABSOLUTE row index, and `indexOffset` exists precisely so one table can be
+ * seeded across several calls. Checking the batch size alone would let two
+ * batches of 2 over a 3-value domain pass and then collide (index 3 wraps onto
+ * index 0), which is the exact scenario the offset feature enables.
+ *
+ * FK and server-defaulted columns are skipped entirely (their values never come
+ * from the generator). An overridden column still gets a deal — an override may
+ * resolve to `undefined` and defer back to the generator — but its capacity is
+ * not asserted, since the caller supplying the values decides their uniqueness.
+ */
+const planUniqueDeals = (
+    fields: ReadonlyArray<FieldSpec>,
+    table: string,
+    count: number,
+    offset: number,
+    now: number,
+    tableOverrides: Record<string, unknown>,
+): ReadonlyMap<string, UniqueDeal> => {
+    const deals = new Map<string, UniqueDeal>();
+
+    for (const field of fields) {
+        if (!field.unique || field.fkTable !== undefined || field.hasServerDefault) {
+            continue;
+        }
+
+        const deal = planUniqueDeal(field, { now, table });
+        const required = offset + count;
+
+        if (required > deal.capacity && !Object.hasOwn(tableOverrides, field.name)) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `cannot seed ${String(required)} rows into "${table}": unique column "${field.name}" has only ${String(deal.capacity)} possible values`,
+            );
+        }
+
+        deals.set(field.name, deal);
+    }
+
+    return deals;
 };
 
 /**
@@ -226,6 +297,8 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
         // Absolute index base — lets a client seed the same table across calls
         // without colliding ids (each id/value hashes from the absolute index).
         const offset = indexOffset[table] ?? 0;
+        const uniqueDeals = planUniqueDeals(spec.fields, table, count, offset, now, tableOverrides);
+
         const ids: string[] = [];
         idsByTable.set(table, ids);
         const rows: Record<string, unknown>[] = [];
@@ -260,7 +333,18 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
             ids.push(row._id as string);
 
             for (const field of spec.fields) {
-                apply(field.name, () => generateField(field, table, cellInput(seed, table, index, field.name), localIndex, idsByTable, existingIds, now));
+                apply(field.name, () =>
+                    generateField(field, {
+                        existingIds,
+                        idsByTable,
+                        index,
+                        input: cellInput(seed, table, index, field.name),
+                        localIndex,
+                        now,
+                        table,
+                        uniqueDeals,
+                    }),
+                );
             }
 
             rows.push(row);

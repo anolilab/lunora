@@ -25,21 +25,15 @@ overrides:
   # ---------------------------------------------------------------------------
   # Singleton pins — one copy of these across the whole graph
   # ---------------------------------------------------------------------------
-  # Force a single TypeScript across the whole graph. The catalog governs only
-  # our workspace packages; third-party tools that range-depend on `typescript`
-  # (eslint-plugin-sonarjs, ts-api-utils, the @typescript-eslint/* chain) resolve
-  # it independently and pick the highest published — 7.0, the native (Go) rewrite
-  # whose root export dropped the classic JS API (`SyntaxKind`, `readConfigFile`,
-  # …). Those tools load that API eagerly and crash on it (sonarjs: `Cannot read
-  # properties of undefined (reading 'FunctionType')`). 6.0 is the last
-  # classic-codebase release and carries the full API, so this keeps every
-  # consumer — build, typecheck, and lint — on one working compiler. See
-  # typescript-eslint#10940 (native tsgo support is 1–2 majors out).
+  # One TypeScript across the whole graph. The catalog governs only our own packages;
+  # third-party tools that range-depend on `typescript` (sonarjs, ts-api-utils, the
+  # @typescript-eslint chain) resolve it themselves and pick 7.0 — the native rewrite
+  # whose root export dropped the classic JS API those tools load eagerly. 6.0 is the
+  # last release carrying it. See typescript-eslint#10940; tsgo support is 1-2 majors
+  # out, so lifting this is a migration, not a dep bump.
   #
-  # NOTE: `vis update --latest` will offer 7.0.2 and rewrite the `tsc`/`web`
-  # catalogs to it, but leaves this override alone — so the bump installs
-  # nothing and only makes the catalog lie. Keep all three on 6.0.3 until the
-  # lint chain supports tsgo; lifting the pin is a migration, not a dep bump.
+  # `vis update --latest` rewrites the `tsc`/`web` catalogs but not this override, so
+  # such a bump installs nothing and only makes the catalog lie. Move all three together.
   typescript: 6.0.3
   # Force a single React across the tree. @visulima/tui (a vis dependency) and its
   # react-reconciler pin react@^19.2.6 while everything else uses 19.2.8; two
@@ -59,21 +53,14 @@ overrides:
   # severity, no fixed release), failing the dependency-review gate. Bump this in
   # lockstep with `catalogs.expo`.
   react-native: 0.86.2
-  # h3 stays on v1 across the tree. v2 is a different framework (srvx/rou3 core,
-  # `event.req` instead of `toWebRequest`), Nuxt 4 / Nitro 2 run v1, and
-  # @lunora/nuxt declares `h3: ^1.15.0` as its peer. 2.0.0 is deprecated upstream
-  # and the 2.0.1 line is still rc-only, so there is nothing stable to move to.
+  # h3 stays on v1. v2 is a different framework (srvx/rou3 core, `event.req` instead
+  # of `toWebRequest`), Nuxt 4 / Nitro 2 run v1, and @lunora/nuxt peers `h3: ^1.15.0`.
+  # 2.0.0 is deprecated upstream and 2.0.1 is rc-only, so there is nothing stable to
+  # move to.
   #
-  # This does NOT touch `h3-v2`, the ALIASED dependency `@tanstack/start-server-core`
-  # uses to load h3 v2 beside v1 (it reaches apps/docs through TanStack Start) —
-  # pnpm matches overrides on the specifier name, not the resolved package, so the
-  # alias is out of scope by construction. Verified against the lockfile.
-  #
-  # Replaces four overlapping Renovate advisory rules that pinned prerelease
-  # windows. They were inert and unsafe: semver excludes a prerelease unless the
-  # comparator carries one on the same version, so `>=2.0.0-0 <2.0.1` never
-  # matched 2.0.1-rc.*, while a match on 2.0.0 would have rewritten it to `^2.0.1`
-  # — which no published version satisfies, failing the install outright.
+  # This does NOT touch `h3-v2`, the alias `@tanstack/start-server-core` uses to load
+  # v2 beside v1: pnpm matches overrides on the specifier name, not the resolved
+  # package, so the alias is out of scope by construction.
   h3: ^1.15.11
   # Force the whole tree onto js-yaml 4 (3.x is unmaintained / flagged by audits).
   # The only 3.x consumer is gray-matter@4.0.3, which calls the removed
@@ -296,17 +283,13 @@ catalogs:
     "@types/semver": ^7.7.1
   cloudflare:
     "@cloudflare/containers": ^0.3.7
-    # Exact-pinned (no caret): the Browser Rendering surface (`@lunora/browser`) tracks a
-    # verified-good Playwright-on-Workers release; bumps are vetted against a live worker.
+    # Exact-pinned: `@lunora/browser` tracks a verified-good Playwright-on-Workers
+    # release, and bumps are vetted against a live worker.
     #
-    # 1.3.5 (from 1.3.0): the published type surface is additive only — a new
-    # `cloudflare-cdp` export, a `SessionlessBrowser` interface and an optional
-    # `browser: "kitesurf"` launch flag; nothing removed or re-signed. @lunora/browser
-    # never imports the package (it takes `launch` by injection and projects the shape
-    # structurally, see src/types.ts), so its build, typecheck, tests and lint are
-    # unaffected — all four re-run green. The live-worker leg of this vetting has NOT
-    # been done for 1.3.5: it needs a real Browser Rendering binding on a deployed
-    # worker, so run it before relying on this in production.
+    # WARNING: 1.3.5 has only been vetted on types and the local suites (the change from
+    # 1.3.0 is additive, and @lunora/browser never imports the package — it takes
+    # `launch` by injection). The live-worker leg needs a real Browser Rendering binding
+    # on a deployed worker; run it before relying on this in production.
     "@cloudflare/playwright": 1.3.5
     "@cloudflare/vitest-plugin": ^1.0.0
     # PATCHED (patches/@cloudflare__workers-types@5.20260811.1.patch), and the patch
@@ -379,19 +362,14 @@ catalogs:
     react-reconciler: ^0.33.0
     smol-toml: 1.7.1
   vite:
-    # Exact-pinned (no caret) — this plugin has shipped dev-runner regressions before
-    # (1.40.0: `getWorkerEntryExportTypes` threw "Cannot read properties of undefined
-    # (reading 'string')" evaluating the Worker entry, with no fix named in the changelog),
-    # and its transitive wrangler/miniflare/workerd can be fresher than the
-    # minimumReleaseAge gate allows. To bump: try the new version locally, run a
-    # `pnpm --filter "@lunora/vite" dev` smoke against a template, confirm the dev runner
-    # boots without that crash AND that its transitive wrangler/miniflare/workerd are past
-    # the release-age window, then update this pin.
+    # Exact-pinned: this plugin has shipped dev-runner regressions before (1.40.0 threw
+    # from `getWorkerEntryExportTypes` on the Worker entry, unmentioned in its
+    # changelog), and its transitive wrangler/miniflare/workerd can be fresher than the
+    # minimumReleaseAge gate allows.
     #
-    # 1.51.2 vetted: the playground dev runner boots clean on Vite 8.2.1 (no
-    # `getWorkerEntryExportTypes` crash) and serves `GET /` 200; its transitive
-    # wrangler@4.120.1, miniflare@4.20260730.0 and workerd@1.20260730.1 are all past
-    # the 24h minimumReleaseAge window.
+    # To bump: smoke `pnpm --filter "@lunora/vite" dev` against a template, confirm the
+    # dev runner boots and serves, and confirm the transitive wrangler/miniflare/workerd
+    # are past the release-age window. 1.51.2 was vetted that way.
     "@cloudflare/vite-plugin": 1.51.2
     "@tailwindcss/cli": ^4.3.3
     "@tailwindcss/vite": ^4.3.3
@@ -468,22 +446,17 @@ catalogs:
     svelte: ^5.56.8
     vite-plugin-solid: ^2.11.14
     vue: ^3.5.41
-  # Solid 2.0 RC toolchain, deliberately kept OUT of the `frontend` catalog
-  # above so the two majors can move independently: `@lunora/solid` peers on
-  # `^1.9.0 || ^2.0.0-rc.0` and is tested against both. Consumed by
-  # tests/solid-v2-adapter (the dual-major guard) and mirrored by
-  # templates/solid-v2.
+  # Solid 2.0 RC toolchain, kept OUT of the `frontend` catalog so the two majors move
+  # independently: `@lunora/solid` peers `^1.9.0 || ^2.0.0-rc.0` and is tested on both.
   #
-  # Note the package split 2.0 introduced: JSX moved out of core into the
-  # renderer (`@solidjs/web`, hence `jsxImportSource: "@solidjs/web"`), and the
-  # Vite plugin's matching line is 3.x. `@solidjs/testing-library@1` is the
-  # first release that peers on Solid 2.
-  # The plain names are for packages whose ONLY Solid is 2.x —
-  # tests/solid-v2-adapter and tests/auth-ui-solid-v2. The `solid-js-v2` alias is
-  # for @lunora/auth-ui, which authors BOTH Solid ports side by side and so needs
-  # both majors resolvable at once: `solid-js` there is 1.x, and `solid-js-v2` is
-  # the same package under a second name, which `tsconfig.solid-v2.json` maps
-  # `solid-js` onto for that program. Keep the alias in step with `solid-js`.
+  # 2.0 split the packages: JSX moved from core to the renderer (`@solidjs/web`, hence
+  # `jsxImportSource`), the Vite plugin's matching line is 3.x, and
+  # `@solidjs/testing-library@1` is the first release peering on Solid 2.
+  #
+  # Plain names are for packages whose only Solid is 2.x. The `solid-js-v2` alias is for
+  # @lunora/auth-ui, which authors both ports side by side and needs both majors
+  # resolvable at once — `tsconfig.solid-v2.json` maps `solid-js` onto the alias for
+  # that program. Keep the two in step.
   solid2:
     "@solidjs/testing-library": ^1.0.0-beta.2
     "@solidjs/web": ^2.0.0-rc.0

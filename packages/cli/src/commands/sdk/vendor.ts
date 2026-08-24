@@ -17,8 +17,8 @@
  * I hold" answerable from the stamp this module writes.
  */
 
-import { cpSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { cpSync, existsSync, lstatSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 
 import type { SdkTarget } from "@lunora/codegen";
 import { LunoraError } from "@lunora/errors";
@@ -71,11 +71,47 @@ interface VendorResult {
 }
 
 /**
+ * Refuse a transport that contains a symlink, BEFORE anything is copied.
+ *
+ * The transport comes from a giget-fetched (possibly hostile) source or an
+ * arbitrary `--from` directory. `cpSync` copies symlinks verbatim, so a planted
+ * link (`config.py -> ~/.ssh/id_rsa`) would land in the user's project and be
+ * followed by whatever reads the generated SDK. Refuse rather than skip,
+ * matching the registry copy-in guard.
+ *
+ * A separate pass rather than a throw from inside `cpSync`'s filter: the filter
+ * runs as the copy proceeds, so refusing there leaves whatever was copied before
+ * the offending entry behind. Scanning first means a refusal writes nothing.
+ * Excluded files are skipped here too — a test file that was never going to be
+ * vendored must not be able to abort the vendoring.
+ *
+ * `lstatSync`, never `statSync`: the point is to see the link itself rather than
+ * what it points at (a dangling one would throw instead of being reported).
+ */
+const assertNoSymlinks = (sourceRoot: string, current: string): void => {
+    const stats = lstatSync(current);
+
+    if (stats.isSymbolicLink()) {
+        throw new LunoraError("INTERNAL", `refusing to vendor "${relative(sourceRoot, current)}" — it is a symlink, not a regular file`);
+    }
+
+    if (!stats.isDirectory()) {
+        return;
+    }
+
+    for (const child of readdirSync(current)) {
+        if (!isTestFile(child)) {
+            assertNoSymlinks(sourceRoot, join(current, child));
+        }
+    }
+};
+
+/**
  * Copy one `vendor` entry. Returns the destination paths written.
  *
- * `cpSync`'s filter rather than a hand-rolled walk: it already creates parents,
- * copies recursively and preserves file modes, and a filter returning `false` for
- * a directory prunes the whole subtree.
+ * `cpSync` rather than a hand-rolled copy: it already creates parents, copies
+ * recursively and preserves file modes, and a filter returning `false` for a
+ * directory prunes the whole subtree.
  */
 const copyEntry = (sourceRoot: string, outputDirectory: string, from: string, to: string): string[] => {
     const source = join(sourceRoot, from);
@@ -83,6 +119,8 @@ const copyEntry = (sourceRoot: string, outputDirectory: string, from: string, to
     if (!existsSync(source)) {
         throw new LunoraError("NOT_FOUND", `transport is missing ${from}`);
     }
+
+    assertNoSymlinks(sourceRoot, source);
 
     const destination = join(outputDirectory, to);
 

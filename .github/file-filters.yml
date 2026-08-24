@@ -1,6 +1,11 @@
-# Consumed by dorny/paths-filter in test.yml / lint.yml to skip jobs when no
-# relevant files changed. Keep the globs broad — a false "changed" only costs a
-# CI run; a false "unchanged" skips a gate that should have run.
+# Consumed by dorny/paths-filter in test.yml / lint.yml to skip jobs when no relevant
+# files changed. Keep the globs broad — a false "changed" only costs a CI run; a false
+# "unchanged" skips a gate that should have run.
+#
+# Several filters also list their own checker, workflow and this file. That is
+# deliberate: a PR that disables a gate by editing the gate would otherwise match no
+# filter, skip the job, and still pass the required check, which only fails on
+# `failure`/`cancelled`.
 
 # Anything that can affect a package's build/test graph.
 packages: &packages
@@ -30,13 +35,9 @@ frontend_lintable:
     - "**/*.{cts,mts,cjs,mjs}"
     - "**/tsconfig*.json"
     - "**/package.json"
-    # A project.json decides whether the eslint job runs a project at all — an
-    # nx-shaped target silently turns its gate into a no-op — so a change to one
-    # has to reach the job that would catch that. The checker, the job, and this
-    # file are listed for the same reason `worker_size` lists them below: a PR
-    # that switches the gate off by editing the gate would otherwise match no
-    # filter, skip the job, and pass `lint-required-check`, which only fails on
-    # `failure`/`cancelled`.
+    # A project.json decides whether eslint runs a project at all — an nx-shaped
+    # target silently turns that gate into a no-op — so an edit to one must reach the
+    # job that catches it. Checker, job and this file listed per the rule above.
     - "**/project.json"
     - "scripts/check-project-json-targets.js"
     - ".github/workflows/lint.yml"
@@ -47,9 +48,9 @@ package_json_lintable:
     - "**/package.json"
     - "package.json"
 
-# `check-catalog-drift` + `check-peer-catalog-refs` read every workspace manifest
-# and the catalogs they reference, so a `pnpm-workspace.yaml` edit matters as much
-# as a package.json one.
+# `check-catalog-drift` + `check-peer-catalog-refs` read every workspace manifest and
+# the catalogs they reference, so a `pnpm-workspace.yaml` edit matters as much as a
+# package.json one.
 dependency_manifests:
     - "**/package.json"
     - "package.json"
@@ -82,9 +83,9 @@ e2e:
 codecov:
     - "codecov.yml"
 
-# CodSpeed benchmarks: anything that can change a bench result or the bench
-# selection. `vis affected test:bench` narrows further inside the job; this
-# gate only exists so docs/plans-only PRs skip the install+build entirely.
+# CodSpeed benchmarks: anything that can change a bench result or the selection.
+# `vis affected test:bench` narrows further inside the job; this gate only exists so
+# docs-only PRs skip the install+build entirely.
 benchmarks:
     - "packages/**"
     - "shared/**"
@@ -101,46 +102,35 @@ registry_sync:
     - "registry/**"
     - "scripts/sync-auth-ui-registry.mjs"
 
-# The template scaffold+install+build+typecheck matrix. It packs every publishable
-# package and runs a real `pnpm install` per template, so it is far too slow for
-# every PR — but it is the ONLY gate that proves `lunora init` still installs and
-# that `lunora add auth-ui`'s copy-in payload compiles against a meta-framework's
-# own tsconfig. Both regressions it has caught (the CLI entry point, and an
-# unlisted `vue-demi` build script that broke every scaffold's first install) came
-# from packages/registry changes, not from the templates.
-# Worker size budget. Listed separately from `packages` so the gate cannot be
-# switched off by editing the gate: a PR touching only the checker, the
-# committed baseline, or the job itself still runs it.
+# The template scaffold+install+build+typecheck matrix: too slow for every PR, but the
+# only gate proving `lunora init` still installs and that the copy-in auth-ui payload
+# compiles against a meta-framework's own tsconfig. Both regressions it has caught came
+# from packages/registry changes, not from the templates — hence the wide globs.
+# Worker size budget. Separate from `packages` per the self-listing rule at the top.
 worker_size:
     - "scripts/check-worker-size.js"
     - "worker-size.json"
     - ".github/workflows/test.yml"
-    # This file too, or the hole reopens one level up: a PR that edits the
-    # filter itself would not match it, the gate would skip, and
-    # `test-required-check` passes on skipped jobs.
+    # This file too, or the hole reopens one level up.
     - ".github/file-filters.yml"
 
-# The non-JS SDK conformance suites. `protocol/**` is listed because the golden
-# frames under `protocol/fixtures/` ARE the contract those SDKs are tested
-# against — a wire change lands there first, and this is the only gate that
-# catches a non-JS port drifting off it. The workflow and this file are listed
-# for the same anti-hole reason as `worker_size` above.
+# The non-JS SDK conformance suites. `protocol/**` is listed because the golden frames
+# under `protocol/fixtures/` ARE the contract those SDKs are tested against: a wire
+# change lands there first, and this is the only gate catching a port that drifts off
+# it.
 sdks:
     - "sdks/**"
     - "protocol/**"
     - "shared/wire-codec.ts"
     - "shared/stable-key.ts"
-    # The generator too: a target template hardcodes the runtime's call
-    # signatures (`lunora.Call[T](client, verb, path, args, shardKey)`), so an
-    # edit here can break every generated SDK while every other gate stays green.
+    # The generator too: a target template hardcodes the runtime's call signatures, so
+    # an edit here breaks every generated SDK while every other gate stays green.
     - "packages/codegen/src/sdk/**"
-    # And the CLI the job actually invokes — the generate-and-build step runs
-    # `node packages/cli/dist/bin.mjs sdk generate`, so a change to that command
-    # can break every leg while matching no filter.
+    # And the CLI the job invokes: the generate-and-build step shells out to
+    # `sdk generate`, so a change there breaks every leg while matching no filter.
     - "packages/cli/src/commands/sdk/**"
-    # `shared/base64.ts` is the base64 the normative codec uses and
-    # `shared/wire-key.ts` the composition `protocol/README.md` §3 defines, so a
-    # change to either is a wire change every port must mirror.
+    # The normative codec's base64 and the key composition from `protocol/README.md`
+    # §3 — a change to either is a wire change every port must mirror.
     - "shared/base64.ts"
     - "shared/wire-key.ts"
     - ".github/workflows/test.yml"
@@ -155,11 +145,9 @@ templates:
     - "pnpm-lock.yaml"
     - "pnpm-workspace.yaml"
 
-# packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES
-# (packages/platform/src/capabilities.ts) drift guard. Listed separately from
-# `packages` for the same anti-hole reason as `worker_size`/`sdks` above: a PR
-# touching only the checker, the two files it compares, the job, or this
-# filter still runs the gate.
+# packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES in
+# packages/platform/src/capabilities.ts. Separate from `packages` per the self-listing
+# rule at the top.
 node_capabilities_docs:
     - "packages/platform/src/capabilities.ts"
     - "packages/platform-node/docs/index.mdx"

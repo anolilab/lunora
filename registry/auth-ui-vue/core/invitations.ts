@@ -81,7 +81,10 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
         store.update({ error: undefined, status: "submitting" });
 
         try {
-            const session = await context.authClient.getSession();
+            // `assertOk`: an errored session read (5xx, network) must land in
+            // the catch below, not bounce an already signed-in invitee to the
+            // sign-in screen mid-accept.
+            const session = assertOk(await context.authClient.getSession());
 
             if (!session.data?.user) {
                 // Come back to this exact invitation after signing in, rather than

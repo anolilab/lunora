@@ -3376,13 +3376,13 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/observability':
-        specifier: 1.0.0-alpha.33
+        specifier: 1.0.0-alpha.35
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.19
+        specifier: 1.0.0-alpha.20
         version: link:../platform-cloudflare
       '@lunora/shard-engine':
         specifier: workspace:*
@@ -3601,7 +3601,7 @@ importers:
         specifier: workspace:*
         version: link:../flags
       '@lunora/observability':
-        specifier: 1.0.0-alpha.33
+        specifier: 1.0.0-alpha.35
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
@@ -4003,7 +4003,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.19
+        specifier: 1.0.0-alpha.20
         version: link:../platform-cloudflare
       '@lunora/runtime':
         specifier: workspace:*
@@ -4935,8 +4935,8 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/observability':
-        specifier: 1.0.0-alpha.33
-        version: link:../observability
+        specifier: 1.0.0-alpha.34
+        version: 1.0.0-alpha.34
       '@types/node':
         specifier: catalog:types
         version: 26.2.0
@@ -5142,24 +5142,12 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
-      '@solana/kit':
-        specifier: catalog:web3
-        version: 7.0.0(typescript@6.0.3)
       '@x402/core':
         specifier: catalog:web3
         version: 2.21.0
-      '@x402/evm':
-        specifier: catalog:web3
-        version: 2.21.0(typescript@6.0.3)
       '@x402/fetch':
         specifier: catalog:web3
         version: 2.21.0
-      '@x402/svm':
-        specifier: catalog:web3
-        version: 2.21.0(@solana/kit@7.0.0(typescript@6.0.3))(@solana/sysvars@5.5.1(typescript@6.0.3))
-      viem:
-        specifier: catalog:web3
-        version: 2.55.13(typescript@6.0.3)(zod@3.25.76)
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
@@ -5173,6 +5161,9 @@ importers:
       '@coinbase/x402':
         specifier: catalog:web3
         version: 2.1.0(@x402/evm@2.21.0(typescript@6.0.3))(@x402/svm@2.21.0(@solana/kit@7.0.0(typescript@6.0.3))(@solana/sysvars@5.5.1(typescript@6.0.3)))(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
+      '@solana/kit':
+        specifier: catalog:web3
+        version: 7.0.0(typescript@6.0.3)
       '@types/node':
         specifier: catalog:types
         version: 26.2.0
@@ -5182,6 +5173,12 @@ importers:
       '@vitest/coverage-v8':
         specifier: catalog:test
         version: 4.1.10(vitest@4.1.10)
+      '@x402/evm':
+        specifier: catalog:web3
+        version: 2.21.0(typescript@6.0.3)
+      '@x402/svm':
+        specifier: catalog:web3
+        version: 2.21.0(@solana/kit@7.0.0(typescript@6.0.3))(@solana/sysvars@5.5.1(typescript@6.0.3))
       esbuild:
         specifier: catalog:build
         version: 0.28.2
@@ -5191,6 +5188,9 @@ importers:
       typescript:
         specifier: 6.0.3
         version: 6.0.3
+      viem:
+        specifier: catalog:web3
+        version: 2.55.13(typescript@6.0.3)(zod@3.25.76)
       vitest:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.2.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.11.2)(jsdom@30.0.1(@noble/hashes@2.2.0))(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
@@ -8280,6 +8280,10 @@ packages:
   '@lingui/message-utils@6.6.0':
     resolution: {integrity: sha512-XkEcuMjIUjq7KZfTe83jP6UWQvKskpae/Ve7E8M8HEJ3TujHIPLzKn/quEmot6pKRtGwYxQzktGRfs2sPcZaqg==}
     engines: {node: '>=22.19.0'}
+
+  '@lunora/observability@1.0.0-alpha.34':
+    resolution: {integrity: sha512-kFeCKDknBrTbV8L5qtCOV7VzlpkVemteKuB0dqJmUSGrwRkSgN/+Io5J9ASzm6dwpXXB9bA197w/RDftvSwOFw==}
+    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -27804,6 +27808,13 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
+
+  '@lunora/observability@1.0.0-alpha.34':
+    dependencies:
+      '@lunora/errors': link:packages/errors
+      '@lunora/fingerprint': link:packages/fingerprint
+      '@lunora/shard-engine': link:packages/shard-engine
+      '@visulima/redact': 4.0.0
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true

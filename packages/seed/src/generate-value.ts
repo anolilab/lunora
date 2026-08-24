@@ -19,10 +19,14 @@ import { metaOf, unwrapOptional } from "./introspect";
 /** JSON Schema constraint fragment a `.check()` / `.meta()` may have attached. */
 interface Constraints {
     enum?: ReadonlyArray<unknown>;
+    /** `.email()` / `.url()` — a named JSON Schema format the value must satisfy. */
+    format?: string;
     maximum?: number;
     maxLength?: number;
     minimum?: number;
     minLength?: number;
+    /** `.pattern()` — a regular expression source the value must match. */
+    pattern?: string;
 }
 
 const constraintsOf = (validator: Validator): Constraints => metaOf(validator).constraints ?? {};
@@ -79,6 +83,17 @@ const wordsOf = (fieldName: string): string[] =>
         .split(WORD_SEPARATORS)
         .filter((word) => word !== "")
         .map((word) => word.toLowerCase());
+
+/**
+ * Default numeric bounds, used when a column declares none. Named (rather than
+ * inlined at the two `??` sites) because `@lunora/seed`'s unique-value planner
+ * has to know the exact range a column will draw from to decide how many
+ * distinct rows it can produce — an inlined literal would drift.
+ */
+const NUMBER_RANGE = { max: 1000, min: 0 } as const;
+
+/** Default `v.bigint()` bounds. Well within `Number.MAX_SAFE_INTEGER`, so the plain-number wire form loses no precision. */
+const BIGINT_RANGE = { max: 1_000_000, min: 0 } as const;
 
 /** How far back a generated timestamp may fall. Six months is wide enough that a `YYYY-MM` search selects a real subset rather than everything or nothing. */
 const TIMESTAMP_WINDOW_MS = 180 * 24 * 60 * 60 * 1000;
@@ -164,7 +179,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
             // range [0, 1_000_000] is well within Number.MAX_SAFE_INTEGER, so no
             // integer precision is lost. Adapters that write to the DO's SQLite
             // layer must coerce this back to BigInt before insert (see testing.ts).
-            return copycat.int(input, { max: 1_000_000, min: 0 });
+            return copycat.int(input, { max: BIGINT_RANGE.max, min: BIGINT_RANGE.min });
         }
 
         case "boolean": {
@@ -232,8 +247,8 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
                 );
             }
 
-            const min = minimum ?? 0;
-            const max = maximum ?? 1000;
+            const min = minimum ?? NUMBER_RANGE.min;
+            const max = maximum ?? NUMBER_RANGE.max;
 
             // `v.number()` is a float column, so honour non-integer bounds with a
             // float (faker's integer generator rejects fractional min/max).
@@ -287,5 +302,5 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
     }
 };
 
-// eslint-disable-next-line import/prefer-default-export -- named export: the package barrel re-exports by name, per the repo's no-default-mixing convention
-export { generateValue };
+export { BIGINT_RANGE, constraintsOf, generateValue, isTimestampField, NUMBER_RANGE, TIMESTAMP_WINDOW_MS };
+export type { Constraints };
