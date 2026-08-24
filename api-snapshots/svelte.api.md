@@ -486,6 +486,18 @@ interface RateLimitOptions {
 }
 ```
 
+### `ReactiveArgs` (type)
+
+```ts
+type ReactiveArgs<F extends FunctionReference> = ArgsOf<F> | "skip" | Readable<ArgsOf<F> | "skip">;
+```
+
+### `ReactivePaginatedArgs` (type)
+
+```ts
+type ReactivePaginatedArgs<F extends FunctionReference> = "skip" | PaginatedArgs<F> | Readable<"skip" | PaginatedArgs<F>>;
+```
+
 ### `ReturnOf` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -700,9 +712,9 @@ const mutator: <TArgs = Record<string, unknown>>(handle: MutatorHandle<TArgs>) =
 ### `paginatedQuery` (function)
 
 ```ts
-function paginatedQuery<F extends FunctionReference>(function_: F, args: "skip" | PaginatedArgs<F>, options: PaginatedQueryOptions): PaginatedQueryHandle<PageItemOf<F>>;
+function paginatedQuery<F extends FunctionReference>(function_: F, args: ReactivePaginatedArgs<F>, options: PaginatedQueryOptions): PaginatedQueryHandle<PageItemOf<F>>;
 
-function paginatedQuery<F extends FunctionReference>(client: LunoraClient, function_: F, args: "skip" | PaginatedArgs<F>, options: PaginatedQueryOptions): PaginatedQueryHandle<PageItemOf<F>>;
+function paginatedQuery<F extends FunctionReference>(client: LunoraClient, function_: F, args: ReactivePaginatedArgs<F>, options: PaginatedQueryOptions): PaginatedQueryHandle<PageItemOf<F>>;
 ```
 
 ### `presence` (function)
@@ -716,9 +728,9 @@ function presence<H extends HeartbeatReference, L extends ListPresentReference>(
 ### `query` (function)
 
 ```ts
-function query<F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options?: QueryStoreOptions): QueryStore<F>;
+function query<F extends FunctionReference>(function_: F, args: ReactiveArgs<F>, options?: QueryStoreOptions): QueryStore<F>;
 
-function query<F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F> | "skip", options?: QueryStoreOptions): QueryStore<F>;
+function query<F extends FunctionReference>(client: LunoraClient, function_: F, args: ReactiveArgs<F>, options?: QueryStoreOptions): QueryStore<F>;
 ```
 
 ### `rateLimit` (const)
@@ -744,9 +756,9 @@ function stream<F extends FunctionReference<"stream">>(client: LunoraClient, fun
 ### `subscription` (function)
 
 ```ts
-function subscription<F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options?: SubscriptionStoreOptions): SubscriptionHandle<ReturnOf<F>>;
+function subscription<F extends FunctionReference>(function_: F, args: ReactiveArgs<F>, options?: SubscriptionStoreOptions): SubscriptionHandle<ReturnOf<F>>;
 
-function subscription<F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F> | "skip", options?: SubscriptionStoreOptions): SubscriptionHandle<ReturnOf<F>>;
+function subscription<F extends FunctionReference>(client: LunoraClient, function_: F, args: ReactiveArgs<F>, options?: SubscriptionStoreOptions): SubscriptionHandle<ReturnOf<F>>;
 ```
 
 ### `voiceAgent` (function)

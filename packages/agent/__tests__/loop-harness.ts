@@ -200,6 +200,13 @@ export const memoryRuntime = (options?: {
         return undefined;
     };
 
+    /** Mirrors `agentDeleteMessage`: drop the row if present, and never roll back the seq counter. */
+    const deleteMessage = (args?: Record<string, unknown>): unknown => {
+        messages.delete(`${args?.["threadKey"] as string}:${args?.["messageKey"] as string}`);
+
+        return undefined;
+    };
+
     /**
      * The completion mutation: terminal patch + queue handoff. This double keeps
      * no queue (see `run-queue.test.ts` for those semantics), so it ends the run
@@ -235,6 +242,7 @@ export const memoryRuntime = (options?: {
     const handlers = new Map<string, (args?: Record<string, unknown>) => unknown>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
         [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
+        [DEFAULT_AGENT_FUNCTION_PATHS.deleteMessage, deleteMessage],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],

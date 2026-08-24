@@ -45,6 +45,15 @@ export default createConfig(
             "vitest/prefer-expect-assertions": "off",
         },
     },
+    // Formatting rules that conflict with Prettier (which owns formatting). Like
+    // @stylistic (off via `stylistic: false`), satisfying these fights Prettier:
+    // number-literal-case wants uppercase hex digits Prettier lowercases, so an
+    // `eslint --fix` after `prettier --write` un-formats the file again.
+    {
+        rules: {
+            "unicorn/number-literal-case": "off",
+        },
+    },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
     // keys of canonical/wire objects, changing bytes on the wire and breaking
     // order-sensitive tests.
