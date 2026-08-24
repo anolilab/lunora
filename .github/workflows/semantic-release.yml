@@ -33,6 +33,7 @@
             "issues": "write" # to comment on released issues
             "pull-requests": "write" # to comment on released pull requests
             "id-token": "write" # to enable OIDC for npm provenance
+            "actions": "write" # to dispatch the CodSpeed baseline run below
 
         "steps":
             - "name": "Harden Runner"
@@ -188,3 +189,33 @@
 
                   echo "::error::Could not push the refreshed pnpm-lock.yaml after 5 attempts. Every frozen-lockfile install on ${BRANCH} will fail until someone runs 'pnpm install --lockfile-only --no-frozen-lockfile' and pushes the result."
                   exit 1
+
+            # Every commit this job pushes carries `[skip ci]`, so GitHub dispatches no
+            # workflows for them and CodSpeed records no benchmark run at the new head.
+            # Its next PR report then finds no baseline on the branch, silently falls
+            # back to the last commit that did have one, and attributes everything that
+            # landed in between to the PR — a red "regression" in packages the PR never
+            # touched. Ask for a run on the new head explicitly.
+            #
+            # `codspeed.yml` already accepts `workflow_dispatch`, and its benchmark job
+            # is written to run when `files-changed` is skipped, which is what happens
+            # on a dispatch. Only the branches its `push:` trigger covers are worth
+            # dispatching — the others have no baseline to keep fresh.
+            - "name": "Refresh the CodSpeed baseline"
+              "if": "!cancelled() && (github.ref_name == 'main' || github.ref_name == 'alpha')"
+              "shell": "bash"
+              "env":
+                  "BRANCH": "${{ github.ref_name }}"
+                  "GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+              # Advisory: a missing baseline costs a noisy PR report, not a broken
+              # release, so this must never fail the job that just published.
+              "continue-on-error": true
+              "run": |
+                  set -euo pipefail
+
+                  git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+
+                  head="$(git rev-parse "origin/${BRANCH}")"
+
+                  echo "Dispatching a CodSpeed run for ${BRANCH} at ${head}."
+                  gh workflow run codspeed.yml --ref "${BRANCH}"
