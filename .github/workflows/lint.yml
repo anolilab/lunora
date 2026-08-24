@@ -1,5 +1,3 @@
-# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
-
 "name": "Lint"
 
 # PRs + merge queue only (see test.yml for the no-`push` rationale).
@@ -40,9 +38,8 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            # checkout-with-retry rides out the transient GITHUB_TOKEN 401 that
-            # used to hit mid-checkout, so the paths-filter call no longer needs
-            # its own continue-on-error + sleep + retry dance.
+            # checkout-with-retry absorbs the transient mid-checkout GITHUB_TOKEN 401,
+            # so this call needs no retry handling of its own.
             - "name": "Check for file changes"
               "id": "changes"
               "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
@@ -50,10 +47,9 @@
                   "token": "${{ github.token }}"
                   "filters": ".github/file-filters.yml"
 
-    # eslint over the affected graph, split from typecheck into its own required
-    # check. Type-aware eslint needs the upstream packages' declarations on disk,
-    # so build the affected graph first (the vis tasks also codegen the apps'
-    # generated dirs via their `codegen` dependsOn).
+    # eslint over the affected graph, its own required check. Type-aware rules need
+    # the upstream declarations on disk, so the affected graph is built first (which
+    # also codegens the apps' generated dirs via their `codegen` dependsOn).
     "eslint":
         "name": "Lint (eslint)"
         "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
@@ -82,11 +78,9 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # First, before the build: a target declaring an `executor` and no
-            # top-level `command` makes vis report "No command configured" and
-            # pass, so the project's eslint below would be a ~13ms no-op
-            # reporting success. Ten packages were skipped that way; four still
-            # were when this step landed. Runs first so the finding can't be
+            # A target declaring an `executor` and no top-level `command` makes vis
+            # report "No command configured" and pass, turning that project's eslint
+            # into a silent no-op. Runs before the build so the finding cannot be
             # masked by a later step failing.
             - "name": "Check project.json target shapes"
               "run": "pnpm run lint:project-json"
@@ -97,17 +91,14 @@
             - "name": "Lint (eslint)"
               "run": "pnpm run lint:affected:eslint"
 
-    # tsc over the affected graph plus the registry typecheck, split from eslint
-    # into its own required check. registry/ isn't a vis project; it imports
-    # @lunora/* and is typechecked against the full built dist.
+    # tsc over the affected graph plus the registry typecheck, its own required check.
+    # registry/ is not a vis project; it imports @lunora/* and typechecks against the
+    # full built dist.
     #
-    # These run SEQUENTIALLY, not in a parallel group: `lint:types:registry`
-    # begins with `build:packages` (a full `vis run build`), which packem starts
-    # by *cleaning* each package's `dist/`. Run concurrently with `lint:affected:types`,
-    # that clean window races the affected typecheck's tsc as it reads a dependency's
-    # dist — intermittently dropping a freshly-removed declaration (e.g.
-    # `@lunora/auth/dist/plugins-client.d.ts`) and failing with TS2307 on an
-    # affected example. Serializing removes the concurrent reader during the rebuild.
+    # The two steps run SEQUENTIALLY: `lint:types:registry` starts with a full
+    # `build:packages`, and packem begins by cleaning each `dist/`. Run concurrently,
+    # that clean window races the affected typecheck's tsc mid-read and drops a
+    # freshly-removed declaration, failing with TS2307.
     "types":
         "name": "Lint (types)"
         "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
@@ -142,15 +133,13 @@
             - "name": "Typecheck"
               "run": "pnpm run lint:affected:types"
 
-            # Sequential (not parallel) with the step above: its `build:packages`
-            # rebuild cleans each package's dist, which races a concurrent tsc read.
+            # Sequential with the step above — see the clean-window race noted there.
             - "name": "Typecheck registry items"
               "run": "pnpm run lint:types:registry"
 
-    # fallow codebase-intelligence over the affected graph. `health` is a report
-    # (prints each project's score, exits 0) — it surfaces dead code / dupes /
-    # complexity drift without blocking merges. fetch-depth 0 so `vis affected`
-    # can diff against the base ref.
+    # fallow codebase-intelligence over the affected graph: an advisory report of dead
+    # code, dupes and complexity drift. fetch-depth 0 so `vis affected` can diff against
+    # the base ref.
     "fallow":
         "name": "Lint (fallow)"
         "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
@@ -178,21 +167,17 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # fallow is static source analysis — no build needed. `health` is an
-            # advisory report (dead code / dupes / complexity drift): it prints
-            # each project's score but must not block merges, so the step is
-            # non-blocking. Newer fallow exits 1 on any finding (the `--score`
-            # script has no gate flag), which would otherwise fail the job —
-            # `continue-on-error` keeps the report visible without gating the PR.
+            # Static source analysis, so no build is needed. `continue-on-error` because
+            # fallow exits 1 on any finding and the `--score` script has no gate flag:
+            # the report should stay visible without gating the PR.
             - "name": "Run fallow health"
               "continue-on-error": true
               "run": "pnpm run fallow:affected:health"
 
-    # Public-API snapshot guard: rebuild every package's dist and re-extract the
-    # covered public API surface, failing on any drift from the committed
-    # api-snapshots/*.api.md. A breaking change to a covered package's exports
-    # must land with an explicit snapshot update (`pnpm run api:update`). Builds
-    # all packages (not affected-only) so the check runs deterministically.
+    # Public-API snapshot guard: re-extract every package's public surface and fail on
+    # drift from the committed api-snapshots/*.api.md, so an export change has to land
+    # with an explicit `pnpm run api:update`. Builds all packages, not affected-only, to
+    # keep the check deterministic.
     "api-surface":
         "name": "Lint (api surface)"
         "if": "needs.files-changed.outputs.api_surface == 'true'"
@@ -225,12 +210,10 @@
             - "name": "Check public API snapshots"
               "run": "pnpm run api:check"
 
-    # Every other PR job builds `--development`; only a `build:prod` output is
-    # publishable (a dev build ships the React dev JSX runtime and no NODE_ENV
-    # folding — `@lunora/react@1.0.0-alpha.31` shipped exactly that to npm).
-    # Without this job that defect class first surfaces in the non-cancellable
-    # release job, after merge. Kept adjacent to `api-surface` — same shape,
-    # same gate, same setup steps.
+    # Every other PR job builds `--development`, but only a `build:prod` output is
+    # publishable: a dev build ships the React dev JSX runtime and skips NODE_ENV
+    # folding, which is what put @lunora/react@1.0.0-alpha.31 on npm broken. Without
+    # this job the defect first surfaces in the release, after merge.
     "dist-production":
         "name": "Lint (dist production)"
         "if": "needs.files-changed.outputs.api_surface == 'true'"
@@ -316,9 +299,8 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `--check` writes nothing, names each unsorted file and exits 1, so no
-            # write-then-diff gate is needed (an earlier version of this job did
-            # that, believing the command could only sort in place).
+            # `--check` writes nothing, names each unsorted file and exits 1 — no
+            # write-then-diff gate needed.
             - "name": "Check package.json sort order"
               "run": "pnpm run lint:package-json"
 
@@ -349,15 +331,11 @@
             - "name": "Scan for secrets"
               "run": "pnpm exec vis secrets"
 
-    # The auth-ui-* registry items are generated from @lunora/auth-ui's source by
-    # scripts/sync-auth-ui-registry.mjs. This used to be the last step of the
-    # `prettier` job, which meant it was skipped whenever a PR's diff had no
-    # frontend-lintable file, and masked whenever an earlier step in that job
-    # failed — drift landed on `alpha` despite the check nominally existing.
-    # No `if` path-filter, same as `secrets` above: the script only needs
-    # `node` + the repo's `prettier` dependency (no package builds), so an
-    # unconditional run costs well under a minute and closes the skip class
-    # outright.
+    # The auth-ui-* registry items are generated from @lunora/auth-ui by
+    # scripts/sync-auth-ui-registry.mjs. Its own job, and deliberately unfiltered: as a
+    # step inside `prettier` it was skipped on any PR without a frontend-lintable file
+    # and masked whenever an earlier step failed, and drift reached `alpha` anyway. The
+    # script needs only node and prettier, so running it always costs under a minute.
     "registry-sync":
         "name": "Lint (auth-ui registry sync)"
         "if": "needs.files-changed.outputs.registry_sync == 'true'"
@@ -386,11 +364,9 @@
             - "name": "Lint (auth-ui registry sync)"
               "run": "pnpm run lint:registry:sync"
 
-    # packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES
-    # (packages/platform/src/capabilities.ts) drift guard. No build needed — the
-    # checker imports capabilities.ts directly via Node's built-in TS type
-    # stripping. Had a script (`lint:node-capabilities-docs`) but no CI job
-    # until now, so drift between the two went uncaught.
+    # Guards packages/platform-node/docs/index.mdx's capability table against
+    # NODE_CAPABILITIES in packages/platform/src/capabilities.ts. No build needed — the
+    # checker imports capabilities.ts directly via Node's TS type stripping.
     "node-capabilities-docs":
         "name": "Lint (node capabilities docs)"
         "if": "needs.files-changed.outputs.node_capabilities_docs == 'true'"
@@ -441,12 +417,9 @@
                   "file_or_dir": "."
                   "strict": true
 
-    # Two manifest guards that nothing else covers. `check-catalog-drift` already
-    # existed with a `lint:catalog-drift` script but was wired into NOTHING — no
-    # workflow, no postinstall, no aggregate — so it never ran. Given as its own job
-    # rather than a ninth postinstall gate: a failure in the postinstall chain turns
-    # every CI job red in its setup step, with the cause invisible in the job that
-    # reports it.
+    # Two manifest guards nothing else covers. Their own job rather than a ninth
+    # postinstall gate: a failing postinstall turns every CI job red in its setup step,
+    # with the cause invisible in the job that reports it.
     "dependency-manifests":
         "name": "Lint (dependency manifests)"
         "if": "needs.files-changed.outputs.dependency_manifests == 'true'"
@@ -483,12 +456,10 @@
             - "name": "Check peerDependencies for catalog: refs"
               "run": "pnpm run lint:peer-catalog-refs"
 
-    # Regenerate every committed generator output and fail if the tree moved. The
-    # committed `apps/docs/src/data/packages.ts` had gone stale exactly this way —
-    # 51 packages against the generator's 52, missing @lunora/platform-node — because
-    # `apps/docs`'s build rewrote it on every run and nothing ever compared. The diff
-    # is deliberately whole-tree, not scoped to today's output paths, so a generator
-    # added later is covered without touching this job.
+    # Regenerate every committed generator output and fail if the tree moved —
+    # `apps/docs/src/data/packages.ts` went stale exactly this way, rewritten on every
+    # build with nothing ever comparing. The diff is whole-tree, not scoped to today's
+    # output paths, so a generator added later is covered without touching this job.
     "generated-files":
         "name": "Lint (generated files)"
         "if": "needs.files-changed.outputs.generated_files == 'true'"

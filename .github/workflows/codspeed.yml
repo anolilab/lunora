@@ -1,5 +1,3 @@
-# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
-
 "name": "CodSpeed"
 
 "on": # yamllint disable-line rule:truthy
@@ -18,9 +16,8 @@
     "contents": "read" # to fetch code (actions/checkout)
 
 "jobs":
-    # PR-only path gate: docs/plans-only PRs skip the whole install+build+bench
-    # job. Push runs (main/alpha baselines) are never gated — CodSpeed needs a
-    # complete baseline on every branch head.
+    # PR-only path gate, so docs-only PRs skip the whole job. Pushes are never gated:
+    # CodSpeed needs a complete baseline on every branch head.
     "files-changed":
         "name": "Detect what files changed"
         "if": "github.event_name == 'pull_request'"
@@ -101,12 +98,9 @@
             - "name": "Install dependencies"
               "run": "pnpm install --frozen-lockfile"
 
-            # Benchmarks import workspace packages from their built `dist/`, which
-            # is gitignored. Without this the bench suites fail to resolve
-            # `@lunora/*` entries ("Failed to resolve entry for package ...").
-            # On PRs only the affected packages (plus their dependsOn chain) are
-            # built — mirroring the affected bench selection below; pushes build
-            # everything for the full baseline run.
+            # Benchmarks import the workspace packages from their gitignored `dist/`,
+            # so without this they fail to resolve. PRs build only the affected chain,
+            # mirroring the bench selection below; pushes build everything.
             - "name": "Build packages"
               "shell": "bash"
               "env":
@@ -118,17 +112,14 @@
                       pnpm run build:packages
                   fi
 
-            # On PRs only the benches whose project (or an upstream dependency)
-            # changed are run; on push to main/alpha every bench runs so CodSpeed
-            # always has a complete, fresh baseline. `--no-cache` forces real
-            # execution — a vis cache hit would short-circuit the run and starve
-            # CodSpeed of measurements.
+            # PRs run only the affected benches; pushes run all of them to keep the
+            # baseline complete. `--no-cache` forces real execution — a vis cache hit
+            # would short-circuit the run and starve CodSpeed of measurements.
             - "name": "Resolve benchmark command"
               "id": "bench-cmd"
               "shell": "bash"
               "env":
-                  # Bound to env (not interpolated into the script) so untrusted
-                  # context never reaches the shell directly — see zizmor
+                  # Bound to env, never interpolated into the script — zizmor's
                   # template-injection rule.
                   "EVENT_NAME": "${{ github.event_name }}"
                   "BASE_REF": "${{ github.base_ref }}"

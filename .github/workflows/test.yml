@@ -1,10 +1,7 @@
-# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
-
 "name": "Tests"
 
-# PRs + the merge queue only — never `push`. A push to a release branch only
-# happens via a merged PR that already ran this suite, so a push trigger would
-# just re-run everything a second time. Modeled on visulima/visulima.
+# PRs + the merge queue only, never `push`: a release branch only moves via a
+# merged PR that already ran this suite.
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
@@ -40,9 +37,8 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            # checkout-with-retry rides out the transient GITHUB_TOKEN 401 that
-            # used to hit mid-checkout, so the paths-filter call no longer needs
-            # its own continue-on-error + sleep + retry dance.
+            # checkout-with-retry absorbs the transient mid-checkout GITHUB_TOKEN 401,
+            # so this call needs no retry handling of its own.
             - "name": "Check for file changes"
               "id": "changes"
               "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
@@ -83,27 +79,18 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `vis affected` builds upstream deps only via dependsOn; build the
-            # affected packages explicitly so their dist exists for the test run
-            # (workerd-pool suites stay off — see below).
+            # `vis affected` builds upstream deps only via dependsOn, so build the
+            # affected packages explicitly to give the test run their dist.
             - "name": "Build affected packages"
               "run": "pnpm run build:affected:packages"
 
-            # workerd is intentionally OFF here (no LUNORA_WORKERD_TESTS): the
-            # v8 coverage provider collects via node:inspector, which the
-            # @cloudflare/vitest-plugin runtime does not implement, and
-            # with coverage on the workerd-pool suites hang the runner. The
-            # workerd projects run WITHOUT coverage in the dedicated
-            # `test-workerd` job below. d1 runs here like any other package —
-            # with the workerd gate off, its vitest config exposes only the
-            # plain-node "mocks" project (20 files), so neither the old hang
-            # rationale nor the inspector limitation applies. studio runs in the
-            # plain `test:affected` leg (its old component-suite hang — a render
-            # loop in the SQL editor — is fixed) but stays excluded from the
-            # COVERAGE scripts: a full component run under v8 coverage still
-            # stalls (see packages/studio/vitest.config.ts). The dedicated
-            # "Run studio tests" step below covers it on both legs.
-            # lunora-playground stays excluded (same hang class as e2e).
+            # LUNORA_WORKERD_TESTS stays unset here: workerd suites hang under coverage
+            # (see the test-workerd job), so they run there instead.
+            #
+            # studio is excluded from the coverage scripts only — its component suite
+            # still stalls under v8 coverage (packages/studio/vitest.config.ts) — and is
+            # covered by the dedicated step below. lunora-playground stays excluded
+            # entirely, same hang class as e2e.
             - "name": "Run affected tests"
               "shell": "bash"
               "run": |
@@ -113,15 +100,13 @@
                       pnpm run test:affected
                   fi
 
-            # The component tests import @lunora/{react,client,errors,advisor,
-            # bindings} dists, which the affected build above only produces when
-            # they changed. `vis run build` walks upstream deps via dependsOn
-            # (`^build`), so everything studio imports exists for the run.
+            # The component tests import other packages' dist, which the affected build
+            # only produces when those packages changed. `vis run build` walks upstream
+            # deps via dependsOn, so everything studio imports exists for the run.
             - "name": "Build @lunora/studio dependencies"
               "run": |
                   pnpm exec vis run build --query "project=studio"
-            # The full studio suite: the DOM-free `unit` project plus the jsdom
-            # `component` project (73 files / 544 tests, ~1-2 min, no coverage).
+            # Both studio projects — DOM-free `unit` and jsdom `component` — no coverage.
             - "name": "Run studio tests"
               "run": |
                   pnpm --filter "@lunora/studio" run test
@@ -134,13 +119,11 @@
                   "token": "${{ secrets.CODECOV_TOKEN }}"
                   "fail_ci_if_error": false
 
-    # Workerd integration suites: the `workerd` vitest projects run against real
-    # workerd via @cloudflare/vitest-plugin, gated behind
-    # LUNORA_WORKERD_TESTS=1. Coverage MUST stay off — the v8 provider collects
-    # via node:inspector, which workerd does not implement, and with coverage on
-    # these suites hang the runner. So this job uses the plain `test` script
-    # (`vitest run`, no coverage flags) with `--project workerd`, one matrix leg
-    # per package so a single slow suite can't starve the others.
+    # The `workerd` vitest projects, run against real workerd and gated behind
+    # LUNORA_WORKERD_TESTS=1. Coverage MUST stay off: the v8 provider collects via
+    # node:inspector, which workerd does not implement, and these suites hang the
+    # runner with it on — hence the plain `test` script here. One matrix leg per
+    # package so a slow suite cannot starve the others.
     "test-workerd":
         "name": "Workerd integration (${{ matrix.package }})"
         "if": "needs.files-changed.outputs.packages == 'true'"
@@ -171,10 +154,9 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `vis run build` walks upstream deps via dependsOn (`^build`), so
-            # the package's dist plus everything it imports exists for workerd.
-            # (The `pnpm --filter "pkg..."` graph-walk does not build deps
-            # reliably.)
+            # `vis run build` walks upstream deps via dependsOn, so the package's dist
+            # and everything it imports exists. `pnpm --filter "pkg..."` does not build
+            # deps reliably.
             - "name": "Build package and dependencies"
               "run": |
                   pnpm exec vis run build --query "project=${{ matrix.package }}"
@@ -213,15 +195,11 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The E2E global setup boots the playground's Vite dev server, which
-            # imports lunorash / @lunora/* from their built dist and runs the
-            # `lunora` CLI bin — so the packages must be built first.
-            #
-            # Building the packages (CPU/disk) and downloading the Playwright
-            # browsers (network) are independent and bottleneck on different
-            # resources, so they run concurrently via the `parallel:` step group
-            # (each runs in the background with an implicit wait-all at the group's
-            # end). Both complete before "Run E2E suite" starts.
+            # E2E global setup boots the playground's dev server, which imports the
+            # packages from dist and runs the `lunora` bin — so they must be built.
+            # The build (CPU/disk) and the browser download (network) bottleneck on
+            # different resources, so `parallel:` overlaps them; both finish before
+            # the suite starts.
             - "parallel":
                   - "name": "Build packages"
                     "run": "pnpm run build:packages"
@@ -235,9 +213,8 @@
                   "LUNORA_E2E": "true"
               "run": "pnpm e2e"
 
-            # The showcase examples, driven in a real browser. Separate config
-            # (five apps, five ports) and separate report, but the same built
-            # packages and the same Chromium this job already provisioned.
+            # The showcase examples in a real browser: separate config and report,
+            # reusing the packages and Chromium this job already provisioned.
             - "name": "Run examples E2E suite"
               "env":
                   "CI": "true"
@@ -253,13 +230,11 @@
                       tests/e2e/playwright-report-examples
                   "retention-days": 7
 
-    # Scaffold every template, install it, add the auth-ui payload, build, and
-    # typecheck the copied screens. Slow (a real `pnpm install` per template) so it
-    # is path-gated, but it is the only gate that covers two things nothing else
-    # does: that a `lunora init` scaffold still installs at all, and that the
-    # copy-in auth-ui payload compiles against a meta-framework's own tsconfig
-    # (no template imports `lunora/auth-ui/**`, so a build alone tree-shakes it
-    # away before a compiler sees it).
+    # Scaffold every template, install it, add the auth-ui payload, build, typecheck.
+    # Path-gated because a real `pnpm install` per template is slow, but it is the only
+    # gate proving a `lunora init` scaffold still installs, and the only one that puts a
+    # compiler on the copy-in auth-ui payload — no template imports it, so a build alone
+    # tree-shakes it away first.
     "templates":
         "name": "Template scaffold matrix"
         "if": "needs.files-changed.outputs.templates == 'true'"
@@ -286,14 +261,11 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix packs `packages/*/dist` into tarballs and shells out to
-            # `packages/cli/dist/bin.mjs`, so every publishable package must be
-            # built first.
-            # `build:packages:prod`, not `build:packages`. The matrix packs
-            # `dist/` into tarballs, and the plain `build` target is a packem
-            # *development* build that keeps `react/jsx-dev-runtime` — a Next
-            # production prerender then dies with `jsxDEV is not a function`.
-            # Users install the production build, so that is what to test.
+            # The matrix packs `packages/*/dist` into tarballs and shells out to the
+            # built CLI, so everything publishable must be built — and built `:prod`:
+            # the development build keeps `react/jsx-dev-runtime`, which kills a Next
+            # production prerender with `jsxDEV is not a function`. Users install the
+            # production build, so that is what to test.
             - "name": "Build packages (production artifacts)"
               "run": "pnpm run build:packages:prod"
 
@@ -309,14 +281,12 @@
                   "retention-days": 7
                   "if-no-files-found": "ignore"
 
-    # Weighs the Worker a `templates/standalone` app deploys against the committed
-    # ceiling in `worker-size.json`. Nothing else in CI measures bytes, and the
-    # cost of noticing late is a user's deploy rejected by Cloudflare for a
-    # dependency this repo added weeks earlier.
+    # Weighs the Worker a `templates/standalone` app deploys against the ceiling in
+    # `worker-size.json`. Nothing else in CI measures bytes, and noticing late means a
+    # user's deploy rejected by Cloudflare over a dependency added here weeks earlier.
     #
-    # Its own job, NOT the root `postinstall`: a failing postinstall gate turns
-    # every job red in its setup step and the cause is invisible in the job that
-    # reports it.
+    # Its own job, not a `postinstall` gate: a failing postinstall turns every job red
+    # in its setup step, with the cause invisible in the job that reports it.
     "worker-size":
         "name": "Worker size budget"
         "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_size == 'true'"
@@ -343,43 +313,31 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `build:packages:prod`, not `build:packages`: the reference app
-            # bundles the workspace `dist/` directories, and users install the
-            # production build. The development build measures ~25% heavier — a
-            # number nobody deploys, and a baseline nobody could reproduce.
+            # `:prod` because the reference app bundles the workspace `dist/`, and the
+            # development build measures ~25% heavier — a number nobody deploys.
             - "name": "Build packages (production artifacts)"
               "run": "pnpm run build:packages:prod"
 
             - "name": "Weigh the reference Worker"
               "run": "pnpm run worker-size:check"
 
-    # The non-JS SDKs assert themselves against `protocol/fixtures/*.json`, the
-    # same golden frames the TypeScript client is tested against. Without this
-    # job nothing runs them: `sdks/` is not a pnpm workspace, so `pnpm run test`
-    # cannot see it, and `protocol/README.md` claims the Python port is
-    # conformant on the strength of a suite no gate executes.
+    # The non-JS SDKs against `protocol/fixtures/*.json`, the same golden frames the
+    # TypeScript client is tested against. Nothing else runs them: `sdks/` is not a pnpm
+    # workspace, so `pnpm run test` cannot see it.
     #
-    # Every SDK is dependency-free by design (its HTTP/socket transport is
-    # injected), so each leg is just "install the toolchain, run the suite" —
-    # no lockfile, no registry, nothing to pin beyond the language version. That
-    # is also why `lunora sdk generate` can vendor a transport into a consumer's
-    # project and leave them with nothing to install; the second half of each leg
-    # is the check that it really does.
-    #
-    # One matrix leg per language so a single failure names the language that
-    # broke rather than collapsing them into one red job.
+    # Every SDK is dependency-free by design (its transport is injected), so each leg is
+    # just "install the toolchain, run the suite" — and then generates, builds and calls
+    # an SDK, which is the check that `lunora sdk generate` really does leave a consumer
+    # with nothing to install. One leg per language so a failure names the language.
     "sdk-conformance":
         "name": "SDK conformance (${{ matrix.sdk.language }})"
         "if": "needs.files-changed.outputs.sdks == 'true'"
         "needs": "files-changed"
         "runs-on": "${{ matrix.sdk.runner }}"
-        # Per-leg, not one shared ceiling. The six Linux legs finish in about three
-        # minutes; the macOS one does strictly more on a slower runner — swift-format
-        # lint, the suite under ThreadSanitizer, a vis build of the CLI closure, then
-        # generate + build + call — and was cancelled at 15m28s having passed lint and
-        # conformance. Nothing swift-related had changed since the same leg took 9m53s,
-        # so the ceiling was simply too close to the leg's natural spread. Raising the
-        # shared value instead would let a genuinely hung Linux leg burn the same time.
+        # Per-leg, not one shared ceiling: the Linux legs finish in ~3 minutes, while
+        # macOS does strictly more work on a slower runner and has ranged from 9m53s to
+        # 15m28s for the same commit. One shared value would either cancel macOS or let
+        # a genuinely hung Linux leg burn macOS-sized time.
         "timeout-minutes": "${{ matrix.sdk.timeoutMinutes }}"
         "strategy":
             "fail-fast": false
@@ -394,9 +352,9 @@
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
                       "directory": "sdks/go"
-                      # -count=1 disables the test cache: the fixtures and the
-                      # conformance manifest live outside the Go module, so the
-                      # cache cannot see them change and would replay a stale PASS.
+                      # -count=1 disables the test cache: the fixtures live outside the
+                      # Go module, so the cache cannot see them change and replays a
+                      # stale PASS.
                       "run": "go test ./... -v -race -count=1"
                     - "language": "ruby"
                       "runner": "ubuntu-latest"
@@ -422,24 +380,20 @@
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
                       "directory": "sdks/dart"
-                      # `pub get` first: `dart run` resolves `package:lunora/…`
-                      # through .dart_tool/package_config.json, which is
-                      # gitignored. --offline because this package declares no
-                      # dependencies — the resolve is local, and a conformance run
-                      # must never be able to become a network call.
+                      # `pub get` first: `dart run` resolves `package:lunora/…` through
+                      # the gitignored .dart_tool/package_config.json. --offline because
+                      # the package declares no dependencies, so a conformance run can
+                      # never turn into a network call.
                       "run": "dart pub get --offline && dart run test/conformance.dart"
                     - "language": "swift"
                       # Swift ships with the macOS image, so this leg needs no
                       # third-party setup action.
                       "runner": "macos-latest"
-                      # 30, against 15 for the Linux legs: measured at 9m53s and
-                      # 15m28s for the same work, so the spread on a hosted macOS
-                      # runner is wider than the margin 15 left.
+                      # 30 against the Linux legs' 15 — see the spread noted above.
                       "timeoutMinutes": 30
                       "directory": "sdks/swift"
-                      # Thread sanitizer, because the suite's concurrency case
-                      # asserts a COUNT and a lock could be dropped from a path it
-                      # does not drive; TSan reports the unsynchronised access itself.
+                      # TSan: the concurrency case only asserts a count, so a lock
+                      # dropped on a path it does not drive would pass silently.
                       "run": "swift test --sanitize=thread"
         "steps":
             - "name": "Harden Runner"
@@ -462,10 +416,9 @@
               "with":
                   "go-version": "1.22"
 
-            # The Ruby TRANSPORT is dependency-free like the others, but
-            # quicktype's Ruby backend renders Dry::Struct models with no
-            # renderer option to avoid it — so the generated-code check (and
-            # only that check) needs the gems.
+            # The Ruby transport is dependency-free like the others, but quicktype's
+            # Ruby backend renders Dry::Struct models with no option to avoid it, so
+            # the generated-code check alone needs the gems.
             - "name": "Setup java"
               "if": "matrix.sdk.language == 'java'"
               "uses": "actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00" # v4.7.1
@@ -473,10 +426,8 @@
                   "distribution": "temurin"
                   "java-version": "21"
 
-            # Kotlin needs a JVM plus the compiler. setup-java supplies the
-            # former; the latter comes straight from the pinned JetBrains
-            # release rather than a third-party action, so there is no
-            # unverifiable action SHA in the chain.
+            # setup-java gives the JVM; the compiler comes straight from the pinned
+            # JetBrains release, keeping a third-party action SHA out of the chain.
             - "name": "Setup java for kotlin"
               "if": "matrix.sdk.language == 'kotlin'"
               "uses": "actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00" # v4.7.1
@@ -488,18 +439,17 @@
               "if": "matrix.sdk.language == 'kotlin'"
               "run": |
                   curl -fsSL -o /tmp/kotlin.zip https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip
-                  # The checksum JetBrains publishes beside the archive, verified
-                  # by hand against a downloaded copy. A tampered or truncated
-                  # download must not reach `unzip`.
+                  # JetBrains' published checksum, verified by hand against a
+                  # downloaded copy — a tampered or truncated archive must not
+                  # reach `unzip`.
                   echo 'b6698d5728ad8f9edcdd01617d638073191d8a03139cc538a391b4e3759ad297  /tmp/kotlin.zip' | sha256sum --check --strict
                   unzip -q /tmp/kotlin.zip -d /tmp/kotlin
                   echo "/tmp/kotlin/kotlinc/bin" >> "$GITHUB_PATH"
 
-            # Pinned to an exact SDK version, not "stable": `dart format`'s style
-            # is chosen by a language version, and a moving toolchain would
-            # reformat the transport out from under a green PR. This is the dart
-            # leg's whole install — `dart format` and `dart analyze` ship with the
-            # SDK, so it needs no separate linter step below.
+            # An exact SDK version, not "stable": `dart format`'s style follows the
+            # language version, so a moving toolchain reformats the transport out from
+            # under a green PR. This is the whole dart install — format and analyze
+            # ship with the SDK, so it has no linter step below.
             - "name": "Setup dart"
               "if": "matrix.sdk.language == 'dart'"
               "uses": "dart-lang/setup-dart@7654d458321ee25acccccfdb86cd48bd95768ff1" # v1.8.0
@@ -516,20 +466,16 @@
               "if": "matrix.sdk.language == 'ruby'"
               "run": "gem install dry-struct dry-types --no-document"
 
-            # Each leg installs its own language's linter. Pinned by version
-            # (or by SHA-256 for the two that ship as a downloaded artifact), so
-            # a new release cannot change the rule set under a green PR.
+            # Each leg installs its own linter, pinned by version (or SHA-256 where the
+            # tool ships as a downloaded artifact) so a new release cannot change the
+            # rule set under a green PR.
             #
-            # Six install steps for eight legs — a count of STEPS, not of pinned
-            # tools; `sdks/README.md` counts the latter and gets seven. Two legs
-            # have nothing to install here, for opposite reasons. Dart's linter
-            # and formatter ARE the SDK, which the setup step above already pins
-            # to an exact version. swift-format ships no binary on any release
-            # and has no versioned package, so the swift leg uses the toolchain's
-            # own copy, prints the version it ran, and asserts it against
-            # SWIFT_FORMAT_VERSION in `sdks/lint-all.sh` —
-            # a runner image whose Swift moves fails that leg by name instead of
-            # quietly linting against a rule set nobody chose.
+            # Two legs install nothing here, for opposite reasons. Dart's linter IS the
+            # SDK, already pinned above. swift-format publishes no binary and no
+            # versioned package, so that leg uses the toolchain's own copy and asserts
+            # the version against SWIFT_FORMAT_VERSION in `sdks/lint-all.sh` — a runner
+            # image whose Swift moves then fails by name rather than silently linting
+            # against a rule set nobody chose.
             - "name": "Install ruff"
               "if": "matrix.sdk.language == 'python'"
               "run": "python -m pip install --disable-pip-version-check ruff==0.16.2"
@@ -549,8 +495,8 @@
                   echo 'a3fd620207d5c40da6ca789b95e7f823c54e854b7fade7f613e91096a3706d75  /tmp/ktlint' | sha256sum --check --strict
                   install -m 0755 /tmp/ktlint /usr/local/bin/ktlint
 
-            # Shipped as a jar, so the wrapper is what puts the command on PATH
-            # that `lint-all.sh` (and a developer's shell) both call.
+            # Shipped as a jar; the wrapper is what puts the command on PATH for
+            # `lint-all.sh` and for a developer's shell alike.
             - "name": "Install google-java-format"
               "if": "matrix.sdk.language == 'java'"
               "run": |
@@ -560,15 +506,13 @@
                   printf '#!/usr/bin/env bash\nexec java -jar /tmp/google-java-format.jar "$@"\n' > /usr/local/bin/google-java-format
                   chmod +x /usr/local/bin/google-java-format
 
-            # The same script a developer runs. Keeping the command list in the
-            # script rather than in this matrix means the local check and the gate
-            # cannot drift — which is how the conformance coverage drifted before
-            # `protocol/conformance-cases.json` existed.
+            # The same script a developer runs: a command list kept in this matrix
+            # instead drifts from the local check, which is how conformance coverage
+            # drifted before `protocol/conformance-cases.json` existed.
             - "name": "Lint and format-check the ${{ matrix.sdk.language }} SDK"
-              # SDK_LINT_REQUIRE_TOOLS turns "tool not installed" from a SKIP into
-              # a failure. Locally a SKIP is honest — not everyone has seven
-              # toolchains. Here the install steps above just ran, so a missing tool
-              # means one of them broke, and a check that did not run must not
+              # SDK_LINT_REQUIRE_TOOLS turns "tool not installed" from a SKIP into a
+              # failure. A SKIP is honest locally; here the install steps just ran, so
+              # a missing tool means one broke — and a check that did not run must not
               # report green.
               "env":
                   "SDK_LINT_REQUIRE_TOOLS": "1"
@@ -578,17 +522,14 @@
               "working-directory": "${{ matrix.sdk.directory }}"
               "run": "${{ matrix.sdk.run }}"
 
-            # The generated surface hardcodes the runtime's call signatures.
-            # Nothing else pins that coupling: change a runtime signature and every
-            # language suite above still passes while every generated SDK is broken.
-            # So generate against the committed fixture and make the result build —
-            # and then CALL it.
+            # The generated surface hardcodes the runtime's call signatures, and nothing
+            # else pins that coupling: change a signature and every suite above still
+            # passes while every generated SDK is broken.
             #
-            # Every leg runs a generated call, not just a build. Building is not
-            # sufficient and that is measured, not assumed: Java emitted a surface
-            # that compiled and threw `cannot encode` on the first invocation, and
-            # Ruby one whose every method raised NoMethodError, both with the
-            # compile-or-parse gate green throughout.
+            # So every leg generates, builds AND calls. Building alone is demonstrably
+            # not enough: Java once emitted a surface that compiled and threw `cannot
+            # encode` on first invocation, Ruby one whose every method raised
+            # NoMethodError — both with the compile gate green throughout.
             - "name": "Setup node"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
@@ -599,31 +540,25 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # vis, not `pnpm --filter '@lunora/cli...' run build`: the CLI's
-            # dependency closure includes @lunora/studio, whose standalone bundle
-            # imports `@lunora/bindings/analytics`, and under the pnpm filter that
-            # bundle ran before bindings' dist existed. vis orders the closure from
-            # `dependsOn: ["^build"]`, which is why the `Test` legs above already
-            # build studio this way.
+            # vis, not `pnpm --filter '@lunora/cli...'`: the CLI closure includes studio,
+            # whose bundle imports `@lunora/bindings/analytics`, and under the pnpm
+            # filter that bundle ran before bindings' dist existed. vis orders the
+            # closure from `dependsOn: ["^build"]`.
             - "name": "Build the generator"
               "run": |
                   pnpm exec vis run build --query "project=cli"
 
-            # One script, and the same one a developer runs, for the same reason
-            # the lint step calls `lint-all.sh`: a command list kept in this matrix
-            # drifts from the local check, which is how conformance coverage
-            # drifted before `protocol/conformance-cases.json` existed.
+            # One script, the same one a developer runs — same drift argument as the
+            # lint step above.
             #
-            # It generates into `mktemp -d` — outside the checkout — because the
-            # generator now COPIES the transport into its output, and that promise
-            # cannot be tested anywhere the repo's own `sdks/<lang>` is resolvable.
-            # It then assembles the consumer project a real user writes (a go.mod
-            # `replace`, a cargo path dependency, `.package(path:)`) and runs a call
-            # through it.
+            # It generates into `mktemp -d`, outside the checkout: the generator copies
+            # the transport into its output, and that promise cannot be tested anywhere
+            # the repo's own `sdks/<lang>` is resolvable. It then assembles the consumer
+            # project a real user writes (a go.mod `replace`, a cargo path dependency,
+            # `.package(path:)`) and runs a call through it.
             #
-            # `--from sdks` is passed inside the script: the default fetch is pinned
-            # to the CLI's own release tag, and six of the seven transports do not
-            # exist at any released tag yet — CI must not depend on one.
+            # The script passes `--from sdks` because the default fetch is pinned to the
+            # CLI's release tag, and most transports do not exist at any released tag.
             - "name": "Generate a self-contained ${{ matrix.sdk.language }} SDK and call it"
               "run": "bash sdks/generated-check.sh ${{ matrix.sdk.language }}"
 

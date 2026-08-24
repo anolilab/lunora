@@ -21,10 +21,8 @@
             - "main"
             - "alpha"
 
-    # Review profile: "chill" (default) or "assertive" (more detailed)
     "profile": "chill"
 
-    # Path filters - include/exclude specific paths
     "path_filters":
         - "packages/**"
         - "apps/**"
@@ -43,7 +41,6 @@
         - "!**/.vis/**"
         - "!**/.task-runner/**"
 
-    # Path-specific instructions
     "path_instructions":
         - "path": "*"
           "instructions": "All character sets need to be in UTF-8.\n
@@ -81,7 +78,6 @@
               - The code adheres to best practices recommended for performance.
               - Ensure code follows project patterns
 
-    # Configure integrated tools
     "tools":
         "eslint":
             "enabled": true
