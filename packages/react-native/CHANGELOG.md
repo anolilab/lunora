@@ -1,3 +1,9 @@
+## @lunora/react-native [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.36...@lunora/react-native@1.0.0-alpha.37) (2026-08-24)
+
+### Features
+
+* **auth:** upgrade better-auth to 1.7.1 and gate MCP on its OAuth ([#472](https://github.com/anolilab/lunora/issues/472)) ([7f17a35](https://github.com/anolilab/lunora/commit/7f17a35ba36d85163dd099e464a560b874190049))
+
 ## @lunora/react-native [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.35...@lunora/react-native@1.0.0-alpha.36) (2026-08-23)
 
 
