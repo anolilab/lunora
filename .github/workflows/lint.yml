@@ -1,6 +1,6 @@
 "name": "Lint"
 
-# PRs + merge queue only (see test.yml for the no-`push` rationale).
+# Automatic runs on PRs and the merge queue only, never `push` (see test.yml).
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
@@ -332,10 +332,9 @@
               "run": "pnpm exec vis secrets"
 
     # The auth-ui-* registry items are generated from @lunora/auth-ui by
-    # scripts/sync-auth-ui-registry.mjs. Its own job, and deliberately unfiltered: as a
-    # step inside `prettier` it was skipped on any PR without a frontend-lintable file
-    # and masked whenever an earlier step failed, and drift reached `alpha` anyway. The
-    # script needs only node and prettier, so running it always costs under a minute.
+    # scripts/sync-auth-ui-registry.mjs. Its own job, on its own `registry_sync` filter:
+    # as a step inside `prettier` it was skipped on any PR without a frontend-lintable
+    # file and masked whenever an earlier step failed, and drift reached `alpha` anyway.
     "registry-sync":
         "name": "Lint (auth-ui registry sync)"
         "if": "needs.files-changed.outputs.registry_sync == 'true'"

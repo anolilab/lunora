@@ -1,7 +1,8 @@
 "name": "Tests"
 
-# PRs + the merge queue only, never `push`: a release branch only moves via a
-# merged PR that already ran this suite.
+# Automatic runs on PRs and the merge queue only, never `push`: a release branch only
+# moves via a merged PR that already ran this suite. `workflow_dispatch` stays for
+# manual runs.
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]

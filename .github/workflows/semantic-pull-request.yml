@@ -53,9 +53,8 @@
 
             - "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
               "if": "always() && (steps.lint_pr_title.outputs.error_message != null)"
-              # The comment is a courtesy, not the check: a bad title already failed
-              # `lint_pr_title`. Without this, an unreachable comment API turns a
-              # *passing* title into a red required check.
+              # Only reached once `lint_pr_title` has already failed, so the comment is
+              # a courtesy and must not add a second failure of its own.
               "continue-on-error": true
               "with":
                   "header": "pr-title-lint-error"
@@ -72,7 +71,9 @@
 
             - "if": "${{ steps.lint_pr_title.outputs.error_message == null }}"
               "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
-              # Same as above: clearing a stale comment must never fail a passing check.
+              # The mirror image: this one runs when the title PASSES, so an unreachable
+              # comment API here would turn a green check red — as it did on #410, with a
+              # self-signed certificate from behind the harden-runner egress proxy.
               "continue-on-error": true
               "with":
                   "header": "pr-title-lint-error"

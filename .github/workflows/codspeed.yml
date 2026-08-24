@@ -16,7 +16,8 @@
     "contents": "read" # to fetch code (actions/checkout)
 
 "jobs":
-    # PR-only path gate, so docs-only PRs skip the whole job. Pushes are never gated:
+    # Runs on PRs only, to gate the benchmark job below: a docs-only PR gets
+    # `benchmarks: false` and the benchmark job skips. Pushes are never gated, since
     # CodSpeed needs a complete baseline on every branch head.
     "files-changed":
         "name": "Detect what files changed"

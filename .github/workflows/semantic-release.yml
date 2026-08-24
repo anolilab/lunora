@@ -7,10 +7,11 @@
         "branches": ["main", "alpha", "next", "beta"]
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
-# Queue release runs, never cancel them. Each package gets a git tag AND a channel
-# note (refs/notes/semantic-release-<tag>); a run cancelled between those two pushes
-# leaves a tag with no note, which the next run reads as "never released" — it then
-# recomputes an existing version and dies on `git tag`.
+# Never cancel an in-progress release (GitHub may still replace a run that is only
+# pending). Each package gets a git tag AND a channel note
+# (refs/notes/semantic-release-<tag>); a run cancelled between those two pushes leaves
+# a tag with no note, which the next run reads as "never released" — it then recomputes
+# an existing version and dies on `git tag`.
 "concurrency":
     "group": "${{ github.workflow }}-${{ github.ref }}"
     "cancel-in-progress": false
