@@ -7,7 +7,7 @@
     "requires": ["auth"],
     "deps": {
         "@lunora/auth": "workspace:*",
-        "better-auth": "1.7.0-rc.2"
+        "better-auth": "1.7.1"
     },
     "envVars": [
         {

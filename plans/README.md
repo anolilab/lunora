@@ -995,11 +995,13 @@ deliberately on Cloudflare Workflows — different substrate, not a reuse.
 - **166 Phase 1a shipped** (`feat/166-sso-scim`): `scim` on the curated plugin surface,
   `sso` behind `@lunora/auth/plugins/enterprise` as an optional peer (its samlify tree
   should not be in every install). Shipping it required migrating the whole better-auth
-  stack to **1.7.0-rc.2**: `@better-auth/scim` < 1.7.0-beta.4 carries a HIGH advisory
+  stack to **1.7.0-rc.2**, since raised to **1.7.1** now that 1.7 is GA:
+  `@better-auth/scim` < 1.7.0-beta.4 carries a HIGH advisory
   (GHSA-j8v8-g9cx-5qf4) that no 1.6.x escapes. That migration also re-homed removed
   public surface (`oidcProvider` → `oauthProvider`, `withMcpAuth` → `requireMcpAuth`,
   `genericOAuthClient`/`oidcClient`/`scimClient` dropped) and fixed the expo bridge the
-  old pin existed to protect. 1.7.0 is NOT GA — revisit the prerelease pins on release.
+  old pin existed to protect — whose shim GA then made unnecessary, at the cost of an
+  async `expoBearerToken`.
   Phase 2 (SCIM Groups) is obsolete: 1.7 ships `/Groups` upstream. The plan's risk split was
   wrong in one respect — `@better-auth/sso` _statically_ imports `samlify` +
   `node:crypto`'s `X509Certificate`, so the OIDC-only path drags the SAML tree in and

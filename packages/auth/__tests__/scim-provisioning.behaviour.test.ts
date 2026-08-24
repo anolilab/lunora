@@ -134,14 +134,11 @@ const provision = async (userName: string): Promise<ScimUser> => {
 };
 
 /** Set a provisioned user's `active` flag the way an IdP does. */
-const setActive = async (id: string, value: boolean): Promise<number> => {
-    const patched = await callScim(`/Users/${id}`, "PATCH", {
+const setActive = async (id: string, value: boolean): Promise<{ payload: ScimPayload; status: number }> =>
+    await callScim(`/Users/${id}`, "PATCH", {
         Operations: [{ op: "replace", path: "active", value }],
         schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
     });
-
-    return patched.status;
-};
 
 /** Rows in the account table a SCIM operation may or may not have touched. */
 const userRows = (): Record<string, unknown>[] => database.prepare('SELECT * FROM "user"').all();
@@ -215,13 +212,17 @@ describe("scim provisioning lifecycle", () => {
     });
 
     it("deactivates a user through a SCIM PATCH — without banning the account", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const created = await provision("ada@acme.test");
-        const status = await setActive(created.id, false);
+        const patched = await setActive(created.id, false);
 
-        // 204, no body: SCIM's mutation responses here are empty.
-        expect(status).toBe(204);
+        // 200 with the modified resource, per RFC 7644 §3.5.2 — better-auth 1.7.1
+        // switched from the empty 204 its prereleases returned, so an IdP sees the
+        // result of its own PATCH without a follow-up GET. Microsoft Entra is the
+        // driver: it reads the response body to confirm the operation applied.
+        expect(patched.status).toBe(200);
+        expect(asUser(patched.payload)).toMatchObject({ active: false, id: created.id });
 
         const reread = await callScim(`/Users/${created.id}`, "GET");
 

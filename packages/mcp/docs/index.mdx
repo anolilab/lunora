@@ -8,6 +8,8 @@ related:
       note: "defines the queries, mutations, and actions the tools call"
     - to: /docs/packages/agent
       note: "the durable agents the `agent_<name>` tools front"
+    - to: /docs/packages/auth
+      note: "the `mcp` / `requireMcpAuth` plugins backing the OAuth-protected handler"
     - to: /docs/packages/cli
       note: "deploy the app the server introspects"
     - to: /docs/concepts/sharding
@@ -178,6 +180,89 @@ Gating is enforced by your deployment: the tools call ordinary queries,
 mutations, and actions, so whatever auth those functions require applies
 unchanged. Run-tools open no WebSocket (every call is plain HTTP RPC), so the
 server is safe to run as a short-lived stdio process.
+
+## Serving MCP over OAuth
+
+`createMcpFetchHandler` serves anyone who can reach the URL. That is the right
+trade for a stdio binary on your laptop, and the wrong one for a public
+endpoint: the tools carry the deployment's admin bearer, so the network path
+_is_ the authorization.
+
+`createAuthedMcpFetchHandler` mounts the same server behind an OAuth 2.1 gate —
+the flow MCP clients already know how to walk, discovered through the RFC 9728
+protected-resource metadata that better-auth's `mcp()` plugin serves. The
+authorization server is a [`@lunora/auth`](/docs/packages/auth) instance running
+that plugin; the resource server is the handler:
+
+```ts
+// lunora/auth.ts
+import { createAuth } from "@lunora/auth";
+import { jwt, mcp } from "@lunora/auth/plugins";
+
+export const auth = createAuth({
+    database: env.DB,
+    secret: env.AUTH_SECRET,
+    plugins: [
+        jwt(),
+        mcp({
+            consentPage: "/consent",
+            loginPage: "/login",
+            // The canonical protected-resource id (RFC 8707 / RFC 9728). Issued
+            // tokens are audience-bound to it. HTTPS, no query or fragment.
+            resource: "https://app.example.workers.dev/mcp",
+        }),
+    ],
+});
+```
+
+```ts
+// The MCP route.
+import { requireMcpAuth } from "@lunora/auth/plugins";
+import { createAuthedMcpFetchHandler, mcpTokenScopes } from "@lunora/mcp";
+
+import { auth } from "./auth";
+
+export const handleMcp = createAuthedMcpFetchHandler({
+    protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"] }),
+    server: (claims) => ({
+        // Writes need a scope a read-only token does not carry.
+        allowWrites: mcpTokenScopes(claims).has("lunora:write"),
+        token: env.LUNORA_ADMIN_TOKEN,
+        url: env.LUNORA_URL,
+    }),
+});
+```
+
+An unauthenticated request never reaches the MCP server at all — it gets a 401
+carrying the `WWW-Authenticate` challenge that starts the client's authorization
+flow, and no `LunoraClient` holding the admin bearer is ever constructed for it.
+
+### Scoping tools to the token
+
+`server` takes the verified token claims, not just a fixed options object. A
+gate that only answers yes/no gives every authorized agent the same
+capabilities, which throws away the scopes the token was issued with. Resolving
+`allowWrites` per request is what lets one endpoint serve a read-only agent and
+a read-write one: for the former the write tools are omitted from `tools/list`
+**and** refused at dispatch.
+
+`mcpTokenScopes(claims)` parses the space-delimited `scope` claim (RFC 6749
+§3.3) into a `Set`. A malformed or absent claim yields an empty set rather than
+throwing, so a scope check denies instead of surfacing a 500 a client might
+retry.
+
+<Callout type="info">
+    `protect` is a lambda rather than an `auth` instance because `@lunora/mcp` does not depend on better-auth — and the same seam takes either better-auth entry
+    point. Use `requireMcpAuth(auth, handler, opts)` when the resource server shares a deployment with the authorization server, or
+    `createMcpProtectedRequestHandler(verifyOptions, handler)` when it does not (a separate resource server holds verification config, not an auth instance).
+</Callout>
+
+<Callout type="warn">
+    Dynamic client registration is **off** unless you turn it on. better-auth's `mcp()` plugin expects you to compose it with `@better-auth/cimd` for the Client
+    ID Metadata Document flow that MCP 2026-07-28 pins, or to enable the OAuth provider's registration options explicitly. `@lunora/auth` does not re-export
+    `cimd`: its transport contract requires resolve-once DNS validation and connection pinning, which Cloudflare Workers cannot provide — so on Workers,
+    register MCP clients explicitly instead.
+</Callout>
 
 ## Connecting an MCP client
 

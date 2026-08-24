@@ -79,14 +79,18 @@ interface AuditHookContext {
  * (`/sign-in/email`, `/sign-in/username`, `/sign-in/phone-number`, …) as
  * plain `sign-in`. They were NOT recorded at all before this change.
  *
- * `/oauth2/callback/*` is deliberately NOT matched here: it does not exist as
- * an endpoint in the pinned `1.7.0-rc.2` (checked against the installed
- * `better-auth` and `@better-auth/*` dist — generic-oauth reuses the core
- * `/callback/:id` endpoint, it does not register its own path). `@better-auth/sso`
- * does expose its own `/sso/callback/:providerId`, but `@lunora/auth`'s
- * `plugins.ts` does not currently re-export `sso` — recorded as a gap for a
- * follow-up (plan 280 §9 Q1), not matched here since it is unreachable through
- * this package today.
+ * There is no dedicated `/oauth2/callback/*` branch because the generic
+ * `/callback/` check above already covers it, and covering it is CORRECT: an
+ * OAuth callback is a completed sign-in whatever path prefix it arrives on. The
+ * same substring also catches `@better-auth/sso`'s `/sso/callback/:providerId`,
+ * so if `plugins.ts` ever re-exports `sso` (plan 280 §9 Q1) that endpoint is
+ * classified rather than silently unrecorded. Checked against the installed
+ * `better-auth` and `@better-auth/*` dist for 1.7.1: generic-oauth reuses the
+ * core `/callback/:id` endpoint rather than registering its own, and the one
+ * dist hit for a literal `/oauth2/callback/` is inside
+ * `better-auth/plugins/oauth-popup`, which `plugins.ts` does not re-export —
+ * so today the branch fires for the core callback, and stays correct if either
+ * of the others becomes reachable. `__tests__/audit.test.ts` pins all three.
  */
 const eventForPath = (path: string): AuthAuditEvent | undefined => {
     const normalized = path.toLowerCase();

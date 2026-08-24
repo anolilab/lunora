@@ -112,6 +112,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@better-auth/api-key": "catalog:auth",
         "@better-auth/mcp": "catalog:auth",
         "@better-auth/oauth-provider": "catalog:auth",
         "@better-auth/passkey": "catalog:auth",
@@ -143,9 +144,9 @@
         "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
-        "@better-auth/core": ">=1.7.0-rc.2 <2.0.0-0",
-        "@better-auth/sso": ">=1.7.0-rc.2 <2.0.0-0",
-        "better-auth": ">=1.7.0-rc.2 <2.0.0-0"
+        "@better-auth/core": ">=1.7.1 <2.0.0-0",
+        "@better-auth/sso": ">=1.7.1 <2.0.0-0",
+        "better-auth": ">=1.7.1 <2.0.0-0"
     },
     "peerDependenciesMeta": {
         "@better-auth/sso": {

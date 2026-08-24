@@ -36,23 +36,30 @@ connection, mints a token for one, reads the directory, and rewrites a victim's
 `userName` to an address they control → account takeover via email-keyed recovery. Every
 1.6.x is in the vulnerable range, so the exact pin at 1.6.23 could not hold.
 
-The stack therefore moved to **1.7.0-rc.2** (`pnpm audit`: zero better-auth advisories).
-That migration was larger than "a dep bump":
+The stack therefore moved to **1.7.0-rc.2** (`pnpm audit`: zero better-auth advisories),
+and then to **1.7.1** once 1.7 went GA. That migration was larger than "a dep bump":
 
 - **The expo bridge.** `examples/expo` had hard-coded `"@better-auth/expo": "1.6.23"`
   instead of `catalog:auth` — now on the catalog. The generics break the old pin
-  described is real and still present at rc.2, so `packages/react-native` re-types the
-  plugin as `ExpoClientPlugin`. Note for whoever touches it: the base must stay
-  upstream's own return type with only `getActions` replaced; rebuilding on
-  `BetterAuthClientPlugin` (or intersecting with it) collapses better-auth's client-API
-  inference to `never`.
+  described was real through rc.2, so `packages/react-native` re-typed the plugin as
+  `ExpoClientPlugin`. **1.7.1 fixed the declaration upstream and the shim is gone**;
+  removing it surfaced what the shim had been hiding — 1.7.1 also changed `getCookie`
+  from `() => string` to `() => Promise<string>`, so `expoBearerToken` is now async.
+  (Left unfixed that would have regexed a Promise, matched nothing, and returned `null`
+  on every call: a signed-in native app silently behaving as anonymous.)
 - **Removed public surface**, re-homed on the curated barrel: `oidcProvider` →
   `oauthProvider` (`@better-auth/oauth-provider`), `mcp`/`withMcpAuth` → `mcp` /
-  `requireMcpAuth` / `mcpHandler` (`@better-auth/mcp`), `genericOAuthClient` and
+  `requireMcpAuth` (`@better-auth/mcp`), `genericOAuthClient` and
   `oidcClient` dropped, `oidcClient` replaced by `oauthProviderClient`,
   `@better-auth/scim/client` gone entirely. `@better-auth/core` is now a direct
   dependency (`createLocalAccountIssuer`), and `src/admin.ts` moved to the 2-argument
-  `createUser` plus `providerAccountId`/`issuer` on `linkAccount`.
+  `createUser` plus `accountId`/`issuer` on `linkAccount`.
+- **GA moved things again**, on top of rc.2: `mcpHandler` was dropped for
+  `createMcpProtectedRequestHandler`; the account unique index is `(issuer, accountId)`
+  (rc.2's `providerAccountId` rename was reverted); SCIM `PATCH` answers `200` with the
+  modified resource instead of `204`; the device grant split out of `oauthProvider` into
+  `oauthDeviceAuthorization`. `apiKey` (`@better-auth/api-key`), `lastLoginMethod`, and
+  `oneTap` joined the curated barrel at the same time.
 - **1.7.0 is not GA** (`latest` on npm is still 1.6.25). The catalog block says so and
   should be revisited on release.
 
