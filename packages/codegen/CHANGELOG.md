@@ -1,3 +1,12 @@
+## @lunora/codegen [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.119...@lunora/codegen@1.0.0-alpha.120) (2026-08-24)
+
+
+### Dependencies
+
+* **@lunora/container:** upgraded to 1.0.0-alpha.33
+* **@lunora/queue:** upgraded to 1.0.0-alpha.32
+* **@lunora/do:** upgraded to 1.0.0-alpha.94
+
 ## @lunora/codegen [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.118...@lunora/codegen@1.0.0-alpha.119) (2026-08-23)
 
 ### Features
