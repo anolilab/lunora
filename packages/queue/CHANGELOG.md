@@ -1,3 +1,9 @@
+## @lunora/queue [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.31...@lunora/queue@1.0.0-alpha.32) (2026-08-24)
+
+### Bug Fixes
+
+* **dispatch:** idempotent retries, real deadlines ([#455](https://github.com/anolilab/lunora/issues/455)) ([c92909a](https://github.com/anolilab/lunora/commit/c92909af851553f9b63cf5d1ad0844550fbc3cc0))
+
 ## @lunora/queue [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.30...@lunora/queue@1.0.0-alpha.31) (2026-08-23)
 
 ### Build System
