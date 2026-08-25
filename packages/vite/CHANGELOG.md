@@ -1,3 +1,16 @@
+## @lunora/vite [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.152...@lunora/vite@1.0.0-alpha.153) (2026-08-25)
+
+### Bug Fixes
+
+* **config:** parse .dev.vars like wrangler ([#461](https://github.com/anolilab/lunora/issues/461)) ([258fbb7](https://github.com/anolilab/lunora/commit/258fbb70b3c39aec9d33a5254ef384258acc0cfa))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.122
+* **@lunora/config:** upgraded to 1.0.0-alpha.153
+* **@lunora/studio:** upgraded to 1.0.0-alpha.122
+
 ## @lunora/vite [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.151...@lunora/vite@1.0.0-alpha.152) (2026-08-24)
 
 
