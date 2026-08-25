@@ -210,58 +210,12 @@ const tryJsonParse: (raw: string) => unknown;
 
 ### `SqlDialect` (interface)
 
-```ts
-interface SqlDialect {
-    affectedRows?: (result: SqlRunResult) => number;
-    columnType: (kind: string | undefined) => string;
-    companionTypes: {
-        autoincrementPrimaryKey: string;
-        integer: string;
-        key: string;
-        real: string;
-        text: string;
-    };
-    decode: (value: unknown, kind: string | undefined) => unknown;
-    encode: (value: unknown) => unknown;
-    frameworkColumns: () => ReadonlyArray<{
-        name: string;
-        type: string;
-    }>;
-    indexKeyPrefix?: (kind: string | undefined) => number | undefined;
-    isUniqueViolation: (error: unknown) => boolean;
-    maxTableColumns?: number;
-    readonly name: "mysql" | "postgres" | "sqlite";
-    nativeTextSearch?: {
-        createCompanion: (companion: string, keyType: string) => SQL;
-        createIndexes: (companion: string) => SQL[];
-        indexDocument: (companion: string, id: string, analyzed: string) => SQL;
-        matches: (companion: string, terms: ReadonlyArray<string>) => SQL;
-        rank: (companion: string, terms: ReadonlyArray<string>) => SQL;
-    };
-    supportsFts5: boolean;
-    supportsReturning: boolean;
-    tableExists: (table: string) => SQL;
-    textPatternOperatorClass?: string;
-}
-```
+Re-exported from `@lunora/sql-store` — signature tracked in that section.
 
 ### `SqlExec` (interface)
 
-```ts
-interface SqlExec {
-    all: (sql: string, params: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
-    batch?: (statements: ReadonlyArray<{
-        params: ReadonlyArray<unknown>;
-        sql: string;
-    }>) => Promise<void>;
-    run: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRunResult>;
-}
-```
+Re-exported from `@lunora/sql-store` — signature tracked in that section.
 
 ### `SqlRunResult` (interface)
 
-```ts
-interface SqlRunResult {
-    rowsAffected: number;
-}
-```
+Re-exported from `@lunora/sql-store` — signature tracked in that section.

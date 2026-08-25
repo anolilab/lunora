@@ -26,6 +26,14 @@
  *   signature is tracked in the owning package's snapshot (siblings) or is a
  *   dependency's concern (third-party), so upstream text churn can't fail this
  *   package's gate.
+ * - Re-exports whose declarations are already printed in full by ANOTHER
+ *   subpath of the SAME package (a barrel doing `export * from "../core"`) are
+ *   pinned by name + kind + owning subpath, and the signature is read in that
+ *   subpath's section. Six ports re-exporting one core printed the same
+ *   declarations six times, which buries a real one-line change in a port. The
+ *   gate is unchanged: every subpath still lists every export it has, so an
+ *   export appearing, disappearing, being renamed, or changing kind still fails
+ *   that subpath — only the duplicated body is gone. See `chooseOwners`.
  * - Exports tagged `@experimental` (JSDoc) are pinned by name + kind only and
  *   explicitly excluded from signature tracking, so the experimental tier can
  *   churn without a snapshot update. Adding/removing the tag IS a gated change.
@@ -361,8 +369,16 @@ const printDeclaration = (decl) => {
     return normalizeText(printed.replaceAll(/^export\s+/gm, "").replaceAll(/^declare\s+/gm, ""));
 };
 
-/** Render one exported symbol as a snapshot section. */
-const renderExport = (checker, pkgDirName, symbol) => {
+/**
+ * Resolve everything the renderer needs about one exported symbol: its name,
+ * kind, declarations, `@experimental` tag, and whether those declarations live
+ * outside this package.
+ *
+ * Split out from rendering because each package is now walked twice — once to
+ * decide which subpath prints a shared declaration in full, once to render it —
+ * and chasing aliases through the checker is the expensive half.
+ */
+const resolveExport = (checker, pkgDirName, symbol) => {
     const name = symbol.getName();
     let resolved = symbol;
 
@@ -391,23 +407,97 @@ const renderExport = (checker, pkgDirName, symbol) => {
     const isForeign =
         declarations.length > 0 && foreignSources.length > 0 && declarations.every((decl) => !decl.getSourceFile().fileName.startsWith(ownPrefix));
 
-    const header = `### \`${name}\` (${kind})`;
+    return {
+        declarations,
+        experimental,
+        foreignSources,
+        isForeign,
+        // Declaration identity, not name identity: two subpaths exporting the
+        // same NAME from different files are two different surfaces, and each
+        // has to print in full.
+        key: declarations
+            .map((decl) => `${decl.getSourceFile().fileName}:${decl.pos}`)
+            .sort()
+            .join("|"),
+        kind,
+        name,
+    };
+};
 
-    if (experimental) {
+/**
+ * Render one exported symbol as a snapshot section.
+ *
+ * `pinnedTo`, when set, is the OTHER subpath of this same package that prints
+ * these exact declarations in full — see {@link chooseOwners}.
+ */
+const renderExport = (info, pinnedTo) => {
+    const header = `### \`${info.name}\` (${info.kind})`;
+
+    if (info.experimental) {
         return `${header}\n\n_Tagged \`@experimental\` — ${UNTRACKED_MARKER}; churn here does not fail the gate._`;
     }
 
-    if (isForeign) {
-        return `${header}\n\nRe-exported from ${foreignSources.map((source) => `\`${source}\``).join(", ")} — signature tracked at its source.`;
+    if (info.isForeign) {
+        return `${header}\n\nRe-exported from ${info.foreignSources.map((source) => `\`${source}\``).join(", ")} — signature tracked at its source.`;
     }
 
-    if (declarations.length === 0) {
+    if (info.declarations.length === 0) {
         return `${header}\n\n_Unresolved declaration._`;
     }
 
-    const bodies = [...new Set(declarations.map((decl) => (ts.isSourceFile(decl) ? `/* module namespace re-export */` : printDeclaration(decl))))];
+    if (pinnedTo) {
+        return `${header}\n\nRe-exported from \`${pinnedTo}\` — signature tracked in that section.`;
+    }
+
+    const bodies = [...new Set(info.declarations.map((decl) => (ts.isSourceFile(decl) ? `/* module namespace re-export */` : printDeclaration(decl))))];
 
     return `${header}\n\n\`\`\`ts\n${bodies.join("\n\n")}\n\`\`\``;
+};
+
+/**
+ * Decide which subpath prints each shared declaration in full.
+ *
+ * A barrel that re-exports a sibling subpath (`export * from "../core"`) makes
+ * every one of that sibling's declarations an export of the barrel too, so
+ * printing them all under each barrel re-prints the same text once per barrel.
+ * That is the same duplication the cross-package rule above already refuses —
+ * the only difference is that here the owning section lives in the SAME file —
+ * so it gets the same treatment: one section carries the signature, the rest
+ * name it.
+ *
+ * The guard is not weakened by this. Every subpath still lists every export it
+ * has, with its kind, so an export appearing, disappearing, being renamed, or
+ * changing kind still fails that subpath's diff. Only the duplicated body goes
+ * away, in favour of a pointer to a section of the same file — a changed
+ * signature still fails the gate, at the section that owns it.
+ *
+ * Owner = the subpath whose entry directory contains the declaration's file,
+ * longest such directory winning (a port's own screens land on the port, the
+ * shared core's land on `core`). No containing entry, or a tie, falls back to
+ * entry order, which `collectEntries` already fixed — deterministic either way.
+ */
+const chooseOwners = (entriesWithExports) => {
+    const owners = new Map();
+
+    for (const { entryDir, exports: infos, subpathName } of entriesWithExports) {
+        for (const info of infos) {
+            if (info.experimental || info.isForeign || info.declarations.length === 0) {
+                continue;
+            }
+
+            const contained = info.declarations.every((decl) => decl.getSourceFile().fileName.startsWith(entryDir));
+            const score = contained ? entryDir.length : -1;
+            const previous = owners.get(info.key);
+
+            // Strictly greater, so a tie keeps the earlier entry and the winner
+            // never depends on iteration luck.
+            if (!previous || score > previous.score) {
+                owners.set(info.key, { score, subpathName });
+            }
+        }
+    }
+
+    return owners;
 };
 
 /** Render the full snapshot markdown for one covered package. */
@@ -415,6 +505,7 @@ const renderPackage = (program, checker, covered) => {
     const pkgDir = join(packagesDir, covered.dir);
     const { entries, name } = collectEntries(pkgDir);
     const sections = [];
+    const entriesWithExports = [];
 
     for (const entry of entries) {
         const sourceFile = program.getSourceFile(entry.dts);
@@ -423,28 +514,39 @@ const renderPackage = (program, checker, covered) => {
             throw new Error(`${name}: built entry not found or not loaded: ${relative(rootDir, entry.dts)} — run \`pnpm run build:packages\` first.`);
         }
 
-        const subpathName = entry.subpath === "." ? name : `${name}/${entry.subpath.slice(2)}`;
         const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
+
+        entriesWithExports.push({
+            entryDir: `${dirname(entry.dts)}${sep}`,
+            exports: moduleSymbol
+                ? checker
+                      .getExportsOfModule(moduleSymbol)
+                      .filter((exported) => !exported.getName().startsWith("__"))
+                      .sort((a, b) => (a.getName() < b.getName() ? -1 : 1))
+                      .map((exported) => resolveExport(checker, covered.dir, exported))
+                : [],
+            subpathName: entry.subpath === "." ? name : `${name}/${entry.subpath.slice(2)}`,
+        });
+    }
+
+    const owners = chooseOwners(entriesWithExports);
+
+    for (const { exports, subpathName } of entriesWithExports) {
         const lines = [`## \`${subpathName}\``, ""];
 
-        if (!moduleSymbol) {
+        if (exports.length === 0) {
             lines.push("_No exports._");
         } else {
-            const exports = checker
-                .getExportsOfModule(moduleSymbol)
-                .filter((exported) => !exported.getName().startsWith("__"))
-                .sort((a, b) => (a.getName() < b.getName() ? -1 : 1));
+            lines.push(
+                ...exports
+                    .map((info) => {
+                        const owner = owners.get(info.key);
 
-            if (exports.length === 0) {
-                lines.push("_No exports._");
-            } else {
-                lines.push(
-                    ...exports
-                        .map((exported) => renderExport(checker, covered.dir, exported))
-                        .join("\n\n")
-                        .split("\n"),
-                );
-            }
+                        return renderExport(info, owner && owner.subpathName !== subpathName ? owner.subpathName : undefined);
+                    })
+                    .join("\n\n")
+                    .split("\n"),
+            );
         }
 
         sections.push(lines.join("\n"));
@@ -519,32 +621,44 @@ const buildAll = () => {
     return rendered;
 };
 
-const EXPORT_MARKER_RE = /^### (`.+?` \(.+?\))$/gm;
-
-const markerSet = (content) => new Set([...content.matchAll(EXPORT_MARKER_RE)].map((match) => match[1]));
-
-/** Section bodies keyed by export marker, for changed-signature detection. */
+/**
+ * Section bodies keyed by `<subpath> › <export marker>`, for the added /
+ * removed / changed summary above the unified diff.
+ *
+ * Qualified by subpath, because one package prints the same export under
+ * several subpaths and an unqualified key let the last one silently overwrite
+ * the rest — so a signature change in one subpath could be reported as no
+ * change at all. The gate never depended on this (it compares whole files), but
+ * the line a reviewer reads first did.
+ */
 const sectionsByMarker = (content) => {
     const map = new Map();
-    const parts = content.split(/^### /m).slice(1);
+    let subpath = "?";
 
-    for (const part of parts) {
-        const [head, ...body] = part.split("\n");
+    for (const part of content.split(/^(?=## |### )/m)) {
+        if (part.startsWith("## ")) {
+            subpath = part.split("\n")[0].slice(3).trim();
+            continue;
+        }
 
-        map.set(head, body.join("\n").trim());
+        if (!part.startsWith("### ")) {
+            continue;
+        }
+
+        const [head, ...body] = part.slice(4).split("\n");
+
+        map.set(`${subpath} › ${head.trim()}`, body.join("\n").trim());
     }
 
     return map;
 };
 
 const printReadableDiff = (fileName, committed, current) => {
-    const oldMarkers = markerSet(committed);
-    const newMarkers = markerSet(current);
-    const added = [...newMarkers].filter((marker) => !oldMarkers.has(marker));
-    const removed = [...oldMarkers].filter((marker) => !newMarkers.has(marker));
     const oldSections = sectionsByMarker(committed);
     const newSections = sectionsByMarker(current);
-    const changed = [...newMarkers].filter((marker) => oldMarkers.has(marker) && oldSections.get(marker) !== newSections.get(marker));
+    const added = [...newSections.keys()].filter((marker) => !oldSections.has(marker));
+    const removed = [...oldSections.keys()].filter((marker) => !newSections.has(marker));
+    const changed = [...newSections.keys()].filter((marker) => oldSections.has(marker) && oldSections.get(marker) !== newSections.get(marker));
 
     for (const marker of added) {
         console.error(`   + added:   ${marker}`);

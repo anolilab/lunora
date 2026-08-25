@@ -489,209 +489,78 @@ const toMap: <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T) => stri
 
 ### `CheckpointRegistry` (interface)
 
-```ts
-interface CheckpointRegistry {
-    acknowledge: (watermark: CheckpointWatermark) => void;
-    awaitCheckpoint: (cursor: number) => Promise<void>;
-    awaitMutationId: (id: number) => Promise<void>;
-    dispose: () => void;
-    resolve: (watermark: CheckpointWatermark) => void;
-    stats: () => CheckpointRegistryStats;
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `CollectionDef` (interface)
 
-```ts
-interface CollectionDef<TList extends FunctionReference, TInput = never> {
-    getKey?: (row: RowOfList<TList>) => string;
-    insert?: InsertBinding<RowOfList<TList>, TInput>;
-    list: TList;
-    load?: "eager" | "lazy";
-    onError?: (error: SubscriptionError) => void;
-    scopeBy?: string;
-    shardKey?: string;
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `InsertBinding` (interface)
 
-```ts
-interface InsertBinding<TRow extends Row, TInput> {
-    mutation: FunctionReference;
-    optimistic: (input: TInput, id: string) => TRow;
-    toArgs: (row: TRow) => Record<string, unknown>;
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `LunoraCollectionConfig` (interface)
 
-```ts
-interface LunoraCollectionConfig<TRow extends Row> {
-    checkpoints?: CheckpointRegistry;
-    client: LunoraClient;
-    getKey?: (row: TRow) => string;
-    id?: string;
-    list?: FunctionReference;
-    load?: "eager" | "lazy";
-    onError?: (error: SubscriptionError) => void;
-    scopeBy?: string;
-    shape?: ShapeSource;
-    shardKey?: string;
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `LunoraCollectionOptions` (interface)
 
-```ts
-interface LunoraCollectionOptions<TRow extends Row> {
-    checkpoints: CheckpointRegistry;
-    config: CollectionConfig<TRow, string>;
-    scope: (args?: Record<string, unknown>) => void;
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `LunoraDb` (interface)
 
-```ts
-interface LunoraDb<D extends Record<string, AnyDef>> {
-    actions: {
-        [K in keyof D]: D[K] extends {
-            insert: object;
-        } ? (input: InputOf<D[K]>) => {
-            id: string;
-            transaction: Transaction;
-        } : never;
-    };
-    collections: {
-        [K in keyof D]: Collection<RowOf<D[K]>, string>;
-    };
-    executor: OfflineExecutor;
-    pendingCount: () => number;
-    scope: {
-        [K in keyof D]: D[K] extends {
-            scopeBy: string;
-        } ? (args?: Record<string, unknown>) => void : never;
-    };
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `createCheckpointRegistry` (const)
 
-```ts
-const createCheckpointRegistry: (options?: CheckpointRegistryOptions) => CheckpointRegistry;
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `defineCollections` (const)
 
-```ts
-const defineCollections: <D extends Record<string, AnyDef>>(client: LunoraClient, defs: D, options?: DefineCollectionsOptions) => LunoraDb<D>;
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `lunoraCollectionOptions` (const)
 
-```ts
-const lunoraCollectionOptions: <TRow extends Row>(options: LunoraCollectionConfig<TRow>) => LunoraCollectionOptions<TRow>;
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ## `@lunora/db/mutators`
 
 ### `BindMutatorsContext` (interface)
 
-```ts
-interface BindMutatorsContext<TCollections extends CollectionMap = CollectionMap> {
-    checkpoints?: CheckpointRegistry | false;
-    collections: TCollections;
-    onWriteRejected?: (event: MutatorRejectedEvent) => void;
-    shardKey?: string;
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `BoundMutatorApi` (interface)
 
-```ts
-interface BoundMutatorApi<TCollections extends CollectionMap> {
-    bindMutators: <M extends MutatorMapFor<TCollections>>(client: LunoraClient, context: BindMutatorsContext<TCollections>, mutators: M) => BoundMutators<M>;
-    defineMutator: {
-        <TArgs = Record<string, unknown>>(definition: {
-            apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
-            serverRef: string;
-        }): ClientMutatorDef<TArgs, TCollections>;
-        <TArgs>(definition: {
-            apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
-            serverRef: MutatorReference<TArgs>;
-        }): ClientMutatorDef<TArgs, TCollections>;
-    };
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `BoundMutators` (type)
 
-```ts
-type BoundMutators<M extends AnyMutatorMap> = {
-    [K in keyof M]: (args: ArgsOf<M[K]>) => Transaction;
-};
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `ClientMutatorContext` (interface)
 
-```ts
-interface ClientMutatorContext<TCollections extends CollectionMap = CollectionMap> {
-    collections: TCollections;
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `ClientMutatorDef` (interface)
 
-```ts
-interface ClientMutatorDef<TArgs, TCollections extends CollectionMap = CollectionMap> {
-    __lunoraClientMutator: true;
-    apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
-    serverRef: string;
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `CollectionMap` (type)
 
-```ts
-type CollectionMap = Record<string, Collection<any, string>>;
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `MutatorRejectedEvent` (interface)
 
-```ts
-interface MutatorRejectedEvent {
-    args: unknown;
-    code?: string;
-    error: Error;
-    mutator: string;
-    serverRef: string;
-}
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `bindMutators` (const)
 
-```ts
-const bindMutators: <M extends AnyMutatorMap, TCollections extends CollectionMap = CollectionMap>(client: LunoraClient, context: BindMutatorsContext<TCollections>, mutators: M) => BoundMutators<M>;
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `defineMutator` (const)
 
-```ts
-const defineMutator: {
-    <TArgs = Record<string, unknown>>(definition: {
-        apply: (context: ClientMutatorContext, args: TArgs) => void;
-        serverRef: string;
-    }): ClientMutatorDef<TArgs>;
-    <TArgs>(definition: {
-        apply: (context: ClientMutatorContext, args: TArgs) => void;
-        serverRef: MutatorReference<TArgs>;
-    }): ClientMutatorDef<TArgs>;
-};
-```
+Re-exported from `@lunora/db` — signature tracked in that section.
 
 ### `initMutators` (const)
 
-```ts
-const initMutators: <TCollections extends CollectionMap>() => BoundMutatorApi<TCollections>;
-```
+Re-exported from `@lunora/db` — signature tracked in that section.

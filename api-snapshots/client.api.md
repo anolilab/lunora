@@ -1785,22 +1785,11 @@ const rebalance: (pages: Page[], results: (PaginationResult | undefined)[]) => P
 
 ### `ArgsOf` (type)
 
-```ts
-type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R> ? A : never;
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `FunctionReference` (interface)
 
-```ts
-interface FunctionReference<Kind extends FunctionKind = FunctionKind, Args = unknown, Return = unknown> {
-    readonly __lunoraPhantom?: {
-        args: Args;
-        kind: Kind;
-        returns: Return;
-    };
-    readonly __lunoraRef: string;
-}
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `QuerySubscriptionOptions` (interface)
 
@@ -1828,9 +1817,7 @@ type ResolvedArgs<F extends FunctionReference> = ArgsOf<F> | typeof SKIP;
 
 ### `ReturnOf` (type)
 
-```ts
-type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `SKIP` (const)
 
@@ -1840,24 +1827,15 @@ const SKIP: "skip";
 
 ### `SubscriptionError` (interface)
 
-```ts
-interface SubscriptionError {
-    code?: string;
-    message: string;
-}
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `SubscriptionErrorCallback` (type)
 
-```ts
-type SubscriptionErrorCallback = (error: SubscriptionError) => void;
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `Unsubscribe` (type)
 
-```ts
-type Unsubscribe = () => void;
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `createQuerySubscription` (const)
 
@@ -1915,9 +1893,7 @@ const createServiceClient: (binding: ServiceBindingLike) => LunoraServiceClient;
 
 ### `ArgsOf` (type)
 
-```ts
-type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R> ? A : never;
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `AuthLike` (interface)
 
@@ -1933,16 +1909,7 @@ interface AuthLike<Result = ServerSession | null> {
 
 ### `FunctionReference` (interface)
 
-```ts
-interface FunctionReference<Kind extends FunctionKind = FunctionKind, Args = unknown, Return = unknown> {
-    readonly __lunoraPhantom?: {
-        args: Args;
-        kind: Kind;
-        returns: Return;
-    };
-    readonly __lunoraRef: string;
-}
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `HeadersSource` (type)
 
@@ -1954,21 +1921,11 @@ type HeadersSource = Headers | Request | {
 
 ### `Preloaded` (interface)
 
-```ts
-interface Preloaded<T = unknown> {
-    readonly __lunoraPreloaded: true;
-    readonly args: Record<string, unknown>;
-    readonly functionPath: string;
-    readonly shardKey?: string;
-    readonly value: T;
-}
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `ReturnOf` (type)
 
-```ts
-type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `ServerClientOptions` (interface)
 
@@ -2009,17 +1966,11 @@ const getServerSession: <Result>(request: HeadersSource, auth: AuthLike<Result>)
 
 ### `preloadQuery` (const)
 
-```ts
-const preloadQuery: <F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
-    shardKey?: string;
-}) => Promise<Preloaded<ReturnOf<F>>>;
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `preloadedQueryResult` (const)
 
-```ts
-const preloadedQueryResult: <T>(preloaded: Preloaded<T>) => T;
-```
+Re-exported from `@lunora/client` — signature tracked in that section.
 
 ### `serializePreloaded` (const)
 
