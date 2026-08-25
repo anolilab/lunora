@@ -252,6 +252,18 @@ const createRivetSocketHost = (state: RivetShardState): RivetSocketHost => {
 
         runtimeSockets.set(id, record);
 
+        if (row === undefined) {
+            // No durable row for this id — the fallback case above. Create one
+            // now, the way `accept` does: `persistAttachment` and `persistTags`
+            // are both `UPDATE … WHERE id = ?`, so without a row every later
+            // `serializeAttachment`/`setTag`/`removeTag` updates zero rows while
+            // still marking the registry dirty. The snapshot is rewritten
+            // without the values, and the next recycle loses them with no error.
+            // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
+            upsertRow.run(id, attachment === undefined ? null : serialize(attachment), JSON.stringify([...record.tags]));
+            state.markRegistryDirty();
+        }
+
         return createHandle(record, undefined);
     };
 

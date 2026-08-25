@@ -42,6 +42,12 @@ import type Database from "better-sqlite3";
  * prefix. Without escaping, a prefix of `s_` would also match `sx`, and a
  * prefix sweep — TTL GC, a migration — would delete keys it was never pointed
  * at. Cross-tenant, that is a data-loss bug rather than an off-by-one.
+ *
+ * Escaping alone is not enough: SQLite's `LIKE` is case-INSENSITIVE for ASCII,
+ * so a prefix of `A` matches `abc` too — the same over-match by a different
+ * route. The statement stays a `LIKE` because it is the index-friendly
+ * prefilter; {@link createNodeShardKvStore} makes `startsWith` the authority
+ * over what it returns.
  */
 const escapeLikePrefix = (prefix: string): string => prefix.replaceAll(/[\\%_]/gu, (character) => `\\${character}`);
 
@@ -76,8 +82,11 @@ export const createNodeShardKvStore = (database: Database.Database): ShardKvStor
         list: async <T = unknown>(options?: ShardKvListOptions): Promise<Map<string, T>> => {
             const prefix = options?.prefix ?? "";
             const rows = prefix === "" ? scanStatement.all() : prefixStatement.all(`${escapeLikePrefix(prefix)}%`);
+            // `LIKE` narrowed the scan; `startsWith` decides. See
+            // `escapeLikePrefix` for why the two are not the same predicate.
+            const matched = prefix === "" ? rows : rows.filter((row) => row.key.startsWith(prefix));
 
-            return new Map(rows.map((row) => [row.key, deserialize(row.value) as T]));
+            return new Map(matched.map((row) => [row.key, deserialize(row.value) as T]));
         },
         // eslint-disable-next-line @typescript-eslint/require-await -- see `delete`
         put: async (key, value) => {

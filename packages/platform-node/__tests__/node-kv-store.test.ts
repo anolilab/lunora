@@ -37,4 +37,32 @@ describe("node shard kv store", () => {
             database.close();
         }
     });
+
+    it("keeps a prefix case-sensitive, which SQLite LIKE is not", async () => {
+        expect.assertions(3);
+
+        const database = new Database(":memory:");
+
+        try {
+            const kv = createNodeShardKvStore(database);
+
+            await kv.put("Alpha", 1);
+            await kv.put("alpha", 2);
+            await kv.put("ALPHA", 3);
+
+            // SQLite's `LIKE` is case-insensitive for ASCII, so the statement
+            // alone returns all three for any of these prefixes — the same
+            // over-match escaping fixes for `_`/`%`, by a different route, and
+            // with the same consequence for a prefix sweep.
+            const upper = await kv.list({ prefix: "A" });
+            const lower = await kv.list({ prefix: "a" });
+            const shouting = await kv.list({ prefix: "ALP" });
+
+            expect([...upper.keys()]).toStrictEqual(["ALPHA", "Alpha"]);
+            expect([...lower.keys()]).toStrictEqual(["alpha"]);
+            expect([...shouting.keys()]).toStrictEqual(["ALPHA"]);
+        } finally {
+            database.close();
+        }
+    });
 });
