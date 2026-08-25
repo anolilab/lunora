@@ -159,6 +159,22 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * Cloudflare-Access identity facade (`access`), payments (`payments`), and
  * x402 (`x402`). `r2sql` is deliberately unmapped for the same reason: the
  * R2 SQL client is a plain HTTP client over an API token, not a binding.
+ * `notify` is unmapped on the same criterion, and the contrast with `mail` —
+ * which IS mapped — is what makes the line concrete: `@lunora/mail` holds a
+ * Queue binding itself (`createMailer({ queue })`, and `mailer.queue()`
+ * throws without one), so a target without queues cannot serve its surface.
+ * `@lunora/notify` holds nothing: Web Push and FCM delivery are `fetch` under
+ * VAPID/FCM credentials, the subscription store is a caller-supplied
+ * `(env) => SubscriptionStore` that falls back to an in-memory one (and the
+ * shipped D1 store is structurally typed, never a `D1Database` import), and
+ * the fan-out seam takes the producer as an argument (`QueueProducerLike`) so
+ * the queue belongs to the caller, not to `ctx.notify`.
+ *
+ * The unmapped set is not implicit — it is declared as
+ * {@link CREDENTIAL_BASED_CAPABILITIES} below, and a test asserts every
+ * {@link CapabilityKey} appears in exactly one of the two. Adding a capability
+ * therefore forces a deliberate "gated or credential-based?" answer at review
+ * time instead of defaulting, silently, to un-gated.
  *
  * `access` stays unmapped even though the matrix now rates `identityProxy`,
  * and the distinction is the point: `identityProxy` records whether the *host*
@@ -193,6 +209,21 @@ const CAPABILITY_TO_FEATURE: Partial<Record<CapabilityKey, PlatformFeatureKey>> 
     vectors: "vectorStore",
     workflows: "workflows",
 };
+
+/**
+ * The capabilities deliberately left out of {@link CAPABILITY_TO_FEATURE}
+ * because they are credential-based rather than binding-backed — see that map's
+ * doc comment for the per-entry reasoning. Declared rather than inferred so the
+ * complement of the map is an explicit list someone signed off on: a new
+ * {@link CapabilityKey} that lands in neither fails the invariant test, instead
+ * of quietly inheriting "never gated, emitted on every target".
+ *
+ * `shardAlarms` is absent from BOTH because it is absent from `CapabilityKey`
+ * itself — it is an engine-internal contract member, not an app-imported
+ * `ctx.*` module, so there is no usage signal to gate. See the note on
+ * {@link CAPABILITY_TO_FEATURE}.
+ */
+const CREDENTIAL_BASED_CAPABILITIES: ReadonlySet<CapabilityKey> = new Set<CapabilityKey>(["access", "flags", "notify", "payments", "r2sql", "x402"]);
 
 /** An advisor-style diagnostic about a target's platform capabilities. */
 interface PlatformDiagnostic {
@@ -305,4 +336,14 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string): PlatformGate
 };
 
 export type { PlatformDiagnostic, PlatformGateResult };
-export { DEFAULT_TARGET, gateAgainstMatrix, gatePlatformFeatures, platformMatrixIds, PROJECT_CONFIG_FILE, readProjectTarget, resolveCodegenTarget };
+export {
+    CAPABILITY_TO_FEATURE,
+    CREDENTIAL_BASED_CAPABILITIES,
+    DEFAULT_TARGET,
+    gateAgainstMatrix,
+    gatePlatformFeatures,
+    platformMatrixIds,
+    PROJECT_CONFIG_FILE,
+    readProjectTarget,
+    resolveCodegenTarget,
+};
