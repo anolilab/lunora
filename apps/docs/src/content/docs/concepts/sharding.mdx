@@ -81,12 +81,20 @@ verified `identity`, so a caller can only reach shards it owns:
 ```ts
 createWorker({
     shardDO: env.SHARD,
-    // Gate every non-default shard on the caller owning it.
-    authorizeShard: ({ identity, shardKey }) => identity?.userId === shardKey,
+    // Once configured, this runs for EVERY shard the caller names — including the
+    // default one (`__root__`, or your `defaultShardKey`), which is what an
+    // unsharded table resolves to. So let the default through explicitly:
+    // `identity?.userId === shardKey` alone would reject every unsharded RPC in
+    // the app, because no user id equals `"__root__"`.
+    authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === shardKey,
     // Fan-out is a separate, more privileged grant when `authorizeShard` is set.
     authorizeFanOut: (identity) => identity?.role === "admin",
 });
 ```
+
+The simpler gate, when every shard is per-user and you only need "is this caller
+signed in", is `({ identity }) => identity?.userId !== undefined` — it admits the
+default shard without a special case because it never looks at the key.
 
 The alternative is `allowUnauthenticatedShardAccess: true`, which opts into
 open shard/fan-out access. Only reach for it when **every** table is protected
