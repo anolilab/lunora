@@ -25,22 +25,33 @@
  * PII that must stay hidden must use `"redact"`.
  */
 
+/** The standard FNV-1a 32-bit offset basis. The default; `contentDigest` passes the prime as a second basis to widen its digest. */
+const FNV1A_OFFSET_BASIS = 0x81_1c_9d_c5;
+
+/** The FNV-1a 32-bit prime. */
+const FNV1A_PRIME = 0x01_00_01_93;
+
 /**
  * FNV-1a (32-bit) digest of `input`, as zero-padded 8-char lowercase hex. Fast,
  * deterministic and non-cryptographic: same input → same token. Iterates by
  * `codePointAt` per UTF-16 index (so a non-BMP character contributes its astral
  * code point at the first index and a lone low surrogate at the second);
  * `Math.imul` keeps the multiply in 32-bit space.
+ *
+ * `offset` exists only so `shared/content-digest.ts` can run the same hash under
+ * a second basis and concatenate the two. It is not a salt — FNV-1a is unkeyed,
+ * and a caller choosing a different basis gets a different-but-equally-guessable
+ * token, not a secret one.
  */
-const fnv1aHex = (input: string): string => {
-    let hash = 0x81_1c_9d_c5;
+const fnv1aHex = (input: string, offset: number = FNV1A_OFFSET_BASIS): string => {
+    let hash = offset;
 
     for (let index = 0; index < input.length; index += 1) {
         hash ^= input.codePointAt(index) ?? 0;
-        hash = Math.imul(hash, 0x01_00_01_93);
+        hash = Math.imul(hash, FNV1A_PRIME);
     }
 
     return (hash >>> 0).toString(16).padStart(8, "0");
 };
 
-export { fnv1aHex };
+export { FNV1A_OFFSET_BASIS, FNV1A_PRIME, fnv1aHex };

@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { fnv1aHex } from "../../../../shared/fnv1a";
 import { isPrivateHost } from "../../../../shared/ssrf-host";
 import type { RegisterInput, StoredSubscription } from "../types";
 
@@ -144,22 +145,16 @@ const fcmId = (token: string): string => `fcm2_${fnv1a64Hex(token)}`;
 /**
  * The PREVIOUS 32-bit FNV-1a digest (8 hex) — the pre-`_2` id scheme. Kept ONLY so
  * a canonical `put` can evict the stale legacy-prefix row for the same identity (see
- * {@link legacyIdFor}). Must reproduce the old algorithm byte-for-byte (offset basis
- * `0x811c9dc5`, prime `0x01000193`, `codePointAt` iteration, unsigned 8-hex output),
- * or it would delete the wrong (or no) row and the duplicate-broadcast bug survives.
+ * {@link legacyIdFor}).
+ *
+ * It has to reproduce the old algorithm byte-for-byte or it deletes the wrong row (or
+ * none) and the duplicate-broadcast bug survives. That used to be a hand-maintained
+ * copy of the algorithm with the requirement stated in prose; it now delegates to
+ * `shared/fnv1a.ts`, which is the same digest the studio's mask preview and the
+ * server's `"hash"` strategy use — so the requirement is enforced by there being one
+ * implementation rather than by this comment being read.
  */
-const fnv1a32Hex = (input: string): string => {
-    let hash = 0x81_1c_9d_c5;
-
-    for (let index = 0; index < input.length; index += 1) {
-        // eslint-disable-next-line no-bitwise -- FNV-1a mixing requires XOR
-        hash ^= input.codePointAt(index) ?? 0;
-        hash = Math.imul(hash, 0x01_00_01_93);
-    }
-
-    // eslint-disable-next-line no-bitwise -- coerce to an unsigned 32-bit int
-    return (hash >>> 0).toString(16).padStart(8, "0");
-};
+const fnv1a32Hex = (input: string): string => fnv1aHex(input);
 
 /** The legacy (32-bit) store id a web-push endpoint had under the pre-`wp2_` scheme. */
 const legacyWebPushId = (endpoint: string): string => `wp_${fnv1a32Hex(endpoint)}`;
