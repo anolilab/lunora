@@ -62,6 +62,7 @@ export {
     DEV_VARS_KEY_PATTERN,
     escapeRegExp,
     parseDevVariableEntries,
+    removeDevVariableLine,
     upsertDevVariableLine,
 } from "./dev-variables-format";
 export { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "./driver-registry";
