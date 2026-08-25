@@ -4,6 +4,7 @@ import { RateLimiter } from "@lunora/ratelimit";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { mcpDocsIndex } from "@/lib/mcp-docs-index";
+import { serializeByKey } from "@/lib/serialize-by-key";
 
 /**
  * `/mcp` — the Lunora documentation as a Model Context Protocol server, over
@@ -146,38 +147,10 @@ const withCors = (response: Response): Response => {
     return new Response(response.body, { headers, status: response.status, statusText: response.statusText });
 };
 
-/**
- * Serialize limiter calls per bucket.
- *
- * `RateLimiter.limit` reads the stored count, evaluates, then writes it back,
- * with `await`s in between. Against this in-memory store that read-modify-write
- * is not atomic: concurrent requests for one key can all observe the same prior
- * count, all decide they are under budget, and then overwrite each other — so
- * the limit is only enforced against sequential traffic, which is not the
- * traffic it exists to bound. Chaining per key makes each bucket's updates
- * observe the previous one.
- */
-const pending = new Map<string, Promise<unknown>>();
+/** Serializes limiter calls per bucket — see `lib/serialize-by-key` for why both halves matter. */
+const queue = serializeByKey();
 
-const consume = async (limit: "mcp" | "unidentified", key: string): Promise<RateLimitStatus> => {
-    const previous = pending.get(key) ?? Promise.resolve();
-    const next = previous.then(async () => limiter.limit(limit, { key }));
-
-    // Keep the chain from growing without bound, and never let one bucket's
-    // rejection break the next caller's link.
-    pending.set(
-        key,
-        next.catch(() => undefined),
-    );
-
-    try {
-        return await next;
-    } finally {
-        if (pending.get(key) === next) {
-            pending.delete(key);
-        }
-    }
-};
+const consume = async (limit: "mcp" | "unidentified", key: string): Promise<RateLimitStatus> => queue.run(key, async () => limiter.limit(limit, { key }));
 
 /** Serve one MCP request, refusing it when the caller is over budget. */
 const serve = async (request: Request): Promise<Response> => {
