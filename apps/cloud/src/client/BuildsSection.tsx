@@ -42,7 +42,7 @@ export const BuildsSection = ({ organizationId, preloaded }: SectionProps<Return
     // and a branded union makes that inference collapse to the empty-string literal.
     // The brand is reapplied at the query boundary, which is where it means something.
     const [projectId, setProjectId] = useState("");
-    const builds = useQuery(api.builds.listByProject, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip");
+    const builds = useQuery(api.builds.listByProject, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip"); // gitleaks:allow -- a parameter annotation / identifier binding, not a Cypress project id
     const [openBuildId, setOpenBuildId] = useState<BuildId | "">("");
     const logs = useQuery(api.builds.logs, openBuildId ? { buildId: openBuildId, organizationId } : "skip");
 

@@ -84,7 +84,7 @@ describe(createHttpAnalyticsReader, () => {
      * sample interval over the per-tenant index.
      */
     it("aggregates the sample interval over the per-tenant index, not the raw double", async () => {
-        const fetchMock = vi.fn().mockResolvedValue(Response.json({ data: [] }, { status: 200 }));
+        const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ data: [] }, { status: 200 }));
         const reader = createHttpAnalyticsReader({ accountId: "acc", apiToken: "tok", dataset: "usage", fetch: fetchMock });
 
         await reader.readRequestUsage(1_700_000_000_000);

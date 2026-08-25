@@ -70,7 +70,7 @@ export const LogsSection = ({ focusTraceId, organizationId, preloaded }: Section
     // and a branded union makes that inference collapse to the empty-string literal.
     // The brand is reapplied at the query boundary, which is where it means something.
     const [projectId, setProjectId] = useState("");
-    const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip");
+    const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip"); // gitleaks:allow -- a parameter annotation / identifier binding, not a Cypress project id
     const [scriptName, setScriptName] = useState("");
     const [levels, setLevels] = useState<Set<LogLevel>>(new Set());
     const [search, setSearch] = useState("");

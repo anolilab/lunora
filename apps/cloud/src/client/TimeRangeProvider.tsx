@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useState } from "react";
+import { createContext, use, useCallback, useMemo, useState } from "react";
 
 import type { TimeRange, TimeRangePreset } from "./time-range";
 import { DEFAULT_TIME_RANGE_PRESET, rangeForPreset, TIME_RANGE_PRESETS } from "./time-range";
@@ -39,14 +39,17 @@ export const TimeRangeProvider = ({
         };
     });
 
-    const setPreset = (preset: TimeRangePreset): void => {
+    const setPreset = useCallback((preset: TimeRangePreset): void => {
         setRange({ preset, ...rangeForPreset(preset, Date.now()) });
-    };
+    }, []);
 
-    // Not memoized: the consumers read `from`/`to`/`preset` as VALUES (the window is
-    // snapshotted into state, so those stay referentially stable across renders) and
-    // this provider only re-renders when the window actually changes.
-    const value: TimeRangeContextValue = { from: range.from, preset: range.preset, setPreset, to: range.to };
+    // Memoized on the window itself. The three values are referentially stable
+    // between renders (the window is snapshotted into state), but the object
+    // wrapping them was not, so every ancestor re-render handed consumers a new
+    // context value and reflowed Traces, Logs and Metrics for nothing.
+    const value = useMemo<TimeRangeContextValue>(() => {
+        return { from: range.from, preset: range.preset, setPreset, to: range.to };
+    }, [range.from, range.preset, range.to, setPreset]);
 
     return <TimeRangeContext value={value}>{children}</TimeRangeContext>;
 };

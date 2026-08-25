@@ -63,14 +63,18 @@ export const TAB_GROUPS = ["Deploy", "Observability", "Team", "Account"] as cons
  * constants, so the sidebar reads a prepared bucket instead of re-filtering the
  * whole table once per group on every render.
  */
-export const TABS_BY_GROUP: Readonly<Record<string, readonly (typeof TABS)[number][]>> = TABS.reduce<Record<string, (typeof TABS)[number][]>>((groups, tab) => {
-    const bucket = groups[tab.group] ?? [];
+export const TABS_BY_GROUP: Readonly<Record<string, ReadonlyArray<(typeof TABS)[number]>>> = (() => {
+    const groups: Record<string, (typeof TABS)[number][]> = {};
 
-    bucket.push(tab);
-    groups[tab.group] = bucket;
+    for (const tab of TABS) {
+        const bucket = groups[tab.group] ?? [];
+
+        bucket.push(tab);
+        groups[tab.group] = bucket;
+    }
 
     return groups;
-}, {});
+})();
 
 /**
  * What every dashboard section receives.

@@ -53,7 +53,7 @@ const BASE_URL = process.env["LUNORA_SEED_URL"] ?? "http://localhost:5174";
 /** The account the seed signs in as, and prints at the end for the developer to reuse. */
 const DEV_EMAIL = process.env["LUNORA_SEED_EMAIL"] ?? "dev@lunora.local";
 // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a published default for a throwaway local account, overridable via LUNORA_SEED_PASSWORD; it authenticates nothing beyond a developer's own miniflare state.
-const DEV_PASSWORD = process.env["LUNORA_SEED_PASSWORD"] ?? "dev-password-1234";
+const DEV_PASSWORD = process.env["LUNORA_SEED_PASSWORD"] ?? "dev-password-1234"; // gitleaks:allow -- local seed fallback, overridden by LUNORA_SEED_PASSWORD; never a deployed credential
 const DEV_NAME = "Dev User";
 
 const CELL_NAME = "dev-cell";
@@ -287,7 +287,11 @@ const driveToLive = async (cookie: string, id: string): Promise<void> => {
  * strand the seed with a project whose dashboard shows no current deployment. So an
  * existing-but-unfinished deployment is driven the rest of the way instead.
  */
-const ensureDeployment = async (cookie: string, organizationId: string, projectId: string): Promise<string> => {
+const ensureDeployment = async (
+    cookie: string,
+    organizationId: string,
+    projectId: string, // gitleaks:allow -- a parameter annotation, not a Cypress project id
+): Promise<string> => {
     const existing = await rpc<{ _id: string; status: string }[]>(cookie, "deployments:listByProject", { organizationId, projectId });
     const found = existing.at(0);
 
@@ -347,7 +351,11 @@ const ensureDeployment = async (cookie: string, organizationId: string, projectI
  * A FORBIDDEN here is therefore expected, reported, and non-fatal — and the step
  * starts working by itself the day an org has a real subscription.
  */
-const ensureDomain = async (cookie: string, organizationId: string, projectId: string): Promise<void> => {
+const ensureDomain = async (
+    cookie: string,
+    organizationId: string,
+    projectId: string, // gitleaks:allow -- a parameter annotation, not a Cypress project id
+): Promise<void> => {
     const existing = await rpc<{ _id: string }[]>(cookie, "domains:list", { organizationId, projectId });
 
     if (existing.length > 0) {
@@ -399,7 +407,11 @@ const ensureDomain = async (cookie: string, organizationId: string, projectId: s
  *
  * A stale unusable key is revoked and replaced rather than accumulating one per run.
  */
-const ensureDeployKey = async (cookie: string, organizationId: string, projectId: string): Promise<string | undefined> => {
+const ensureDeployKey = async (
+    cookie: string,
+    organizationId: string,
+    projectId: string, // gitleaks:allow -- a parameter annotation, not a Cypress project id
+): Promise<string | undefined> => {
     const traces = await rpc<{ traceId: string }[]>(cookie, "traces:list", { limit: 1, organizationId });
 
     if (traces.length > 0) {
@@ -583,7 +595,11 @@ const readDevVariable = async (key: string): Promise<string | undefined> => {
  * has not claimed — so all three steps are required, and none of them can be
  * short-circuited. Skipped (not fatal) when `GITHUB_WEBHOOK_SECRET` is absent.
  */
-const seedBuild = async (cookie: string, organizationId: string, projectId: string): Promise<void> => {
+const seedBuild = async (
+    cookie: string,
+    organizationId: string,
+    projectId: string, // gitleaks:allow -- a parameter annotation, not a Cypress project id
+): Promise<void> => {
     const secret = await readDevVariable("GITHUB_WEBHOOK_SECRET");
 
     if (secret === undefined || secret === "") {
@@ -701,7 +717,11 @@ const seedSubscription = async (organizationId: string): Promise<boolean> => {
  * construction, and `assertLocalTarget` has already refused any non-loopback run.
  * Delete this stage the day the dispatcher is wired.
  */
-const seedBuildLogs = async (cookie: string, organizationId: string, projectId: string): Promise<void> => {
+const seedBuildLogs = async (
+    cookie: string,
+    organizationId: string,
+    projectId: string, // gitleaks:allow -- a parameter annotation, not a Cypress project id
+): Promise<void> => {
     const builds = await rpc<{ _id: string; status: string }[]>(cookie, "builds:listByProject", { organizationId, projectId });
     const build = builds.at(0);
 
