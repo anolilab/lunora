@@ -1,3 +1,189 @@
+## @lunora/cli [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.183...@lunora/cli@1.0.0-alpha.184) (2026-08-25)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** previously-accepted `contains` on non-string filter
+columns is no longer honoured. Consistent with the module's allow-list
+mechanism (v.object strips undeclared keys), the key is stripped/dropped
+rather than rejected with a validation error — the predicate never
+reaches the SQL compiler. Alpha branch, no back-compat shim.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* fix(server): redact camelCase and lowercase secret keys
+
+redactSecrets' keyed-value pass matched any identifier key but tested it
+against an uppercase-only suffix regex, so exactly the spellings that
+appear in request bodies and thrown errors (password, apiToken,
+authSecret) fell through unredacted unless the value happened to hit a
+prefix or entropy heuristic.
+
+The suffix regex now matches key/password/secret/token as a real word in
+SCREAMING_SNAKE, lower snake/bare, or camelCase form, with a boundary so
+MONKEY/monkey/donkey (suffix mid-word) no longer match — the old regex
+redacted MONKEY=..., a false positive the boundary removes rather than
+extends. Camel-hump keys like sortKey are deliberate over-redaction.
+
+The duplicated regex in @lunora/config's .dev.vars scaffolder (and its
+test mirror) is kept byte-identical per the existing cross-reference
+comment.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* docs(server): pin storageRules getUrl sync contract
+
+getUrl is the only synchronous member of the storageRules guarded
+surface; the wrapping loop's untyped (unknown) return would let a future
+async/await refactor silently turn ctx.storage.getUrl into a Promise for
+guarded procedures only. Document the invariant at the declaration and
+pin it with a test asserting the wrapped call returns a plain string,
+not a thenable. No behaviour change.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* perf(server): bound presence reads and self-reap
+
+listPresent collected every row a room had ever accumulated (the TTL is
+a read-time filter that hides stale rows but never deletes them) and the
+sweep is an internal mutation nothing schedules by default, so an app
+that skipped wiring a cron degraded as O(live-set x historical-rows) per
+TTL window — on the hottest query in the module, re-run for every
+subscriber on every heartbeat.
+
+Two local fixes:
+- a (roomId, lastSeen) index and a maxMembers option (default 512):
+  listPresent now reads newest-first with a hard cap, so cost scales
+  with the cap, not with rows ever written; the in-memory sort is gone
+  since index order already delivers newest-first.
+- the heartbeat opportunistically reaps up to 8 of its room's oldest
+  rows per beat, using a cutoff a full max(grace, ttl) window behind the
+  visibility cutoff so a row the read filter could still show — or a
+  grace-window reconnect could revive — is never deleted. Active rooms
+  self-clean; sweep remains as optional bulk hardening.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* fix(server): unify the secret-key rule in shared/
+
+Four copies of the "does this key name imply a secret" regex existed —
+the runtime redactor, the .dev.vars scaffolder, `lunora deploy`'s
+required-secret resolver and `lunora doctor` — kept in step only by a
+comment. Two had just been updated for camelCase keys and two had not,
+so `apiToken` in a .dev.vars was a secret to the runtime and ordinary
+config to the CLI.
+
+They are now one definition in shared/secret-key.ts (zero-dep,
+bundler-inlined, so no dependency edge between the app runtime and the
+CLI/config layer).
+
+The rule also fixes a regression the boundary-based regex introduced:
+requiring `^`/`_`/`-` immediately before the suffix silently stopped
+matching no-separator compounds the original caught — OPENAI_APIKEY,
+APITOKEN, MYPASSWORD, AUTHSECRET — leaving a short or low-entropy secret
+under one of those names unredacted in logs and unminted by the
+scaffolder. Matching is now a plain case-insensitive suffix, which also
+picks up the Title-case and kebab spellings (Api_Key, Auth-Token) the
+previous doc claimed to cover.
+
+MONKEY/monkey/donkey stay excluded by an explicit word list rather than
+a boundary rule: MONKEY and APIKEY are structurally identical, so no
+positional rule can separate them, and the word list is the only honest
+way to keep both properties.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* fix(server): treat enum columns as string filter columns
+
+Gating `contains` on `validator.kind` alone judged an enum column —
+`v.union(v.literal("open"), v.literal("closed"))`, kind "union" — and a
+bare `v.literal("x")` as non-string, so the operator was omitted from
+the generated validator. Because `v.object` strips an undeclared key and
+an emptied predicate is dropped, `?where[status][contains]=ope` against
+an enum column silently returned the UNFILTERED set rather than failing
+— a silent widening wherever a list filter is doing the scoping.
+
+A union now counts as string-typed when every member is (v.null()
+members are transparent, so a nullable string union qualifies); a mixed
+union still refuses, since `contains` would otherwise reach non-string
+values.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* fix(server): name the presence cap for sessions, not members
+
+The bounded `listPresent` read caps SESSION ROWS — one per (roomId,
+sessionId), so one per open tab — but the option was called maxMembers
+and documented as a member cap, and the multi-tab dedup runs after the
+read. A 300-person room at two tabs each is 600 rows, so the 512 default
+silently truncated ~90 live, currently-heartbeating users out of "who's
+here" where the previous unbounded read was complete.
+
+Renamed to `maxSessions`, documented as a session cap to be sized
+against expected tabs, and the default raised to 1024. A non-finite
+value now falls back to the default instead of reaching the reader as
+`LIMIT NaN` (Math.max(1, Math.floor(NaN)) is NaN).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* fix(server): redact any key ending in a secret suffix
+
+The word list excluding ordinary "-key" words (MONKEY, DONKEY, …) is
+gone. It never delivered the property it claimed — turnkey, hokey,
+lowkey and smokey all end in "key" and were absent, so the list bought
+the appearance of precision and none of it, while being unbounded and
+unjustifiable to the next reader.
+
+MONKEY and APIKEY are structurally identical, so the only question is
+which way to fail. For a redactor over log and error text, over-
+redaction is the safe direction: masking a variable named MONKEY costs
+one confusing log line, missing APITOKEN costs the credential. The
+JSDoc now states that as the deliberate trade, and the tests assert
+MONKEY/monkey/sortKey ARE redacted.
+
+The one consumer that writes rather than logs is safe under over-
+matching too: the .dev.vars scaffolder mints a value only where the
+example held a placeholder, so an over-match fills a placeholder the
+user had to fill anyway and never overwrites a real value.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* test(server): suppress the redaction fixture on the secret scanner
+
+`MYPASSWORD=abc` is an input to a redaction assertion, not a credential, but
+the scanner reads the assignment shape and fails the Secrets job. Marked with
+`gitleaks:allow` the same way the other redaction and column-name fixtures in
+this repo are.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016xX4FTtqmhWH97TomT8uww
+
+### Bug Fixes
+
+* **config:** parse .dev.vars like wrangler ([#461](https://github.com/anolilab/lunora/issues/461)) ([258fbb7](https://github.com/anolilab/lunora/commit/258fbb70b3c39aec9d33a5254ef384258acc0cfa))
+* **server:** harden validation, presence, filters ([#441](https://github.com/anolilab/lunora/issues/441)) ([ca46d51](https://github.com/anolilab/lunora/commit/ca46d510a3f865df6ed547b4b9521ac625e055a3))
+* **studio:** route try-it to the worker ([#466](https://github.com/anolilab/lunora/issues/466)) ([d01a363](https://github.com/anolilab/lunora/commit/d01a3639ee52635df5f94d8190c56c9cd5c34e21))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.87
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.36
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.122
+* **@lunora/config:** upgraded to 1.0.0-alpha.153
+* **@lunora/d1:** upgraded to 1.0.0-alpha.86
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.84
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.72
+* **@lunora/seed:** upgraded to 1.0.0-alpha.81
+* **@lunora/testing:** upgraded to 1.0.0-alpha.119
+
 ## @lunora/cli [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.182...@lunora/cli@1.0.0-alpha.183) (2026-08-24)
 
 
