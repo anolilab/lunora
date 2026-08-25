@@ -46,13 +46,11 @@ const assertSameCurrency = (a: Money, b: Money): void => {
 
 /**
  * True when the currency has no minor unit (e.g. JPY).
- * @experimental
  */
 export const isZeroDecimalCurrency = (currency: CurrencyCode): boolean => exponentFor(currency.toUpperCase()) === 0n;
 
 /**
  * Construct money. Currency is normalized to uppercase; never use floats for amounts.
- * @experimental
  */
 export const money = (minorUnits: bigint | number, currency: CurrencyCode): Money => {
     if (typeof minorUnits === "number" && !Number.isSafeInteger(minorUnits)) {
@@ -65,14 +63,12 @@ export const money = (minorUnits: bigint | number, currency: CurrencyCode): Mone
 };
 
 /**
- * `zeroMoney` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
+ * Zero in the given currency.
  */
 export const zeroMoney = (currency: CurrencyCode): Money => money(0n, currency);
 
 /**
  * Localized currency string for display (e.g. `$19.99`). For UI only — never for arithmetic.
- * @experimental
  */
 export const formatMoney = (value: Money, locale = "en-US"): string => {
     const exponent = Number(exponentFor(value.currency.toUpperCase()));
@@ -87,8 +83,7 @@ export const formatMoney = (value: Money, locale = "en-US"): string => {
 };
 
 /**
- * `addMoney` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
+ * Sum of two same-currency amounts. Throws `CURRENCY_MISMATCH` otherwise.
  */
 export const addMoney = (a: Money, b: Money): Money => {
     assertSameCurrency(a, b);
@@ -97,8 +92,7 @@ export const addMoney = (a: Money, b: Money): Money => {
 };
 
 /**
- * `subtractMoney` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
+ * Difference of two same-currency amounts. Throws `CURRENCY_MISMATCH` otherwise.
  */
 export const subtractMoney = (a: Money, b: Money): Money => {
     assertSameCurrency(a, b);
@@ -108,7 +102,6 @@ export const subtractMoney = (a: Money, b: Money): Money => {
 
 /**
  * Compares two same-currency amounts, returning -1, 0, or 1.
- * @experimental
  */
 export const compareMoney = (a: Money, b: Money): -1 | 0 | 1 => {
     assertSameCurrency(a, b);
@@ -119,19 +112,16 @@ export const compareMoney = (a: Money, b: Money): -1 | 0 | 1 => {
 /**
  * Split an amount across integer ratios, distributing the remainder to the smallest unit so the
  * parts always sum back to the original. The basis for seat/proration math.
- * @experimental
  */
 export const allocateMoney = (amount: Money, ratios: ReadonlyArray<bigint>): Money[] => allocate(toDinero(amount), [...ratios]).map((part) => fromDinero(part));
 
 /**
- * `isZeroMoney` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
+ * True when the amount is exactly zero minor units.
  */
 export const isZeroMoney = (a: Money): boolean => a.minorUnits === 0n;
 
 /**
  * JSON-safe wire form of money (bigint encoded as a decimal string).
- * @experimental
  */
 export interface MoneyJSON {
     readonly currency: CurrencyCode;
@@ -139,15 +129,13 @@ export interface MoneyJSON {
 }
 
 /**
- * `toMoneyJSON` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
+ * Encode money for the wire — `minorUnits` becomes a decimal string.
  */
 export const toMoneyJSON = (m: Money): MoneyJSON => {
     return { currency: m.currency, minorUnits: m.minorUnits.toString() };
 };
 
 /**
- * `fromMoneyJSON` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
+ * Decode the wire form back to a `bigint`-backed {@link Money}.
  */
 export const fromMoneyJSON = (json: MoneyJSON): Money => money(BigInt(json.minorUnits), json.currency);

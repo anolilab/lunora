@@ -61,10 +61,10 @@ const UNTRACKED_MARKER = "signature not tracked";
 /**
  * Packages covered by the guard, by DIRECTORY name (`packages/<dir>`).
  *
- * `agent`, `ai`, `container` and `platform-node` ARE covered, at TIER_3, and
- * being covered is NOT a stability promise — see {@link TIER_3}. The rest of the
- * experimental tier (`replica`, `x402`, `react-native`, `angular`, `browser`,
- * `payment`) is not covered yet.
+ * The experimental tier IS covered, at TIER_3, and being covered is NOT a
+ * stability promise — see {@link TIER_3}. Nothing published is uncovered: every
+ * package this repo ships has its public surface on record here, and the tier
+ * decides what that record promises, not whether it exists.
  *
  * `platform-node` was held out entirely while it was a plan-234 spike, on the
  * grounds that its surface was still expected to move. It now implements what it
@@ -78,10 +78,19 @@ const UNTRACKED_MARKER = "signature not tracked";
  *
  * `auth-ui` IS covered (TIER_2) despite being `private: true` with no build
  * step — privacy and "no dist" are not exemptions (see `dispatch`, also
- * private, also covered). Its `core`/`react` exports point at `.ts`/`.tsx`
- * source and are extracted via the source-file fallback in `collectEntries`.
- * Only `./core` and `./react` are wired into its exports map today; `solid`,
- * `svelte`, `vue`, `angular` aren't covered until they are.
+ * private, also covered). Its exports point at `.ts`/`.tsx` source and are
+ * extracted via the source-file fallback in `collectEntries`. All six view
+ * ports are wired into the exports map and therefore covered — `core`,
+ * `react`, `angular`, `solid`, `solid-v2`, `svelte`, `vue` — because the
+ * registry copies every one of them verbatim into consumer projects, so an
+ * ungated port is a breaking change shipping to users with no record of it.
+ * Fidelity per port is whatever a plain TS program can resolve: `core` and
+ * `angular` are `.ts` and pin full signatures; `.tsx` components (`react`,
+ * `solid`, `solid-v2`) and `.vue`/`.svelte` SFCs resolve no further than the
+ * export, so those pin name + kind and catch an added/removed/renamed screen
+ * rather than a changed prop. Deliberate: teaching the program to resolve
+ * `.tsx` would inline every component's whole JSX body into the snapshot and
+ * fail the gate on implementation churn.
  */
 const TIER_1 = [
     "server",
@@ -161,8 +170,20 @@ const TIER_2 = [
  * `containerTool` calls `ContainerHandle.exec` — so a second package tracks it
  * the same way `platform-node` tracks `platform`, which is the case TIER_3
  * exists for.
+ *
+ * `payment` was added because it is the money path — provider adapters, webhook
+ * signature verification, the subscription state machine, entitlements — and a
+ * surface that moves there moves under someone's billing. Recollection is the
+ * wrong instrument for "has this settled?" on a surface with that blast radius.
+ *
+ * `angular`, `browser`, `react-native`, `replica` and `x402` were added last,
+ * for the plainest reason: they were the only published packages whose surface
+ * no record described, so the graduation question had no instrument at all for
+ * them. Their churn is cheap to carry — `react-native` in particular re-exports
+ * `@lunora/react`, and a re-export is pinned by name + kind + source package
+ * with its signature tracked in the owning snapshot.
  */
-const TIER_3 = ["agent", "ai", "container", "platform-node"];
+const TIER_3 = ["agent", "ai", "angular", "browser", "container", "payment", "platform-node", "react-native", "replica", "x402"];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.
