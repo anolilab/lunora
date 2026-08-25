@@ -1,3 +1,9 @@
+## @lunora/auth [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.90...@lunora/auth@1.0.0-alpha.91) (2026-08-25)
+
+### Bug Fixes
+
+* **auth:** close silent no-ops in admin paths ([#442](https://github.com/anolilab/lunora/issues/442)) ([68516d0](https://github.com/anolilab/lunora/commit/68516d0e9e189d0c37f2f63af076a293641d0219))
+
 ## @lunora/auth [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.89...@lunora/auth@1.0.0-alpha.90) (2026-08-25)
 
 ## @lunora/auth [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.88...@lunora/auth@1.0.0-alpha.89) (2026-08-24)
