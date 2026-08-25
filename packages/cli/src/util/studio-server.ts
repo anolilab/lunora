@@ -10,6 +10,12 @@
  * serve itself (so a `fetch()` for an app REST route reaches the worker rather
  * than collecting the SPA history fallback).
  *
+ * Both proxy legs are **loopback-only**. Bound to anything else (`0.0.0.0`, a
+ * LAN address) the server stays a read-only shell: it serves the studio document
+ * and its assets, and answers every other path with the SPA fallback rather than
+ * forwarding it — the admin token is not handed to a request that arrived off
+ * the machine.
+ *
  * Because the studio and its API are then same-origin (this server), the
  * studio auto-connects with no CORS and no worker changes — the same
  * experience as the Vite route, where the worker is embedded in Vite.
@@ -51,6 +57,9 @@ const pathnameOf = (url: string): string => {
 };
 
 /** Forward an HTTP request to the worker and pipe its response back. */
+/** Milliseconds to wait for the worker to answer a proxied HTTP request before giving up. */
+const PROXY_RESPONSE_TIMEOUT_MS = 30_000;
+
 const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: URL): void => {
     const upstream = httpRequest(
         {
@@ -66,10 +75,34 @@ const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: U
         },
     );
 
+    // A worker that accepts the connection and then never answers would other-
+    // wise hold the request open for as long as the browser waits. Bounded, so
+    // the failure surfaces as a 504 the console can render.
+    upstream.setTimeout(PROXY_RESPONSE_TIMEOUT_MS, () => {
+        upstream.destroy(new Error(`no response within ${String(PROXY_RESPONSE_TIMEOUT_MS)}ms`));
+    });
+
     upstream.on("error", (error: Error) => {
+        if (response.headersSent) {
+            // Already streaming the upstream body — there is no status left to
+            // set, so drop the connection rather than append an error to a
+            // partial response the client would parse as complete.
+            response.destroy();
+
+            return;
+        }
+
         // The worker may still be booting — surface a 502 rather than hang.
-        response.statusCode = 502;
+        response.statusCode = error.message.startsWith("no response within") ? 504 : 502;
         response.end(`lunora dev: worker unreachable (${error.message})`);
+    });
+
+    // The browser navigated away or aborted the fetch. `writableFinished` tells
+    // an abort apart from an ordinary completed response, which closes too.
+    response.on("close", () => {
+        if (!response.writableFinished) {
+            upstream.destroy();
+        }
     });
 
     request.pipe(upstream);

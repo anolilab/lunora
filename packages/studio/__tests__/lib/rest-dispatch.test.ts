@@ -88,4 +88,37 @@ describe("restDispatch", () => {
 
         expect(stub).not.toHaveBeenCalled();
     });
+
+    it("refuses an absolute httpPath even when no origin was resolved", async () => {
+        expect.assertions(2);
+
+        const stub = stubFetch();
+
+        // The empty-origin case used to skip the guard entirely and fetch the
+        // path as written, sending the admin bearer to whatever host it names.
+        await expect(restDispatch({ httpPath: "http://evil.example/steal", method: "GET" }, {}, "", "secret")).rejects.toThrow("off-origin");
+
+        expect(stub).not.toHaveBeenCalled();
+    });
+
+    it("refuses a protocol-relative httpPath when no origin was resolved", async () => {
+        expect.assertions(2);
+
+        const stub = stubFetch();
+
+        await expect(restDispatch({ httpPath: "//evil.example/steal", method: "GET" }, {}, "", "secret")).rejects.toThrow("off-origin");
+
+        expect(stub).not.toHaveBeenCalled();
+    });
+
+    it("still fetches a relative httpPath when no origin was resolved", async () => {
+        expect.assertions(2);
+
+        const stub = stubFetch();
+
+        await restDispatch(operation, {}, "", "secret");
+
+        expect(stub).toHaveBeenCalledTimes(1);
+        expect(stub.mock.calls[0]?.[0]).toBe("/api/health");
+    });
 });
