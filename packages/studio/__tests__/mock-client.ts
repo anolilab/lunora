@@ -462,6 +462,11 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         // a constant keeps that key stable across renders.
         clientIdentifier: () => "mock-client",
         deleteKvKey,
+        // The API try-it console reads both when it dispatches a plain REST
+        // route: `url` is the worker origin the request is resolved against, and
+        // `getAuthToken` supplies the admin bearer. Stable, non-empty values so a
+        // test asserts on what the console actually forwards.
+        getAuthToken: () => "mock-admin-token",
         deleteStorageObject,
         facetGlobalColumn,
         fetchOpenApi,
@@ -490,6 +495,8 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         subscribe,
         subscribeScheduledJobs,
         uploadStorageObject,
+        /** The worker origin a REST try-it request is resolved against. */
+        url: "http://127.0.0.1:8787",
         ...authAdminMethods,
     } as unknown as LunoraClient;
 

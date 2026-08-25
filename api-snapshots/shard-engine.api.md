@@ -688,6 +688,7 @@ type DurableAttachDecision = "attach" | "interrupted" | "reclaim" | "replay-term
 
 ```ts
 interface DurableStreamAttach {
+    readonly generation?: number;
     readonly iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
     readonly runKey: string;
     readonly sinceChunk: number;
@@ -728,6 +729,7 @@ class DurableStreamRunner {
 interface DurableStreamSink {
     readonly chunk: (chunk: {
         data: unknown;
+        generation?: number;
         seq: number;
     }) => boolean;
     readonly complete: () => void;
@@ -2644,6 +2646,7 @@ interface SubscriptionEnvelope {
     clientId?: string;
     context?: Record<string, unknown>;
     data?: unknown;
+    generation?: number;
     id: string;
     query?: SubscriptionQuery;
     shape?: {
@@ -3385,7 +3388,10 @@ const createSystemReader: (options?: SystemReaderOptions) => SystemDatabaseReade
 
 ```ts
 const decideDurableAttach: (run: DurableStreamRun | undefined, context: {
-    live: boolean;
+    generation?: number;
+    live?: {
+        generation: number;
+    };
     resuming: boolean;
 }) => DurableAttachDecision;
 ```

@@ -1,18 +1,17 @@
 import { getVitestConfig } from "../../tools/get-vitest-config";
 
 /**
- * Coverage floors below the repo default, because extraction moved code out
- * from under its tests rather than because the code is untested.
- *
- * Most of this package's 21 modules arrived from `@lunora/do`, where they were
- * exercised integration-style through `ShardDO`'s suite — 1134 tests that still
- * cover them today, but count toward `@lunora/do`'s coverage, not this
- * package's. Only the modules that already had standalone unit tests
- * (aggregate-sql, query-args, reactive-cache, rls-guard, socket-pool, where-sql,
- * geo) brought their coverage with them.
- *
- * These numbers are a RATCHET, not a target: they sit just under the current
+ * These numbers are a RATCHET, not a target: they sit under the current
  * measurement so a regression still fails, and every engine unit test added
- * should raise them toward the 80/70 default. Do not lower them.
+ * should raise them. Do not lower them.
+ *
+ * Measured on both CI legs, because they do not agree: Node 22 (which CI runs
+ * `test:affected:coverage` on) gives 88.9 stmts / 79.2 branches / 88.0 funcs /
+ * 88.9 lines, Node 24 gives 89.0 / 79.5 / 88.1 / 89.0. Part of that gap is not
+ * instrumentation noise but real branch selection — `node:sqlite` ships FTS5
+ * from 22.23 on, so the older leg takes the LIKE-scan path through ctx-db's
+ * search code instead. The floors are pinned ~3pp under the LOWER leg: a floor
+ * fitted tightly to the local (Node 24) number reds in CI on the identical
+ * commit, which is exactly how PR #408 failed.
  */
-export default getVitestConfig({ test: { environment: "node" } }, { branches: 25, functions: 43, lines: 46, statements: 46 });
+export default getVitestConfig({ test: { environment: "node" } }, { branches: 75, functions: 85, lines: 86, statements: 86 });

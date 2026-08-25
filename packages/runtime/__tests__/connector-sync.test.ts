@@ -290,6 +290,52 @@ describe("toFivetranResponse", () => {
         expect(out.insert["users"]).toEqual([{ _id: "x" }]);
         expect(out.delete["users"]).toBeUndefined();
     });
+
+    it("decodes wire-tagged bigint and bytes values into portable JSON", () => {
+        expect.assertions(2);
+
+        // Docs arrive wire-form from the shard admin RPC (`encodeWire`): a
+        // bigint is a `["$lunora.wire$","bigint","…"]` tag, bytes a base64 tag.
+        // Warehouse output must carry values, never the tag arrays.
+        const page: ConnectorSyncPage = {
+            changes: [
+                {
+                    doc: {
+                        _id: "r1",
+                        blob: ["$lunora.wire$", "bytes", "AQID"],
+                        count: ["$lunora.wire$", "bigint", "42"],
+                        huge: ["$lunora.wire$", "bigint", "9007199254740993"],
+                    },
+                    op: "insert",
+                    table: "rows",
+                },
+            ],
+            hasMore: false,
+            nextCursor: "T",
+        };
+
+        const out = toFivetranResponse(page);
+
+        // Every bigint is a decimal string (one stable JSON type per column,
+        // whichever side of 2^53 a row falls on); bytes become a base64 string.
+        expect(out.insert["rows"]).toEqual([{ _id: "r1", blob: "AQID", count: "42", huge: "9007199254740993" }]);
+        expect(JSON.stringify(out.insert["rows"])).not.toContain("$lunora.wire$");
+    });
+
+    it("passes a pure-JSON doc through unchanged", () => {
+        expect.assertions(1);
+
+        const doc = { _id: "p1", nested: { flag: true, list: [1, "two", null] }, note: "plain" };
+        const page: ConnectorSyncPage = {
+            changes: [{ doc, op: "insert", table: "plain" }],
+            hasMore: false,
+            nextCursor: "T",
+        };
+
+        const out = toFivetranResponse(page);
+
+        expect(JSON.stringify(out.insert["plain"]?.[0])).toBe(JSON.stringify(doc));
+    });
 });
 
 describe("toAirbyteMessages", () => {
@@ -312,5 +358,55 @@ describe("toAirbyteMessages", () => {
         // A delete is marked with `_lunora_deleted` so a downstream step can tombstone.
         expect(messages[1]).toMatchObject({ record: { data: { _lunora_deleted: true } }, type: "RECORD" });
         expect(messages[2]).toEqual({ state: { data: { cursor: "TOKEN" } }, type: "STATE" });
+    });
+
+    it("decodes wire-tagged bigint and bytes values in RECORD data", () => {
+        expect.assertions(3);
+
+        const page: ConnectorSyncPage = {
+            changes: [
+                {
+                    doc: {
+                        _id: "r1",
+                        blob: ["$lunora.wire$", "bytes", "AQID"],
+                        count: ["$lunora.wire$", "bigint", "42"],
+                        huge: ["$lunora.wire$", "bigint", "9007199254740993"],
+                    },
+                    op: "insert",
+                    table: "rows",
+                },
+                { doc: { _id: "r2", count: ["$lunora.wire$", "bigint", "7"] }, op: "delete", table: "rows" },
+            ],
+            hasMore: false,
+            nextCursor: "T",
+        };
+
+        const messages = toAirbyteMessages(page, 1000);
+
+        expect(messages[0]).toEqual({
+            record: { data: { _id: "r1", blob: "AQID", count: "42", huge: "9007199254740993" }, emitted_at: 1000, stream: "rows" },
+            type: "RECORD",
+        });
+        // The delete marker spreads over the decoded doc, not the wire form.
+        expect(messages[1]).toEqual({
+            record: { data: { _id: "r2", _lunora_deleted: true, count: "7" }, emitted_at: 1000, stream: "rows" },
+            type: "RECORD",
+        });
+        expect(JSON.stringify(messages)).not.toContain("$lunora.wire$");
+    });
+
+    it("passes a pure-JSON doc through unchanged", () => {
+        expect.assertions(1);
+
+        const doc = { _id: "p1", nested: { flag: true, list: [1, "two", null] } };
+        const page: ConnectorSyncPage = {
+            changes: [{ doc, op: "insert", table: "plain" }],
+            hasMore: false,
+            nextCursor: "T",
+        };
+
+        const messages = toAirbyteMessages(page, 1000);
+
+        expect(JSON.stringify((messages[0] as { record: { data: unknown } }).record.data)).toBe(JSON.stringify(doc));
     });
 });
