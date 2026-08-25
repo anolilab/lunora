@@ -301,7 +301,7 @@ describe("createStorage", () => {
     });
 
     it("head() returns the R2 object shape body-free, with the sha256 projection", async () => {
-        expect.assertions(6);
+        expect.assertions(8);
 
         const checksum = new Uint8Array([0xde, 0xad, 0xbe, 0xef]).buffer;
         const bucket = fakeBucket();
@@ -311,7 +311,10 @@ describe("createStorage", () => {
                 return null;
             }
 
-            return { checksums: { sha256: checksum }, etag: "etag-1", httpMetadata: { contentType: "video/mp4" }, key, size: 1024 };
+            // `Object.preventExtensions` mirrors the real R2 binding: a host object
+            // a Proxy cannot advertise synthetic own keys on. A plain object literal
+            // is extensible and would let a Proxy-returning `head()` pass.
+            return Object.preventExtensions({ checksums: { sha256: checksum }, etag: "etag-1", httpMetadata: { contentType: "video/mp4" }, key, size: 1024 });
         });
 
         const storage = createStorage({ bucket });
@@ -322,7 +325,17 @@ describe("createStorage", () => {
         expect(object?.size).toBe(1024);
         expect(object?.etag).toBe("etag-1");
         expect(object?.httpMetadata?.contentType).toBe("video/mp4");
-        expect((object as { sha256Base64?: string } | null)?.sha256Base64).toBe("3q2+7w==");
+        expect(object?.sha256Base64).toBe("3q2+7w==");
+
+        // A head result is routinely returned from a query, so the checksum fields
+        // have to survive the wire — asserted on the SERIALIZED form rather than a
+        // property read, because a Proxy answers the read and still serializes
+        // without them (it cannot report synthetic own keys on a non-extensible
+        // target).
+        const wire = JSON.stringify(object);
+
+        expect(wire).toContain('"sha256":"deadbeef"');
+        expect(wire).toContain('"sha256Base64":"3q2+7w=="');
         // No body was pulled to learn any of it.
         expect(bucket.get).not.toHaveBeenCalled();
 

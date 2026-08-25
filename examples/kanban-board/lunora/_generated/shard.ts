@@ -326,6 +326,9 @@ const storageStub = {
     getUrl: () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
+    head: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
+    },
     list: async () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },

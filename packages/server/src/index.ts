@@ -166,6 +166,7 @@ export type {
     SpanOptions,
     Storage,
     StorageMetadata,
+    StorageObjectHead,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,

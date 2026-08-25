@@ -366,10 +366,12 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         // resolve a `Range` against.
         const object = options.bucket.head ? await options.bucket.head(key) : await options.bucket.get(key, { range: { length: 0 } });
 
-        // Same `withSha256` projection `download()` returns, so a caller reading
-        // `sha256`/`sha256Base64` off a head result sees the same fields it would
-        // off a body result.
-        return object && withSha256(object);
+        // The `toListObject` projection, not `download()`'s `withSha256` Proxy: a
+        // head result has no body to keep native accessors alive for, and it IS
+        // routinely returned from a query and serialized. A Proxy over R2's
+        // non-extensible object cannot advertise the synthetic checksum fields as
+        // own keys, so `JSON.stringify` would silently drop them on the wire.
+        return object && toListObject(object);
     };
 
     const getMetadata = async (key: string): Promise<ObjectMetadata | null> => {

@@ -154,6 +154,27 @@ describe("serveStorageObject", () => {
         expect(calls.downloads).toStrictEqual([undefined]);
     });
 
+    it("skips the head for a Range that cannot produce a 206 anyway", async () => {
+        expect.assertions(4);
+
+        // Multi-range and malformed headers both degrade to the whole object, so
+        // paying for a metadata read would only add a round trip — and a window in
+        // which the object can vanish between the two, turning a 200 into a 404.
+        const served = await Promise.all(
+            ["bytes=0-1,4-5", "furlongs=1-2"].map(async (range) => {
+                const { calls, ctx } = ctxWith(BODY);
+                const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range } }));
+
+                return { heads: calls.heads, status: response.status };
+            }),
+        );
+
+        for (const { heads, status } of served) {
+            expect(status).toBe(200);
+            expect(heads).toBe(0);
+        }
+    });
+
     it("answers an unsatisfiable range from the head alone, with no download at all", async () => {
         expect.assertions(2);
 

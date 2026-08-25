@@ -26,6 +26,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
             getMetadata: async (_key) => null,
             getSignedUrl: async (key, options) => `signed://${key}?expires=${String(options?.expiresInSeconds ?? 60)}`,
             getUrl: (key) => `https://cdn.example.com/${key}`,
+            head: async (_key) => null,
         };
 
         const queryContext: QueryContext["storage"] = storage;
@@ -78,6 +79,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
                 return `signed://${key}`;
             },
             getUrl: (key) => `https://cdn.example.com/${key}`,
+            head: async () => null,
         };
 
         const getAvatar = query.input({ userId: v.id("users") }).query(async ({ args: { userId }, ctx }): Promise<{ url: string }> => {

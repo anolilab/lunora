@@ -750,6 +750,17 @@ const storageObjectHeaders = (object: Omit<StorageObjectBody, "body">): Record<s
     return headers;
 };
 
+/**
+ * Whether `header` degrades to the whole object no matter how big the object is:
+ * absent, multi-range, malformed, or a bare `bytes=-`.
+ *
+ * Every branch of {@link parseRange} that answers `"full"` returns before `size`
+ * is read, so probing with `0` is a header-only question — which lets a request
+ * that can never be a 206 skip the metadata read instead of paying for one and
+ * throwing it away.
+ */
+const rangeDegradesToWholeObject = (header: null | string): boolean => parseRange(header, 0).kind === "full";
+
 /** The whole object as a `200`, streamed from a single `download()`. */
 const serveWholeStorageObject = async (context: ContextWithStorage, key: string): Promise<Response> => {
     const object = await context.storage.download(key);
@@ -775,17 +786,20 @@ const serveWholeStorageObject = async (context: ContextWithStorage, key: string)
  * A range request resolves its window against a body-free `head()`, then issues
  * ONE `download()` with the resolved `{ offset, length }` so R2 streams just
  * those bytes — the slice is never buffered in the isolate, and no full-object
- * body transfer is started only to be cancelled. An unranged request skips the
- * `head()` entirely and streams straight from a single `download()`. For very
+ * body transfer is started only to be cancelled. A request that cannot produce a
+ * 206 at all (no `Range`, multi-range, malformed) skips the `head()` entirely and
+ * streams straight from a single `download()`. For very
  * large objects a signed URL (`ctx.storage.getSignedUrl`) is still cheaper since
  * the client then ranges against R2/CDN directly with no Worker hop.
  */
 const serveStorageObject = async (context: ContextWithStorage, key: string, request: Request): Promise<Response> => {
     const rangeHeader = request.headers.get("range");
 
-    // No `Range` at all: the object's own metadata rides along with its body, so
-    // there is nothing to look up first.
-    if (rangeHeader === null) {
+    // No `Range`, or one that cannot produce a 206 anyway (multi-range, malformed):
+    // the object's own metadata rides along with its body, so there is nothing to
+    // look up first — and paying for a `head()` here would only add a round trip
+    // and a window for the object to vanish between the two reads.
+    if (rangeDegradesToWholeObject(rangeHeader)) {
         return serveWholeStorageObject(context, key);
     }
 
@@ -815,8 +829,8 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
         });
     }
 
-    // A multi-range or malformed header degrades to the whole object (see
-    // `parseRange`), which needs the body this metadata read deliberately skipped.
+    // Unreachable: the whole-object check at the top already answered this, and
+    // its answer does not depend on `size`. Kept so the union stays exhaustive.
     if (range.kind === "full") {
         return serveWholeStorageObject(context, key);
     }
