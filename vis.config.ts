@@ -211,6 +211,16 @@ export default defineConfig({
                 ".claude/skills/**",
                 "registry/**",
                 "api-snapshots/**",
+                // `lunora/.lunora-registry.json` is the registry lockfile
+                // `lunora registry add` writes (`packages/cli/src/util/registry-lock.ts`):
+                // a map of copied-file paths to their SHA-256 content hashes. A
+                // path like `.../core/reset-password.ts` puts a credential-shaped
+                // word next to 64 hex characters, which is exactly the shape
+                // `kingfisher.generic.5` looks for — but the hash is a digest of a
+                // file in this repo, not a value anyone could authenticate with.
+                // Same wholesale-generated, cannot-carry-a-hand-committed-secret
+                // class as `api-snapshots/**` above.
+                "**/.lunora-registry.json",
             ],
         },
     },

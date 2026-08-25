@@ -22,17 +22,27 @@ const capturingLogger = (): { errors: string[]; infos: string[]; logger: Logger;
     };
 };
 
-const deps = (over: Partial<CloudCommandDeps> = {}): Partial<CloudCommandDeps> => ({
-    deployFn: async () => ({ status: "live" }),
-    env: { LUNORA_CLOUD_URL: "https://cloud", LUNORA_DEPLOY_KEY: "dk_secret" },
-    readBundleBase64: () => "YnVuZGxl",
-    readWrangler: () => ({ durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] }, name: "app", triggers: { crons: ["0 0 * * *"] } }),
-    rollbackFn: async () => ({ scriptName: "app-v2", version: 2 }),
-    ...over,
-});
+const deps = (over: Partial<CloudCommandDeps> = {}): Partial<CloudCommandDeps> => {
+    return {
+        deployFn: async () => {
+            return { status: "live" };
+        },
+        env: { LUNORA_CLOUD_URL: "https://cloud", LUNORA_DEPLOY_KEY: "dk_secret" },
+        readBundleBase64: () => "YnVuZGxl",
+        readWrangler: () => {
+            return { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] }, name: "app", triggers: { crons: ["0 0 * * *"] } };
+        },
+        rollbackFn: async () => {
+            return { scriptName: "app-v2", version: 2 };
+        },
+        ...over,
+    };
+};
 
 describe("lunora cloud", () => {
     it("rejects an unknown subcommand", async () => {
+        expect.assertions(2);
+
         const { errors, logger } = capturingLogger();
         const result = await runCloudCommand({ argument: ["frobnicate"], cwd: "/x", deps: deps(), logger });
 
@@ -41,24 +51,46 @@ describe("lunora cloud", () => {
     });
 
     it("errors when the deploy key is absent (never a flag/file)", async () => {
+        expect.assertions(2);
+
         const { errors, logger } = capturingLogger();
-        const result = await runCloudCommand({ argument: ["deploy"], cwd: "/x", deps: deps({ env: { LUNORA_CLOUD_URL: "https://cloud" } }), logger, project: "prj_1", bundlePath: "dist/index.js" });
+        const result = await runCloudCommand({
+            argument: ["deploy"],
+            cwd: "/x",
+            deps: deps({ env: { LUNORA_CLOUD_URL: "https://cloud" } }),
+            logger,
+            project: "prj_1",
+            bundlePath: "dist/index.js",
+        });
 
         expect(result.code).toBe(1);
         expect(errors[0]).toMatch(/LUNORA_DEPLOY_KEY/);
     });
 
     it("errors when the API URL is absent", async () => {
+        expect.assertions(2);
+
         const { errors, logger } = capturingLogger();
-        const result = await runCloudCommand({ argument: ["deploy"], cwd: "/x", deps: deps({ env: { LUNORA_DEPLOY_KEY: "dk" } }), logger, project: "prj_1", bundlePath: "b" });
+        const result = await runCloudCommand({
+            argument: ["deploy"],
+            cwd: "/x",
+            deps: deps({ env: { LUNORA_DEPLOY_KEY: "dk" } }),
+            logger,
+            project: "prj_1",
+            bundlePath: "b",
+        });
 
         expect(result.code).toBe(1);
         expect(errors[0]).toMatch(/LUNORA_CLOUD_URL/);
     });
 
     it("deploys: sends the wrangler manifest + bundle and reports live", async () => {
+        expect.assertions(3);
+
         const { logger, successes } = capturingLogger();
-        const deployFn = vi.fn(async () => ({ status: "live" }));
+        const deployFn = vi.fn<CloudCommandDeps["deployFn"]>(async () => {
+            return { status: "live" };
+        });
 
         const result = await runCloudCommand({
             argument: ["deploy"],
@@ -90,12 +122,18 @@ describe("lunora cloud", () => {
     });
 
     it("deploys: non-live terminal status is a failure exit", async () => {
+        expect.assertions(1);
+
         const { logger } = capturingLogger();
         const result = await runCloudCommand({
             argument: ["deploy"],
             bundlePath: "b",
             cwd: "/x",
-            deps: deps({ deployFn: async () => ({ status: "failed" }) }),
+            deps: deps({
+                deployFn: async () => {
+                    return { status: "failed" };
+                },
+            }),
             logger,
             project: "prj_1",
         });
@@ -104,15 +142,19 @@ describe("lunora cloud", () => {
     });
 
     it("deploys: requires project and bundle", async () => {
+        expect.assertions(4);
+
         const { errors, logger } = capturingLogger();
 
-        expect((await runCloudCommand({ argument: ["deploy"], cwd: "/x", deps: deps(), logger, bundlePath: "b" })).code).toBe(1);
-        expect((await runCloudCommand({ argument: ["deploy"], cwd: "/x", deps: deps(), logger, project: "prj_1" })).code).toBe(1);
+        await expect(runCloudCommand({ argument: ["deploy"], cwd: "/x", deps: deps(), logger, bundlePath: "b" })).resolves.toMatchObject({ code: 1 });
+        await expect(runCloudCommand({ argument: ["deploy"], cwd: "/x", deps: deps(), logger, project: "prj_1" })).resolves.toMatchObject({ code: 1 });
         expect(errors.some((error) => /project/.test(error))).toBe(true);
         expect(errors.some((error) => /bundle/.test(error))).toBe(true);
     });
 
     it("deploys: rejects an invalid --kind", async () => {
+        expect.assertions(2);
+
         const { errors, logger } = capturingLogger();
         const result = await runCloudCommand({ argument: ["deploy"], bundlePath: "b", cwd: "/x", deps: deps(), kind: "staging", logger, project: "prj_1" });
 
@@ -121,8 +163,12 @@ describe("lunora cloud", () => {
     });
 
     it("rolls back with confirmation and reports the now-serving script", async () => {
+        expect.assertions(3);
+
         const { logger, successes } = capturingLogger();
-        const rollbackFn = vi.fn(async () => ({ scriptName: "app-v2", version: 2 }));
+        const rollbackFn = vi.fn<CloudCommandDeps["rollbackFn"]>(async () => {
+            return { scriptName: "app-v2", version: 2 };
+        });
 
         const result = await runCloudCommand({ argument: ["rollback", "dep_1"], cwd: "/x", deps: deps({ rollbackFn }), logger, org: "org_1", yes: true });
 
@@ -132,10 +178,12 @@ describe("lunora cloud", () => {
     });
 
     it("rollback requires an id, an org, and --yes", async () => {
+        expect.assertions(3);
+
         const { logger } = capturingLogger();
 
-        expect((await runCloudCommand({ argument: ["rollback"], cwd: "/x", deps: deps(), logger, org: "o", yes: true })).code).toBe(1);
-        expect((await runCloudCommand({ argument: ["rollback", "dep_1"], cwd: "/x", deps: deps(), logger, yes: true })).code).toBe(1);
-        expect((await runCloudCommand({ argument: ["rollback", "dep_1"], cwd: "/x", deps: deps(), logger, org: "o" })).code).toBe(1);
+        await expect(runCloudCommand({ argument: ["rollback"], cwd: "/x", deps: deps(), logger, org: "o", yes: true })).resolves.toMatchObject({ code: 1 });
+        await expect(runCloudCommand({ argument: ["rollback", "dep_1"], cwd: "/x", deps: deps(), logger, yes: true })).resolves.toMatchObject({ code: 1 });
+        await expect(runCloudCommand({ argument: ["rollback", "dep_1"], cwd: "/x", deps: deps(), logger, org: "o" })).resolves.toMatchObject({ code: 1 });
     });
 });

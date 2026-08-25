@@ -173,7 +173,7 @@ describe("statement sample buffer (OBS-04)", () => {
                 storage: {
                     sql: {
                         exec: (query: string, ...parameters: unknown[]) => {
-                            const cursor = (database.sql).exec(query, ...parameters);
+                            const cursor = database.sql.exec(query, ...parameters);
 
                             if (query !== probe) {
                                 return cursor;

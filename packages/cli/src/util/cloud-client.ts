@@ -8,16 +8,16 @@
  * the wire contract with the control plane's own `apps/cloud` client.
  */
 
-export type DeployEvent = Record<string, unknown>;
+type DeployEvent = Record<string, unknown>;
 
 /** The tenant binding manifest a deploy carries (from the app's `wrangler.jsonc`). */
-export interface DeployManifestBindings {
+interface DeployManifestBindings {
     d1?: { binding: string };
     durableObjects?: { binding: string; className: string }[];
     r2?: { binding: string };
 }
 
-export interface DeployToCloudOptions {
+interface DeployToCloudOptions {
     apiUrl: string;
     bindings?: DeployManifestBindings;
     branch?: string;
@@ -31,11 +31,11 @@ export interface DeployToCloudOptions {
     scriptName: string;
 }
 
-export interface DeployResult {
+interface DeployResult {
     status: string;
 }
 
-export interface RollbackOptions {
+interface RollbackOptions {
     apiUrl: string;
     deployKey: string;
     deploymentId: string;
@@ -54,7 +54,7 @@ const stripTrailingSlashes = (value: string): string => {
 };
 
 /** `POST /v1/deployments/rollback` — swap the project's stable URL to a retained release. */
-export const rollbackDeployment = async (options: RollbackOptions): Promise<{ scriptName: string; version?: number }> => {
+const rollbackDeployment = async (options: RollbackOptions): Promise<{ scriptName: string; version?: number }> => {
     const fetchImpl = options.fetch ?? globalThis.fetch;
 
     const response = await fetchImpl(`${stripTrailingSlashes(options.apiUrl)}/v1/deployments/rollback`, {
@@ -73,7 +73,7 @@ export const rollbackDeployment = async (options: RollbackOptions): Promise<{ sc
 };
 
 /** `POST /v1/deploy` — push a prebuilt bundle and stream NDJSON progress via `onEvent`. */
-export const deployToCloud = async (options: DeployToCloudOptions, onEvent: (event: DeployEvent) => void): Promise<DeployResult> => {
+const deployToCloud = async (options: DeployToCloudOptions, onEvent: (event: DeployEvent) => void): Promise<DeployResult> => {
     const fetchImpl = options.fetch ?? globalThis.fetch;
 
     const response = await fetchImpl(`${stripTrailingSlashes(options.apiUrl)}/v1/deploy`, {
@@ -142,7 +142,7 @@ export const deployToCloud = async (options: DeployToCloudOptions, onEvent: (eve
 };
 
 /** The subset of a parsed `wrangler.jsonc` the manifest reads — all optional/defensive. */
-export interface WranglerConfig {
+interface WranglerConfig {
     d1_databases?: { binding?: unknown }[];
     durable_objects?: { bindings?: { class_name?: unknown; name?: unknown }[] };
     name?: unknown;
@@ -150,7 +150,7 @@ export interface WranglerConfig {
     triggers?: { crons?: unknown[] };
 }
 
-export interface DeployManifest {
+interface DeployManifest {
     bindings: DeployManifestBindings;
     cronSpecs: string[];
 }
@@ -162,14 +162,16 @@ const asString = (value: unknown): string | undefined => (typeof value === "stri
  * parsed `wrangler.jsonc`. Defensive — malformed entries are dropped. The server
  * floors bindings to ShardDO, so a partial manifest is safe.
  */
-export const parseWranglerManifest = (wrangler: WranglerConfig): DeployManifest => {
+const parseWranglerManifest = (wrangler: WranglerConfig): DeployManifest => {
     const durableObjects = (wrangler.durable_objects?.bindings ?? [])
-        .map((entry) => ({ binding: asString(entry.name), className: asString(entry.class_name) }))
+        .map((entry) => {
+            return { binding: asString(entry.name), className: asString(entry.class_name) };
+        })
         .filter((entry): entry is { binding: string; className: string } => entry.binding !== undefined && entry.className !== undefined);
 
     const d1Binding = asString(wrangler.d1_databases?.[0]?.binding);
     const r2Binding = asString(wrangler.r2_buckets?.[0]?.binding);
-    const cronSpecs = (wrangler.triggers?.crons ?? []).map(asString).filter((cron): cron is string => cron !== undefined);
+    const cronSpecs = (wrangler.triggers?.crons ?? []).map((cron) => asString(cron)).filter((cron): cron is string => cron !== undefined);
 
     return {
         bindings: {
@@ -180,3 +182,6 @@ export const parseWranglerManifest = (wrangler: WranglerConfig): DeployManifest 
         cronSpecs,
     };
 };
+
+export { deployToCloud, parseWranglerManifest, rollbackDeployment };
+export type { DeployEvent, DeployManifest, DeployManifestBindings, DeployResult, DeployToCloudOptions, RollbackOptions, WranglerConfig };

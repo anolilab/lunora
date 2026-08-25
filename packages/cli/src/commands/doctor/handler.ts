@@ -183,7 +183,9 @@ const checkCpuLimit = (parsed: WranglerConfig | undefined, findings: Finding[]):
  * asserting a config shape.
  */
 const checkR2Lifecycle = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
-    const names = (parsed?.r2_buckets ?? []).map((entry) => entry.bucket_name).filter((name): name is string => typeof name === "string" && name.length > 0);
+    // `r2_buckets` entries are typed nullable — the validator parses user JSON
+    // defensively, so a hand-edited config can carry a hole in the array.
+    const names = (parsed?.r2_buckets ?? []).map((entry) => entry?.bucket_name).filter((name): name is string => typeof name === "string" && name.length > 0);
 
     if (names.length === 0) {
         return;

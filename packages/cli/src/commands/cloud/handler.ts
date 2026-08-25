@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
-import type { CommandHandler } from "../../util/command";
-import { defineHandler } from "../../util/command";
 import type { DeployEvent, WranglerConfig } from "../../util/cloud-client";
 import { deployToCloud, parseWranglerManifest, rollbackDeployment } from "../../util/cloud-client";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { CloudOptions } from "./index";
 
@@ -48,26 +48,28 @@ interface CloudCommandResult {
     outcome?: string;
 }
 
-const defaultDeps = (): CloudCommandDeps => ({
-    deployFn: deployToCloud,
-    env: process.env,
-    readBundleBase64: (path) => readFileSync(path).toString("base64"),
-    readWrangler: (cwd) => {
-        const wranglerPath = findWranglerFile(cwd);
+const defaultDeps = (): CloudCommandDeps => {
+    return {
+        deployFn: deployToCloud,
+        env: process.env,
+        readBundleBase64: (path) => readFileSync(path).toString("base64"),
+        readWrangler: (cwd) => {
+            const wranglerPath = findWranglerFile(cwd);
 
-        return wranglerPath ? readWranglerJsonc<WranglerConfig>(wranglerPath).parsed : undefined;
-    },
-    rollbackFn: rollbackDeployment,
-});
+            return wranglerPath ? readWranglerJsonc<WranglerConfig>(wranglerPath).parsed : undefined;
+        },
+        rollbackFn: rollbackDeployment,
+    };
+};
 
 /** Resolve the API URL (flag → env) and the deploy key (env only — it is a secret). */
-const resolveAuth = (options: CloudCommandOptions, deps: CloudCommandDeps, logger: Logger): { apiUrl: string; deployKey: string } | null => {
+const resolveAuth = (options: CloudCommandOptions, deps: CloudCommandDeps, logger: Logger): { apiUrl: string; deployKey: string } | undefined => {
     const apiUrl = options.url ?? deps.env["LUNORA_CLOUD_URL"];
 
     if (!apiUrl) {
         logger.error("cloud: no API URL — pass --url or set LUNORA_CLOUD_URL");
 
-        return null;
+        return undefined;
     }
 
     const deployKey = deps.env["LUNORA_DEPLOY_KEY"];
@@ -75,7 +77,7 @@ const resolveAuth = (options: CloudCommandOptions, deps: CloudCommandDeps, logge
     if (!deployKey) {
         logger.error("cloud: no deploy key — set LUNORA_DEPLOY_KEY (never passed as a flag)");
 
-        return null;
+        return undefined;
     }
 
     return { apiUrl, deployKey };
@@ -146,7 +148,7 @@ const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, a
             cronSpecs: manifest.cronSpecs,
             deployKey: auth.deployKey,
             ...(options.kind ? { kind: options.kind as DeployKind } : {}),
-            projectId: options.project,
+            projectId: options.project, // gitleaks:allow -- the --project flag's value, not a Cypress project id
             scriptName,
         },
         onEvent,
