@@ -458,9 +458,7 @@ const MAX_SEARCH_LIMIT = 50;
 
 ### `McpFetchHandler` (type)
 
-```ts
-type McpFetchHandler = (request: Request) => Promise<Response>;
-```
+Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `McpResourceProvider` (interface)
 
@@ -487,21 +485,11 @@ interface McpResourceSummary {
 
 ### `McpServerInfo` (interface)
 
-```ts
-interface McpServerInfo {
-    name: string;
-    version: string;
-}
-```
+Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `McpTool` (interface)
 
-```ts
-interface McpTool {
-    definition: ToolDefinition;
-    handle: (input: Record<string, unknown>) => Promise<ToolResult>;
-}
-```
+Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `RemoteDocsIndexOptions` (interface)
 
@@ -515,38 +503,15 @@ interface RemoteDocsIndexOptions {
 
 ### `ToolDefinition` (interface)
 
-```ts
-interface ToolDefinition {
-    annotations?: ToolAnnotations;
-    description: string;
-    inputSchema: ToolInputSchema;
-    name: string;
-    outputSchema?: ToolInputSchema;
-}
-```
+Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `ToolInputSchema` (interface)
 
-```ts
-interface ToolInputSchema {
-    properties: Record<string, unknown>;
-    required?: ReadonlyArray<string>;
-    type: "object";
-}
-```
+Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `ToolResult` (interface)
 
-```ts
-interface ToolResult {
-    content: {
-        text: string;
-        type: "text";
-    }[];
-    isError?: boolean;
-    structuredContent?: Record<string, unknown>;
-}
-```
+Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `createDocsMcpFetchHandler` (const)
 

@@ -118,7 +118,7 @@ const app = defineApp<Env>()
     .global({ d1: (env) => env.DB })
     .auth({ d1: (env) => env.DB, options: authOptions })
     .storage({ bucket: (env) => env.FILES, publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL, signingSecret: (env) => env.STORAGE_SECRET })
-    .extend(() => ({ authorizeShard: (identity) => Boolean(identity?.userId) }))
+    .extend(() => ({ authorizeShard: ({ identity }) => Boolean(identity?.userId) }))
     .build();
 ```
 

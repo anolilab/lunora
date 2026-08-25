@@ -8,6 +8,7 @@ import type { ColumnMeta, FilterClause, TableInfo, TablesColumnsResult } from ".
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
 import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
+import { maskRow } from "../../lib/mask-preview";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
 import { useSqlAssistant } from "../sql/hooks/use-sql-assistant";
 import { backRelationKey, backRelationsFor } from "./back-relations";
@@ -402,7 +403,9 @@ export const DataBrowser = ({
 
     // The foreign-key context passed alongside it: the column → table map plus the
     // navigate/preview handlers a ref cell needs.
-    const references = { columns: page?.refs, onNavigate: handleNavigateRef, onPreview: previewRef };
+    // `maskViewFor` (not `preferences.maskView`) because the hover preview renders a
+    // row from the TARGET table, whose covered columns are its own.
+    const references = { columns: page?.refs, maskViewFor: preferences.maskViewFor, onNavigate: handleNavigateRef, onPreview: previewRef };
 
     return (
         <div className="flex h-full min-w-0" data-testid="lunora-data-browser">
@@ -466,10 +469,19 @@ export const DataBrowser = ({
                 )}
             </div>
 
-            {page !== null && <DataFacets columns={columns} facets={facets} onFacetFilter={facetFilter} onToggleFacet={toggleFacet} />}
+            {page !== null && (
+                <DataFacets columns={columns} facets={facets} mask={preferences.maskView} onFacetFilter={facetFilter} onToggleFacet={toggleFacet} />
+            )}
 
             {inspecting !== null && page !== null && (
-                <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={handleNavigateRef} refs={page.refs} row={inspecting} />
+                <RowDetailDrawer
+                    columns={page.columns}
+                    mask={preferences.maskView}
+                    onClose={closeInspect}
+                    onNavigate={handleNavigateRef}
+                    refs={page.refs}
+                    row={maskRow(inspecting, preferences.maskView)}
+                />
             )}
 
             {expandedCell !== null && (

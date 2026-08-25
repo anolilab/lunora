@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ExecutionContextLike } from "../src/create-worker";
+import type { ExecutionContextLike, ShardCaller } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -145,19 +145,93 @@ describe("createWorker — code-defined cron jobs", () => {
 
         await expect(worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext)).rejects.toThrow(/WORKFLOW_MISSING/u);
     });
+});
 
-    it("denies dispatch when authorizeShard rejects the system identity", async () => {
-        expect.assertions(2);
+describe("createWorker — `authorizeShard` gates callers, never system dispatch", () => {
+    // The natural gate an app writes: reaching a shard requires a signed-in user.
+    // It must hold for end users AND leave server-initiated dispatch alone — a
+    // gate that cannot tell "anonymous end user" from "the scheduler" silently
+    // 403s every cron with the DO retrying forever.
+    const requireSignedInUser = vi.fn<(caller: ShardCaller) => boolean>(({ identity }) => identity?.userId !== undefined);
+
+    const rpcRequest = (envelope: Record<string, unknown>): Request =>
+        new Request("https://app.example/_lunora/rpc", { body: JSON.stringify(envelope), method: "POST" });
+
+    beforeEach(() => {
+        requireSignedInUser.mockClear();
+    });
+
+    it("dispatches a firing cron job to a shard whose gate rejects every anonymous end user", async () => {
+        expect.assertions(3);
 
         const shard = createShardSpy();
-        const authorizeShard = vi.fn<() => Promise<boolean>>(async () => false);
         const worker = createWorker({
-            authorizeShard,
-            cronJobs: { [CRON]: [{ args: {}, functionPath: "presence:clear", name: "clear presence" }] },
+            authorizeShard: requireSignedInUser,
+            cronJobs: { [CRON]: [{ args: {}, functionPath: "presence:clear", name: "clear presence", shardKey: "tenant-7" }] },
             shardDO: shard.namespace,
         });
 
-        await expect(worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext)).rejects.toThrow(/Forbidden shard/u);
+        await worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext);
+
+        expect(shard.calls).toHaveLength(1);
+        expect(shard.calls[0]?.shardKey).toBe("tenant-7");
+        // The caller gate is not consulted at all for system dispatch.
+        expect(requireSignedInUser).not.toHaveBeenCalled();
+    });
+
+    it("dispatches an HMAC/bearer-authenticated scheduler job through the same gate", async () => {
+        expect.assertions(2);
+
+        const shard = createShardSpy();
+        const worker = createWorker({
+            adminToken: "admin-secret",
+            authorizeShard: requireSignedInUser,
+            shardDO: shard.namespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/scheduler/dispatch", {
+                body: JSON.stringify({ args: {}, functionPath: "digests:flush", id: "job-1", shardKey: "tenant-7" }),
+                headers: { authorization: "Bearer admin-secret" }, // gitleaks:allow -- test fixture bearer, matches the stub admin token below
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(shard.calls[0]?.shardKey).toBe("tenant-7");
+    });
+
+    it("still rejects an anonymous end user with that same gate", async () => {
+        expect.assertions(3);
+
+        const shard = createShardSpy();
+        const worker = createWorker({ authorizeShard: requireSignedInUser, shardDO: shard.namespace });
+
+        const response = await worker.fetch(rpcRequest({ args: {}, functionPath: "presence:list", shardKey: "tenant-7" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_SHARD" } });
         expect(shard.calls).toHaveLength(0);
+    });
+
+    it("still allows an authenticated end user through that same gate", async () => {
+        expect.assertions(3);
+
+        const shard = createShardSpy();
+        const worker = createWorker({
+            authorizeShard: requireSignedInUser,
+            resolveIdentity: () => {
+                return { userId: "user_42" };
+            },
+            shardDO: shard.namespace,
+        });
+
+        const response = await worker.fetch(rpcRequest({ args: {}, functionPath: "presence:list", shardKey: "tenant-7" }), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(shard.calls).toHaveLength(1);
+        expect(requireSignedInUser).toHaveBeenCalledWith({ identity: { userId: "user_42" }, shardKey: "tenant-7" });
     });
 });

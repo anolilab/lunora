@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { PlatformCapabilities } from "@lunora/platform";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { CapabilityKey } from "../src/capabilities";
 import type { FeatureUsage } from "../src/discover-feature-usage";
 import { readProjectTarget, resolveCodegenTarget } from "../src/platform-target";
 import { runCodegen } from "../src/run-codegen";
@@ -130,11 +131,13 @@ describe("gatePlatformFeatures", () => {
         expect.assertions(1);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        // flags / access / payments / x402 / r2sql are credential-based add-ons
-        // (they work anywhere fetch works), not platform primitives — they must
-        // survive any target unchanged. `images` is NOT in this list: it is
-        // binding-based (`env.IMAGES`) and gated like `browser`/`vectors`.
-        const usage: FeatureUsage = { ...ALL_OFF, access: true, flags: true, payments: true, r2sql: true, x402: true };
+        // flags / access / payments / x402 / r2sql / notify are credential-based
+        // add-ons (they work anywhere fetch works), not platform primitives — they
+        // must survive any target unchanged. `images` is NOT in this list: it is
+        // binding-based (`env.IMAGES`) and gated like `browser`/`vectors`. The
+        // list is spelled out here and derived from the source in "capability
+        // classification" below, which is what stops the two drifting again.
+        const usage: FeatureUsage = { ...ALL_OFF, access: true, flags: true, notify: true, payments: true, r2sql: true, x402: true };
 
         const result = gatePlatformFeatures(usage, "cloudflare");
 
@@ -256,5 +259,65 @@ describe("project-declared target", () => {
         // misspelled string, which must reach the registry and be rejected.
         expect(readProjectTarget(workdir)).toBeUndefined();
         expect(resolveCodegenTarget(workdir)).toBe("cloudflare");
+    });
+});
+
+describe("capability classification", () => {
+    /** A matrix that rates nothing — the shape a WIP host ships before it fills its features in. */
+    const EMPTY_MATRIX: PlatformCapabilities = { id: "empty", name: "Empty Host", features: {} };
+
+    it("covers every capability the codegen table declares", async () => {
+        expect.assertions(1);
+
+        const { CAPABILITIES } = await import("../src/capabilities");
+        const { CAPABILITY_TO_FEATURE } = await import("../src/platform-target");
+
+        // `CAPABILITY_TO_FEATURE` is a total `Record`, so a `CapabilityKey` with no
+        // classification fails `tsc` rather than this test — that is the enforcement,
+        // and it is why the old complement-list-plus-partition-test is gone. What
+        // `tsc` cannot see is the OTHER direction: `CAPABILITIES` is a runtime array,
+        // and a row added there without widening `CapabilityKey` would leave a real
+        // capability absent from the map. That is the fail-open `notify` had, where
+        // `gateAgainstMatrix` never iterated it and `ctx.notify` shipped un-gated.
+        expect(CAPABILITIES.map((capability) => capability.key).filter((key) => !(key in CAPABILITY_TO_FEATURE))).toStrictEqual([]);
+    });
+
+    it("fails closed for every gated capability against a matrix that rates nothing", async () => {
+        expect.assertions(2);
+
+        const { CAPABILITY_TO_FEATURE, gateAgainstMatrix } = await import("../src/platform-target");
+        const gatedKeys = (Object.entries(CAPABILITY_TO_FEATURE) as [CapabilityKey, string | null][])
+            .filter(([, feature]) => feature !== null)
+            .map(([key]) => key);
+        const usage: FeatureUsage = { ...ALL_OFF, ...Object.fromEntries(gatedKeys.map((key) => [key, true])) };
+
+        const result = gateAgainstMatrix(usage, EMPTY_MATRIX, "empty");
+
+        // Generalizes the single-feature `browser` case above to the whole map: a
+        // mapped capability the matrix says nothing about is dropped and diagnosed.
+        expect(gatedKeys.filter((key) => result.usage[key])).toStrictEqual([]);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(
+            gatedKeys.toSorted((a, b) => a.localeCompare(b)),
+        );
+    });
+
+    it("emits the credential-based capabilities un-gated on a matrix that rates nothing", async () => {
+        expect.assertions(2);
+
+        const { CAPABILITY_TO_FEATURE, gateAgainstMatrix } = await import("../src/platform-target");
+        const exempt = (Object.entries(CAPABILITY_TO_FEATURE) as [CapabilityKey, string | null][])
+            .filter(([, feature]) => feature === null)
+            .map(([key]) => key);
+
+        // `notify` is deliberately classified credential-based rather than mapped:
+        // Web Push / FCM are `fetch` under VAPID / FCM credentials, the subscription
+        // store is caller-supplied with an in-memory fallback, and the fan-out seam
+        // takes the producer as an argument — nothing in `@lunora/notify` holds a
+        // host binding, so there is no target on which the surface should be dropped.
+        expect(exempt).toContain("notify");
+
+        const usage: FeatureUsage = { ...ALL_OFF, ...Object.fromEntries(exempt.map((key) => [key, true])) };
+
+        expect(gateAgainstMatrix(usage, EMPTY_MATRIX, "empty")).toStrictEqual({ diagnostics: [], usage });
     });
 });

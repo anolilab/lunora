@@ -1,7 +1,17 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { dispatchByKind, fireAndForget, formatCell, jsonRowReplacer } from "../../src/lib/internal";
+import {
+    adminRef,
+    dispatchByKind,
+    errorDocumentationUrl,
+    errorHint,
+    fireAndForget,
+    formatCell,
+    formatTimestamp,
+    jsonRowReplacer,
+    sqlIdentifier,
+} from "../../src/lib/internal";
 
 const REF: FunctionReference = { __lunoraRef: "messages:list" };
 
@@ -129,5 +139,147 @@ describe("jsonRowReplacer", () => {
         const row = { flag: true, nested: { list: [1, "two", null] }, num: 1, text: "x" };
 
         expect(JSON.stringify(row, jsonRowReplacer)).toBe(JSON.stringify(row));
+    });
+});
+
+describe("sqlIdentifier", () => {
+    it("double-quotes a name so a non-bare identifier survives", () => {
+        expect.assertions(3);
+
+        expect(sqlIdentifier("users")).toBe('"users"');
+        // The reason the helper exists: `-` makes this illegal unquoted.
+        expect(sqlIdentifier("query-result")).toBe('"query-result"');
+        expect(sqlIdentifier("")).toBe('""');
+    });
+
+    // The escape is what stops a crafted column/table name from closing the
+    // quoted identifier and continuing as SQL. `toSql` (the export) and
+    // `composeIndexSql` both build statements the operator then runs.
+    it("doubles an embedded quote so the identifier cannot be closed early", () => {
+        expect.assertions(3);
+
+        expect(sqlIdentifier('a"b')).toBe('"a""b"');
+        expect(sqlIdentifier('"; DROP TABLE users; --')).toBe('"""; DROP TABLE users; --"');
+        // Every quote, not just the first.
+        expect(sqlIdentifier('""')).toBe('""""""');
+    });
+
+    it("leaves a single quote alone — it is not the identifier delimiter", () => {
+        expect.assertions(1);
+
+        expect(sqlIdentifier("o'brien")).toBe('"o\'brien"');
+    });
+});
+
+describe("errorDocumentationUrl", () => {
+    it("returns an http(s) docsUrl", () => {
+        expect.assertions(2);
+
+        expect(errorDocumentationUrl({ docsUrl: "https://lunora.dev/errors/X" })).toBe("https://lunora.dev/errors/X");
+        expect(errorDocumentationUrl({ docsUrl: "http://localhost:5173/errors/X" })).toBe("http://localhost:5173/errors/X");
+    });
+
+    // The value is rendered as an `href`, so a non-http scheme is an XSS sink.
+    // Dropped even though `docsUrl` normally comes from the trusted catalog.
+    it("drops any non-http(s) scheme", () => {
+        expect.assertions(4);
+
+        // eslint-disable-next-line no-script-url -- the script URL IS the input under test; the assertion is that it never reaches an href
+        expect(errorDocumentationUrl({ docsUrl: "javascript:alert(1)" })).toBeUndefined();
+        expect(errorDocumentationUrl({ docsUrl: "data:text/html,<script>alert(1)</script>" })).toBeUndefined();
+        expect(errorDocumentationUrl({ docsUrl: "vbscript:msgbox(1)" })).toBeUndefined();
+        expect(errorDocumentationUrl({ docsUrl: "file:///etc/passwd" })).toBeUndefined();
+    });
+
+    it("drops a relative or unparseable value", () => {
+        expect.assertions(2);
+
+        expect(errorDocumentationUrl({ docsUrl: "/errors/X" })).toBeUndefined();
+        expect(errorDocumentationUrl({ docsUrl: "not a url" })).toBeUndefined();
+    });
+
+    it("returns undefined for anything that carries no string docsUrl", () => {
+        expect.assertions(5);
+
+        expect(errorDocumentationUrl(null)).toBeUndefined();
+        expect(errorDocumentationUrl(undefined)).toBeUndefined();
+        expect(errorDocumentationUrl("a string error")).toBeUndefined();
+        expect(errorDocumentationUrl(new Error("boom"))).toBeUndefined();
+        expect(errorDocumentationUrl({ docsUrl: 42 })).toBeUndefined();
+    });
+});
+
+describe("errorHint", () => {
+    it("returns a string hint verbatim", () => {
+        expect.assertions(1);
+
+        expect(errorHint({ hint: "Set LUNORA_ADMIN_TOKEN." })).toBe("Set LUNORA_ADMIN_TOKEN.");
+    });
+
+    it("joins an array hint into newline-separated lines", () => {
+        expect.assertions(1);
+
+        expect(errorHint({ hint: ["First, do this.", "Then this."] })).toBe("First, do this.\nThen this.");
+    });
+
+    it("drops non-string entries from an array hint rather than rendering 'undefined'", () => {
+        expect.assertions(2);
+
+        expect(errorHint({ hint: ["keep", 1, null, undefined, { a: 1 }, "me"] })).toBe("keep\nme");
+        // An array with nothing usable joins to the empty string, not undefined —
+        // callers render it as "no hint text" either way.
+        expect(errorHint({ hint: [1, 2] })).toBe("");
+    });
+
+    it("returns undefined when the error carries no usable hint", () => {
+        expect.assertions(4);
+
+        expect(errorHint(null)).toBeUndefined();
+        expect(errorHint(new Error("boom"))).toBeUndefined();
+        expect(errorHint("a string error")).toBeUndefined();
+        expect(errorHint({ hint: 42 })).toBeUndefined();
+    });
+});
+
+describe("formatTimestamp", () => {
+    it("renders an epoch-ms value and its ISO equivalent identically", () => {
+        expect.assertions(1);
+
+        const epoch = Date.UTC(2026, 0, 2, 3, 4, 5);
+
+        expect(formatTimestamp(epoch)).toBe(formatTimestamp(new Date(epoch).toISOString()));
+    });
+
+    it("renders absent values as the fallback (blank by default)", () => {
+        expect.assertions(4);
+
+        expect(formatTimestamp(undefined)).toBe("");
+
+        expect(formatTimestamp(null)).toBe("");
+        expect(formatTimestamp("")).toBe("");
+        expect(formatTimestamp(undefined, "—")).toBe("—");
+    });
+
+    // Zero is a real instant (the epoch), not an absent value — the `=== ""`
+    // check must not be loosened into a falsiness test.
+    it("treats 0 as the epoch, not as absent", () => {
+        expect.assertions(1);
+
+        expect(formatTimestamp(0, "—")).not.toBe("—");
+    });
+
+    it("falls back to the raw string when the value is unparseable", () => {
+        expect.assertions(2);
+
+        expect(formatTimestamp("not a date")).toBe("not a date");
+        expect(formatTimestamp(Number.NaN)).toBe("NaN");
+    });
+});
+
+describe("adminRef", () => {
+    it("wraps a path as a client FunctionReference", () => {
+        expect.assertions(1);
+
+        expect(adminRef("__lunora_admin__:listTables")).toStrictEqual({ __lunoraRef: "__lunora_admin__:listTables" });
     });
 });

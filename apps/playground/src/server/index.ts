@@ -49,6 +49,13 @@ interface Env extends Record<string, unknown> {
 }
 
 /**
+ * The runtime's default shard key (`WorkerOptions.defaultShardKey`). Every call
+ * that names no shard — a client RPC on an unsharded table, the inbound-email
+ * dispatch below, and every scheduler/cron dispatch — resolves here.
+ */
+const ROOT_SHARD_KEY = "__root__";
+
+/**
  * Auth config the builder's `.auth()` lazily builds the runtime + migration
  * instances from — same plugins/secret so both describe the identical schema.
  * The full plugin set is what the studio's auth dashboard adapts to
@@ -129,21 +136,27 @@ const app = defineApp<Env>()
                     };
                 },
                 shard: env.SHARD as unknown as InboundShardNamespaceLike,
-                shardKey: "__root__",
+                shardKey: ROOT_SHARD_KEY,
             }),
             parse: parseInboundEmail,
         });
 
         await handler(message as ForwardableEmailMessageLike, env, context);
     })
-    // This playground has `.auth()` but no per-row RLS, so leaving shard access
-    // OPEN would let an unauthenticated caller reach any channel's shard. Gate it
-    // on authentication instead: a non-default shard requires a signed-in user.
+    // This playground has `.auth()` but no per-row RLS on every table, so leaving
+    // shard access OPEN would let an unauthenticated caller reach any channel's
+    // shard. Gate it on authentication instead: reaching a shard requires a
+    // signed-in user.
+    //
+    // `authorizeShard` only ever sees client-originated access, so `identity ===
+    // null` here means an anonymous end user and nothing else — crons and
+    // scheduled jobs are dispatched inside the trust boundary and never reach it.
+    //
     // (This is a coarse gate — a real multi-tenant app should check the caller
     // OWNS the shard, e.g. `identity?.userId === ownerOf(shardKey)`, and add
     // per-row RLS as defense-in-depth.)
     .extend(() => {
-        return { authorizeShard: (identity) => identity?.userId !== undefined };
+        return { authorizeShard: ({ identity }) => identity?.userId !== undefined };
     })
     .build();
 

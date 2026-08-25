@@ -1,3 +1,4 @@
+import { fnv1aHex } from "../../../../shared/fnv1a";
 import type { MaskColumnMetadata, MaskStrategy } from "./admin";
 
 /**
@@ -10,8 +11,8 @@ import type { MaskColumnMetadata, MaskStrategy } from "./admin";
  * pure function of the cell value). A `"custom"` strategy is an opaque
  * server-side `(value, ctx) => …` closure the studio never receives, so it
  * **fails closed** to a fixed sentinel rather than guess — never leak the raw
- * value. The `"hash"` path mirrors `packages/server/src/mask/middleware.ts`'s
- * FNV-1a digest byte-for-byte so a hashed column reads identically here.
+ * value. The `"hash"` path calls the same `shared/fnv1a.ts` digest the server's
+ * middleware does, so a hashed column reads identically here by construction.
  */
 
 /** Insert a space at every camelCase boundary so `apiKey` splits into `api`/`key`. */
@@ -89,31 +90,15 @@ const tokenize = (name: string): ReadonlyArray<string> => {
 export const CUSTOM_MASK_SENTINEL = "•••";
 
 /**
- * FNV-1a (32-bit) digest as 8-char hex — a verbatim mirror of the server's
- * `"hash"` token (`packages/server/src/mask/middleware.ts`). Deterministic and
- * non-cryptographic: same input → same token, so the preview matches what a
- * masked query returns. `Math.imul` keeps the multiply in 32-bit space.
- */
-export const fnv1aHex = (input: string): string => {
-    /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and an unsigned shift; the bit ops ARE the algorithm */
-    let hash = 0x81_1c_9d_c5;
-
-    for (let index = 0; index < input.length; index += 1) {
-        hash ^= input.codePointAt(index) ?? 0;
-        hash = Math.imul(hash, 0x01_00_01_93);
-    }
-
-    return (hash >>> 0).toString(16).padStart(8, "0");
-    /* eslint-enable no-bitwise */
-};
-
-/**
  * Apply one mask strategy to one cell value for the preview. Mirrors the server's
  * `applyStrategy` for the strategies whose output is value-derived; **fails
  * closed** for `"custom"` (and on any thrown error) by returning the sentinel.
  *
  * - `"redact"` → `null` (the server's redaction sentinel).
  * - `"hash"` → FNV-1a token (`null`/`undefined` pass through, matching the server).
+ * A `bigint` is hashed over its decimal form (`123n` → `fnv1aHex("123")`), which
+ * the server does too — `JSON.stringify` throws on a bigint, so both sides
+ * special-case it rather than let the `catch` fail the cell closed.
  * - `"custom"` → {@link CUSTOM_MASK_SENTINEL} (closure not available client-side).
  */
 export const maskValue = (value: unknown, strategy: MaskStrategy): unknown => {
@@ -130,7 +115,8 @@ export const maskValue = (value: unknown, strategy: MaskStrategy): unknown => {
 
             // `JSON.stringify` throws on a decoded `v.bigint()`, which would fail
             // the mask closed to the sentinel instead of hashing. Only bigint is
-            // special-cased, so every other value's hash is unchanged.
+            // special-cased, so every other value's hash is unchanged. The server
+            // carries the same case (`packages/server/src/mask/middleware.ts`).
             if (typeof value === "bigint") {
                 return fnv1aHex(value.toString());
             }
@@ -228,26 +214,38 @@ export const maskCell = (value: unknown, column: string, view: MaskView): unknow
 };
 
 /**
+ * Apply the active {@link MaskView} across one whole row — used by the row-detail
+ * drawer, which renders the row object directly rather than per-cell. Returns the
+ * row untouched (same reference) when masking is off or no column is covered;
+ * otherwise every covered cell is rewritten in a shallow copy.
+ */
+export const maskRow = <Row extends Record<string, unknown>>(row: Row, view: MaskView): Row => {
+    if (!view.enabled || view.columns.size === 0) {
+        return row;
+    }
+
+    const masked: Record<string, unknown> = { ...row };
+
+    for (const [column, strategy] of view.columns) {
+        if (column in masked) {
+            masked[column] = maskValue(masked[column], strategy);
+        }
+    }
+
+    return masked as Row;
+};
+
+/**
  * Apply the active {@link MaskView} across whole rows — used by the JSON and
- * transposed views, which render the row objects directly rather than per-cell.
+ * transposed views (which render the row objects directly rather than per-cell)
+ * and by the page export, so a downloaded CSV/JSON/SQL carries what is on screen.
  * Returns the rows untouched (same reference) when masking is off or no column is
- * covered, so the common unmasked path allocates nothing; otherwise each covered
- * cell is rewritten in a shallow per-row copy.
+ * covered, so the common unmasked path allocates nothing.
  */
 export const maskRows = <Row extends Record<string, unknown>>(rows: ReadonlyArray<Row>, view: MaskView): ReadonlyArray<Row> => {
     if (!view.enabled || view.columns.size === 0) {
         return rows;
     }
 
-    return rows.map((row) => {
-        const masked: Record<string, unknown> = { ...row };
-
-        for (const [column, strategy] of view.columns) {
-            if (column in masked) {
-                masked[column] = maskValue(masked[column], strategy);
-            }
-        }
-
-        return masked as Row;
-    });
+    return rows.map((row) => maskRow(row, view));
 };

@@ -26,7 +26,7 @@ re-use the local browser cache.
 | `optimistic.spec.ts`     | `useMutation` shows pending instantly, then either confirms or rolls back                                      |
 | `r2-storage.spec.ts`     | Signed URL PUT/GET round-trip through Miniflare R2, expiry returns 403                                         |
 | `scaffold.spec.ts`       | `lunora init` (BUILT CLI bin, offline `--from templates`) → `lunora codegen` → the scaffold typechecks         |
-| `scheduler.spec.ts`      | `ctx.scheduler.runAfter` fires the job within the wall-clock budget (skipped — see Limitations)                |
+| `scheduler.spec.ts`      | A scheduled job's SchedulerDO alarm fires and dispatches it back into the worker within the wall-clock budget  |
 
 ## How the harness boots
 
@@ -109,10 +109,6 @@ a red suite is a signal to fix, not to mute.
 - The suite is offline-only — no Cloudflare account, no real WAF / Argo /
   Workers AI. Tests that would require those features (e.g. real OAuth
   callbacks, real Workers AI inference) are not present.
-- **`scheduler.spec.ts` is skipped** in this harness: Durable Object alarms
-  don't fire in `@cloudflare/vite-plugin`'s embedded dev Miniflare, so a
-  scheduled job never dispatches. The scheduler is exercised against a
-  standalone `wrangler dev` / production instead.
 - **`scaffold.spec.ts` does not run a real `pnpm install`**: the template's
   `@lunora/*`/`lunorash` versions aren't on npm from a monorepo checkout, so
   the workspace packages are symlinked in (their built `dist/`) and the

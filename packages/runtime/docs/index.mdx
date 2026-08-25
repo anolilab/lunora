@@ -81,6 +81,15 @@ non-default shard, so it is unaffected; the gate only bites once you
 only safe when every table is protected by per-row RLS (the runtime logs a
 one-time warning while it is on with no `authorizeShard`/`authorizeFanOut`).
 
+`authorizeShard` is a gate on **callers**: it receives a single
+`{ identity, shardKey }` argument and runs only for client-originated access
+(RPC, REST, `serverQuery`, WebSocket upgrade). Server-initiated dispatch — a
+firing cron, a scheduler job — originates inside the trust boundary (the
+scheduler endpoint authenticates an HMAC signature or admin bearer first) and
+never reaches the gate, so `identity === null` always means an anonymous end
+user and `({ identity }) => identity?.userId !== undefined` is a complete gate
+that cannot starve the scheduler.
+
 ## `composeWorker` / `withFrameworkWorker`
 
 `composeWorker(options)` is `createWorker` under a name that reads better in

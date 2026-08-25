@@ -34,7 +34,14 @@ import { sqliteDecode, sqliteEncode } from "../src/value-codec";
  * checks, which use a recording exec because the point *is* the emitted SQL.
  */
 
-/** Whether this Node build's `node:sqlite` carries the FTS5 module. */
+/**
+ * Whether this Node build's `node:sqlite` carries the FTS5 module. It was
+ * switched on in 22.16.0 (nodejs/node#57621), so 22.15.x and older lack it
+ * while 22.16+ and every 24.x have it — and `^22.15.0` is this repo's `engines`
+ * floor, so the floor is exactly the build that skips the `fts5Layout` block
+ * below. CI's `test` job probes the same thing per matrix leg and reports it,
+ * so a green run says which Node exercised FTS5 rather than leaving it unsaid.
+ */
 const FTS5_IN_BUILD = ((): boolean => {
     const database = new DatabaseSync(":memory:");
 

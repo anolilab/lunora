@@ -75,4 +75,10 @@ export type {
     WebhookAction,
     WebhookActionType,
 } from "./types";
+// The two input interfaces are exported alongside their verifiers so a caller can
+// name the shape it has to construct — and so the api-snapshot tracks that shape.
+// Without them the verifiers' signatures render as `(input: VerifyStandardWebhookInput)`
+// with nothing pinning the interface, so a field added or retyped inside it would
+// pass the gate silently on the webhook signature-verification path.
+export type { VerifyCreemSignatureInput, VerifyStandardWebhookInput } from "./webhook";
 export { constantTimeEqual, hmacSha256Hex, verifyCreemSignature, verifyStandardWebhook } from "./webhook";

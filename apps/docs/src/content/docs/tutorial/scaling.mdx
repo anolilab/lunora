@@ -159,9 +159,16 @@ identity rather than from anything the caller sent:
 ```ts
 createWorker({
     shardDO: env.SHARD,
-    authorizeShard: async (identity, shardKey) => {
+    authorizeShard: async ({ identity, shardKey }) => {
         if (!identity?.userId) {
             return false;
+        }
+
+        // The default shard is where unsharded tables live; it has no channel to be
+        // a member of, so let a signed-in caller through rather than asking
+        // `isMemberOfChannel` a question with no answer.
+        if (shardKey === "__root__") {
+            return true;
         }
 
         return isMemberOfChannel(identity.userId, shardKey);

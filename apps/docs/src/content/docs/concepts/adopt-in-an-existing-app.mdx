@@ -45,8 +45,10 @@ export default createWorker({
     },
 
     // Which shard a given identity may reach. With `.shardBy("userId")` this is the
-    // whole per-user isolation boundary.
-    authorizeShard: (identity, shardKey) => identity?.userId === shardKey,
+    // whole per-user isolation boundary. It runs for the DEFAULT shard too, which is
+    // where an unsharded table lives — hence the explicit pass, without which every
+    // unsharded RPC would 403.
+    authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === shardKey,
 });
 ```
 

@@ -93,7 +93,7 @@ export const tableRef = (ref: string): string => {
  * - `null` / `undefined` → `NULL`
  * - `boolean` → `true` / `false`
  * - finite `number` / `bigint` → the numeric text (non-finite throws — `NaN`/`Infinity` have no SQL literal)
- * - `Date` → an RFC3339 string literal (R2 SQL's `timestamp` form)
+ * - `Date` → an RFC3339 string literal (R2 SQL's `timestamp` form; an invalid `Date` throws)
  * - `string` → a single-quoted, escaped literal
  * - `Array` → a parenthesised, comma-separated list of literals (for `IN (...)`)
  *
@@ -126,6 +126,12 @@ export const lit = (value: unknown): string => {
     }
 
     if (value instanceof Date) {
+        if (Number.isNaN(value.getTime())) {
+            // `toISOString()` would throw a RangeError here; keep every rejection
+            // path in `lit` a TypeError so callers can catch one type.
+            throw new TypeError("r2sql: cannot inline an invalid Date — it has no RFC3339 form. Check the value parsed before building the query.");
+        }
+
         return quoteString(value.toISOString());
     }
 

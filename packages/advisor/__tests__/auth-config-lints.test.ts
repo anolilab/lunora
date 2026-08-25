@@ -165,34 +165,34 @@ describe("auth_session_freshage_zero", () => {
     });
 });
 
-describe("authScimWithoutTransactions", () => {
-    it("flags scim() on an adapter with no native transactions", async () => {
+describe("auth_scim_without_transactions", () => {
+    it("flags an analyzable config loading scim() on an adapter with no native transactions", () => {
         expect.assertions(2);
 
-        const findings = authScimWithoutTransactions.run({ authConfigs: [authConfig({ scimOnNonTransactionalAdapter: true })], ...schema() } as never);
+        const findings = authScimWithoutTransactions.run({ authConfigs: [authConfig({ scimOnNonTransactionalAdapter: true })], schema: schema() });
 
         // This exact pairing shipped in documentation once and throws on the first SCIM
         // request; there is no reason for build time not to say so.
         expect(findings).toHaveLength(1);
-        expect(findings[0]?.level).toBe("ERROR");
+        expect(findings[0]).toMatchObject({
+            cacheKey: "auth_scim_without_transactions:auth:1",
+            level: "ERROR",
+            metadata: { exportName: "auth", file: "auth", line: 1 },
+            name: "auth_scim_without_transactions",
+        });
     });
 
-    it("stays quiet when the adapter does have transactions", async () => {
+    it("ignores an adapter that does have transactions, and an unanalyzable config even when the flag is set", () => {
         expect.assertions(1);
 
-        const findings = authScimWithoutTransactions.run({ authConfigs: [authConfig()], ...schema() } as never);
+        const configs = [authConfig(), authConfig({ analyzable: false, scimOnNonTransactionalAdapter: true })];
 
-        expect(findings).toStrictEqual([]);
+        expect(authScimWithoutTransactions.run({ authConfigs: configs, schema: schema() })).toHaveLength(0);
     });
 
-    it("skips an opaque config rather than guessing at its database", async () => {
+    it("finds nothing when the feeder supplies no auth-config evidence", () => {
         expect.assertions(1);
 
-        const findings = authScimWithoutTransactions.run({
-            authConfigs: [authConfig({ analyzable: false, scimOnNonTransactionalAdapter: true })],
-            ...schema(),
-        } as never);
-
-        expect(findings).toStrictEqual([]);
+        expect(authScimWithoutTransactions.run({ schema: schema() })).toHaveLength(0);
     });
 });

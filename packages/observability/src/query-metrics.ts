@@ -22,6 +22,7 @@
 
 import type { SqlExec } from "@lunora/shard-engine";
 
+import { fnv1aHex } from "../../../shared/fnv1a";
 import { runSql } from "./run-sql";
 
 /** Reserved table name. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -183,18 +184,7 @@ const bucketFloor = (at: number): number => Math.floor(at / QUERY_BUCKET_MS) * Q
  * statement text would multiply the storage. The text lives once in the lifetime
  * table and is joined back on read.
  */
-const hashStatement = (normalized: string): string => {
-    let hash = 0x81_1c_9d_c5;
-
-    for (let index = 0; index < normalized.length; index += 1) {
-        // eslint-disable-next-line no-bitwise -- FNV-1a is defined in terms of XOR and an unsigned shift; there is no non-bitwise formulation
-        hash ^= normalized.codePointAt(index) ?? 0;
-        // eslint-disable-next-line no-bitwise -- see above
-        hash = Math.imul(hash, 0x01_00_01_93) >>> 0;
-    }
-
-    return hash.toString(16).padStart(8, "0");
-};
+const hashStatement = (normalized: string): string => fnv1aHex(normalized);
 
 /** Index of the first histogram edge at or above `durationMs`; the last index is the overflow bucket. */
 const latencyBucketIndex = (durationMs: number): number => {

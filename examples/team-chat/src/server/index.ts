@@ -65,7 +65,7 @@ const app = defineApp<Env & { PUBLIC_STORAGE_BASE_URL: string }>()
          * address none. Without this the runtime rejects client-named shards
          * outright (403), which is the safe default.
          */
-        authorizeShard: (identity) => Boolean(identity?.userId),
+        authorizeShard: ({ identity }) => Boolean(identity?.userId),
     }))
     .build();
 

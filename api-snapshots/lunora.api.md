@@ -4217,6 +4217,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `ShardCaller` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ShardCallerIdentity` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.

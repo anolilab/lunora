@@ -1,14 +1,17 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadJsonArray, newId, saveJson, usePersistedList } from "../../src/lib/browser-storage";
+import { loadJsonArray, newId, removeJson, saveJson, storageOf, usePersistedList } from "../../src/lib/browser-storage";
 
 const KEY = "lunora-studio-test";
 
 describe("browserStorage", () => {
     afterEach(() => {
-        localStorage.clear();
+        // Restore FIRST: a case that mocks the storage getter into throwing would
+        // otherwise take the `clear()` calls below down with it.
         vi.restoreAllMocks();
+        localStorage.clear();
+        sessionStorage.clear();
     });
 
     describe("loadJsonArray", () => {
@@ -53,6 +56,77 @@ describe("browserStorage", () => {
 
             expect(() => {
                 saveJson(KEY, [1, 2, 3]);
+            }).not.toThrow();
+        });
+    });
+
+    describe("storageOf", () => {
+        it("returns the two distinct storage areas, defaulting to local", () => {
+            expect.assertions(3);
+
+            expect(storageOf()).toBe(localStorage);
+            expect(storageOf("local")).toBe(localStorage);
+            expect(storageOf("session")).toBe(sessionStorage);
+        });
+
+        /**
+         * Reading `globalThis.localStorage` THROWS (not returns null) in a
+         * sandboxed iframe and in browsers set to block site data. This is the
+         * one guarded accessor every persisted-store helper routes through, so
+         * the throw has to be swallowed here or it escapes into a render.
+         */
+        it("degrades to undefined when the accessor itself throws", () => {
+            expect.assertions(2);
+
+            for (const property of ["localStorage", "sessionStorage"] as const) {
+                vi.spyOn(globalThis, property, "get").mockImplementation(() => {
+                    throw new Error("SecurityError: access denied");
+                });
+            }
+
+            expect(storageOf("local")).toBeUndefined();
+            expect(storageOf("session")).toBeUndefined();
+        });
+
+        it("keeps every helper on top of it silent when access throws", () => {
+            expect.assertions(3);
+
+            vi.spyOn(globalThis, "localStorage", "get").mockImplementation(() => {
+                throw new Error("SecurityError: access denied");
+            });
+
+            expect(loadJsonArray(KEY)).toStrictEqual([]);
+            expect(() => {
+                saveJson(KEY, [1]);
+            }).not.toThrow();
+            expect(() => {
+                removeJson(KEY);
+            }).not.toThrow();
+        });
+    });
+
+    describe("removeJson", () => {
+        it("deletes the key from the requested area only", () => {
+            expect.assertions(2);
+
+            localStorage.setItem(KEY, JSON.stringify([1]));
+            sessionStorage.setItem(KEY, JSON.stringify([2]));
+
+            removeJson(KEY, "local");
+
+            expect(localStorage.getItem(KEY)).toBeNull();
+            expect(sessionStorage.getItem(KEY)).toBe(JSON.stringify([2]));
+        });
+
+        it("swallows a removeItem throw instead of propagating it", () => {
+            expect.assertions(1);
+
+            vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+                throw new Error("SecurityError");
+            });
+
+            expect(() => {
+                removeJson(KEY);
             }).not.toThrow();
         });
     });

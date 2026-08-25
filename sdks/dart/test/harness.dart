@@ -25,10 +25,26 @@ int executed = 0;
 
 /// Run one case, counting it. Every entry in `main()` goes through this, so the
 /// summary line is derived from what actually ran.
+///
+/// The timeout is the gate, not a convenience. A case that awaits a future
+/// nothing will ever complete does not hang this process: the isolate's event
+/// loop simply drains, `main()` is abandoned part-way, and Dart exits 0 having
+/// printed nothing — which is indistinguishable from a full green run. So a case
+/// that outstays [caseTimeout] is recorded as a failure naming its ordinal, and
+/// the run carries on to the ones after it.
+const Duration caseTimeout = Duration(seconds: 30);
+
 Future<void> run(FutureOr<void> Function() body) async {
   executed += 1;
 
-  await body();
+  final ordinal = executed;
+
+  try {
+    await Future<void>.sync(body).timeout(caseTimeout);
+  } on TimeoutException {
+    failures.add('case #$ordinal did not complete within ${caseTimeout.inSeconds}s '
+        '(count the `await run(...)` lines in conformance.dart to name it)');
+  }
 }
 
 /// Records that the named manifest case actually executed. The evidence is the

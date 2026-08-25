@@ -254,8 +254,19 @@ export const copyToClipboard = (text: string): boolean => {
     return true;
 };
 
-/** Quote a SQL identifier (table/column) with double quotes, doubling any embedded quote — handles names like `query-result` that aren't bare identifiers. */
-export const sqlIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+/**
+ * Quote a SQL identifier (table/column) with double quotes, doubling any embedded
+ * quote — handles names like `query-result` that aren't bare identifiers.
+ *
+ * Re-exported from `shared/quote-identifier.ts` rather than defined here. That
+ * file is the canonical quoter for `@lunora/d1`, `@lunora/do` and
+ * `@lunora/shard-engine`, and it says why in its own doc comment: identifier
+ * quoting is the sole defense against identifier injection wherever a name is
+ * spliced into raw SQL, so it must have exactly ONE definition rather than
+ * byte-identical copies that can drift. The studio had such a copy; the local
+ * name is kept because the index-DDL composer and the SQL exporter call it.
+ */
+export { quoteIdentifier as sqlIdentifier } from "../../../../shared/quote-identifier";
 
 /**
  * Render an epoch-ms or ISO timestamp as a locale string. Absent values render

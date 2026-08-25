@@ -159,6 +159,24 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * Cloudflare-Access identity facade (`access`), payments (`payments`), and
  * x402 (`x402`). `r2sql` is deliberately unmapped for the same reason: the
  * R2 SQL client is a plain HTTP client over an API token, not a binding.
+ * `notify` is unmapped on the same criterion, and the contrast with `mail` —
+ * which IS mapped — is what makes the line concrete: `@lunora/mail` holds a
+ * Queue binding itself (`createMailer({ queue })`, and `mailer.queue()`
+ * throws without one), so a target without queues cannot serve its surface.
+ * `@lunora/notify` holds nothing: Web Push and FCM delivery are `fetch` under
+ * VAPID/FCM credentials, the subscription store is a caller-supplied
+ * `(env) => SubscriptionStore` that falls back to an in-memory one (and the
+ * shipped D1 store is structurally typed, never a `D1Database` import), and
+ * the fan-out seam takes the producer as an argument (`QueueProducerLike`) so
+ * the queue belongs to the caller, not to `ctx.notify`.
+ *
+ * Credential-based is spelled `null`, not omission, and the map is TOTAL
+ * (`Record`, not `Partial`). That is the whole enforcement: adding a member to
+ * `CapabilityKey` without classifying it here fails `tsc`, at the moment it is
+ * written, rather than defaulting silently to un-gated. An earlier revision kept
+ * the unmapped keys in a second list with a test asserting the two partitioned
+ * `CapabilityKey` — same guarantee, but deferred to CI and costing a list, two
+ * exports and a test to say what the type already says.
  *
  * `access` stays unmapped even though the matrix now rates `identityProxy`,
  * and the distinction is the point: `identityProxy` records whether the *host*
@@ -178,20 +196,32 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * any future target-level check — see its `shardAlarms` entry in the Node
  * capability matrix (`NODE_CAPABILITIES` in `@lunora/platform`, plan 267).
  */
-const CAPABILITY_TO_FEATURE: Partial<Record<CapabilityKey, PlatformFeatureKey>> = {
+const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = {
+    // eslint-disable-next-line unicorn/no-null -- null is the classification "credential-based"; undefined would be indistinguishable from an unclassified key, which is what this map exists to prevent
+    access: null,
     ai: "ai",
     analytics: "analytics",
     browser: "browser",
     container: "containers",
+    // eslint-disable-next-line unicorn/no-null -- see `access`
+    flags: null,
     hyperdrive: "hyperdrive",
     images: "images",
     kv: "keyValueStore",
     mail: "mail",
+    // eslint-disable-next-line unicorn/no-null -- see `access`
+    notify: null,
+    // eslint-disable-next-line unicorn/no-null -- see `access`
+    payments: null,
     pipelines: "pipelines",
+    // eslint-disable-next-line unicorn/no-null -- see `access`
+    r2sql: null,
     scheduler: "scheduler",
     storage: "objectStorage",
     vectors: "vectorStore",
     workflows: "workflows",
+    // eslint-disable-next-line unicorn/no-null -- see `access`
+    x402: null,
 };
 
 /** An advisor-style diagnostic about a target's platform capabilities. */
@@ -229,8 +259,10 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
     const gated: FeatureUsage = { ...usage };
     const diagnostics: PlatformDiagnostic[] = [];
 
-    for (const [capability, featureKey] of Object.entries(CAPABILITY_TO_FEATURE) as [CapabilityKey, PlatformFeatureKey][]) {
-        if (!usage[capability]) {
+    for (const [capability, featureKey] of Object.entries(CAPABILITY_TO_FEATURE) as [CapabilityKey, PlatformFeatureKey | null][]) {
+        // A `null` feature is the declared "credential-based" classification: the
+        // surface works anywhere `fetch` does, so there is no host rating to gate on.
+        if (featureKey === null || !usage[capability]) {
             continue;
         }
 
@@ -305,4 +337,13 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string): PlatformGate
 };
 
 export type { PlatformDiagnostic, PlatformGateResult };
-export { DEFAULT_TARGET, gateAgainstMatrix, gatePlatformFeatures, platformMatrixIds, PROJECT_CONFIG_FILE, readProjectTarget, resolveCodegenTarget };
+export {
+    CAPABILITY_TO_FEATURE,
+    DEFAULT_TARGET,
+    gateAgainstMatrix,
+    gatePlatformFeatures,
+    platformMatrixIds,
+    PROJECT_CONFIG_FILE,
+    readProjectTarget,
+    resolveCodegenTarget,
+};
