@@ -34,12 +34,12 @@ describe("relay shape persistence", () => {
         const stored = seed({
             args: { since: 1n },
             cursor: 0,
-            identity: { orgId: 42n, sub: "user_1" },
+            identity: { identity: { orgId: 42n }, userId: "user_1" },
             key: "k1",
             name: "messages:list",
         });
 
-        expect(stored?.identity).toStrictEqual({ orgId: 42n, sub: "user_1" });
+        expect(stored?.identity).toStrictEqual({ identity: { orgId: 42n }, userId: "user_1" });
         expect(stored?.args).toStrictEqual({ since: 1n });
     });
 
@@ -53,11 +53,11 @@ describe("relay shape persistence", () => {
         const stored = seed({
             args: {},
             cursor: 0,
-            identity: { issuedAt, sub: "user_1" },
+            identity: { identity: { issuedAt }, userId: "user_1" },
             key: "k2",
             name: "messages:list",
         });
 
-        expect(stored?.identity).toStrictEqual({ issuedAt, sub: "user_1" });
+        expect(stored?.identity).toStrictEqual({ identity: { issuedAt }, userId: "user_1" });
     });
 });
