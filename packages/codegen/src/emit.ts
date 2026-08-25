@@ -749,6 +749,13 @@ const referencedDataModelImports = (body: string): ReadonlyArray<"Doc" | "Id"> =
  *
  * Falls back to the handler when no `.output()` is declared, so a project that
  * never uses it emits byte-identical output.
+ *
+ * A `stream` is the exception and keeps the handler's type. `.output()` is inert
+ * on that terminal — `makeStreamHandler` is never given `state.output`, and the
+ * terminal is generic over its own yield type, so the builder does not even
+ * type-check the declaration (`packages/server/src/builder/types.ts` says so on
+ * the `stream` member). Preferring an unenforced, untyped declaration there
+ * would describe chunks the handler does not yield.
  */
 const referenceReturnType = (definition: FunctionIR): string => {
     // `parseValidator` yields `{ kind: "any" }` for anything that is not a call
@@ -757,7 +764,7 @@ const referenceReturnType = (definition: FunctionIR): string => {
     // Preferring that over the handler would replace a precise inferred type
     // with `unknown` — reintroducing, on every procedure with a hoisted output
     // validator, exactly the leak this function exists to stop.
-    if (definition.output === undefined || definition.output.kind === "any") {
+    if (definition.output === undefined || definition.output.kind === "any" || definition.kind === "stream") {
         return definition.returnType;
     }
 
@@ -1642,6 +1649,14 @@ const renderFunctionRegistry = (
  * `(args) => Promise<Return>`; `args` is optional only when the function takes
  * none. The runtime leaves dispatch through `callRegistered`, which infers the
  * return type from the interface's contextual type.
+ *
+ * `Return` comes from {@link referenceReturnType}, so a declared `.output()`
+ * wins over the handler's inferred type here exactly as it does in `api.ts`.
+ * Reading `definition.returnType` directly is what let the two surfaces
+ * disagree: `ctx.run*` through the caller saw a field the validator declares
+ * `v.optional(...)` as required, and a `v.string()` narrowed to a branded
+ * `Id<...>` — while `api.ts`, one function away, described the same procedure
+ * correctly.
  */
 const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: string; types: string } => {
     const ordered = groupByFileSorted(functions);
@@ -1652,13 +1667,15 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
                 .map((definition) => {
                     const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
                     const optional = argsType === "{}" ? "?" : "";
-                    const returnType = rebaseRelativeQualifiers(definition.returnType, definition.filePath);
+                    const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
 
                     // A `stream` handler returns an `AsyncIterable<T>` *synchronously*;
                     // `callRegistered` awaits the handler, and awaiting a non-thenable
                     // async-iterable yields the iterable itself. So the leaf resolves to
                     // `AsyncIterable<T>`, not a single element `T`. (Note `unwrapHandlerReturn`
-                    // already unwrapped the iterable to its element type in `returnType`.)
+                    // already unwrapped the iterable to its element type — and
+                    // `referenceReturnType` keeps a stream on that inferred type rather
+                    // than an inert `.output()`, so this is still the element type.)
                     if (definition.kind === "stream") {
                         return `        ${definition.exportName}: (args${optional}: ${argsType}) => Promise<AsyncIterable<${returnType}>>;`;
                     }

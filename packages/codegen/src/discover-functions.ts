@@ -348,83 +348,123 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
 const GENERATED_DIRECTORY_SEGMENT = "/_generated/";
 
 /**
- * True when the checker will print this user-land named type as a BARE name at
+ * Whether the module at `node` imports `name` from `declarationFile` — the
+ * precise form of "the checker will print this bare".
+ *
+ * Deliberately NOT `type.getText(node).includes("import(")`: that renders the
+ * WHOLE type, type arguments and all, so an imported `Wrapper` wrapping an
+ * out-of-scope `Bar` renders text containing `import(` and the wrapper is
+ * wrongly cleared — printed bare into `_generated/` as a TS2304, one generic
+ * deep. Asking the source file directly is depth-independent, because the
+ * recursion visits each type on its own.
+ */
+const importsName = (handlerFile: SourceFile, declarationFile: SourceFile, name: string): boolean =>
+    handlerFile.getImportDeclarations().some((declaration) => {
+        if (declaration.getModuleSpecifierSourceFile() !== declarationFile) {
+            return false;
+        }
+
+        // A namespace import (`import * as t`) makes every exported name
+        // reachable, but only as `t.Bar` — which the checker prints qualified
+        // by a local alias that `_generated/` does not have either, so it
+        // counts as bare-nameable exactly like a named import.
+        return declaration.getNamespaceImport() !== undefined || declaration.getNamedImports().some((specifier) => specifier.getName() === name);
+    });
+
+/**
+ * True when `declaration` names a user-land type the checker can print BARE at
  * `node` — the case that does not resolve from `_generated/`.
  *
- * `_generated/api.ts` does not import the handler's modules; codegen only emits
- * an import for a qualifier the checker itself rendered as `import("…")` (plus
- * the fixed `dataModel` one, excluded below). So a bare name must be expanded
- * structurally rather than printed, or it lands in the generated file as an
- * undeclared identifier (TS2304).
- *
  * Two ways a name comes out bare, and both must be caught. One: the type is
- * declared in the handler's own module (`handlerFilePath`). Two: the type is
- * declared elsewhere in user code but IMPORTED into the handler's module, which
- * makes it equally nameable there. That second half was missing, so a shared
- * `./lib/types` interface — the ordinary way to write one — leaked into
- * `api.ts`/`functions.ts` unimported. It is detected by asking the checker what
- * it renders: an out-of-scope type comes back carrying an `import("…")`
- * qualifier, which the emitter rebases against the output directory instead, so
- * only the qualifier-free rendering is expanded here.
+ * declared in the handler's own module (`handlerFilePath`), at any nesting depth.
+ * Two: the type is declared elsewhere in user code but IMPORTED into the
+ * handler's module, which makes it equally nameable there. That second half was
+ * missing once, so a shared `./lib/types` interface — the ordinary way to write
+ * one — leaked into `api.ts`/`functions.ts` unimported.
  *
  * Exported declarations are included — being nameable from the handler is the
  * whole trigger, and `export` does not change that.
  */
-const printsAsUnimportedName = (type: Type, node: Node, handlerFilePath: string): boolean => {
-    const handlerFile = node.getSourceFile();
+const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string): boolean => {
+    const declarationFile = declaration.getSourceFile();
 
-    /**
-     * Whether `handlerFile` imports `name` from `declarationPath` — the precise
-     * form of "the checker will print this bare".
-     *
-     * Deliberately NOT `type.getText(node).includes("import(")`: that renders the
-     * WHOLE type, type arguments and all, so an imported `Wrapper` wrapping an
-     * out-of-scope `Bar` renders text containing `import(` and the wrapper is
-     * wrongly cleared — printed bare into `_generated/` as a TS2304, one generic
-     * deep. Asking the source file directly is depth-independent, because the
-     * recursion visits each type on its own.
-     */
-    const importsName = (declarationFile: SourceFile, name: string): boolean =>
-        handlerFile.getImportDeclarations().some((declaration) => {
-            if (declaration.getModuleSpecifierSourceFile() !== declarationFile) {
-                return false;
-            }
+    if (declarationFile.isInNodeModules() || declarationFile.isDeclarationFile()) {
+        return false;
+    }
 
-            // A namespace import (`import * as t`) makes every exported name
-            // reachable, but only as `t.Bar` — which the checker prints qualified
-            // by a local alias that `_generated/` does not have either, so it
-            // counts as bare-nameable exactly like a named import.
-            return declaration.getNamespaceImport() !== undefined || declaration.getNamedImports().some((specifier) => specifier.getName() === name);
-        });
+    if (!Node.isInterfaceDeclaration(declaration) && !Node.isTypeAliasDeclaration(declaration)) {
+        return false;
+    }
 
-    const isBareNameable = (declaration: Node): boolean => {
-        const declarationFile = declaration.getSourceFile();
+    const declarationPath = declarationFile.getFilePath();
 
-        if (declarationFile.isInNodeModules() || declarationFile.isDeclarationFile()) {
-            return false;
-        }
+    // `Doc`/`Id` and friends: the generated files import these by name, so the
+    // bare rendering is correct there. Expanding them instead would discard a
+    // branded `Id` (not an expandable object) and fall all the way back to
+    // `unknown` — measured as every `Doc`/`Id`-shaped return type in the
+    // example apps collapsing at once. Keyed on the declaration PATH, never on
+    // the name: a user's own `Doc`/`Id` is a different type, and exempting it by
+    // name let `referencedDataModelImports` bind it to the generated one — a
+    // wrong type with no compile error anywhere.
+    if (declarationPath.includes(GENERATED_DIRECTORY_SEGMENT)) {
+        return false;
+    }
 
-        if (!Node.isInterfaceDeclaration(declaration) && !Node.isTypeAliasDeclaration(declaration)) {
-            return false;
-        }
+    return declarationPath === handlerFilePath || importsName(node.getSourceFile(), declarationFile, declaration.getName());
+};
 
-        const declarationPath = declarationFile.getFilePath();
-
-        // `Doc`/`Id` and friends: the generated files import these by name, so the
-        // bare rendering is correct there. Expanding them instead would discard a
-        // branded `Id` (not an expandable object) and fall all the way back to
-        // `unknown` — measured as every `Doc`/`Id`-shaped return type in the
-        // example apps collapsing at once.
-        if (declarationPath.includes(GENERATED_DIRECTORY_SEGMENT)) {
-            return false;
-        }
-
-        return declarationPath === handlerFilePath || importsName(declarationFile, declaration.getName());
-    };
-
-    return [type.getSymbol(), type.getAliasSymbol()]
+/**
+ * True when the checker will print this user-land named type as a BARE name at
+ * `node`.
+ *
+ * `_generated/api.ts` does not import the handler's modules; codegen only emits
+ * an import for a qualifier the checker itself rendered as `import("…")` (plus
+ * the fixed `dataModel` one, excluded above). So a bare name must be expanded
+ * structurally rather than printed, or it lands in the generated file as an
+ * undeclared identifier (TS2304).
+ */
+const printsAsUnimportedName = (type: Type, node: Node, handlerFilePath: string): boolean =>
+    [type.getSymbol(), type.getAliasSymbol()]
         .flatMap((candidate) => candidate?.getDeclarations() ?? [])
-        .some((declaration) => isBareNameable(declaration));
+        .some((declaration) => isBareNameable(declaration, node, handlerFilePath));
+
+/**
+ * True when a declaration's type ANNOTATION names something that would print
+ * bare — the half of the printing rule that the resolved type cannot reveal.
+ *
+ * TypeScript's node builder reuses the syntax of a declared annotation whenever
+ * that syntax resolves at the printing location, so `{ action: AuditAction }`
+ * prints the alias verbatim. The same property fetched back through the checker
+ * (`getTypeAtLocation`, `getTypeOfSymbol`) comes back with no alias symbol at
+ * all, fully resolved to its union — so walking resolved types alone reported
+ * "nothing unreachable here" about text that names an alias on its face, and the
+ * bare name reached `_generated/` as a TS2304 while `lunora codegen` exited 0.
+ * An alias behind a conditional type (`Infer<typeof schema>`, the shape every
+ * Standard Schema wrapper produces) leaked from every procedure that returned
+ * one. Walking the annotation as well as the type it resolves to is what closes
+ * that gap; it does not replace the resolved walk, because an inferred return
+ * with no annotation anywhere still has to be caught by the type.
+ */
+const annotationPrintsAsUnimportedName = (declaration: Node, node: Node, handlerFilePath: string): boolean => {
+    const annotation = Node.isPropertySignature(declaration) || Node.isPropertyDeclaration(declaration) ? declaration.getTypeNode() : undefined;
+
+    if (annotation === undefined) {
+        return false;
+    }
+
+    return [annotation, ...annotation.getDescendantsOfKind(SyntaxKind.TypeReference)]
+        .filter((candidate) => Node.isTypeReference(candidate))
+        .flatMap((reference) => {
+            // Resolved through `getAliasedSymbol()` for an `import type { X }`,
+            // exactly as `resolveValidatorAlias` does — otherwise the symbol is
+            // the `ImportSpecifier`, which is neither an interface nor a type
+            // alias, so every imported name read as reachable and the leak this
+            // walk exists to catch stayed open for the commonest spelling of it.
+            const symbol = reference.getTypeName().getSymbol();
+
+            return (symbol?.getAliasedSymbol() ?? symbol)?.getDeclarations() ?? [];
+        })
+        .some((referenced) => isBareNameable(referenced, node, handlerFilePath));
 };
 
 /** Composite child types of `type` (type arguments + union/intersection members) to recurse into. */
@@ -485,7 +525,15 @@ const referencesUnreachableLocalType = (type: Type, node: Node, handlerFilePath:
         return false;
     }
 
-    return type.getProperties().some((property) => referencesUnreachableLocalType(property.getTypeAtLocation(node), node, handlerFilePath, seen));
+    return type.getProperties().some((property) => {
+        // The annotation first: it is the syntax the printer reuses, and the
+        // resolved type below has already lost the alias by the time we see it.
+        if (property.getDeclarations().some((declaration) => annotationPrintsAsUnimportedName(declaration, node, handlerFilePath))) {
+            return true;
+        }
+
+        return referencesUnreachableLocalType(property.getTypeAtLocation(node), node, handlerFilePath, seen);
+    });
 };
 
 /** Is `property` declared optional (`name?: …`)? */
