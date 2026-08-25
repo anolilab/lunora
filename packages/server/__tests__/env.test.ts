@@ -247,7 +247,7 @@ describe("redactSecrets", () => {
         // boundary-only rule silently misses these.
         expect(redactSecrets("OPENAI_APIKEY=abc")).toBe("OPENAI_APIKEY=[redacted]");
         expect(redactSecrets("APITOKEN=abc")).toBe("APITOKEN=[redacted]");
-        expect(redactSecrets("MYPASSWORD=abc")).toBe("MYPASSWORD=[redacted]");
+        expect(redactSecrets("MYPASSWORD=abc")).toBe("MYPASSWORD=[redacted]"); // gitleaks:allow -- redaction test fixture, not a secret
         expect(redactSecrets("AUTHSECRET=abc")).toBe("AUTHSECRET=[redacted]");
         expect(redactSecrets("TOKEN=abc")).toBe("TOKEN=[redacted]");
     });
