@@ -45,14 +45,14 @@ there are no category sub-folders.
 Scripts run before Vite build (in order):
 
 1. **`scripts/generate-packages.js`** — discovers flat workspace packages via `project.json` `category:*` tags + `package.json`, merges with `src/data/packages-metadata.json`, outputs `src/data/packages.ts`.
-2. **`scripts/copy-package-docs.js`** — copies every `packages/<name>/docs/` into `src/content/docs/packages/<name>/`, sanitises MDX for Fumadocs, and builds a categorised `packages/meta.json` (categories come from `CATEGORY_CONFIG`).
+2. **`scripts/copy-package-docs.js`** — copies every `packages/<name>/docs/` into `src/content/docs/packages/<name>/`, sanitises MDX for Fumadocs, and builds a categorised `packages/meta.json` (categories come from `CATEGORY_TITLES` in `scripts/package-categories.js`, shared with `generate-packages.js`).
 3. **`scripts/check-doc-imports.mjs`** — fails the build when a code sample imports a symbol no package actually exports. Run it alone with `pnpm lint:doc-imports`; it does not run in `dev`.
 4. **`scripts/fetch-stats.js`** — fetches npm + GitHub stats (derived from `packages.ts`, repo `anolilab/lunora`) into `src/data/stats.json`. Network-bound; skipped by `dev`.
 
 ### Adding a Package to the Website
 
 1. Create `packages/<name>/docs/index.mdx` (add more pages + `meta.json` as needed).
-2. Add a `category:<slug>` tag to the package's `project.json` (valid slugs: `runtime`, `client`, `vite-plugin`, `codegen`, `cli`, `dev-tools`, `advisor`, `add-on`). Add the slug to `CATEGORY_CONFIG` in `copy-package-docs.js` if it's new.
+2. Add a `category:<slug>` tag to the package's `project.json` (valid slugs are the keys of `CATEGORY_TITLES`: `runtime`, `platform`, `observability`, `client`, `vite-plugin`, `codegen`, `cli`, `dev-tools`, `advisor`, `add-on`, `web3`). Add the slug to `CATEGORY_TITLES` in `scripts/package-categories.js` if it's new — and give it an entry in `CATEGORY_COLORS` there too, keyed by the display title.
 3. Optionally add `displayName` / `description` / `features` to `src/data/packages-metadata.json`.
 4. The package appears in the showcase and docs on the next build.
 
