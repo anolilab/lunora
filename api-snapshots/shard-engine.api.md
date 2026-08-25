@@ -19,6 +19,7 @@ const ADMIN_FUNCTIONS: {
     readonly aiGenerateSql: "__lunora_admin__:aiGenerateSql";
     readonly aiTableFilter: "__lunora_admin__:aiTableFilter";
     readonly assignIssue: "__lunora_admin__:assignIssue";
+    readonly backfillSearch: "__lunora_admin__:backfillSearch";
     readonly backRelationCounts: "__lunora_admin__:backRelationCounts";
     readonly cdcSync: "__lunora_admin__:cdcSync";
     readonly clearCapturedMail: "__lunora_admin__:clearCapturedMail";
@@ -289,6 +290,12 @@ type BroadcastDelta = (delta: MutationDelta) => void;
 const CDC_LOG_TABLE = "__cdc_log";
 ```
 
+### `CDC_LOG_TABLE_SEQ_INDEX` (const)
+
+```ts
+const CDC_LOG_TABLE_SEQ_INDEX = "__cdc_log_table_seq";
+```
+
 ### `CDC_META_TABLE` (const)
 
 ```ts
@@ -354,6 +361,16 @@ interface CdcChange {
     seq: number;
     table: string;
     ts: number;
+}
+```
+
+### `CdcChangeKey` (interface)
+
+```ts
+interface CdcChangeKey {
+    id: string;
+    op: CdcChange["op"];
+    seq: number;
 }
 ```
 
@@ -578,6 +595,13 @@ type DataMigrationTransform = (document: DataMigrationDocument, context: DataMig
 interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
     asId?: (tableName: string, id: string) => string;
+    cdcChangedTables?: (sinceSeq: number, options?: {
+        cursorOnly?: boolean;
+    }) => Promise<{
+        cursor: number;
+        floor?: number;
+        tables: string[];
+    } | undefined>;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: {
         hard?: boolean;
@@ -834,11 +858,13 @@ interface FacetValue {
 
 ```ts
 interface FanoutMetricsResult {
+    globalPoll: ShapeProbeCounters;
     maxRelays: number;
     peakSubscribers: number;
     promoted: boolean;
     relayCount: number;
     shapePoke: FanoutPathCounters;
+    shapeProbe: ShapeProbeCounters;
     sinceMs: number;
     topics: FanoutTopicStat[];
     totalConnections: number;
@@ -1028,6 +1054,20 @@ interface GeoScoredDocument {
     distanceMeters: null | number;
     document: Record<string, unknown>;
     score?: never;
+}
+```
+
+### `GlobalPollTick` (class)
+
+```ts
+class GlobalPollTick {
+    constructor(changedTables?: Set<string>);
+    get readCount(): number;
+    get resyncRequested(): boolean;
+    get skipped(): number;
+    requestResync(): void;
+    rows(key: string | undefined, load: () => Promise<ShapeRow[]>): Promise<ShapeRow[]>;
+    shouldRead(table: string): boolean;
 }
 ```
 
@@ -1383,12 +1423,14 @@ class OwnerRelay extends RelayLink {
     announce(): Promise<void>;
     announceDrain(): Promise<void>;
     relayCount(): number;
+    minShapeCursor(): number | undefined;
     isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
     protected onAttach(index: number): void;
     protected onDetach(index: number): void;
     protected onWhisperFrame(message: RelayFrame): Promise<void>;
     protected onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
     protected onShapePoke(): number;
+    protected bindingName(): string | undefined;
 }
 ```
 
@@ -1824,6 +1866,12 @@ interface ReadFootprint {
 type ReadHook = (table: string, idOrScan?: string) => void;
 ```
 
+### `ReadShapeCdcKeys` (type)
+
+```ts
+type ReadShapeCdcKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: number) => CdcChangeKey[];
+```
+
 ### `ReadTablePageOptions` (interface)
 
 ```ts
@@ -1934,6 +1982,7 @@ interface RelayHost {
         baseCheckpoint: number | undefined;
         cursor: number;
         epoch: string | undefined;
+        reset: boolean;
         rowsPatch: ShapeRowOp[];
     };
     currentCdcEpoch: () => string | undefined;
@@ -1967,6 +2016,7 @@ class RelayMember extends RelayLink {
     announceDrain(closing: ShardSocketLike): Promise<void>;
     relayCount(): number;
     isShapeRelayUniform(): boolean;
+    minShapeCursor(): number | undefined;
     protected onAttach(): void;
     protected onDetach(): void;
     protected onWhisperFrame(): Promise<void>;
@@ -2281,6 +2331,15 @@ interface SchemaLike {
 type ScoredDocument = GeoScoredDocument | SearchScoredDocument;
 ```
 
+### `SearchBackfillProgress` (interface)
+
+```ts
+interface SearchBackfillProgress {
+    done: boolean;
+    pages: number;
+}
+```
+
 ### `SearchFilterBuilderLike` (interface)
 
 ```ts
@@ -2361,12 +2420,34 @@ interface SettingsResult {
 }
 ```
 
+### `ShapeDiffCache` (class)
+
+```ts
+class ShapeDiffCache {
+    get probesRun(): number;
+    get probesServed(): number;
+    changedKeys(rangeKey: string, load: () => CdcChangeKey[]): CdcChangeKey[];
+    members(resolved: ResolvedShape, rangeKey: string, load: () => Map<string, Record<string, unknown>>): Map<string, Record<string, unknown>>;
+}
+```
+
 ### `ShapePokePart` (interface)
 
 ```ts
 interface ShapePokePart {
+    baseCheckpoint?: number;
+    reset?: boolean;
     rowsPatch: ShapeRowOp[];
     shapeId: string;
+}
+```
+
+### `ShapeProbeCounters` (interface)
+
+```ts
+interface ShapeProbeCounters {
+    run: number;
+    served: number;
 }
 ```
 
@@ -2976,6 +3057,12 @@ interface TtlSweepSpec {
 }
 ```
 
+### `UNVOUCHABLE_DEP` (const)
+
+```ts
+const UNVOUCHABLE_DEP = "!unvouchable";
+```
+
 ### `ValidatorLike` (interface)
 
 ```ts
@@ -3193,7 +3280,9 @@ const backfillRankIndexes: (sql: SqlExec, schema: SchemaLike) => void;
 ### `backfillSearchIndexes` (const)
 
 ```ts
-const backfillSearchIndexes: (sql: SqlExec, schema: SchemaLike) => void;
+const backfillSearchIndexes: (sql: SqlExec, schema: SchemaLike, options?: {
+    maxPages?: number;
+}) => SearchBackfillProgress;
 ```
 
 ### `backfillSearchIndexesForTable` (const)
@@ -3254,10 +3343,34 @@ const buildSeekWhere: (keys: OrderKey[], cursorValues: unknown[]) => WhereInput;
 const buildSettings: (rawEnv: unknown) => SettingsResult;
 ```
 
+### `buildShapeDiff` (const)
+
+```ts
+const buildShapeDiff: (sql: SqlExec, resolved: ResolvedShape, sinceSeq: number, upTo: number, cache: ShapeDiffCache, readKeys?: ReadShapeCdcKeys) => ShapeRowOp[];
+```
+
 ### `bumpCdcEpoch` (const)
 
 ```ts
 const bumpCdcEpoch: (sql: SqlExec) => string;
+```
+
+### `cdcCanVouchFor` (const)
+
+```ts
+const cdcCanVouchFor: (sql: SqlExec, deps: ReadonlySet<string>) => boolean;
+```
+
+### `cdcSeqLeavingRows` (const)
+
+```ts
+const cdcSeqLeavingRows: (sql: SqlExec, keep: number) => number | undefined;
+```
+
+### `cdcTouchesTables` (const)
+
+```ts
+const cdcTouchesTables: (sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>) => boolean;
 ```
 
 ### `claimStreamRun` (const)
@@ -3298,6 +3411,12 @@ const clearQueueMessages: (sql: SqlExec) => {
 
 ```ts
 const coerceAggregateNumber: (value: unknown) => number | undefined;
+```
+
+### `compactCdcDocs` (const)
+
+```ts
+const compactCdcDocs: (sql: SqlExec, throughSeq: number, maxRows: number) => void;
 ```
 
 ### `compileWhereSql` (const)
@@ -3370,6 +3489,18 @@ const createRelayLink: (host: RelayHost) => OwnerRelay | RelayMember | undefined
 
 ```ts
 const createReplicaLink: (host: ReplicaFollowerHost) => ShardReplica | undefined;
+```
+
+### `createShapeDiffCache` (const)
+
+```ts
+const createShapeDiffCache: () => ShapeDiffCache;
+```
+
+### `createShapeProbeCounters` (const)
+
+```ts
+const createShapeProbeCounters: () => ShapeProbeCounters;
 ```
 
 ### `createShardCtxDb` (const)
@@ -3507,6 +3638,18 @@ const ensureAuditTable: (sql: SqlExec) => void;
 const ensureMailTable: (sql: SqlExec) => void;
 ```
 
+### `envOptionalPositiveInt` (const)
+
+```ts
+const envOptionalPositiveInt: (env: unknown, key: string) => number | undefined;
+```
+
+### `envPositiveInt` (const)
+
+```ts
+const envPositiveInt: (env: unknown, key: string, fallback: number) => number;
+```
+
 ### `exportShardRows` (const)
 
 ```ts
@@ -3562,6 +3705,15 @@ const gateReplicaDispatch: (replica: ShardReplica, request: Request, functionPat
 
 ```ts
 const geoTableName: (table: string, indexName: string) => string;
+```
+
+### `globalShapeReadKey` (const)
+
+```ts
+const globalShapeReadKey: (resolved: ResolvedShape, identity: {
+    identity?: Record<string, unknown>;
+    userId?: string;
+}) => string | undefined;
 ```
 
 ### `guardWriter` (const)
@@ -3705,6 +3857,12 @@ const listTables: (sql: SqlExec) => TableInfo[];
 const literalInList: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean) => SQL;
 ```
 
+### `markUnvouchableReads` (const)
+
+```ts
+const markUnvouchableReads: <T extends object>(facade: T, onRead: ReadFootprint["onRead"] | undefined, methods: ReadonlyArray<string>) => T;
+```
+
 ### `matchesRankStaticWhere` (const)
 
 ```ts
@@ -3814,10 +3972,22 @@ const migrateSearchState: (sql: SqlExec) => void;
 const migrateShapePokeCursor: (sql: SqlExec) => void;
 ```
 
+### `minCdcReplayableSeq` (const)
+
+```ts
+const minCdcReplayableSeq: (sql: SqlExec) => number | undefined;
+```
+
 ### `minCdcSeq` (const)
 
 ```ts
 const minCdcSeq: (sql: SqlExec) => number | undefined;
+```
+
+### `minShapePokeCursor` (const)
+
+```ts
+const minShapePokeCursor: (sql: SqlExec) => number | undefined;
 ```
 
 ### `nextPromotionState` (const)
@@ -3986,6 +4156,12 @@ const readCapturedMail: (sql: SqlExec, options?: {
 };
 ```
 
+### `readCdcChangeKeys` (const)
+
+```ts
+const readCdcChangeKeys: (sql: SqlExec, table: string, sinceSeq: number, upTo: number) => CdcChangeKey[];
+```
+
 ### `readCdcChanges` (const)
 
 ```ts
@@ -4141,6 +4317,12 @@ const recordQueueMessages: (sql: SqlExec, inputs: ReadonlyArray<RecordQueueMessa
 
 ```ts
 const recordSchemaVersion: (sql: SqlExec, hash: string, snapshotJson: string, now?: number) => boolean;
+```
+
+### `recordShapeProbePass` (const)
+
+```ts
+const recordShapeProbePass: (counters: ShapeProbeCounters, run: number, served: number) => ShapeProbeCounters;
 ```
 
 ### `relationHooks` (const)
@@ -4317,10 +4499,10 @@ const selectMatchingIds: (sql: SqlExec, options: SelectMatchingIdsOptions) => {
 };
 ```
 
-### `selectShapeMemberIds` (const)
+### `selectShapeMembers` (const)
 
 ```ts
-const selectShapeMemberIds: (sql: SqlExec, table: string, effectiveWhere: WhereInput | undefined, ids: ReadonlyArray<string>) => Set<string>;
+const selectShapeMembers: (sql: SqlExec, table: string, effectiveWhere: WhereInput | undefined, ids: ReadonlyArray<string>) => Map<string, Record<string, unknown>>;
 ```
 
 ### `selectShapeRows` (const)
@@ -4425,7 +4607,7 @@ const throwingScheduler: SchedulerLike;
 ### `trimCdcChanges` (const)
 
 ```ts
-const trimCdcChanges: (sql: SqlExec, throughSeq: number) => void;
+const trimCdcChanges: (sql: SqlExec, throughSeq: number, maxRows: number) => void;
 ```
 
 ### `trimIdempotent` (const)
