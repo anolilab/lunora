@@ -105,6 +105,7 @@ const PACKAGE_OPT_OUT = new Map<string, string>([
     ["payment", "optional add-on with heavy provider deps — installed directly"],
     ["platform-cloudflare", "host/engine layer — consumed by @lunora/do, never app code"],
     ["platform-node", "host/engine layer — experimental Node host, never app code"],
+    ["platform-rivet", "host/engine layer — experimental rivet host, never app code"],
     ["queue", "add-on — installed directly when used"],
     ["react", "framework adapter — installed per framework, not part of the base surface"],
     ["react-native", "framework adapter — installed per framework, not part of the base surface"],
