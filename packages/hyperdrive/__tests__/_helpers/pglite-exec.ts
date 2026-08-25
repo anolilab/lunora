@@ -18,6 +18,8 @@ import { buildPgExec } from "../../src/global-exec";
  * `node:sqlite`.
  */
 interface PgliteHarness {
+    /** The raw row-client the {@link SqlExec} wraps — what `createPostgresGlobalCtxDb` takes. */
+    client: RowClient;
     /** Close the embedded database. */
     close: () => Promise<void>;
     /** The {@link SqlExec} the store core / migrations run against. */
@@ -40,6 +42,7 @@ const createPgliteHarness = async (): Promise<PgliteHarness> => {
     };
 
     return {
+        client: rowClient,
         close: () => database.close(),
         exec: buildPgExec(rowClient),
         query: async (sql, parameters = []) => {

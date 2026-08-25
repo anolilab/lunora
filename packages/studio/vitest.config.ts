@@ -39,6 +39,7 @@ const unitTestFiles = [
     "__tests__/features/sql/sql-diagnostics.test.ts",
     "__tests__/features/sql/sql-tabs.test.ts",
     "__tests__/features/storage/storage-entries.test.ts",
+    "__tests__/lib/admin-functions.test.ts",
     "__tests__/lib/data-view-params.test.ts",
     "__tests__/lib/internal.test.ts",
     "__tests__/lib/mask-preview-heuristic.test.ts",
