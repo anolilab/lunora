@@ -142,11 +142,12 @@ describe("shardDO durable streams", () => {
         await shard.driveMessage(first, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
         await waitForTerminator(first);
 
-        // Every chunk carries its position so a client knows what to resume from.
+        // Every chunk carries its position (and the run's generation stamp) so a
+        // client knows what to resume from — and which run it is resuming.
         expect(parseFrames(first).filter((frame) => frame.type === "chunk")).toStrictEqual([
-            { data: "the", id: "stream_1", seq: 1, type: "chunk" },
-            { data: " quick", id: "stream_1", seq: 2, type: "chunk" },
-            { data: " fox", id: "stream_1", seq: 3, type: "chunk" },
+            { data: "the", generation: expect.any(Number) as number, id: "stream_1", seq: 1, type: "chunk" },
+            { data: " quick", generation: expect.any(Number) as number, id: "stream_1", seq: 2, type: "chunk" },
+            { data: " fox", generation: expect.any(Number) as number, id: "stream_1", seq: 3, type: "chunk" },
         ]);
 
         // A reload: same args, same run, resuming after the first chunk.
@@ -265,6 +266,56 @@ describe("shardDO durable streams", () => {
         // One start on the revived instance: the resuming attach refused rather
         // than re-running, and only the fresh one produced.
         expect(revived.starts).toBe(1);
+    });
+
+    it("refuses to splice a resume onto the run that replaced the one it holds a prefix of", async () => {
+        expect.assertions(3);
+
+        const shard = new DurableStreamShard(state, {});
+
+        shard.registered.set("chat:answer", async function* answer() {
+            yield "one";
+            yield "two";
+        });
+
+        // Tab A watches run #1 to completion and holds its generation stamp.
+        const tabA = createFakeWebSocket();
+
+        shard.registerSocket(tabA, { clientId: "client-a", subs: {} });
+        await shard.driveMessage(tabA, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(tabA);
+
+        const { generation } = parseFrames(tabA).find((frame) => frame.type === "chunk") as { generation: number };
+
+        // Tab B asks the same question FRESH: the finished run is reclaimed and
+        // run #2 starts under the same key.
+        shard.registered.set("chat:answer", async function* answer() {
+            yield "alpha";
+            yield "beta";
+            yield "gamma";
+        });
+
+        const tabB = createFakeWebSocket();
+
+        shard.registerSocket(tabB, { clientId: "client-a", subs: {} });
+        await shard.driveMessage(tabB, { id: "stream_2", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(tabB);
+
+        // Tab A reconnects, resuming run #1 after its second chunk. Without the
+        // generation gate this would append run #2's chunk 3 onto run #1's 1..2 —
+        // two different generations concatenated into one transcript.
+        const resumed = createFakeWebSocket();
+
+        shard.registerSocket(resumed, { clientId: "client-a", subs: {} });
+        await shard.driveMessage(resumed, { generation, id: "stream_3", query: { functionPath: "chat:answer" }, sinceChunk: 2, type: "stream" });
+        await waitForTerminator(resumed);
+
+        const frames = parseFrames(resumed);
+
+        expect(frames.filter((frame) => frame.type === "chunk")).toStrictEqual([]);
+        expect((frames.at(-1) as { error?: { code?: string } }).error?.code).toBe("STREAM_INTERRUPTED");
+        // The refusal never re-ran the handler.
+        expect(shard.starts).toBe(2);
     });
 
     it("re-runs for a later caller instead of serving a finished transcript as a cache", async () => {

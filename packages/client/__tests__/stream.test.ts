@@ -361,6 +361,45 @@ describe("stream", () => {
             client.close();
         });
 
+        it("re-sends a durable start frame with the resume watermark and run generation after a bounce", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const iterable = client.stream(fnRef<number>("chat:answer"), {});
+
+            const first = latestSocket();
+
+            first.open();
+
+            const { id } = first.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>).find((f) => f.type === "stream") as { id: string };
+
+            // A seq-bearing chunk marks the stream durable; `generation` is the
+            // server's stamp for the run these chunks belong to.
+            first.receive({ data: 1, generation: 1234, id, seq: 1, type: "chunk" });
+            first.receive({ data: 2, generation: 1234, id, seq: 2, type: "chunk" });
+
+            // Socket bounces; the scheduled reconnect brings up a new socket.
+            first.close();
+            vi.runOnlyPendingTimers();
+
+            const second = latestSocket();
+
+            second.open();
+
+            const resume = second.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>).find((f) => f.type === "stream" && f.id === id);
+
+            expect(resume).toBeDefined();
+            // The resume proves both WHERE it left off and WHICH run it left off
+            // in, so the server never splices a different run's tail on.
+            expect(resume?.sinceChunk).toBe(2);
+            expect(resume?.generation).toBe(1234);
+
+            iterable.cancel();
+            client.close();
+        });
+
         it("buffers the start frame while the socket is connecting and flushes it on open", async () => {
             expect.assertions(2);
 

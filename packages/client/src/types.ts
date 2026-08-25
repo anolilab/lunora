@@ -589,6 +589,14 @@ export interface ClientAckMessage {
  * (`sub_*` vs `stream_*`) keeps the local registries searchable.
  */
 export interface ClientStreamMessage {
+    /**
+     * Run generation the {@link ClientStreamMessage.sinceChunk} watermark
+     * belongs to: the `generation` stamp carried by the chunk frames this
+     * client already received, echoed back on a resume. The server refuses to
+     * splice a different run's tail onto the held prefix — a mismatch fails
+     * with `STREAM_INTERRUPTED` instead. Omitted on a first attach.
+     */
+    generation?: number;
     id: string;
     query: { args?: Record<string, unknown>; functionPath: string; shardKey?: string };
 
@@ -724,6 +732,15 @@ export interface ServerCompleteMessage {
 /** One frame of a streaming query — `data` carries the user-yielded chunk. */
 export interface ServerChunkMessage {
     data: unknown;
+
+    /**
+     * Generation stamp of the **durable** run this chunk belongs to. The client
+     * stores it beside {@link ServerChunkMessage.seq} and echoes it as
+     * {@link ClientStreamMessage.generation} on a resume, so the server can
+     * tell a genuine resume from an attempt to splice onto a different run
+     * under the same key. Absent on an ephemeral stream.
+     */
+    generation?: number;
     id: string;
 
     /**

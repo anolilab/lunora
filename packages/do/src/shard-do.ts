@@ -835,7 +835,7 @@ const streamFrames = (
     id: string,
 ): {
     ack: () => void;
-    chunk: (data: unknown, seq?: number) => boolean;
+    chunk: (data: unknown, seq?: number, generation?: number) => boolean;
     complete: () => boolean;
     fail: (failure: { code: string; message: string }) => boolean;
 } => {
@@ -843,7 +843,11 @@ const streamFrames = (
         ack: () => {
             ws.send(JSON.stringify({ id, type: "ack" }));
         },
-        chunk: (data, seq) => trySendFrame(ws, JSON.stringify(seq === undefined ? { data, id, type: "chunk" } : { data, id, seq, type: "chunk" })),
+        // `generation` rides only durable chunks (an `undefined` key is dropped
+        // by JSON.stringify) — the client echoes it on resume so the server can
+        // refuse to splice a different run's tail onto the prefix it holds.
+        chunk: (data, seq, generation) =>
+            trySendFrame(ws, JSON.stringify(seq === undefined ? { data, id, type: "chunk" } : { data, generation, id, seq, type: "chunk" })),
         complete: () => trySendFrame(ws, JSON.stringify({ id, type: "complete" })),
         fail: (failure) => trySendFrame(ws, JSON.stringify({ error: failure, id, type: "error" })),
     };
@@ -1791,55 +1795,91 @@ abstract class ShardDO {
         // dispatches; the hooks run under the connecting user's identity.
         const attachment = this.readAttachment(ws);
 
-        if (attachment.connectionId !== undefined) {
-            await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
-        }
+        // The hooks deliberately run before any teardown so they observe
+        // pre-cleanup state; the `finally` guarantees the deterministic
+        // teardown below still runs when the dispatch machinery itself throws
+        // (e.g. a malformed attachment in `lifecycleInfo`). The failure is held
+        // rather than left in flight so a teardown step can't displace it, and
+        // rethrown once cleanup is done.
+        let dispatchError: { error: unknown } | undefined;
+        let relayError: { error: unknown } | undefined;
 
-        // Abort in-flight stream iterators bound to this socket so user
-        // handlers stop pumping into a closed channel rather than discovering
-        // it on the next yield.
-        const cancellers = this.streamCancellers.get(ws);
+        try {
+            if (attachment.connectionId !== undefined) {
+                await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
+            }
+        } catch (error) {
+            dispatchError = { error };
+        } finally {
+            // Abort in-flight stream iterators bound to this socket so user
+            // handlers stop pumping into a closed channel rather than discovering
+            // it on the next yield.
+            const cancellers = this.streamCancellers.get(ws);
 
-        if (cancellers) {
-            for (const controller of cancellers.values()) {
-                controller.abort();
+            if (cancellers) {
+                for (const controller of cancellers.values()) {
+                    controller.abort();
+                }
+
+                this.streamCancellers.delete(ws);
             }
 
-            this.streamCancellers.delete(ws);
-        }
+            // Drop the per-socket subscription memo too — leaving it would pin
+            // the socket in the WeakMap until GC and (more importantly) keep the
+            // stale memo set around if the same socket id is reused after a
+            // bounce. Cheap to recompute on the next subscribe.
+            this.subMemos.delete(ws);
+            this.shapeMemos.delete(ws);
+            this.globalShapeSnapshots.delete(ws);
 
-        // Drop the per-socket subscription memo too — leaving it would pin
-        // the socket in the WeakMap until GC and (more importantly) keep the
-        // stale memo set around if the same socket id is reused after a
-        // bounce. Cheap to recompute on the next subscribe.
-        this.subMemos.delete(ws);
-        this.shapeMemos.delete(ws);
-        this.globalShapeSnapshots.delete(ws);
+            // Drop the durable global-shape and shape-poke-cursor baselines for
+            // this socket too — leaving them would orphan rows under a
+            // `connectionId` that can never reconnect (a fresh upgrade mints a
+            // new id), slowly leaking both tables.
+            if (attachment.connectionId !== undefined) {
+                try {
+                    deleteGlobalShapeSnapshotsForConnection(this.sql as SqlExec, attachment.connectionId);
+                } catch {
+                    /* stub sql / missing table — nothing durable to clean up */
+                }
 
-        // Drop the durable global-shape and shape-poke-cursor baselines for
-        // this socket too — leaving them would orphan rows under a
-        // `connectionId` that can never reconnect (a fresh upgrade mints a
-        // new id), slowly leaking both tables.
-        if (attachment.connectionId !== undefined) {
+                try {
+                    deleteShapePokeCursorsForConnection(this.sql as SqlExec, attachment.connectionId);
+                } catch {
+                    /* stub sql / missing table — nothing durable to clean up */
+                }
+            }
+
+            // Clear the attachment so a future reconnection starts clean.
+            (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
+
+            // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
+            // socket detaches from its owner, so the owner stops forwarding to it.
+            // The detach is a network post, so it can reject — hold that too
+            // rather than letting it escape the `finally` and replace a dispatch
+            // failure the caller still has to see.
             try {
-                deleteGlobalShapeSnapshotsForConnection(this.sql as SqlExec, attachment.connectionId);
-            } catch {
-                /* stub sql / missing table — nothing durable to clean up */
-            }
-
-            try {
-                deleteShapePokeCursorsForConnection(this.sql as SqlExec, attachment.connectionId);
-            } catch {
-                /* stub sql / missing table — nothing durable to clean up */
+                await this.relay?.announceDrain(ws);
+            } catch (error) {
+                relayError = { error };
             }
         }
 
-        // Clear the attachment so a future reconnection starts clean.
-        (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
+        // Rethrow outside the `finally` so neither failure can be lost to the
+        // other: a dispatch failure always wins (the relay one is only a
+        // diagnostic then), and a relay failure still surfaces on its own.
+        if (dispatchError !== undefined) {
+            if (relayError !== undefined) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for a relay drain that failed behind a dispatch error
+                console.error("[@lunora/do] relay drain failed during socket close:", relayError.error);
+            }
 
-        // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
-        // socket detaches from its owner, so the owner stops forwarding to it.
-        await this.relay?.announceDrain(ws);
+            throw dispatchError.error;
+        }
+
+        if (relayError !== undefined) {
+            throw relayError.error;
+        }
     }
 
     /** Hibernation API: invoked on socket error. */
@@ -4826,6 +4866,10 @@ abstract class ShardDO {
                 // `delivered` past real chunks and silently truncate the stream,
                 // so it is normalised here rather than trusted.
                 Number.isInteger(envelope.sinceChunk) && (envelope.sinceChunk as number) > 0 ? (envelope.sinceChunk as number) : 0,
+                // Same trust boundary for the resume generation: only a positive
+                // integer counts; anything else behaves like an older client
+                // that never sent one.
+                Number.isInteger(envelope.generation) && (envelope.generation as number) > 0 ? (envelope.generation as number) : undefined,
             ).catch(() => {
                 /* socket already gone; nothing to report */
             });
@@ -8298,7 +8342,14 @@ abstract class ShardDO {
      * `{type:"error"}`. Either way drop the controller.
      */
 
-    private async handleStream(ws: ShardSocketLike, id: string, functionPath: string, args: Record<string, unknown>, sinceSeq = 0): Promise<void> {
+    private async handleStream(
+        ws: ShardSocketLike,
+        id: string,
+        functionPath: string,
+        args: Record<string, unknown>,
+        sinceSeq = 0,
+        generation?: number,
+    ): Promise<void> {
         const iterable = this.executeStream(functionPath, args);
 
         if (!iterable) {
@@ -8330,7 +8381,7 @@ abstract class ShardDO {
         }
 
         if (iterable.durable) {
-            await this.attachDurableStream(ws, id, functionPath, args, { durable: iterable.durable, iterator: iterable.iterator }, sinceSeq);
+            await this.attachDurableStream(ws, id, functionPath, args, { durable: iterable.durable, iterator: iterable.iterator }, sinceSeq, generation);
 
             return;
         }
@@ -8412,6 +8463,7 @@ abstract class ShardDO {
         args: Record<string, unknown>,
         registration: { durable: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> },
         sinceChunk: number,
+        generation?: number,
     ): Promise<void> {
         const attachment = this.readAttachment(ws);
         // An ANONYMOUS caller shares nothing. Falling back to a constant here
@@ -8451,7 +8503,7 @@ abstract class ShardDO {
 
                 delivered = chunk.seq;
 
-                return frames.chunk(chunk.data, chunk.seq);
+                return frames.chunk(chunk.data, chunk.seq, chunk.generation);
             },
             complete: () => {
                 frames.complete();
@@ -8472,6 +8524,7 @@ abstract class ShardDO {
         });
 
         await this.durableStreams.attach({
+            ...(generation === undefined ? {} : { generation }),
             iterator: registration.iterator,
             runKey,
             sinceChunk,

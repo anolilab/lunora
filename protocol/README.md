@@ -241,16 +241,16 @@ are ignored by the client parser.
 
 ### 5.1 Client → server frames
 
-| `type`                                      | Shape                                                                           |
-| ------------------------------------------- | ------------------------------------------------------------------------------- |
-| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context? }` — one-shot, first on open |
-| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch? } }`    |
-| `unsubscribe`                               | `{ type, id }`                                                                  |
-| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`           |
-| `shape_unsubscribe`                         | `{ type, id }`                                                                  |
-| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk? }`          |
-| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                               |
-| `whisper`                                   | `{ type, topic, data? }`                                                        |
+| `type`                                      | Shape                                                                               |
+| ------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context? }` — one-shot, first on open     |
+| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch? } }`        |
+| `unsubscribe`                               | `{ type, id }`                                                                      |
+| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`               |
+| `shape_unsubscribe`                         | `{ type, id }`                                                                      |
+| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk?, generation? }` |
+| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                   |
+| `whisper`                                   | `{ type, topic, data? }`                                                            |
 
 `subscribe.query.args` is `encodeWire(args)`. `table` defaults to
 `functionPath` (unless codegen surfaced a distinct table). `sinceSeq` /
@@ -264,6 +264,17 @@ so re-sending the same start frame with `sinceChunk` re-attaches to the run
 already in flight, replays the chunks after that watermark from the server's
 transcript, and then continues live. A server that did not declare the procedure
 durable ignores `sinceChunk` and emits chunks without `seq`.
+
+`stream.generation` names **which** run the `sinceChunk` watermark belongs to:
+it is the run stamp the server put on every durable `chunk` frame, echoed back
+verbatim on a resume. Because the run key is shared across a caller's tabs, the
+transcript under it can be replaced between disconnect and resume (another tab
+asked fresh and started a new run); a `generation` that does not match the
+stored run — or a resume whose run row no longer exists — fails with the
+existing `STREAM_INTERRUPTED` error instead of splicing the new run's chunks
+onto the prefix the client already holds. Omitting `generation` (older clients)
+keeps the previous attach behaviour; ephemeral streams ignore the field
+entirely, exactly as they ignore `sinceChunk`.
 
 The `connect` frame is sent once per socket open, **before** resubscribing, so
 `onConnect`/`onDisconnect` lifecycle hooks fire symmetrically.
@@ -320,17 +331,17 @@ Run `pageDeltaFrames` only once you announce the token.
 
 ### 5.2 Server → client frames
 
-| `type`     | Shape                                                          | Effect                                                                    |
-| ---------- | -------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `ack`      | `{ type, id }`                                                 | subscription acknowledged                                                 |
-| `data`     | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }` | deliver `decodeWire(data)` as the new value                               |
-| `delta`    | `{ type, id, delta: <wire>, cursor?, epoch? }`                 | merge delta into server base (falls back to replace)                      |
-| `resume`   | `{ type, id, cursor?, epoch?, lastMutationId? }`               | nothing changed; keep value, advance cursor                               |
-| `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`               | write touched tables, byte-identical result; advance only                 |
-| `error`    | `{ type, id?, error: { code?, message? }, message? }`          | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired) |
-| `complete` | `{ type, id }`                                                 | subscription/stream closed server-side                                    |
-| `chunk`    | `{ type, id, data: <wire>, seq? }`                             | one streaming-query chunk (`seq` on a durable run only)                   |
-| `whisper`  | `{ type, topic, data: <wire>, from? }`                         | ephemeral relay                                                           |
+| `type`     | Shape                                                          | Effect                                                                     |
+| ---------- | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `ack`      | `{ type, id }`                                                 | subscription acknowledged                                                  |
+| `data`     | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }` | deliver `decodeWire(data)` as the new value                                |
+| `delta`    | `{ type, id, delta: <wire>, cursor?, epoch? }`                 | merge delta into server base (falls back to replace)                       |
+| `resume`   | `{ type, id, cursor?, epoch?, lastMutationId? }`               | nothing changed; keep value, advance cursor                                |
+| `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`               | write touched tables, byte-identical result; advance only                  |
+| `error`    | `{ type, id?, error: { code?, message? }, message? }`          | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)  |
+| `complete` | `{ type, id }`                                                 | subscription/stream closed server-side                                     |
+| `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
+| `whisper`  | `{ type, topic, data: <wire>, from? }`                         | ephemeral relay                                                            |
 
 ### 5.3 Shape poke protocol (partial replication)
 

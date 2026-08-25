@@ -5,13 +5,13 @@ import {
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
     DEV_VARS_KEY_PATTERN,
-    escapeRegExp,
     generateSecretValue,
     inferLunoraBindings,
     isMintableSecretKey,
     isPlaceholderValue,
     packageNamesFromBindings,
     parseDevVariableEntries,
+    removeDevVariableLine,
     requiredSecrets,
     resolveDeployDriver,
     resolveProjectTarget,
@@ -72,11 +72,12 @@ interface EnvCommandResult {
 const NEWLINE_PRESENT = /[\r\n]/u;
 
 /**
- * `.dev.vars` values are wrapped in double quotes but the shared grammar's
- * read path (`@lunora/config`'s `unquoteDevVariable`) only strips the outer
- * quotes — it does NOT unescape. So any `"` or `\` we tried to escape on write
- * would not round-trip (and would compound on every rewrite). Reject those
- * characters at write time instead, the same way newlines are rejected.
+ * `.dev.vars` values are wrapped in double quotes on write. The shared read
+ * path is dotenv, which strips those quotes and expands `\n`/`\r` inside them
+ * but nothing else — so a `"` would end the value early and a `\` would either
+ * survive verbatim or turn into a newline, and neither round-trips (each
+ * rewrite compounds it). Reject both characters at write time instead, the
+ * same way newlines are rejected.
  */
 const UNREPRESENTABLE_PRESENT = /["\\]/u;
 
@@ -89,18 +90,6 @@ const parseDevVariables = (content: string): Map<string, ParsedLine> => new Map(
 
 /** Raw `.dev.vars` text, or `""` when the file does not exist yet. */
 const readDevVariablesRaw = (devVariablesPath: string): string => (existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "");
-
-/**
- * Surgically remove every `.dev.vars` line defining `key` (and its trailing
- * newline), preserving all other lines, comments, and blanks verbatim. Keys
- * are always validated against `DEV_VARS_KEY_PATTERN` before we build this
- * (see `runEnvUnset`), so they hold only `[A-Za-z_]\w*` — no regex
- * metacharacters to escape in practice — but `key` is escaped anyway
- * (via the shared `escapeRegExp`) as defense-in-depth against a future
- * caller that skips validation.
- */
-const removeDevVariableLine = (content: string, key: string): string =>
-    content.replaceAll(new RegExp(String.raw`^[ \t]*${escapeRegExp(key)}[ \t]*=.*(?:\r?\n|$)`, "gmu"), "");
 
 const redact = (value: string): string => {
     if (value.length <= 4) {

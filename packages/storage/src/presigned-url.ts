@@ -14,6 +14,9 @@
  * credentials (an R2 API token's Access Key ID / Secret Access Key).
  * @see https://developers.cloudflare.com/r2/api/s3/presigned-urls/
  */
+import { LunoraError } from "@lunora/errors";
+
+import { validateTtlSeconds } from "../../../shared/hmac-url";
 import { toHex } from "./internal";
 import type { R2S3Credentials } from "./types";
 
@@ -22,8 +25,7 @@ const REGION = "auto";
 const SERVICE = "s3";
 const ALGORITHM = "AWS4-HMAC-SHA256";
 
-/** S3 presigned-URL expiry bounds (seconds): 1 second to 7 days. */
-const MIN_EXPIRES_SECONDS = 1;
+/** S3 presigned-URL expiry ceiling (seconds): 7 days, AWS SigV4's own limit. */
 const MAX_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
 const DEFAULT_EXPIRES_SECONDS = 900;
 
@@ -89,7 +91,7 @@ const formatAmzDate = (date: Date): { amzDate: string; dateStamp: string } => {
 export interface PresignedUrlParams {
     /** R2 S3 API credentials + bucket/account. */
     credentials: R2S3Credentials;
-    /** Seconds the URL stays valid; clamped to [1, 604800]. Default 900. */
+    /** Seconds the URL stays valid: 1 to 604800 (7 days); an out-of-range value throws. Default 900. */
     expiresInSeconds?: number;
     /** Object key (path-style; not URL-encoded by the caller). */
     key: string;
@@ -108,12 +110,22 @@ export interface PresignedUrlParams {
 export const buildPresignedUrl = async (parameters: PresignedUrlParams): Promise<string> => {
     const { credentials, key } = parameters;
     const method = parameters.method ?? "GET";
-    // A non-finite `expiresInSeconds` (NaN/Infinity from a JS caller) would
-    // propagate through the clamp as NaN and mint an `X-Amz-Expires=NaN` URL
-    // that R2 rejects — fall back to the default instead of emitting garbage.
-    const requested = parameters.expiresInSeconds ?? DEFAULT_EXPIRES_SECONDS;
-    const normalised = Number.isFinite(requested) ? requested : DEFAULT_EXPIRES_SECONDS;
-    const expires = Math.min(Math.max(MIN_EXPIRES_SECONDS, Math.floor(normalised)), MAX_EXPIRES_SECONDS);
+    // An explicit `expiresInSeconds` is validated exactly like `buildSignedUrl`'s:
+    // invalid input (non-finite, non-positive, over-ceiling) throws rather than
+    // being silently clamped to a different lifetime. Absent → default. Floored
+    // BEFORE validating so a sub-second value (0.5 → 0) is rejected too —
+    // S3 refuses `X-Amz-Expires=0`.
+    let expires = DEFAULT_EXPIRES_SECONDS;
+
+    if (parameters.expiresInSeconds !== undefined) {
+        expires = Math.floor(parameters.expiresInSeconds);
+
+        const ttlProblem = validateTtlSeconds(expires, MAX_EXPIRES_SECONDS);
+
+        if (ttlProblem !== undefined) {
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: ${ttlProblem}`);
+        }
+    }
 
     const host = endpointHost(credentials);
     const date = new Date(parameters.now?.() ?? Date.now());

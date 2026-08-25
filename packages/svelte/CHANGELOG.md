@@ -1,3 +1,9 @@
+## @lunora/svelte [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.89...@lunora/svelte@1.0.0-alpha.90) (2026-08-24)
+
+### Features
+
+* **svelte:** accept reactive query args ([#467](https://github.com/anolilab/lunora/issues/467)) ([041b454](https://github.com/anolilab/lunora/commit/041b454da81cc4575431b588352055f5cf8d7527))
+
 ## @lunora/svelte [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.88...@lunora/svelte@1.0.0-alpha.89) (2026-08-23)
 
 

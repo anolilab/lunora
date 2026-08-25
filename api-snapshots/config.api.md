@@ -1327,6 +1327,12 @@ const readProjectRemotePreference: (projectRoot: string) => RemotePreference;
 const readProjectTarget: (projectRoot: string) => string | undefined;
 ```
 
+### `removeDevVariableLine` (const)
+
+```ts
+const removeDevVariableLine: (content: string, key: string) => string;
+```
+
 ### `requiredSecrets` (const)
 
 ```ts

@@ -287,6 +287,39 @@ describe("lunora env", () => {
             expect(recorded.warnings.join("\n")).toContain("A");
         });
 
+        it("unset actually removes an export-prefixed line it reports as unset", async () => {
+            expect.assertions(3);
+
+            // The reader accepts `export KEY=…` (wrangler does), so `unset` must
+            // edit that line too. When the writers matched a narrower grammar
+            // this reported success while leaving the secret in the file — a
+            // developer revoking a leaked credential was told it was gone.
+            writeFileSync(join(workdir, ".dev.vars"), "# keep me\nexport AUTH_SECRET=leaked\nB=2\n", "utf8");
+
+            const { logger, recorded } = recordingLogger();
+
+            const result = await runEnvCommand({ cwd: workdir, key: "AUTH_SECRET", logger, subcommand: "unset" });
+
+            const file = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+            expect(result.code).toBe(0);
+            expect(file).not.toContain("leaked");
+            expect(recorded.warnings.join("\n")).not.toContain("AUTH_SECRET");
+        });
+
+        it("unset still warns for a key that is genuinely absent", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, ".dev.vars"), "# AUTH_SECRET=commented\nB=2\n", "utf8");
+
+            const { logger, recorded } = recordingLogger();
+
+            const result = await runEnvCommand({ cwd: workdir, key: "AUTH_SECRET", logger, subcommand: "unset" });
+
+            expect(result.code).toBe(0);
+            expect(recorded.warnings.join("\n")).toContain("was not set");
+        });
+
         it("unset rejects an invalid key rather than building an unescaped regex from it", async () => {
             expect.assertions(2);
 
