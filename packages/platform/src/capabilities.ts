@@ -493,7 +493,6 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
     },
 };
 
-
 /**
  * The Node capability matrix — `@lunora/platform-node`'s honest self-rating
  * (plan 234).
