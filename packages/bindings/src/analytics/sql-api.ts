@@ -24,6 +24,14 @@ interface RawSqlResponse {
 
 const SQL_API_BASE = "https://api.cloudflare.com/client/v4/accounts";
 
+/**
+ * Default for the config's `timeoutMs`: generous, because analytical scans
+ * legitimately run tens of seconds — but bounded, because an unresponsive
+ * endpoint would otherwise hold the calling action (or the Studio panel /
+ * advisor lint importing this client) open to the platform limit.
+ */
+const DEFAULT_SQL_TIMEOUT_MS = 60_000;
+
 /** Configuration for an {@link AnalyticsSqlClient}. */
 export interface AnalyticsSqlConfig {
     /** Cloudflare account id that owns the dataset. */
@@ -36,6 +44,17 @@ export interface AnalyticsSqlConfig {
      * so the SQL path never touches the network.
      */
     fetch?: typeof globalThis.fetch;
+
+    /**
+     * Milliseconds before an in-flight query (the fetch AND its body read) is
+     * aborted and surfaced as an `AnalyticsSqlError` with status 504. Defaults
+     * to 60_000 — analytical scans legitimately run tens of seconds.
+     * `undefined` means the default, not unbounded.
+     *
+     * The deadline is carried by the request's `signal`, so a custom `fetch`
+     * (above) that ignores `signal` leaves the query unbounded.
+     */
+    timeoutMs?: number;
 }
 
 /**
@@ -82,39 +101,72 @@ export const createAnalyticsSqlClient = (config: AnalyticsSqlConfig): AnalyticsS
     // to a different endpoint on the API origin.
     const endpoint = `${SQL_API_BASE}/${encodeURIComponent(config.accountId)}/analytics_engine/sql`;
 
+    const timeoutMs = config.timeoutMs ?? DEFAULT_SQL_TIMEOUT_MS;
+
     const query = async (sql: string): Promise<AnalyticsSqlResult> => {
-        const response = await fetchImpl(endpoint, {
-            body: sql,
-            headers: {
-                Authorization: `Bearer ${config.apiToken}`,
-                "Content-Type": "text/plain",
-            },
-            method: "POST",
-        });
-
-        if (!response.ok) {
-            throw new AnalyticsSqlError(response.status, await response.text());
-        }
-
-        let raw: unknown;
+        // Bound the fetch AND the body reads with one deadline — a hang after
+        // headers is the harder failure — so a stalled endpoint can't hold the
+        // caller open to the platform limit.
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+            controller.abort();
+        }, timeoutMs);
 
         try {
-            raw = await response.json();
-        } catch {
-            // A 2xx with a body that isn't JSON (e.g. an HTML error page from an
-            // intermediary) would otherwise surface as a bare SyntaxError;
-            // normalise it to the same AnalyticsSqlError callers already handle.
-            throw new AnalyticsSqlError(response.status, "Analytics Engine SQL API returned a non-JSON body.");
+            const response = await fetchImpl(endpoint, {
+                body: sql,
+                headers: {
+                    Authorization: `Bearer ${config.apiToken}`,
+                    "Content-Type": "text/plain",
+                },
+                method: "POST",
+                signal: controller.signal,
+            });
+
+            if (!response.ok) {
+                // The status is the diagnosis (401/403/429); the body is detail.
+                // If the deadline fires mid-read, keep the status-derived error
+                // rather than letting the outer handler mask it as a 504.
+                throw new AnalyticsSqlError(
+                    response.status,
+                    await response.text().catch(() => "<error body unavailable: the request deadline fired before it was read>"),
+                );
+            }
+
+            let raw: unknown;
+
+            try {
+                raw = await response.json();
+            } catch (error) {
+                // Let a timeout mid-read reach the outer 504 mapping instead of
+                // being folded into the non-JSON-body normalisation below.
+                if (controller.signal.aborted) {
+                    throw error;
+                }
+
+                // A 2xx with a body that isn't JSON (e.g. an HTML error page from an
+                // intermediary) would otherwise surface as a bare SyntaxError;
+                // normalise it to the same AnalyticsSqlError callers already handle.
+                throw new AnalyticsSqlError(response.status, "Analytics Engine SQL API returned a non-JSON body.");
+            }
+
+            const body = raw as RawSqlResponse;
+            const rows = body.data ?? [];
+
+            return {
+                columns: body.meta ?? [],
+                rowCount: body.rows ?? rows.length,
+                rows,
+            };
+        } catch (error) {
+            if (controller.signal.aborted && !(error instanceof AnalyticsSqlError)) {
+                throw new AnalyticsSqlError(504, `query timed out after ${String(timeoutMs)}ms (AnalyticsSqlConfig.timeoutMs)`);
+            }
+
+            throw error;
+        } finally {
+            clearTimeout(timeout);
         }
-
-        const body = raw as RawSqlResponse;
-        const rows = body.data ?? [];
-
-        return {
-            columns: body.meta ?? [],
-            rowCount: body.rows ?? rows.length,
-            rows,
-        };
     };
 
     return { query };

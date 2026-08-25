@@ -149,10 +149,16 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
 
 /**
  * Map a codegen {@link CapabilityKey} to the `@lunora/platform` feature that
- * decides whether a target supports it. A key with no entry is an
- * app-level add-on with no platform-portability meaning (feature flags, the
- * Cloudflare-Access identity facade, Cloudflare Images, R2 SQL, payments,
- * x402) — never gated, always emitted, on every target.
+ * decides whether a target supports it. The criterion for an entry is the
+ * transport: a capability backed by a host **binding** is mapped and gated —
+ * a target without the binding fails at runtime, so codegen must omit the
+ * surface and emit `platform_unsupported_feature` instead. A key with no
+ * entry is **credential-based** (genuinely target-agnostic): it works
+ * anywhere `fetch` works, given an API token, so it is never gated and
+ * always emitted, on every target — feature flags (`flags`), the
+ * Cloudflare-Access identity facade (`access`), payments (`payments`), and
+ * x402 (`x402`). `r2sql` is deliberately unmapped for the same reason: the
+ * R2 SQL client is a plain HTTP client over an API token, not a binding.
  *
  * `access` stays unmapped even though the matrix now rates `identityProxy`,
  * and the distinction is the point: `identityProxy` records whether the *host*
@@ -178,6 +184,7 @@ const CAPABILITY_TO_FEATURE: Partial<Record<CapabilityKey, PlatformFeatureKey>> 
     browser: "browser",
     container: "containers",
     hyperdrive: "hyperdrive",
+    images: "images",
     kv: "keyValueStore",
     mail: "mail",
     pipelines: "pipelines",

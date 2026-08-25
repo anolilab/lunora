@@ -385,8 +385,12 @@ export interface QueueWorkpool {
     ) => Promise<void>;
 }
 
-/** Dispatches a single {@link QueueJob} — the consumer's per-message worker. */
-export type QueueDispatch = (job: QueueJob) => Promise<void>;
+/**
+ * Dispatches a single {@link QueueJob} — the consumer's per-message worker.
+ * `messageId` is the queue message's native id, threaded through so the
+ * dispatcher can attribute a failure to the exact message that caused it.
+ */
+export type QueueDispatch = (job: QueueJob, messageId?: string) => Promise<void>;
 
 /** Options for `createQueueConsumer`. */
 export interface QueueConsumerOptions {
@@ -402,4 +406,12 @@ export interface HttpDispatcherOptions {
     fetchImpl?: typeof fetch;
     /** Origin where the Worker is mounted (the `/_lunora/scheduler/dispatch` endpoint). */
     originUrl: string;
+
+    /**
+     * Abort a job's dispatch after this many ms; the abort is retryable, so the
+     * consumer retries the message. Defaults to 5 minutes — raise it for a
+     * workpool running jobs that legitimately run longer, lower it to fail a
+     * stuck origin faster.
+     */
+    timeoutMs?: number;
 }

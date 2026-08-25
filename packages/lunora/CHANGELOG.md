@@ -1,3 +1,18 @@
+## lunorash [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.184...lunorash@1.0.0-alpha.185) (2026-08-24)
+
+### Tests
+
+* **lunora:** derive parity list from disk ([#445](https://github.com/anolilab/lunora/issues/445)) ([b799e61](https://github.com/anolilab/lunora/commit/b799e61da2e0e7d146e643eb152108fce26522c2))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.183
+* **@lunora/do:** upgraded to 1.0.0-alpha.95
+* **@lunora/flags:** upgraded to 1.0.0-alpha.33
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.70
+* **@lunora/server:** upgraded to 1.0.0-alpha.80
+
 ## lunorash [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.183...lunorash@1.0.0-alpha.184) (2026-08-24)
 
 

@@ -134,6 +134,41 @@ const assertCanonicalSafe = (value: string): void => {
  */
 const hasControlChar = (value: string): boolean => CONTROL_CHAR_RE.test(value);
 
+// A base-URL pathname consisting only of slashes (`"/"`, `"//"`, …) is not a
+// "path" for the signed-URL subpath-base guard — the URL builders collapse any
+// run of trailing slashes to the bare origin when the URL is minted, so e.g.
+// `https://cdn.test//` must be accepted like the bare origin.
+const ONLY_SLASHES_RE = /^\/+$/u;
+
+/**
+ * True when `path` is a run of one or more slashes (`"/"`, `"//"`, …) — the
+ * trailing-slash carve-out both signed-URL builders apply to their
+ * no-subpath-base guard. Single definition so the two guards cannot diverge on
+ * what counts as "no path".
+ */
+const isOnlySlashesPath = (path: string): boolean => ONLY_SLASHES_RE.test(path);
+
+/**
+ * Validate a signed-URL TTL against the shared posture: a positive finite
+ * number, at most `maxSeconds`. Returns a human-readable problem (without a
+ * package prefix) or `undefined` when valid. Zero-dep by design — each caller
+ * throws its own error type (`LunoraError` in storage, `TypeError` in images)
+ * around the returned message.
+ */
+const validateTtlSeconds = (value: number, maxSeconds: number): string | undefined => {
+    if (!Number.isFinite(value) || value <= 0) {
+        return "expiresInSeconds must be a positive finite number";
+    }
+
+    if (value > maxSeconds) {
+        const wholeDays = maxSeconds % 86_400 === 0 ? ` (${String(maxSeconds / 86_400)} days)` : "";
+
+        return `expiresInSeconds must not exceed ${String(maxSeconds)} seconds${wholeDays}`;
+    }
+
+    return undefined;
+};
+
 /** Sign `canonical` with the secret's HMAC key, returning the base64url signature. */
 const signCanonical = async (secret: string, canonical: string): Promise<string> => {
     const cryptoKey = await importHmacKey(secret);
@@ -154,4 +189,14 @@ const verifyCanonical = async (secret: string, canonical: string, sigBytes: Uint
     return crypto.subtle.verify("HMAC", cryptoKey, sigBytes as unknown as BufferSource, textEncoder.encode(canonical));
 };
 
-export { assertCanonicalSafe, extractHost, fromBase64Url, hasControlChar, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical };
+export {
+    assertCanonicalSafe,
+    extractHost,
+    fromBase64Url,
+    hasControlChar,
+    isOnlySlashesPath,
+    MAX_SIGNED_URL_TTL_SECONDS,
+    signCanonical,
+    validateTtlSeconds,
+    verifyCanonical,
+};

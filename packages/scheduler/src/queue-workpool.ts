@@ -14,9 +14,12 @@
  * {@link QueueJob} on the queue); `createQueueConsumer` wraps your `queue()`
  * handler (it dispatches each message and uses the message's native `ack()` /
  * `retry()` so failures ride Queues' retry + dead-letter machinery); and
- * `httpDispatcher` is the default dispatcher (POSTs each job to the Worker's
- * `/_lunora/scheduler/dispatch` endpoint, authenticated with the admin bearer).
+ * `httpDispatcher` is the default dispatcher (dispatches each job to the
+ * Worker's `/_lunora/scheduler/dispatch` endpoint via `@lunora/dispatch`'s
+ * `createDispatchRunner`, authenticated with the admin bearer).
  */
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import type {
@@ -42,16 +45,20 @@ import type {
  */
 const MAX_QUEUE_BATCH = 100;
 
-/** Strip trailing slashes from an origin so the dispatch path joins cleanly. */
-const trimTrailingSlashes = (value: string): string => {
-    let end = value.length;
-
-    while (end > 0 && value[end - 1] === "/") {
-        end -= 1;
-    }
-
-    return value.slice(0, end);
-};
+/**
+ * Default deadline for one job's dispatch, overridable per dispatcher via
+ * {@link HttpDispatcherOptions.timeoutMs}. Deliberately far above
+ * `@lunora/dispatch`'s 30s default: that budget is for an inline `ctx.run`
+ * inside a handler that is itself serving something, whereas a workpool is
+ * precisely where jobs that outlive a request live (an LLM call, an export, a
+ * payment round-trip). Truncating those at 30s would turn a working job into a
+ * retry loop — and an action's dedup read is not gated, so the retry can run
+ * concurrently with the still-in-flight first attempt. 5 minutes still bounds a
+ * hung origin well short of the platform killing the whole `queue()`
+ * invocation, which is what this dispatcher previously did with no deadline at
+ * all.
+ */
+const DEFAULT_JOB_TIMEOUT_MS = 300_000;
 
 /**
  * Build a Queues producer that enqueues Lunora function dispatches. Concurrency
@@ -116,7 +123,7 @@ const createQueueConsumer =
                         throw new LunoraError("INTERNAL", "@lunora/scheduler: queue message body is not a QueueJob (missing functionPath)");
                     }
 
-                    await options.dispatch(message.body);
+                    await options.dispatch(message.body, message.id);
                     message.ack();
                 } catch {
                     // Hand off to Queues' retry/dead-letter machinery.
@@ -127,30 +134,28 @@ const createQueueConsumer =
     };
 
 /**
- * Default {@link QueueDispatch}: POST each job to the Worker's
+ * Default {@link QueueDispatch}: dispatch each job to the Worker's
  * `/_lunora/scheduler/dispatch` endpoint (the same path SchedulerDO dispatches
- * through), authenticated with the admin bearer. A non-2xx response throws so
- * the consumer retries the message.
+ * through) via `@lunora/dispatch`'s `createDispatchRunner` — which bounds each
+ * job with {@link HttpDispatcherOptions.timeoutMs} (default
+ * {@link DEFAULT_JOB_TIMEOUT_MS}), so a hung origin no longer holds the whole
+ * `queue()` invocation open, and threads the queue message id through for
+ * failure attribution. Any dispatch failure throws so the consumer retries the
+ * message — including a 2xx carrying a non-empty non-JSON body, which is an
+ * intermediary's page rather than a function's return value and therefore no
+ * evidence the job ran. An empty 2xx is a normal success (a `void` function).
  */
 const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
-    const fetchImpl = options.fetchImpl ?? (globalThis as unknown as { fetch: typeof fetch }).fetch;
+    const run = createDispatchRunner({
+        env: { LUNORA_ADMIN_TOKEN: options.adminToken, LUNORA_ORIGIN_URL: options.originUrl },
+        fetchImpl: options.fetchImpl,
+        label: "@lunora/scheduler",
+    });
 
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("@lunora/scheduler: no fetch implementation available — pass fetchImpl or run on a platform with global fetch");
-    }
+    const timeoutMs = options.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
 
-    const url = `${trimTrailingSlashes(options.originUrl)}/_lunora/scheduler/dispatch`;
-
-    return async (job: QueueJob): Promise<void> => {
-        const response = await fetchImpl(url, {
-            body: JSON.stringify({ args: job.args ?? {}, functionPath: job.functionPath, shardKey: job.shardKey }),
-            headers: { authorization: `Bearer ${options.adminToken}`, "content-type": "application/json" },
-            method: "POST",
-        });
-
-        if (!response.ok) {
-            throw new LunoraError("INTERNAL", `@lunora/scheduler: queue dispatch failed (${response.status.toString()}): ${await response.text()}`);
-        }
+    return async (job: QueueJob, messageId?: string): Promise<void> => {
+        await run({ __lunoraRef: job.functionPath }, job.args, { messageId, shardKey: job.shardKey, timeoutMs });
     };
 };
 

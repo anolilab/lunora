@@ -37,7 +37,7 @@ describe("gatePlatformFeatures", () => {
         expect.assertions(2);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        const usage: FeatureUsage = { ...ALL_OFF, ai: true, browser: true, storage: true, workflows: true };
+        const usage: FeatureUsage = { ...ALL_OFF, ai: true, browser: true, images: true, storage: true, workflows: true };
 
         const result = gatePlatformFeatures(usage, "cloudflare");
 
@@ -130,9 +130,11 @@ describe("gatePlatformFeatures", () => {
         expect.assertions(1);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        // flags / access / images / payments / x402 / r2sql are app add-ons, not
-        // platform primitives — they must survive any target unchanged.
-        const usage: FeatureUsage = { ...ALL_OFF, access: true, flags: true, images: true, payments: true, r2sql: true, x402: true };
+        // flags / access / payments / x402 / r2sql are credential-based add-ons
+        // (they work anywhere fetch works), not platform primitives — they must
+        // survive any target unchanged. `images` is NOT in this list: it is
+        // binding-based (`env.IMAGES`) and gated like `browser`/`vectors`.
+        const usage: FeatureUsage = { ...ALL_OFF, access: true, flags: true, payments: true, r2sql: true, x402: true };
 
         const result = gatePlatformFeatures(usage, "cloudflare");
 
@@ -144,29 +146,32 @@ describe("gatePlatformFeatures", () => {
     // through the actual registry lookup — the thing `platformMatrixIds`
     // reports and `resolveCodegenTarget`/`lunora.json`'s `target` field select.
     it("gates a project declaring an unsupported ctx.* for the node target", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        // `browser` and `container` are rated "unsupported" for node
-        // (`NODE_CAPABILITIES` — no headless-browser or container binding is
-        // implemented by `@lunora/platform-node`), so codegen gates both off.
+        // `browser`, `container`, and `images` are rated "unsupported" for node
+        // (`NODE_CAPABILITIES` — no headless-browser, container, or Images
+        // binding is implemented by `@lunora/platform-node`), so codegen gates
+        // all three off.
         //
         // `scheduler` was gated off too under plan 267, when the Node host
         // stored and timed jobs but never dispatched them. It dispatches now
         // (`onDispatch`) and re-arms its durable rows on construction, so it is
         // back to "emulated" and must survive gating — alongside `kv`, which
         // has been a real better-sqlite3-backed implementation throughout.
-        const usage: FeatureUsage = { ...ALL_OFF, browser: true, container: true, kv: true, scheduler: true };
+        const usage: FeatureUsage = { ...ALL_OFF, browser: true, container: true, images: true, kv: true, scheduler: true };
 
         const result = gatePlatformFeatures(usage, "node");
 
         expect(result.usage.browser).toBe(false);
         expect(result.usage.container).toBe(false);
+        expect(result.usage.images).toBe(false);
         expect(result.usage.scheduler).toBe(true);
         expect(result.usage.kv).toBe(true);
         expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual([
             "browser",
             "container",
+            "images",
         ]);
     });
 });

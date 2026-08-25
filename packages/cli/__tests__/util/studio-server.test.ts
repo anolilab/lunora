@@ -97,6 +97,41 @@ const requestStudioWithHeaders = (port: number, path: string, headers: Record<st
         request.end();
     });
 
+/**
+ * A worker that accepts a request and never answers it. `closed` settles when
+ * the proxied upstream request is torn down, which is what the abort test waits
+ * on — the conditional address handling lives here rather than inside the test.
+ */
+const startHangingWorker = (): Promise<{ close: () => Promise<void>; closed: Promise<void>; url: string }> => {
+    let markClosed: () => void = () => {};
+    const closed = new Promise<void>((resolve) => {
+        markClosed = resolve;
+    });
+
+    return new Promise((resolve, reject) => {
+        const server = createHttpServer((_request: IncomingMessage, response: ServerResponse) => {
+            // Deliberately never ends: the only thing that closes this response
+            // is the proxy dropping the upstream leg.
+            response.on("close", () => {
+                markClosed();
+            });
+        });
+
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+            const address = server.address();
+
+            if (!address || typeof address === "string") {
+                reject(new Error("unexpected address shape"));
+
+                return;
+            }
+
+            resolve({ close: () => closeServer(server), closed, url: `http://127.0.0.1:${String(address.port)}` });
+        });
+    });
+};
+
 /** A throwaway `wrangler dev`-shaped worker stub that records every hit, for asserting the proxy never reaches it. */
 const startStubWorker = (): Promise<{ close: () => Promise<void>; hits: string[]; url: string }> =>
     new Promise((resolve, reject) => {
@@ -337,6 +372,87 @@ describe("startStudioServer", () => {
             });
 
             expect(response.statusCode).toBe(403);
+            expect(worker.hits).toStrictEqual([]);
+        } finally {
+            await studio.close();
+            await worker.close();
+        }
+    });
+
+    it("proxies a non-navigation request for an unknown path to the worker instead of the SPA document", async () => {
+        expect.assertions(3);
+
+        // Fails against pre-fix code: the history fallback answered every
+        // unknown path, so the studio's own `fetch()` for an app REST route
+        // (the API console's "try it") got the studio HTML back as a 200.
+        const worker = await startStubWorker();
+        const port = await getFreePort();
+        const studio = await startStudioServer({ cwd: "/tmp", port, workerOrigin: worker.url });
+
+        try {
+            const response = await requestStudioWithHeaders(port, "/api/health", {
+                "sec-fetch-mode": "cors",
+                host: `127.0.0.1:${String(port)}`,
+            });
+
+            expect(response.statusCode).toBe(200);
+            expect(response.body).not.toContain("<!doctype html>");
+            expect(worker.hits).toStrictEqual(["/api/health"]);
+        } finally {
+            await studio.close();
+            await worker.close();
+        }
+    });
+
+    it("drops the upstream request when the client aborts a proxied fetch", async () => {
+        expect.assertions(1);
+
+        // Fails against pre-fix code: the upstream request outlived the aborted
+        // client request, so a console that navigated away left a request
+        // running against the worker until the worker itself gave up.
+        const worker = await startHangingWorker();
+        const port = await getFreePort();
+        const studio = await startStudioServer({ cwd: "/tmp", port, workerOrigin: worker.url });
+
+        try {
+            const aborted = httpRequest(
+                { headers: { "sec-fetch-mode": "cors", host: `127.0.0.1:${String(port)}` }, hostname: "127.0.0.1", path: "/api/slow", port },
+                () => {},
+            );
+
+            // Destroying the request raises ECONNRESET on it; the assertion is
+            // about the upstream leg, so swallow the client-side echo.
+            aborted.on("error", () => {});
+            aborted.end();
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 150);
+            });
+
+            aborted.destroy();
+
+            await expect(worker.closed).resolves.toBeUndefined();
+        } finally {
+            await studio.close();
+            await worker.close();
+        }
+    });
+
+    it("still serves the SPA document for a deep-link navigation, without contacting the worker", async () => {
+        expect.assertions(3);
+
+        const worker = await startStubWorker();
+        const port = await getFreePort();
+        const studio = await startStudioServer({ cwd: "/tmp", port, workerOrigin: worker.url });
+
+        try {
+            const response = await requestStudioWithHeaders(port, "/data", {
+                "sec-fetch-mode": "navigate",
+                host: `127.0.0.1:${String(port)}`,
+            });
+
+            expect(response.statusCode).toBe(200);
+            expect(response.body).toContain("<!doctype html>");
             expect(worker.hits).toStrictEqual([]);
         } finally {
             await studio.close();
