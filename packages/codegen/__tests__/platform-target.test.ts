@@ -266,31 +266,29 @@ describe("capability classification", () => {
     /** A matrix that rates nothing — the shape a WIP host ships before it fills its features in. */
     const EMPTY_MATRIX: PlatformCapabilities = { id: "empty", name: "Empty Host", features: {} };
 
-    it("classifies every capability as either gated or explicitly credential-based", async () => {
-        expect.assertions(2);
+    it("covers every capability the codegen table declares", async () => {
+        expect.assertions(1);
 
         const { CAPABILITIES } = await import("../src/capabilities");
-        const { CAPABILITY_TO_FEATURE, CREDENTIAL_BASED_CAPABILITIES } = await import("../src/platform-target");
+        const { CAPABILITY_TO_FEATURE } = await import("../src/platform-target");
 
-        // The defect this pins: `notify` was in NEITHER, so `gateAgainstMatrix`
-        // never iterated it and `ctx.notify` shipped un-gated on every target —
-        // the fail-open the gate exists to prevent. A new capability must now be
-        // classified deliberately; landing in neither list fails here.
-        expect(
-            CAPABILITIES.map((capability) => capability.key).filter(
-                (key) => CAPABILITY_TO_FEATURE[key] === undefined && !CREDENTIAL_BASED_CAPABILITIES.has(key),
-            ),
-        ).toStrictEqual([]);
-
-        // …and never BOTH, which would read as "gated" while claiming exemption.
-        expect([...CREDENTIAL_BASED_CAPABILITIES].filter((key) => CAPABILITY_TO_FEATURE[key] !== undefined)).toStrictEqual([]);
+        // `CAPABILITY_TO_FEATURE` is a total `Record`, so a `CapabilityKey` with no
+        // classification fails `tsc` rather than this test — that is the enforcement,
+        // and it is why the old complement-list-plus-partition-test is gone. What
+        // `tsc` cannot see is the OTHER direction: `CAPABILITIES` is a runtime array,
+        // and a row added there without widening `CapabilityKey` would leave a real
+        // capability absent from the map. That is the fail-open `notify` had, where
+        // `gateAgainstMatrix` never iterated it and `ctx.notify` shipped un-gated.
+        expect(CAPABILITIES.map((capability) => capability.key).filter((key) => !(key in CAPABILITY_TO_FEATURE))).toStrictEqual([]);
     });
 
     it("fails closed for every gated capability against a matrix that rates nothing", async () => {
         expect.assertions(2);
 
         const { CAPABILITY_TO_FEATURE, gateAgainstMatrix } = await import("../src/platform-target");
-        const gatedKeys = Object.keys(CAPABILITY_TO_FEATURE) as CapabilityKey[];
+        const gatedKeys = (Object.entries(CAPABILITY_TO_FEATURE) as [CapabilityKey, string | null][])
+            .filter(([, feature]) => feature !== null)
+            .map(([key]) => key);
         const usage: FeatureUsage = { ...ALL_OFF, ...Object.fromEntries(gatedKeys.map((key) => [key, true])) };
 
         const result = gateAgainstMatrix(usage, EMPTY_MATRIX, "empty");
@@ -306,14 +304,16 @@ describe("capability classification", () => {
     it("emits the credential-based capabilities un-gated on a matrix that rates nothing", async () => {
         expect.assertions(2);
 
-        const { CREDENTIAL_BASED_CAPABILITIES, gateAgainstMatrix } = await import("../src/platform-target");
-        const exempt = [...CREDENTIAL_BASED_CAPABILITIES];
+        const { CAPABILITY_TO_FEATURE, gateAgainstMatrix } = await import("../src/platform-target");
+        const exempt = (Object.entries(CAPABILITY_TO_FEATURE) as [CapabilityKey, string | null][])
+            .filter(([, feature]) => feature === null)
+            .map(([key]) => key);
 
-        // `notify` is deliberately in here rather than mapped: Web Push / FCM are
-        // `fetch` under VAPID / FCM credentials, the subscription store is
-        // caller-supplied with an in-memory fallback, and the fan-out seam takes
-        // the producer as an argument — nothing in `@lunora/notify` holds a host
-        // binding, so there is no target on which the surface should be dropped.
+        // `notify` is deliberately classified credential-based rather than mapped:
+        // Web Push / FCM are `fetch` under VAPID / FCM credentials, the subscription
+        // store is caller-supplied with an in-memory fallback, and the fan-out seam
+        // takes the producer as an argument — nothing in `@lunora/notify` holds a
+        // host binding, so there is no target on which the surface should be dropped.
         expect(exempt).toContain("notify");
 
         const usage: FeatureUsage = { ...ALL_OFF, ...Object.fromEntries(exempt.map((key) => [key, true])) };

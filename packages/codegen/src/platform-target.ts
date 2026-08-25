@@ -170,11 +170,13 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * the fan-out seam takes the producer as an argument (`QueueProducerLike`) so
  * the queue belongs to the caller, not to `ctx.notify`.
  *
- * The unmapped set is not implicit — it is declared as
- * {@link CREDENTIAL_BASED_CAPABILITIES} below, and a test asserts every
- * {@link CapabilityKey} appears in exactly one of the two. Adding a capability
- * therefore forces a deliberate "gated or credential-based?" answer at review
- * time instead of defaulting, silently, to un-gated.
+ * Credential-based is spelled `null`, not omission, and the map is TOTAL
+ * (`Record`, not `Partial`). That is the whole enforcement: adding a member to
+ * `CapabilityKey` without classifying it here fails `tsc`, at the moment it is
+ * written, rather than defaulting silently to un-gated. An earlier revision kept
+ * the unmapped keys in a second list with a test asserting the two partitioned
+ * `CapabilityKey` — same guarantee, but deferred to CI and costing a list, two
+ * exports and a test to say what the type already says.
  *
  * `access` stays unmapped even though the matrix now rates `identityProxy`,
  * and the distinction is the point: `identityProxy` records whether the *host*
@@ -194,36 +196,33 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * any future target-level check — see its `shardAlarms` entry in the Node
  * capability matrix (`NODE_CAPABILITIES` in `@lunora/platform`, plan 267).
  */
-const CAPABILITY_TO_FEATURE: Partial<Record<CapabilityKey, PlatformFeatureKey>> = {
+const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = {
+    // eslint-disable-next-line unicorn/no-null -- null is the classification "credential-based"; undefined would be indistinguishable from an unclassified key, which is what this map exists to prevent
+    access: null,
     ai: "ai",
     analytics: "analytics",
     browser: "browser",
     container: "containers",
+    // eslint-disable-next-line unicorn/no-null -- see `access`
+    flags: null,
     hyperdrive: "hyperdrive",
     images: "images",
     kv: "keyValueStore",
     mail: "mail",
+    // eslint-disable-next-line unicorn/no-null -- see `access`
+    notify: null,
+    // eslint-disable-next-line unicorn/no-null -- see `access`
+    payments: null,
     pipelines: "pipelines",
+    // eslint-disable-next-line unicorn/no-null -- see `access`
+    r2sql: null,
     scheduler: "scheduler",
     storage: "objectStorage",
     vectors: "vectorStore",
     workflows: "workflows",
+    // eslint-disable-next-line unicorn/no-null -- see `access`
+    x402: null,
 };
-
-/**
- * The capabilities deliberately left out of {@link CAPABILITY_TO_FEATURE}
- * because they are credential-based rather than binding-backed — see that map's
- * doc comment for the per-entry reasoning. Declared rather than inferred so the
- * complement of the map is an explicit list someone signed off on: a new
- * {@link CapabilityKey} that lands in neither fails the invariant test, instead
- * of quietly inheriting "never gated, emitted on every target".
- *
- * `shardAlarms` is absent from BOTH because it is absent from `CapabilityKey`
- * itself — it is an engine-internal contract member, not an app-imported
- * `ctx.*` module, so there is no usage signal to gate. See the note on
- * {@link CAPABILITY_TO_FEATURE}.
- */
-const CREDENTIAL_BASED_CAPABILITIES: ReadonlySet<CapabilityKey> = new Set<CapabilityKey>(["access", "flags", "notify", "payments", "r2sql", "x402"]);
 
 /** An advisor-style diagnostic about a target's platform capabilities. */
 interface PlatformDiagnostic {
@@ -260,8 +259,10 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
     const gated: FeatureUsage = { ...usage };
     const diagnostics: PlatformDiagnostic[] = [];
 
-    for (const [capability, featureKey] of Object.entries(CAPABILITY_TO_FEATURE) as [CapabilityKey, PlatformFeatureKey][]) {
-        if (!usage[capability]) {
+    for (const [capability, featureKey] of Object.entries(CAPABILITY_TO_FEATURE) as [CapabilityKey, PlatformFeatureKey | null][]) {
+        // A `null` feature is the declared "credential-based" classification: the
+        // surface works anywhere `fetch` does, so there is no host rating to gate on.
+        if (featureKey === null || !usage[capability]) {
             continue;
         }
 
@@ -338,7 +339,6 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string): PlatformGate
 export type { PlatformDiagnostic, PlatformGateResult };
 export {
     CAPABILITY_TO_FEATURE,
-    CREDENTIAL_BASED_CAPABILITIES,
     DEFAULT_TARGET,
     gateAgainstMatrix,
     gatePlatformFeatures,
