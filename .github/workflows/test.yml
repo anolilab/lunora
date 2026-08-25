@@ -56,7 +56,18 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "node_version": ["22.15", "24.11"]
+                # Both legs are the `engines` bounds, deliberately: `^22.15.0 || >=24.11.0`.
+                #
+                # `fts5` declares whether the leg's `node:sqlite` carries the FTS5 module,
+                # which is a property of the Node build, not of SQLite: it was switched on
+                # in 22.16.0 (nodejs/node#57621), so the engines-floor leg does not have it
+                # and every FTS5 suite skips itself there. The step below probes the real
+                # build and fails on any disagreement with what is declared here.
+                "include":
+                    - "node_version": "22.15"
+                      "fts5": "absent"
+                    - "node_version": "24.11"
+                      "fts5": "present"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -79,6 +90,52 @@
                   "enable-nx-cache": "false"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
+
+            # The FTS5-backed search suites in d1, sql-store and shard-engine gate on a
+            # runtime probe, so on a build without the module they skip and the leg still
+            # reports green — a whole capability leaving CI with nothing to show for it.
+            #
+            # This makes it legible instead: every leg writes what it will cover into the
+            # run summary, so a green run says which Node exercised FTS5, and the leg fails
+            # if the build disagrees with the matrix — Node dropping the module, or a
+            # version bump that silently moves which leg carries it.
+            #
+            # Before the build, not after: a mismatch is a matrix bug, and there is no
+            # reason to spend twenty minutes compiling to find out.
+            - "name": "Report FTS5 coverage for this leg"
+              "shell": "bash"
+              "run": |
+                  # Asserted against the matrix, not against this leg: if the FTS5 leg is
+                  # ever dropped, no leg would probe `present` and every leg would still
+                  # pass. Failing here means removing it has to be deliberate.
+                  grep -qE '^ +"fts5": "present"$' .github/workflows/test.yml || {
+                      echo "::error file=.github/workflows/test.yml::No matrix leg declares an FTS5-carrying Node, so the FTS5 search suites would run nowhere. Keep one leg on a Node >= 22.16."
+                      exit 1
+                  }
+
+                  actual="$(node -e '
+                      const { DatabaseSync } = require("node:sqlite");
+                      const database = new DatabaseSync(":memory:");
+                      try {
+                          database.prepare(`CREATE VIRTUAL TABLE "probe" USING fts5(x)`).all();
+                          console.log("present");
+                      } catch {
+                          console.log("absent");
+                      } finally {
+                          database.close();
+                      }
+                  ')"
+
+                  if [ "${actual}" = "present" ]; then
+                      echo "- FTS5 on node ${{ matrix.node_version }} ($(node -v)): **exercised** — the FTS5 shadow-table suites ran on this leg." >> "${GITHUB_STEP_SUMMARY}"
+                  else
+                      echo "- FTS5 on node ${{ matrix.node_version }} ($(node -v)): **not exercised** — this build's \`node:sqlite\` has no FTS5 (added in 22.16.0), so those suites skipped here." >> "${GITHUB_STEP_SUMMARY}"
+                  fi
+
+                  if [ "${actual}" != "${{ matrix.fts5 }}" ]; then
+                      echo "::error file=.github/workflows/test.yml::node $(node -v) reports FTS5 '${actual}' but this matrix leg declares '${{ matrix.fts5 }}'. Update the leg — and keep one leg declaring the module present."
+                      exit 1
+                  fi
 
             # `vis affected` builds upstream deps only via dependsOn, so build the
             # affected packages explicitly to give the test run their dist.

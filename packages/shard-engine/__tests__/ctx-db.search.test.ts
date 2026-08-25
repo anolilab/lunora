@@ -13,11 +13,12 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * Every case runs **twice**, once per engine shape the ctx-db supports — the
  * FTS5 shadow table a Durable Object gets, and the LIKE scan over the document
  * table it falls back to where the engine has no FTS5. Which one a bare
- * `node:sqlite` gives depends on the Node build (22.14 has no FTS5, 22.23 and
- * 24 do), so leaving it ambient means one branch is under test and the other is
- * exercised by nobody. That is not hypothetical: an unguarded read-time
- * backfill passed here on Node 24 and threw "no such table" on every search
- * under 22.14, because the fallback creates no companion to back-fill.
+ * `node:sqlite` gives depends on the Node build — FTS5 was switched on in
+ * 22.16.0 (nodejs/node#57621), so 22.15.x and older lack it while 22.16+ and
+ * every 24.x have it — so leaving it ambient means one branch is under test and
+ * the other is exercised by nobody. That is not hypothetical: an unguarded
+ * read-time backfill passed here on Node 24 and threw "no such table" on every
+ * search under 22.14, because the fallback creates no companion to back-fill.
  *
  * The FTS5 *emitted SQL* (DDL + sync + MATCH) is asserted separately in
  * `ctx-db.search.fts.test.ts` via a recording double.
@@ -42,7 +43,8 @@ const FTS5_IN_BUILD = ((): boolean => {
  * The engine shapes to run every case against. The fallback is always
  * reachable (the harness can refuse the fts5 DDL); the FTS5 leg needs the
  * module to actually be there, so it drops out on a build without it rather
- * than failing — CI's other Node runs it.
+ * than failing — CI's other Node runs it, and the `test` job's own probe both
+ * records which leg that was and fails if no leg has the module at all.
  */
 const ENGINES: { label: string; withoutFts5: boolean }[] = [
     ...(FTS5_IN_BUILD ? [{ label: "FTS5 shadow table", withoutFts5: false }] : []),

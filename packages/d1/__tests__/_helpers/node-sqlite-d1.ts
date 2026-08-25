@@ -17,9 +17,13 @@ import type { D1Exec } from "../../src/d1-ctx-db";
  *
  * One place the stand-in is *not* faithful: D1 always ships FTS5, and the D1
  * dialect says so, but whether `node:sqlite` carries the module depends on the
- * Node build (22.14 does not, 22.23 and 24 do). Suites that exercise the FTS5
- * shadow through the real D1 factory gate on {@link FTS5_IN_BUILD}; the ones
- * that override the dialect to the portable layout run everywhere.
+ * Node build — it was switched on in 22.16.0 (nodejs/node#57621), so every
+ * 22.15.x and older build lacks it and every 22.16+ and 24.x build has it.
+ * `^22.15.0` is this repo's `engines` floor, so the floor is exactly the case
+ * without FTS5. Suites that exercise the FTS5 shadow through the real D1
+ * factory gate on {@link FTS5_IN_BUILD}; the ones that override the dialect to
+ * the portable layout run everywhere. CI's `test` job probes the same thing and
+ * reports per leg which Node exercised FTS5, so the gap is never silent.
  */
 /** Whether this Node build's `node:sqlite` carries the FTS5 module. */
 const FTS5_IN_BUILD = ((): boolean => {

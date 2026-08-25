@@ -8,7 +8,14 @@
 # `failure`/`cancelled`.
 
 # Anything that can affect a package's build/test graph.
+#
+# The workflow and this file are listed per the self-listing rule above: the test job
+# carries the assertion that some matrix leg still runs on an FTS5-capable Node, so a PR
+# that drops that leg by editing the matrix must not be able to skip the job that would
+# have caught it.
 packages: &packages
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
     - "**/tsconfig*.json"
     - "pnpm-lock.yaml"
     - "pnpm-workspace.yaml"
