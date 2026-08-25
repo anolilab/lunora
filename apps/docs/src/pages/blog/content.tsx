@@ -10,7 +10,7 @@ import HatchSpacer from "@/components/sections/hatch-spacer";
 import JsonLd from "@/components/seo/json-ld";
 import { Kicker, Shell } from "@/kit/layout";
 import { ArticleHeader } from "@/kit/page-header";
-import { isFallbackImage, SITE_URL } from "@/lib/seo";
+import { coverImageUrl, isFallbackImage, SITE_URL } from "@/lib/seo";
 
 import { Cover, formatDate, MetaLine } from "./shared";
 
@@ -185,7 +185,7 @@ const BlogPost: FC<{
         datePublished: post.publishedAt,
         description: post.description,
         headline: post.title,
-        image: post.image ? `${SITE_URL}${post.image}` : undefined,
+        image: coverImageUrl(post.image),
         mainEntityOfPage: url,
         publisher: { "@type": "Organization", logo: { "@type": "ImageObject", url: `${SITE_URL}/favicon.svg` }, name: "Lunora" },
         url,
