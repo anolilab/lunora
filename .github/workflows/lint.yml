@@ -459,12 +459,17 @@
     # `apps/docs/src/data/packages.ts` went stale exactly this way, rewritten on every
     # build with nothing ever comparing. The diff is whole-tree, not scoped to today's
     # output paths, so a generator added later is covered without touching this job.
+    #
+    # The sweep now includes `lunora codegen` for the 13 examples that commit a
+    # `lunora/_generated` tree (all 13 had drifted). That runs the built CLI, so this
+    # job builds first — same `build:packages` step and 30-minute budget as the
+    # api-surface job. The codegen sweep itself is ~50s on top of the build.
     "generated-files":
         "name": "Lint (generated files)"
         "if": "needs.files-changed.outputs.generated_files == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 15
+        "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -479,10 +484,16 @@
               "with":
                   "node-version": "22.15"
                   "cache-prefix": "lint"
+                  "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
+
+            # `lunora codegen` runs from packages/lunora/dist/bin.mjs, so the CLI and
+            # everything it loads (@lunora/codegen and its deps) must be built first.
+            - "name": "Build packages"
+              "run": "pnpm run build:packages"
 
             - "name": "Regenerate generated files and diff"
               "run": "pnpm run lint:generated"
