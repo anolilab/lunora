@@ -6,7 +6,15 @@
  * - serves the prebuilt static `@lunora/studio` bundle (with the admin token
  * and basepath injected, via the shared `@lunora/config/studio-host` helpers), and
  * - reverse-proxies `/_lunora/*` — both HTTP and the WebSocket upgrade — to the
- * `wrangler dev` worker.
+ * `wrangler dev` worker, plus any non-navigation request to a path it doesn't
+ * serve itself (so a `fetch()` for an app REST route reaches the worker rather
+ * than collecting the SPA history fallback).
+ *
+ * Both proxy legs are **loopback-only**. Bound to anything else (`0.0.0.0`, a
+ * LAN address) the server stays a read-only shell: it serves the studio document
+ * and its assets, and answers every other path with the SPA fallback rather than
+ * forwarding it — the admin token is not handed to a request that arrived off
+ * the machine.
  *
  * Because the studio and its API are then same-origin (this server), the
  * studio auto-connects with no CORS and no worker changes — the same
@@ -16,6 +24,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer, request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
+import { pipeline } from "node:stream";
 
 import { detectAgentRules } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
@@ -49,6 +58,9 @@ const pathnameOf = (url: string): string => {
 };
 
 /** Forward an HTTP request to the worker and pipe its response back. */
+/** Milliseconds to wait for the worker to answer a proxied HTTP request before giving up. */
+const PROXY_RESPONSE_TIMEOUT_MS = 30_000;
+
 const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: URL): void => {
     const upstream = httpRequest(
         {
@@ -60,14 +72,47 @@ const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: U
         },
         (upstreamResponse) => {
             response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
-            upstreamResponse.pipe(response);
+            // `pipeline`, not a bare `pipe`: a worker that dies after its headers
+            // but before the body ends closes `upstreamResponse` WITHOUT the
+            // request emitting an error, and a bare pipe would leave the browser
+            // holding an open response with a partial body it reads as complete.
+            // Destroying the downstream turns that into the transport error it is.
+            pipeline(upstreamResponse, response, () => {
+                // Both ends are already torn down by `pipeline` itself; the
+                // callback exists because omitting it makes the failure an
+                // unhandled 'error' event on the stream.
+            });
         },
     );
 
+    // A worker that accepts the connection and then never answers would other-
+    // wise hold the request open for as long as the browser waits. Bounded, so
+    // the failure surfaces as a 504 the console can render.
+    upstream.setTimeout(PROXY_RESPONSE_TIMEOUT_MS, () => {
+        upstream.destroy(new Error(`no response within ${String(PROXY_RESPONSE_TIMEOUT_MS)}ms`));
+    });
+
     upstream.on("error", (error: Error) => {
+        if (response.headersSent) {
+            // Already streaming the upstream body — there is no status left to
+            // set, so drop the connection rather than append an error to a
+            // partial response the client would parse as complete.
+            response.destroy();
+
+            return;
+        }
+
         // The worker may still be booting — surface a 502 rather than hang.
-        response.statusCode = 502;
+        response.statusCode = error.message.startsWith("no response within") ? 504 : 502;
         response.end(`lunora dev: worker unreachable (${error.message})`);
+    });
+
+    // The browser navigated away or aborted the fetch. `writableFinished` tells
+    // an abort apart from an ordinary completed response, which closes too.
+    response.on("close", () => {
+        if (!response.writableFinished) {
+            upstream.destroy();
+        }
     });
 
     request.pipe(upstream);
@@ -310,6 +355,28 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         }
 
         if (serveStaticAsset(pathname, request, response)) {
+            return;
+        }
+
+        // A programmatic request (a `fetch()`/XHR from the studio bundle) to an
+        // unknown path is never an SPA deep link, so the history fallback below
+        // must not answer it: doing so hands the caller the studio's own HTML
+        // as a 200. The API console's "try it" sends exactly that for a plain
+        // `httpRouter()` route, which is why pressing Send rendered the studio
+        // document as a successful response. Forward those to the worker so it
+        // answers — with the route's real response, or its own 404.
+        //
+        // `Sec-Fetch-Mode` is what separates the two: browsers send `navigate`
+        // for a document load and `cors`/`same-origin`/`no-cors` for a script's
+        // fetch. A client that sends no such header (curl, an older browser)
+        // keeps the fallback, so this only ever narrows what the shell answers.
+        // Loopback-only, mirroring the `/_lunora` proxy branch above: off
+        // loopback the studio stays a read-only shell that never proxies.
+        const fetchMode = request.headers["sec-fetch-mode"];
+
+        if (isLoopback && typeof fetchMode === "string" && fetchMode !== "navigate") {
+            proxyHttp(request, response, worker);
+
             return;
         }
 
