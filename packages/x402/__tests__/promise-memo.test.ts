@@ -91,19 +91,33 @@ describe("memoizePromise", () => {
         expect(map.get("a")).toBe(second);
     });
 
-    it("runs onInsert before storing a new entry, and not on a hit", async () => {
+    it("bounds the map FIFO when maxEntries is given, evicting on insert only", async () => {
         expect.assertions(3);
 
         const map = new Map<string, Promise<string>>();
-        const onInsert = vi.fn<() => void>(() => {
-            // A bounding caller evicts here; the map must not yet hold this key.
-            expect(map.has("a")).toBe(false);
-        });
 
-        await memoizePromise(map, "a", async () => "built", onInsert);
-        await memoizePromise(map, "a", async () => "built", onInsert);
+        await memoizePromise(map, "a", async () => "a", 2);
+        await memoizePromise(map, "b", async () => "b", 2);
 
-        expect(onInsert).toHaveBeenCalledTimes(1);
-        expect(map.has("a")).toBe(true);
+        // A hit adds no entry, so it must not evict one either.
+        await memoizePromise(map, "a", async () => "a", 2);
+
+        expect([...map.keys()]).toStrictEqual(["a", "b"]);
+
+        // The third distinct key pushes the oldest out, never past the bound.
+        await memoizePromise(map, "c", async () => "c", 2);
+
+        expect([...map.keys()]).toStrictEqual(["b", "c"]);
+        expect(map.size).toBe(2);
+    });
+
+    it("grows without a bound when maxEntries is omitted", async () => {
+        expect.assertions(1);
+
+        const map = new Map<string, Promise<string>>();
+
+        await Promise.all([...Array.from({ length: 5 }).keys()].map(async (index) => memoizePromise(map, `k${String(index)}`, async () => "built")));
+
+        expect(map.size).toBe(5);
     });
 });

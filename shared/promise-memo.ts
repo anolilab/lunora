@@ -27,12 +27,18 @@
  * the next caller starts a third run. Comparing identity before deleting makes
  * an entry only ever able to evict itself.
  *
+ * The FIFO bound is `evictOldestEntry`'s, not a second implementation. That
+ * helper's contract — "every caller inserts exactly one entry immediately after
+ * calling" — is structurally true here, where it used to be a promise each
+ * caller kept on its own.
+ *
  * Like the other `shared/` helpers this is deliberately **not** a package:
  * consumers import it by relative path and the bundler inlines it — no runtime
  * dependency edge. Keep it genuinely zero-dependency. A consumer that sets
  * `rootDir` in its `tsconfig.json` must drop it (a set `rootDir` raises TS6059
  * for this out-of-package file under `tsc --noEmit`).
  */
+import { evictOldestEntry } from "./evict-oldest";
 
 /**
  * The promise stored under `key`, starting (and storing) one via `start` on the
@@ -43,23 +49,26 @@
  * installed — so the next caller retries instead of being handed the old
  * failure.
  *
- * `onInsert` runs immediately before a new entry is stored, for a caller that
- * bounds the map (`evictOldestEntry(map, capacity)`). It does not run on a hit,
- * since a hit adds no entry.
- * @param map The cache. Insertion-ordered, so a bounding caller can evict FIFO.
+ * `maxEntries` bounds the map: the oldest entry is evicted immediately before a
+ * new one is stored, never on a hit (a hit adds no entry). Omit it for a cache
+ * whose keys are a closed set — a declared tool name, a `functionPath` — where
+ * there is nothing to bound.
+ * @param map The cache. Insertion-ordered, so the bound evicts FIFO.
  * @param key The cache key.
  * @param start Starts the work. Called only on a miss.
- * @param onInsert Optional hook run before storing a new entry.
+ * @param maxEntries Optional FIFO bound on the map's size.
  * @returns The cached or freshly started promise.
  */
-const memoizePromise = <K, V>(map: Map<K, Promise<V>>, key: K, start: () => Promise<V>, onInsert?: () => void): Promise<V> => {
+const memoizePromise = <K, V>(map: Map<K, Promise<V>>, key: K, start: () => Promise<V>, maxEntries?: number): Promise<V> => {
     const cached = map.get(key);
 
     if (cached !== undefined) {
         return cached;
     }
 
-    onInsert?.();
+    if (maxEntries !== undefined) {
+        evictOldestEntry(map, maxEntries);
+    }
 
     const pending = start().catch((error: unknown) => {
         // Identity-checked: only evict the entry THIS call installed. See the

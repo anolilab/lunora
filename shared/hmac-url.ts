@@ -25,7 +25,6 @@
  * `outDir`/`rootDir` from their `tsconfig.json` (a set `rootDir` raises TS6059
  * for this out-of-package file under `tsc --noEmit`).
  */
-import { evictOldestEntry } from "./evict-oldest";
 import { memoizePromise } from "./promise-memo";
 
 const textEncoder = new TextEncoder();
@@ -79,15 +78,13 @@ const keyCache = new Map<string, Promise<CryptoKey>>();
 // `memoizePromise` rather than a bare `set`: a rejected import used to stay in
 // the map, so one failed `importKey` poisoned that secret for the isolate's
 // whole life and every later verify against it failed with the original error.
-// The eviction hook keeps the FIFO bound on the insert path.
+// It carries the FIFO bound too, evicting on the insert path.
 const importHmacKey = async (secret: string): Promise<CryptoKey> =>
     memoizePromise(
         keyCache,
         secret,
         async () => crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]),
-        () => {
-            evictOldestEntry(keyCache, KEY_CACHE_MAX);
-        },
+        KEY_CACHE_MAX,
     );
 
 /**
