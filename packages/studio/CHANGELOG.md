@@ -1,3 +1,16 @@
+## @lunora/studio [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.120...@lunora/studio@1.0.0-alpha.121) (2026-08-25)
+
+### Bug Fixes
+
+* **studio:** route try-it to the worker ([#466](https://github.com/anolilab/lunora/issues/466)) ([d01a363](https://github.com/anolilab/lunora/commit/d01a3639ee52635df5f94d8190c56c9cd5c34e21))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.57
+* **@lunora/react:** upgraded to 1.0.0-alpha.62
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.71
+
 ## @lunora/studio [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.119...@lunora/studio@1.0.0-alpha.120) (2026-08-24)
 
 
