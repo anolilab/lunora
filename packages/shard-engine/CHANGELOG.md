@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.34...@lunora/shard-engine@1.0.0-alpha.35) (2026-08-25)
+
+### Bug Fixes
+
+* **shard-engine:** stamp stream generations ([#462](https://github.com/anolilab/lunora/issues/462)) ([b67de3c](https://github.com/anolilab/lunora/commit/b67de3c27d473aa7094bc4629b40db4af92070ad))
+
 ## @lunora/shard-engine [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.33...@lunora/shard-engine@1.0.0-alpha.34) (2026-08-23)
 
 ### Features
