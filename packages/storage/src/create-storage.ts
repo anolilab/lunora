@@ -355,19 +355,27 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         await options.bucket.delete(key);
     };
 
-    const getMetadata = async (key: string): Promise<ObjectMetadata | null> => {
+    const head = async (key: string): Promise<R2ObjectLike | null> => {
         validateKey(key);
 
         // Prefer a true HEAD (no body transfer) when the binding exposes one.
         // Fall back to a 0-length ranged GET (`{ length: 0 }`) so we still avoid
         // streaming the body when running against a `head`-less double or runtime.
-        if (options.bucket.head) {
-            const head = await options.bucket.head(key);
+        // Either way `size` is the FULL object size — R2 reports the object's
+        // size, not the returned window's — which is what makes this enough to
+        // resolve a `Range` against.
+        const object = options.bucket.head ? await options.bucket.head(key) : await options.bucket.get(key, { range: { length: 0 } });
 
-            return head && toMetadata(head);
-        }
+        // The `toListObject` projection, not `download()`'s `withSha256` Proxy: a
+        // head result has no body to keep native accessors alive for, and it IS
+        // routinely returned from a query and serialized. A Proxy over R2's
+        // non-extensible object cannot advertise the synthetic checksum fields as
+        // own keys, so `JSON.stringify` would silently drop them on the wire.
+        return object && toListObject(object);
+    };
 
-        const object = await options.bucket.get(key, { range: { length: 0 } });
+    const getMetadata = async (key: string): Promise<ObjectMetadata | null> => {
+        const object = await head(key);
 
         return object && toMetadata(object);
     };
@@ -498,6 +506,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         getPresignedUrl,
         getSignedUrl,
         getUrl,
+        head,
         list,
         resumeMultipartUpload,
         // `store` is `upload` under Convex's name — the same function, so the

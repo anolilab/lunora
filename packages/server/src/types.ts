@@ -1679,6 +1679,38 @@ interface StorageMetadata {
 }
 
 /**
+ * The body-free object shape returned by {@link ReadOnlyStorage.head} — a clean
+ * public mirror of `@lunora/storage`'s head projection, re-declared here for the
+ * same reason as {@link StorageMetadata}: the ctx surface carries no dependency
+ * on the storage package's types.
+ *
+ * Richer than {@link StorageMetadata} on purpose. `getMetadata` is the tidy
+ * Convex-shaped summary; `head` is what an HTTP layer needs, so it keeps the
+ * validator (`etag`) and the base64 digest RFC 9530 `Repr-Digest` requires, and
+ * leaves `uploaded` as the `Date` the binding reports rather than epoch ms.
+ */
+interface StorageObjectHead {
+    /** Custom metadata set at upload time, if any. */
+    customMetadata?: Record<string, string>;
+    /** R2's unquoted etag (the MD5 hex for a single-part upload). */
+    etag?: string;
+    /** The already-quoted form of {@link StorageObjectHead.etag}, when the binding reports one. */
+    httpEtag?: string;
+    /** Recorded HTTP metadata, notably the `Content-Type`. */
+    httpMetadata?: { contentType?: string };
+    /** The object's key. */
+    key: string;
+    /** Hex-encoded SHA-256 of the body, when R2 carries a checksum. */
+    sha256?: string;
+    /** Base64-encoded SHA-256 of the same checksum — the encoding RFC 9530 digest headers require. */
+    sha256Base64?: string;
+    /** The FULL object size in bytes: R2 reports the object's size, not a returned window's, which is what makes a head enough to resolve a `Range` against. */
+    size: number;
+    /** When the object was last written. */
+    uploaded?: Date;
+}
+
+/**
  * Read-only projection of `Storage` exposed on `QueryCtx` / `MutationCtx`.
  *
  * Queries are pure reads, and mutations run inside a transactional scope —
@@ -1712,6 +1744,16 @@ interface ReadOnlyStorage<Buckets extends string = string> {
     getSignedUrl: (key: string, options?: { expiresInSeconds?: number }) => Promise<string>;
     /** Public URL pointing at the configured base for `key`. */
     getUrl: (key: string) => string;
+
+    /**
+     * Read an object's metadata with NO body transfer, as the raw object shape —
+     * `etag` and the base64 digest included, which is what an HTTP layer needs to
+     * answer a `Range` request. Returns `null` when the object is absent.
+     *
+     * {@link ReadOnlyStorage.getMetadata} is the tidier summary over the same
+     * read; reach for this one when building a response.
+     */
+    head: (key: string) => Promise<StorageObjectHead | null>;
 }
 
 interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
@@ -2439,6 +2481,7 @@ export type {
     SpanOptions,
     Storage,
     StorageMetadata,
+    StorageObjectHead,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,

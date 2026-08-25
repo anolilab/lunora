@@ -236,7 +236,7 @@ describe("createWorker — opt-in public REST surface", () => {
 
             expect(response.headers.get("cache-control")).toBe("public, max-age=60");
             expect(response.headers.get("cache-tag")).toBe("messages");
-            expect(response.headers.get("vary")).toBe("authorization, cf-access-jwt-assertion, cookie, x-d1-bookmark, x-lunora-shard-key");
+            expect(response.headers.get("vary")).toBe("authorization, cf-access-jwt-assertion, cookie, x-payment, x-d1-bookmark, x-lunora-shard-key");
         });
 
         it("varies on the shard-key header, which selects which rows the caller sees", async () => {

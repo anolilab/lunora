@@ -18,6 +18,7 @@ interface FakeStorage {
         download: (key: string) => Promise<undefined>;
         getSignedUrl: (key: string, options?: { method?: string }) => Promise<string>;
         getUrl: (key: string) => string;
+        head: (key: string) => Promise<undefined>;
         store: (key: string, body: unknown) => Promise<{ etag: string; key: string }>;
     };
 }
@@ -46,6 +47,11 @@ const createFakeStorage = (): FakeStorage => {
                 calls.push({ key, method: "getUrl" });
 
                 return `https://cdn.example/${key}`;
+            },
+            head: async (key: string): Promise<undefined> => {
+                calls.push({ key, method: "head" });
+
+                return undefined;
             },
             store: async (key: string): Promise<{ etag: string; key: string }> => {
                 calls.push({ key, method: "store" });
@@ -139,6 +145,29 @@ describe("storageRules — read path", () => {
         });
 
         await handler.handler(makeContext(fake, "u1"), {});
+    });
+
+    it("gates head as a read — the body-free sibling of getMetadata is not a way around read rules", async () => {
+        expect.assertions(3);
+
+        const rule = defineStorageRule<TestContext>({
+            bucket: "avatars",
+            on: "read",
+            when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`),
+        });
+
+        const fake = createFakeStorage();
+        const allowed = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.head("user/u1/a.png"));
+
+        await allowed.handler(makeContext(fake, "u1"), {});
+
+        expect(fake.calls).toEqual([{ key: "user/u1/a.png", method: "head" }]);
+
+        const denied = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.head("user/u2/secret.png"));
+
+        await expect(denied.handler(makeContext(fake, "u1"), {})).rejects.toThrow(LunoraError);
+        // Still just the allowed call — the denied one never reached the backing storage.
+        expect(fake.calls).toHaveLength(1);
     });
 
     it("leaves an operation with no rules unrestricted (opt-in)", async () => {

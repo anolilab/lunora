@@ -25,7 +25,7 @@
  * `outDir`/`rootDir` from their `tsconfig.json` (a set `rootDir` raises TS6059
  * for this out-of-package file under `tsc --noEmit`).
  */
-import { evictOldestEntry } from "./evict-oldest";
+import { memoizePromise } from "./promise-memo";
 
 const textEncoder = new TextEncoder();
 
@@ -75,21 +75,17 @@ const fromBase64Url = (input: string): Uint8Array => {
 const KEY_CACHE_MAX = 64;
 const keyCache = new Map<string, Promise<CryptoKey>>();
 
-const importHmacKey = async (secret: string): Promise<CryptoKey> => {
-    const cached = keyCache.get(secret);
-
-    if (cached) {
-        return cached;
-    }
-
-    evictOldestEntry(keyCache, KEY_CACHE_MAX);
-
-    const keyPromise = crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
-
-    keyCache.set(secret, keyPromise);
-
-    return keyPromise;
-};
+// `memoizePromise` rather than a bare `set`: a rejected import used to stay in
+// the map, so one failed `importKey` poisoned that secret for the isolate's
+// whole life and every later verify against it failed with the original error.
+// It carries the FIFO bound too, evicting on the insert path.
+const importHmacKey = async (secret: string): Promise<CryptoKey> =>
+    memoizePromise(
+        keyCache,
+        secret,
+        async () => crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]),
+        KEY_CACHE_MAX,
+    );
 
 /**
  * Extract `host[:port]` from a full URL or a bare host/base form. Tolerates a

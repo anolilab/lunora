@@ -16,7 +16,7 @@ describe("restCacheHeaders", () => {
         // The anonymous variant must be fenced off from credentialed callers, or a
         // shared cache could hand it to a signed-in user in place of their own data.
         // Shard/bookmark headers ride along because they change the body too.
-        expect(headers?.vary).toBe("authorization, cf-access-jwt-assertion, cookie, x-d1-bookmark, x-lunora-shard-key");
+        expect(headers?.vary).toBe("authorization, cf-access-jwt-assertion, cookie, x-payment, x-d1-bookmark, x-lunora-shard-key");
     });
 
     it("downgrades scope:public to private when the request carries an Authorization header", () => {
@@ -62,7 +62,7 @@ describe("restCacheHeaders", () => {
 
         const headers = restCacheHeaders({ ...publicCache, vary: "Accept-Language, AUTHORIZATION" }, get(), 200);
 
-        expect(headers?.vary).toBe("accept-language, authorization, cf-access-jwt-assertion, cookie, x-d1-bookmark, x-lunora-shard-key");
+        expect(headers?.vary).toBe("accept-language, authorization, cf-access-jwt-assertion, cookie, x-payment, x-d1-bookmark, x-lunora-shard-key");
     });
 
     it("still varies a private endpoint on the data-selecting headers", () => {

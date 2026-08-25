@@ -610,8 +610,23 @@ interface StorageRange {
     offset: number;
 }
 
-/** The minimal storage surface {@link serveStorageObject} needs: a metadata-rich `download`. */
-interface StorageDownloader {
+/**
+ * The minimal storage surface {@link serveStorageObject} needs: a metadata-rich
+ * `download`, plus the body-free `head` a range request resolves against.
+ *
+ * `head` is required rather than optional-with-a-fallback because the fallback
+ * is the bug: without it a ranged request has to start a full-object `download`
+ * just to learn the size, then throw that body away. `@lunora/storage`'s `head`
+ * already degrades internally to a 0-length ranged `get()` on a binding with no
+ * HEAD, so there is nothing a caller here could usefully do that it does not.
+ */
+interface StorageHead {
+    /** Object metadata with no body. `size` is the FULL object size (mirrors R2). */
+    head: (key: string) => Promise<Omit<StorageObjectBody, "body"> | null>;
+}
+
+/** The storage surface {@link serveStorageObject} reads through. */
+interface StorageDownloader extends StorageHead {
     download: (key: string, options?: { range?: StorageRange }) => Promise<StorageObjectBody | null>;
 }
 
@@ -708,37 +723,20 @@ const parseRange = (header: null | string, size: number): RangeResult => {
 };
 
 /**
- * Stream a stored object as an HTTP {@link Response} from an `httpAction`
- * handler, with correct `Content-Type`, `ETag`, and `Accept-Ranges: bytes`.
- * Honors a single-range `Range` request → **206 Partial Content** with
- * `Content-Range` + `Content-Length`; otherwise **200**. A missing object is a
- * **404**; an out-of-bounds range is a **416** with a `Content-Range` of
- * `bytes` star-slash-size.
+ * The headers every representation of an object carries — its content-type, its
+ * validator, and the RFC 9530 digest when R2 recorded a checksum.
  *
- * A range request re-issues the `download()` with the resolved `{ offset, length }`
- * window so R2 streams only those bytes back to the Worker — the slice is never
- * buffered in the isolate. The first `download()` is used only for the object's
- * size + metadata (its body is left unread and cancelled). For very large
- * objects a signed URL (`ctx.storage.getSignedUrl`) is still cheaper since the
- * client then ranges against R2/CDN directly with no Worker hop.
+ * `contentType` originates from object metadata set at upload time, so it is
+ * attacker-influenced. A value carrying CR/LF (or other control chars) would
+ * either throw inside `Response`/`Headers` construction (→ unhandled 500) or,
+ * on a permissive runtime, smuggle an injected response header. Reject any
+ * unsafe value and fall back to the safe default rather than reflecting it.
  */
-const serveStorageObject = async (context: ContextWithStorage, key: string, request: Request): Promise<Response> => {
-    const object = await context.storage.download(key);
-
-    if (!object) {
-        return new Response("Not Found", { status: 404 });
-    }
-
-    // `contentType` originates from object metadata set at upload time, so it is
-    // attacker-influenced. A value carrying CR/LF (or other control chars) would
-    // either throw inside `Response`/`Headers` construction (→ unhandled 500) or,
-    // on a permissive runtime, smuggle an injected response header. Reject any
-    // unsafe value and fall back to the safe default rather than reflecting it.
+const storageObjectHeaders = (object: Omit<StorageObjectBody, "body">): Record<string, string> => {
     const rawContentType = object.httpMetadata?.contentType;
-    const contentType = rawContentType !== undefined && isSafeHeaderValue(rawContentType) ? rawContentType : "application/octet-stream";
-    const baseHeaders: Record<string, string> = {
+    const headers: Record<string, string> = {
         "accept-ranges": "bytes",
-        "content-type": contentType,
+        "content-type": rawContentType !== undefined && isSafeHeaderValue(rawContentType) ? rawContentType : "application/octet-stream",
         etag: toHttpEtag(object.etag),
     };
 
@@ -746,39 +744,96 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
         // RFC 9530 representation digest so clients can verify integrity. The
         // value is a structured-field byte-sequence (base64 wrapped in colons),
         // and it covers the full representation, so it's correct on a 206 too.
-        baseHeaders["repr-digest"] = `sha-256=:${object.sha256Base64}:`;
+        headers["repr-digest"] = `sha-256=:${object.sha256Base64}:`;
     }
 
-    const range = parseRange(request.headers.get("range"), object.size);
+    return headers;
+};
+
+/**
+ * Whether `header` degrades to the whole object no matter how big the object is:
+ * absent, multi-range, malformed, or a bare `bytes=-`.
+ *
+ * Every branch of {@link parseRange} that answers `"full"` returns before `size`
+ * is read, so probing with `0` is a header-only question — which lets a request
+ * that can never be a 206 skip the metadata read instead of paying for one and
+ * throwing it away.
+ */
+const rangeDegradesToWholeObject = (header: null | string): boolean => parseRange(header, 0).kind === "full";
+
+/** The whole object as a `200`, streamed from a single `download()`. */
+const serveWholeStorageObject = async (context: ContextWithStorage, key: string): Promise<Response> => {
+    const object = await context.storage.download(key);
+
+    if (!object) {
+        return new Response("Not Found", { status: 404 });
+    }
+
+    return new Response(object.body, {
+        headers: { ...storageObjectHeaders(object), "content-length": String(object.size) },
+        status: 200,
+    });
+};
+
+/**
+ * Stream a stored object as an HTTP {@link Response} from an `httpAction`
+ * handler, with correct `Content-Type`, `ETag`, and `Accept-Ranges: bytes`.
+ * Honors a single-range `Range` request → **206 Partial Content** with
+ * `Content-Range` + `Content-Length`; otherwise **200**. A missing object is a
+ * **404**; an out-of-bounds range is a **416** with a `Content-Range` of
+ * `bytes` star-slash-size.
+ *
+ * A range request resolves its window against a body-free `head()`, then issues
+ * ONE `download()` with the resolved `{ offset, length }` so R2 streams just
+ * those bytes — the slice is never buffered in the isolate, and no full-object
+ * body transfer is started only to be cancelled. A request that cannot produce a
+ * 206 at all (no `Range`, multi-range, malformed) skips the `head()` entirely and
+ * streams straight from a single `download()`. For very
+ * large objects a signed URL (`ctx.storage.getSignedUrl`) is still cheaper since
+ * the client then ranges against R2/CDN directly with no Worker hop.
+ */
+const serveStorageObject = async (context: ContextWithStorage, key: string, request: Request): Promise<Response> => {
+    const rangeHeader = request.headers.get("range");
+
+    // No `Range`, or one that cannot produce a 206 anyway (multi-range, malformed):
+    // the object's own metadata rides along with its body, so there is nothing to
+    // look up first — and paying for a `head()` here would only add a round trip
+    // and a window for the object to vanish between the two reads.
+    if (rangeDegradesToWholeObject(rangeHeader)) {
+        return serveWholeStorageObject(context, key);
+    }
+
+    // A range has to be resolved against the object's size before it can be
+    // requested, so this read exists only for the metadata — which is exactly why
+    // it is a `head()` and not a `download()`.
+    const metadata = await context.storage.head(key);
+
+    if (!metadata) {
+        return new Response("Not Found", { status: 404 });
+    }
+
+    const range = parseRange(rangeHeader, metadata.size);
 
     if (range.kind === "unsatisfiable") {
         // The body here is a plain-text error, not the object — so it carries
         // neither the object's `Content-Type` nor its digest. Only the
-        // range-relevant headers (and the resource ETag) ride along. The unread
-        // object body is cancelled so the stream isn't left dangling.
-        object.body?.cancel().catch(() => {});
-
+        // range-relevant headers (and the resource ETag) ride along.
         return new Response("Range Not Satisfiable", {
             headers: {
                 "accept-ranges": "bytes",
-                "content-range": `bytes */${String(object.size)}`,
+                "content-range": `bytes */${String(metadata.size)}`,
                 "content-type": "text/plain; charset=utf-8",
-                etag: toHttpEtag(object.etag),
+                etag: toHttpEtag(metadata.etag),
             },
             status: 416,
         });
     }
 
+    // Unreachable: the whole-object check at the top already answered this, and
+    // its answer does not depend on `size`. Kept so the union stays exhaustive.
     if (range.kind === "full") {
-        return new Response(object.body, {
-            headers: { ...baseHeaders, "content-length": String(object.size) },
-            status: 200,
-        });
+        return serveWholeStorageObject(context, key);
     }
-
-    // Single range: re-fetch just the window so R2 streams only those bytes (the
-    // first download's body is unused — cancel it rather than leak the stream).
-    object.body?.cancel().catch(() => {});
 
     const length = range.end - range.start + 1;
     const slice = await context.storage.download(key, { range: { length, offset: range.start } });
@@ -788,11 +843,15 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
         return new Response("Not Found", { status: 404 });
     }
 
+    // Headers come from `metadata`, not `slice`: the validator, the digest and the
+    // `Content-Range` total must all describe the ONE representation the window
+    // was resolved against. (An object replaced between the two reads is a
+    // pre-existing race either way — this at least keeps the header set coherent.)
     return new Response(slice.body, {
         headers: {
-            ...baseHeaders,
+            ...storageObjectHeaders(metadata),
             "content-length": String(length),
-            "content-range": `bytes ${String(range.start)}-${String(range.end)}/${String(object.size)}`,
+            "content-range": `bytes ${String(range.start)}-${String(range.end)}/${String(metadata.size)}`,
         },
         status: 206,
     });

@@ -29,13 +29,13 @@ to perform a side-effectful R2 write or delete, because those can't participate
 in the transaction or be rolled back. Both can still read existing objects and
 mint signed URLs, since signing is an HMAC computation with no R2 round-trip.
 
-| Operation                  | Query | Mutation | Action |
-| -------------------------- | :---: | :------: | :----: |
-| `download` / `getMetadata` |   ✓   |    ✓     |   ✓    |
-| `getUrl` / `getSignedUrl`  |   ✓   |    ✓     |   ✓    |
-| `generateUploadUrl`        |   —   |    —     |   ✓    |
-| `store`                    |   —   |    —     |   ✓    |
-| `delete`                   |   —   |    —     |   ✓    |
+| Operation                           | Query | Mutation | Action |
+| ----------------------------------- | :---: | :------: | :----: |
+| `download` / `getMetadata` / `head` |   ✓   |    ✓     |   ✓    |
+| `getUrl` / `getSignedUrl`           |   ✓   |    ✓     |   ✓    |
+| `generateUploadUrl`                 |   —   |    —     |   ✓    |
+| `store`                             |   —   |    —     |   ✓    |
+| `delete`                            |   —   |    —     |   ✓    |
 
 In short: serve and inspect files from anywhere; mint a **direct-upload** URL or
 write and delete bytes only from an action.
@@ -86,7 +86,14 @@ export const avatarUrl = query.input({ key: v.string() }).query(async ({ ctx, ar
 To stream the body through your Worker instead, `download(key)` returns the
 `ReadableStream` (or `null` when the object is absent), and `getMetadata(key)`
 returns the size, content-type, sha256, and any custom metadata without fetching
-the body.
+the body. `head(key)` is the same body-free read one level down — the raw R2
+object shape, with the `etag` and base64 digest an HTTP response needs. Reach for
+it when you need the object's size before deciding what to fetch (resolving a
+`Range` header is the usual case); a `download()` there would start a full-object
+body transfer you then throw away.
+
+Under `storageRules(...)`, `head` is gated as a `read` exactly like
+`getMetadata` — it reads the same object's metadata, so the same rules apply.
 
 ## Named buckets
 

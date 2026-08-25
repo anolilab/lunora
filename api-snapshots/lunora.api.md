@@ -713,6 +713,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageObjectHead` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageOperation` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -3221,6 +3225,14 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `HttpCacheLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `HttpCacheQueryOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `KVNamespaceLike` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
@@ -5275,6 +5287,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageObjectHead` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageOperation` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7022,6 +7038,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageMetadata` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageObjectHead` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

@@ -1525,6 +1525,7 @@ interface ReadOnlyStorage<Buckets extends string = string> {
         expiresInSeconds?: number;
     }) => Promise<string>;
     getUrl: (key: string) => string;
+    head: (key: string) => Promise<StorageObjectHead | null>;
 }
 ```
 
@@ -1911,6 +1912,24 @@ interface StorageMetadata {
     sha256?: string;
     size: number;
     uploaded?: number;
+}
+```
+
+### `StorageObjectHead` (interface)
+
+```ts
+interface StorageObjectHead {
+    customMetadata?: Record<string, string>;
+    etag?: string;
+    httpEtag?: string;
+    httpMetadata?: {
+        contentType?: string;
+    };
+    key: string;
+    sha256?: string;
+    sha256Base64?: string;
+    size: number;
+    uploaded?: Date;
 }
 ```
 
@@ -4714,6 +4733,7 @@ interface ReadOnlyStorage<Buckets extends string = string> {
         expiresInSeconds?: number;
     }) => Promise<string>;
     getUrl: (key: string) => string;
+    head: (key: string) => Promise<StorageObjectHead | null>;
 }
 ```
 
@@ -5006,6 +5026,24 @@ interface StorageMetadata {
     sha256?: string;
     size: number;
     uploaded?: number;
+}
+```
+
+### `StorageObjectHead` (interface)
+
+```ts
+interface StorageObjectHead {
+    customMetadata?: Record<string, string>;
+    etag?: string;
+    httpEtag?: string;
+    httpMetadata?: {
+        contentType?: string;
+    };
+    key: string;
+    sha256?: string;
+    sha256Base64?: string;
+    size: number;
+    uploaded?: Date;
 }
 ```
 

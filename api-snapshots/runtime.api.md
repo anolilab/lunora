@@ -1690,6 +1690,7 @@ type RestRoute = (request: Request, env: unknown, url?: URL, context?: Execution
 
 ```ts
 interface RestRouteDeps {
+    edgeCache?: HttpCacheLike | null;
     functions: RestRegistryLike;
     invoke: RestInvoke;
     rateLimit?: RestRateLimit;
@@ -2207,6 +2208,7 @@ interface WorkerOptions {
     requireEphemeralWsToken?: boolean;
     resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     resolveTableSharding?: AdminTableResolver;
+    restEdgeCache?: HttpCacheLike | null;
     restRateLimit?: RestRateLimit;
     routes?: Record<string, Route>;
     sampling?: TraceSamplingConfig;
