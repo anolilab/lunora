@@ -1,3 +1,14 @@
+## @lunora/platform-node [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.24...@lunora/platform-node@1.0.0-alpha.25) (2026-08-25)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.87
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.89
+* **@lunora/do:** upgraded to 1.0.0-alpha.98
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.73
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.37
+
 ## @lunora/platform-node [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.23...@lunora/platform-node@1.0.0-alpha.24) (2026-08-25)
 
 ### ⚠ BREAKING CHANGES
