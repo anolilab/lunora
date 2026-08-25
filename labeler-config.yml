@@ -97,6 +97,9 @@
 "package: platform-node":
     - changed-files:
           - any-glob-to-any-file: "packages/platform-node/**/*"
+"package: platform-rivet":
+    - changed-files:
+          - any-glob-to-any-file: "packages/platform-rivet/**/*"
 "package: queue":
     - changed-files:
           - any-glob-to-any-file: "packages/queue/**/*"

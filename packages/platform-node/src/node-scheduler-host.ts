@@ -45,22 +45,9 @@ import { randomUUID } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
 
 import type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
+import { DEFAULT_RETRY_POLICY, retryBackoffMs } from "@lunora/platform";
 import type Database from "better-sqlite3";
 import { CronExpressionParser } from "cron-parser";
-
-/**
- * Retry policy applied when a caller supplies none. `ScheduleOptions.retry`
- * documents each field as falling back to "the host's defaults"; these are this
- * host's, and they are deliberately modest — a Node host is usually a dev
- * server or a single-node deployment, where a job retrying for ten minutes is
- * noise rather than resilience.
- */
-const DEFAULT_RETRY = {
-    backoffMultiplier: 2,
-    initialDelayMs: 1000,
-    maxAttempts: 5,
-    maxDelayMs: 60_000,
-} as const;
 
 /**
  * Largest delay `setTimeout` accepts as a 32-bit signed integer. Any delay
@@ -137,17 +124,13 @@ interface NodeSchedulerHost {
     simulateDeadLetter: (id: string) => Promise<boolean>;
 }
 
-/**
- * Delay before attempt number `attempts` (1-based), capped at `maxDelayMs`.
- * Exponential on the multiplier, the shape `ScheduleOptions.retry` describes.
- */
-const backoffFor = (attempts: number, retry: ScheduleOptions["retry"]): number => {
-    const initial = retry?.initialDelayMs ?? DEFAULT_RETRY.initialDelayMs;
-    const multiplier = retry?.backoffMultiplier ?? DEFAULT_RETRY.backoffMultiplier;
-    const max = retry?.maxDelayMs ?? DEFAULT_RETRY.maxDelayMs;
-
-    return Math.min(max, initial * multiplier ** Math.max(0, attempts - 1));
-};
+/** Delay before attempt number `attempts` (1-based), over a caller's partial policy. */
+const backoffFor = (attempts: number, retry: ScheduleOptions["retry"]): number =>
+    retryBackoffMs(attempts, {
+        backoffMultiplier: retry?.backoffMultiplier ?? DEFAULT_RETRY_POLICY.backoffMultiplier,
+        initialDelayMs: retry?.initialDelayMs ?? DEFAULT_RETRY_POLICY.initialDelayMs,
+        maxDelayMs: retry?.maxDelayMs ?? DEFAULT_RETRY_POLICY.maxDelayMs,
+    });
 
 /** Build a durable, SQLite-backed scheduler over `database`. */
 const createNodeSchedulerHost = (database: Database.Database, options: NodeSchedulerHostOptions = {}): NodeSchedulerHost => {
@@ -316,7 +299,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 return;
             }
 
-            const maxAttempts = retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts;
+            const maxAttempts = retry?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts;
 
             if (attempts >= maxAttempts) {
                 parkJob.run(attempts, id);
@@ -530,7 +513,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             const retry = decodeRetry(row.retry);
 
-            parkJob.run((retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts) + 1, id);
+            parkJob.run((retry?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts) + 1, id);
 
             return true;
         },

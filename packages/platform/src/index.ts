@@ -80,13 +80,14 @@ export type {
 
 // Capability matrix
 export type { Capability, CapabilityLevel, PlatformCapabilities } from "./capabilities";
-export { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "./capabilities";
+export { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES, RIVET_CAPABILITIES } from "./capabilities";
 
 // Durable key-value store
 export type { ShardKvListOptions, ShardKvStore } from "./kv-store";
 
 // Scheduler host
 export type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "./scheduler-host";
+export { DEFAULT_RETRY_POLICY, retryBackoffMs } from "./scheduler-host";
 
 // Shard directory
 export type { DirectShardDirectory, ShardDirectory, ShardJurisdiction, ShardRegionHint, ShardStub, TwoStepShardDirectory } from "./shard-directory";

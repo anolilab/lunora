@@ -19,9 +19,10 @@
  * `native` and `emulated` both emit as-is — `emulated` means Lunora builds the
  * feature on lower-level primitives, which is still a working surface.
  *
- * Cloudflare and Node are registered (their matrices live in `@lunora/platform`
- * as `CLOUDFLARE_CAPABILITIES` / `NODE_CAPABILITIES`); other hosts register
- * their matrices as their per-target `@lunora/platform-<target>` packages land.
+ * Cloudflare, Node and Rivet are registered (their matrices live in
+ * `@lunora/platform` as `CLOUDFLARE_CAPABILITIES` / `NODE_CAPABILITIES` /
+ * `RIVET_CAPABILITIES`); other hosts register their matrices as their
+ * per-target `@lunora/platform-<target>` packages land.
  * An unregistered `target` is a configuration error, reported as
  * `platform_unknown_target` — and, crucially, the usage set is left untouched
  * so codegen never silently omits a surface against a matrix it does not have.
@@ -38,14 +39,16 @@
  * silently reconciled, in `plans/234-node-host-findings.md`: the two registries
  * conflate "codegen can gate capabilities for this" with "the CLI can deploy to
  * this," and `node` is the first target where those two questions have
- * different answers.
+ * different answers. `rivet` is the second, which settles it — the divergence
+ * is the normal shape of a host that lands before its deploy story, not a
+ * one-off to reconcile later.
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { PlatformCapabilities } from "@lunora/platform";
-import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
+import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES, RIVET_CAPABILITIES } from "@lunora/platform";
 import type { ParseError } from "jsonc-parser";
 import { parse as parseJsonc } from "jsonc-parser";
 
@@ -120,12 +123,24 @@ const resolveCodegenTarget = (projectRoot: string, explicit?: string): string =>
 /**
  * The capability matrices codegen can gate against, keyed by target id. One
  * entry per host package that ships a `PlatformCapabilities` — Cloudflare
- * (deployable) and, per plan 234, Node (a spike host with no deploy story; see
- * `@lunora/platform-node`).
+ * (deployable), Node (per plan 234, a spike host with no deploy story; see
+ * `@lunora/platform-node`) and Rivet (`@lunora/platform-rivet`, likewise no
+ * deploy story yet).
+ *
+ * **Registering a matrix here is what makes it do anything.** A host package
+ * that exports a `PlatformCapabilities` and stops there has written a document,
+ * not a gate: `gatePlatformFeatures` would answer `platform_unknown_target` for
+ * its id and leave the usage set untouched, so an app declaring that target
+ * emits the full Cloudflare-shaped surface against a host that cannot serve it.
+ * That is the failure mode CLAUDE.md's platform-parity rule is aimed at, and it
+ * is invisible until runtime — hence the registry-coverage leg in
+ * `__tests__/platform-target.test.ts`, which asserts every `*_CAPABILITIES`
+ * export in `@lunora/platform` appears here.
  */
 const PLATFORM_MATRICES: Readonly<Record<string, PlatformCapabilities>> = {
     cloudflare: CLOUDFLARE_CAPABILITIES,
     node: NODE_CAPABILITIES,
+    rivet: RIVET_CAPABILITIES,
 };
 
 /**

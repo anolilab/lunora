@@ -14,13 +14,49 @@
  * after a delay.
  */
 
+/**
+ * The retry policy every host applies when a caller supplies none.
+ *
+ * Here rather than per host, because "how many times does at-least-once try"
+ * is part of the contract a portable caller reasons about, not a knob each
+ * adapter tunes: an app whose job gives up after 3 attempts on one target and
+ * 5 on another has a portability bug that nothing would report. A host that
+ * genuinely needs different numbers should say so in its capability note and
+ * document the divergence, not quietly redefine the constant.
+ */
+export const DEFAULT_RETRY_POLICY = {
+    backoffMultiplier: 2,
+    initialDelayMs: 1000,
+    maxAttempts: 5,
+    maxDelayMs: 60_000,
+} as const;
+
+/**
+ * Delay before attempt number `attempts` (1-based), capped at `maxDelayMs`.
+ * Exponential on the multiplier, the shape {@link ScheduleOptions.retry}
+ * describes.
+ *
+ * Takes resolved numbers rather than the optional `retry` object, so a host
+ * can call it with values it read back from its own job table (where the
+ * defaults were already applied at schedule time) or with a caller's options
+ * defaulted through {@link DEFAULT_RETRY_POLICY}.
+ * @param attempts Attempts made so far, 1-based.
+ * @param policy The resolved backoff parameters.
+ * @param policy.backoffMultiplier Factor each successive delay is multiplied by.
+ * @param policy.initialDelayMs Delay before the first retry.
+ * @param policy.maxDelayMs Ceiling the exponential growth is clamped to.
+ * @returns the delay in milliseconds.
+ */
+export const retryBackoffMs = (attempts: number, policy: { backoffMultiplier: number; initialDelayMs: number; maxDelayMs: number }): number =>
+    Math.min(policy.maxDelayMs, policy.initialDelayMs * policy.backoffMultiplier ** Math.max(0, attempts - 1));
+
 /** Options accepted when scheduling a job. */
 export interface ScheduleOptions {
     /** Run the job at this absolute timestamp (ms since epoch). Overrides `delayMs`. */
     at?: number | Date;
     /** Run the job no sooner than this delay (ms) from now. */
     delayMs?: number;
-    /** Per-job retry policy. Falls back to the host's defaults when omitted. */
+    /** Per-job retry policy. Each field falls back to {@link DEFAULT_RETRY_POLICY} when omitted. */
     retry?: {
         /** Backoff multiplier. */
         backoffMultiplier?: number;

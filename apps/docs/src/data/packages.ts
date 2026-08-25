@@ -175,6 +175,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Platform Hosts"]!,
         category: "Platform Hosts",
+        description: "The Rivet host: the platform contracts over Rivet Actors and the rivetkit runtime.",
+        docsPath: "/docs/packages/platform-rivet",
+        features: ["Actor-per-shard state, alarms & hibernated sockets", "Runtime cron registration via c.cron", "Experimental — no dev or deploy target yet"],
+        name: "Rivet Host",
+        npmName: "@lunora/platform-rivet",
+        slug: "platform-rivet",
+    },
+    {
+        accentColor: categoryColors["Platform Hosts"]!,
+        category: "Platform Hosts",
         description: "The host-neutral reactive engine — ctx.db, CDC op-log, relay tier, indexes.",
         docsPath: "/docs/packages/shard-engine",
         features: ["Reactive ctx.db + dependency tracking", "CDC op-log & shape pokes", "Engine conformance suite"],

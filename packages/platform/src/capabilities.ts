@@ -250,6 +250,129 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
 };
 
 /**
+ * The Rivet capability matrix — `@lunora/platform-rivet`'s honest self-rating.
+ *
+ * Rivet Actors are the closest thing outside Cloudflare to a Durable Object:
+ * one addressable, single-writer, stateful instance per key, with its own
+ * SQLite database, its own durable schedules, and a sleep/wake lifecycle rather
+ * than an eviction-and-rehydrate one. That is why several rows here read
+ * `native` where the Node host reads `emulated` — sharded state, alarms,
+ * hibernated sockets, the KV store and the scheduler are all things the
+ * platform genuinely provides, not things Lunora rebuilds out of `setTimeout`
+ * and a table.
+ *
+ * Two rows carry the interesting arguments.
+ *
+ * `localSql` is `emulated` for a structural reason, not a missing-feature one.
+ * `ShardSqlExec.exec` is **synchronous** — the engine's read paths walk cursors
+ * without awaiting — while every Rivet SQLite entry point (`c.db.execute`,
+ * `c.db.transaction`) is a promise, because the actor reaches its database
+ * through the runtime rather than through an in-process handle. The contract
+ * anticipates exactly this ("implementations may be sync … or async-backed with
+ * a sync facade"), and the facade has a real cost: the working copy lives in
+ * the actor's memory and the whole database is serialized back into Rivet's
+ * durable SQLite on each commit. Correct, bounded by what one actor can hold,
+ * and O(database size) per committed write.
+ *
+ * `crossShardFanout` is `unsupported` rather than `emulated` because the
+ * coordinator needs to *enumerate* shard keys and the RivetKit client only
+ * addresses them (`getOrCreate`, `getForId`). A fan-out query would answer from
+ * no shards instead of all of them — a wrong answer, not a slow one.
+ *
+ * That rating is **not** enforced by codegen today, and saying otherwise would
+ * be worse than the gap: `gateAgainstMatrix` walks `CAPABILITY_TO_FEATURE` in
+ * `@lunora/codegen`, whose keys are the app-imported `ctx.*` add-ons, and a
+ * `.shardBy()` fan-out query is not one of them — there is no usage probe for
+ * it to gate on, exactly as with `shardAlarms`. An app targeting `rivet` with a
+ * fan-out query therefore gets no diagnostic. Closing it needs a usage probe
+ * first; until then this row informs Studio parity reporting and a reader, not
+ * the build.
+ *
+ * What is `unsupported` for the ordinary reason — nothing binds it yet — is
+ * most of the Cloudflare product surface (`queues`, `workflows`, object
+ * storage, Vectorize, Workers AI, Containers, Analytics, Pipelines, Hyperdrive,
+ * secrets). Two of those are the obvious next moves rather than dead ends:
+ * Rivet ships a durable workflow SDK (`rivetkit/workflow`) that `defineWorkflow`
+ * could compile onto, and a container runner `defineContainer` could target.
+ * They are rated `unsupported` because that is what the code does today.
+ */
+export const RIVET_CAPABILITIES: PlatformCapabilities = {
+    id: "rivet",
+    name: "Rivet",
+    features: {
+        shardedState: {
+            level: "native",
+            note: "One Rivet Actor per shard key — single-writer by construction (actions on one actor never interleave), with its own SQLite database, durable schedules and a lifecycle that sleeps and wakes rather than being recycled. This is the closest primitive to a Durable Object outside Cloudflare",
+        },
+        globalTables: {
+            level: "unsupported",
+            note: "Rivet has no cross-actor SQL product to point @lunora/sql-store at. An actor's SQLite is actor-scoped by design, so a `.global()` table would need an external database (Postgres/PlanetScale) this host does not bind",
+        },
+        websocketHibernation: {
+            level: "emulated",
+            note: "`options.canHibernateWebSocket: true` lets the actor sleep with its sockets still open and wake on the next frame or close — the connection half is genuinely the platform's, and Rivet documents it as beta. The subscription half is not: Rivet hibernates the socket, not Lunora's attachment/tag state, so the host persists that itself in `_lunora_sockets` and rebuilds the runtime registry on every wake. Rebinding is not automatic either — Rivet hands `onWebSocket` a fresh socket, so the actor must stash the socket id in `c.conn.state` and call `attachSocket(id, ws)`; a plain `accept` mints a new id and orphans the subscription. Working, and Lunora's own bookkeeping rather than the platform's, which is what `emulated` means",
+        },
+        durableStreams: {
+            level: "unsupported",
+            note: "Same gap as the Node host: the transcript store is host-neutral (@lunora/shard-engine) but the attach/produce state machine lives in @lunora/do and nothing here mounts it, so a durable stream declared against this target would silently behave as an ephemeral one",
+        },
+        localSql: {
+            level: "emulated",
+            note: "Rivet's actor SQLite (`c.db.execute`) is async-only, and `ShardSqlExec.exec` is synchronous — the engine's hot path reads rows without awaiting. This host therefore takes the contract's documented \"async-backed with a sync facade\" route: a better-sqlite3 working copy in the actor's own memory answers every `exec`, and the whole database is serialized back into Rivet's durable SQLite at each commit. Correct, and O(database size) per committed write — a small-shard strategy, not a large-table one",
+        },
+        shardAlarms: {
+            level: "native",
+            note: "`c.schedule.at` — durable across sleep, restarts, upgrades and crashes, and Rivet wakes a sleeping actor to deliver it. The host keeps the single-slot `ShardAlarms` semantics (set replaces, delete cancels) over Rivet's multi-schedule API by tracking the current schedule id",
+        },
+        shardPlacement: {
+            level: "emulated",
+            note: "Rivet honours `getOrCreate(key, { createInRegion })` at create time and never migrates an actor afterwards, which is exactly the contract's advisory semantics — but Rivet region slugs are deployment-defined (`atl` on Rivet Cloud, operator-named when self-hosting), so they cannot be derived from Lunora's Cloudflare-shaped `RegionHint` vocabulary. The directory maps through a caller-supplied `resolveRegion`; without one the hint is dropped rather than guessed",
+        },
+        shardReadReplicas: {
+            level: "unsupported",
+            note: "An actor lives in one region and does not migrate; Rivet exposes no follower copy to place in a reader's region, and this host implements no CDC-follow loop of its own",
+        },
+        crossShardFanout: {
+            level: "unsupported",
+            note: "Not wired, rather than impossible. Enumeration exists: the engine API's `GET /actors?name=<actor>` (RivetKit's `listActorsByName`) returns every actor of a type with its key, which is exactly the `listShardKeys` @lunora/runtime's query coordinator needs — but nothing here feeds it, so a fan-out query against this target would answer from no shards rather than from all of them. Wiring it has to solve two things the endpoint does not: the response is unpaginated (one array, no cursor or limit) and unfiltered (destroyed actors carry a `destroyTs` the caller must skip)",
+        },
+        queues: {
+            level: "unsupported",
+            note: "Rivet actors have a per-actor message queue (`c.queue`), but that is an inbox for one actor rather than a Cloudflare-Queues-shaped producer/consumer with batches, per-message ack/retry and dead-lettering. No queue binding is implemented here",
+        },
+        workflows: {
+            level: "unsupported",
+            note: "Rivet ships a durable workflow SDK (`rivetkit/workflow`) that is a credible backing for `defineWorkflow`, but this host does not compile Lunora workflows onto it yet",
+        },
+        scheduler: {
+            level: "native",
+            note: "`c.schedule.after`/`at` for delayed jobs and `c.cron.set`/`every` for recurring ones, all durable and all registrable at runtime — so this is the second host (after Node) to implement `SchedulerHost.cron`, and the first to get it from the platform rather than from a table it maintains itself. Rivet does not retry a failed run, so at-least-once retry and dead-lettering are this host's own bookkeeping",
+        },
+        objectStorage: { level: "unsupported", note: "No R2-equivalent binding implemented" },
+        objectStorageBackups: {
+            level: "unsupported",
+            note: "The backup commands need a bucket to write snapshots to, and this target binds none",
+        },
+        keyValueStore: {
+            level: "emulated",
+            note: "A `_lunora_kv` table in the actor's own SQLite, written through per put. Rivet's `c.kv` is an almost literal match for this contract — actor-scoped, durable, prefix and range scans — and would rate `native`, but it carries an `@deprecated` tag on every member ('a low-level escape hatch kept for backward compatibility'), so the host builds on the storage Rivet recommends instead. Revisit the rating if `c.kv` is un-deprecated",
+        },
+        vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
+        ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
+        browser: { level: "unsupported", note: "No headless-browser binding implemented" },
+        containers: {
+            level: "unsupported",
+            note: "Rivet has a container runner, but no `defineContainer` binding is implemented against it here",
+        },
+        analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
+        pipelines: { level: "unsupported", note: "No Pipelines-equivalent binding implemented" },
+        mail: { level: "unsupported", note: "@lunora/mail's queue-backed sends need a queues binding, which this target does not provide" },
+        secrets: { level: "unsupported", note: "No secrets binding implemented (a real host would likely map this to the runner's environment variables)" },
+        hyperdrive: { level: "unsupported", note: "No connection-pooling binding implemented" },
+    },
+};
+
+/**
  * The Node capability matrix — `@lunora/platform-node`'s honest self-rating
  * (plan 234).
  *
