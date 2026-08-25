@@ -29,7 +29,7 @@
 import type { EvalResult, Scorer } from "@lunora/testing";
 import { absentScorer, containsScorer, evaluate, keywordScorer } from "@lunora/testing";
 
-import type { AiOptInLevel, AiRunBinding, ChatResult, ChatToolCall, ChatTurn, SchemaFact } from "../../shared/ai-chat";
+import type { AiOptInLevel, AiRunBinding, ChatResult, ChatToolCall, ChatTurn, ForwardedToolName, SchemaFact } from "../../shared/ai-chat";
 import { generateChat, MAX_TOOL_CALLS, MAX_TRANSCRIPT_TURNS } from "../../shared/ai-chat";
 import { UNTRUSTED_BEGIN, UNTRUSTED_END } from "../../shared/ai-prompt";
 
@@ -39,8 +39,13 @@ const SCHEMA: ReadonlyArray<SchemaFact> = [
     { columns: ["id", "email"], table: "users" },
 ];
 
-/** What the stubbed tool runner answers per tool — shaped like the admin op behind it. */
-const TOOL_RESULTS: Readonly<Record<ChatToolCall["name"], unknown>> = {
+/**
+ * What the stubbed tool runner answers per tool — shaped like the admin op behind
+ * it. Keyed on {@link ForwardedToolName}, not every tool name: `loadKnowledge` is
+ * answered by the engine from its own bundled index and never reaches a runner,
+ * which is exactly what `ChatToolRunner` taking a `ForwardedToolCall` says.
+ */
+const TOOL_RESULTS: Readonly<Record<ForwardedToolName, unknown>> = {
     describeTables: { columnsByTable: { messages: ["id", "body", "authorId"], users: ["id", "email"] } },
     readAdvisors: { advisories: [] },
     readLogs: { entries: [] },
