@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { createAuthMiddleware } from "better-auth/api";
@@ -6,7 +7,10 @@ import { magicLink } from "better-auth/plugins/magic-link";
 import { twoFactor } from "better-auth/plugins/two-factor";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { readAuthAuditLog } from "../src/audit";
+import { withAuthAudit } from "../src/audit-hooks";
 import { createAuth } from "../src/create-auth";
+import type { SqlExecutor } from "../src/sql-store";
 
 /**
  * Plan 280 S0 — pins the better-auth `1.7.1` after-hook contract that
@@ -205,6 +209,53 @@ describe("better-auth 1.7.1 after-hook contract (plan 280 S0 gate)", () => {
             // the no-op claim is about SHAPE, not byte-identity: same top-level
             // keys, same nested `user` keys, neither reduced to `{}`.
             expect(sortedKeysOf(withUndefinedHookBody)).toStrictEqual(sortedKeysOf(noHookBody));
+        });
+    });
+
+    describe("withAuthAudit composition", () => {
+        it("forwards the caller's hooks.after return value (a replacement response) while still recording the audit entry", async () => {
+            expect.assertions(2);
+
+            const sqlite = new DatabaseSync(":memory:");
+            const auditExecutor: SqlExecutor = {
+                all: (sql, parameters) => Promise.resolve(sqlite.prepare(sql).all(...(parameters as never[])) as Record<string, unknown>[]),
+                run: (sql, parameters) => {
+                    sqlite.prepare(sql).run(...(parameters as never[]));
+
+                    return Promise.resolve();
+                },
+            };
+            const replacement = { replaced: true };
+
+            const auth = createAuth(
+                withAuthAudit(
+                    {
+                        database: memoryAdapter(seedMemoryDatabase()),
+                        emailAndPassword: { enabled: true },
+                        hooks: { after: createAuthMiddleware(async () => replacement) },
+                        secret: SECRET,
+                    },
+                    { executor: auditExecutor },
+                ),
+            );
+
+            const response = await auth.handler(
+                new Request("http://localhost/api/auth/sign-up/email", {
+                    body: JSON.stringify({ email: EMAIL, name: "Ada", password: STRONG_PASSWORD }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+
+            // The caller's rewrite must win — the audit hook is a side effect,
+            // not a response producer.
+            await expect(response.json()).resolves.toStrictEqual(replacement);
+
+            const rows = await readAuthAuditLog(auditExecutor);
+
+            expect(rows.map((row) => row.event)).toContain("sign-up");
+
+            sqlite.close();
         });
     });
 
