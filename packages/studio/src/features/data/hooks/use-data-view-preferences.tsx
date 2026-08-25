@@ -19,6 +19,8 @@ interface DataViewPreferences {
     readonly maskOn: boolean;
     /** The threaded view the grid/JSON/transposed renderers read. */
     readonly maskView: MaskView;
+    /** A view for a table other than the open one — the FK hover preview's target. */
+    readonly maskViewFor: (table: string, columns: ReadonlyArray<string>) => MaskView;
     readonly onToggleMask: () => void;
     readonly onTogglePin: (column: string) => void;
     readonly onToggleTranspose: () => void;
@@ -80,9 +82,9 @@ const useDataViewPreferences = ({
 
     // The "Mask sensitive columns" preview for the open table — shared verbatim
     // with the `.global()` browser, which has no pins or transpose to bundle in.
-    const { maskColumns, maskOn, maskView, onToggleMask } = useMaskView({ columns, selectedTable });
+    const { maskColumns, maskOn, maskView, maskViewFor, onToggleMask } = useMaskView({ columns, selectedTable });
 
-    return { maskColumns, maskOn, maskView, onToggleMask, onTogglePin, onToggleTranspose, pinnedColumns, transposed };
+    return { maskColumns, maskOn, maskView, maskViewFor, onToggleMask, onTogglePin, onToggleTranspose, pinnedColumns, transposed };
 };
 
 export type { DataViewPreferences };

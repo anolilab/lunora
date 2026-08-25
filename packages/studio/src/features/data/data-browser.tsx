@@ -403,7 +403,9 @@ export const DataBrowser = ({
 
     // The foreign-key context passed alongside it: the column → table map plus the
     // navigate/preview handlers a ref cell needs.
-    const references = { columns: page?.refs, onNavigate: handleNavigateRef, onPreview: previewRef };
+    // `maskViewFor` (not `preferences.maskView`) because the hover preview renders a
+    // row from the TARGET table, whose covered columns are its own.
+    const references = { columns: page?.refs, maskViewFor: preferences.maskViewFor, onNavigate: handleNavigateRef, onPreview: previewRef };
 
     return (
         <div className="flex h-full min-w-0" data-testid="lunora-data-browser">
