@@ -5,10 +5,7 @@ import { Checkbox } from "../../components/ui/checkbox";
 import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta } from "../../lib/admin";
 import { cn } from "../../lib/utils";
-
-/** Shared control-button class (mirrors the data-browser toolbar). */
-const CONTROL_BTN =
-    "inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent aria-pressed:bg-accent aria-pressed:text-accent-foreground disabled:pointer-events-none disabled:opacity-50";
+import { CONTROL_TOGGLE_BTN } from "./control-button";
 
 /** Shared text-ish input class. */
 const FIELD_INPUT = "w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus-visible:border-ring";
@@ -372,7 +369,7 @@ const RowFormEditor = ({ columnMeta, documentText, onCancel, onDocumentTextChang
             <div className="flex items-center gap-1.5">
                 <button
                     aria-pressed={showForm}
-                    className={CONTROL_BTN}
+                    className={CONTROL_TOGGLE_BTN}
                     data-testid="db-editor-form"
                     disabled={fields === null}
                     onClick={showFormMode}
@@ -380,7 +377,7 @@ const RowFormEditor = ({ columnMeta, documentText, onCancel, onDocumentTextChang
                 >
                     {t("Form")}
                 </button>
-                <button aria-pressed={!showForm} className={CONTROL_BTN} data-testid="db-editor-json" onClick={showJsonMode} type="button">
+                <button aria-pressed={!showForm} className={CONTROL_TOGGLE_BTN} data-testid="db-editor-json" onClick={showJsonMode} type="button">
                     {t("JSON")}
                 </button>
             </div>
@@ -402,10 +399,10 @@ const RowFormEditor = ({ columnMeta, documentText, onCancel, onDocumentTextChang
             )}
 
             <div className="flex items-center gap-1.5">
-                <button className={CONTROL_BTN} data-testid="db-editor-save" onClick={onSave} type="button">
+                <button className={CONTROL_TOGGLE_BTN} data-testid="db-editor-save" onClick={onSave} type="button">
                     {t("Save")}
                 </button>
-                <button className={CONTROL_BTN} data-testid="db-editor-cancel" onClick={onCancel} type="button">
+                <button className={CONTROL_TOGGLE_BTN} data-testid="db-editor-cancel" onClick={onCancel} type="button">
                     {t("Cancel")}
                 </button>
             </div>

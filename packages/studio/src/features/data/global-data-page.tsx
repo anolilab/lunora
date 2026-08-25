@@ -5,13 +5,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useT } from "../../i18n/i18n-context";
 import type { MaskView } from "../../lib/mask-preview";
 import { maskCell } from "../../lib/mask-preview";
+import { CONTROL_TOGGLE_BTN } from "./control-button";
 import { CellValue, GridContainer } from "./data-grid";
 import { chipValue, rowKey } from "./global-row-format";
 import GridPagination from "./grid-pagination";
-
-/** Shared Supabase-style control-button class (mirrors the shard browser's toolbar). */
-const CONTROL_BTN =
-    "inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50 aria-pressed:bg-accent aria-pressed:text-accent-foreground";
 
 /**
  * The loaded page of a `.global()` table: its active drill-down chips, the grid,
@@ -61,7 +58,7 @@ const GlobalDataPage = ({
         <div className="flex min-h-0 flex-1 flex-col" data-testid="gdb-page">
             {hasMaskedColumns && (
                 <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-4 py-2">
-                    <button aria-pressed={maskOn} className={CONTROL_BTN} data-testid="gdb-mask-toggle" onClick={onToggleMask} type="button">
+                    <button aria-pressed={maskOn} className={CONTROL_TOGGLE_BTN} data-testid="gdb-mask-toggle" onClick={onToggleMask} type="button">
                         {t("Mask sensitive columns")}
                     </button>
                 </div>

@@ -16,13 +16,10 @@ import {
 import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
 import { copyToClipboard, fireAndForget, formatCell, jsonRowReplacer, sqlIdentifier } from "../../lib/internal";
+import { CONTROL_BTN } from "./control-button";
 
 /** A loaded grid row keyed by column name. */
 type GridRow = Record<string, unknown>;
-
-/** Shared Supabase-style control-button class (mirrors the data-browser toolbar). */
-const CONTROL_BTN =
-    "inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50";
 
 // ── Export ───────────────────────────────────────────────────────────────────
 

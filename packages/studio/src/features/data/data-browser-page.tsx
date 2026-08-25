@@ -8,6 +8,7 @@ import { jsonRowReplacer } from "../../lib/internal";
 import { maskRows } from "../../lib/mask-preview";
 import type { SavedQuery } from "../../lib/saved-queries";
 import type { SqlAssistant } from "../sql/hooks/use-sql-assistant";
+import { CONTROL_TOGGLE_BTN } from "./control-button";
 import type { GridEdit, GridReferences, TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
 import type { EditableFilter } from "./data-filters";
@@ -20,10 +21,6 @@ import type { DataBrowserModel } from "./hooks/use-data-browser";
 import type { DataViewPreferences } from "./hooks/use-data-view-preferences";
 import RowFormEditor from "./row-form";
 import { StagedDiffPanel } from "./staged-edits";
-
-/** Shared Supabase-style control-button class for the toolbar actions. */
-const CONTROL_BTN =
-    "inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50 aria-pressed:bg-accent aria-pressed:text-accent-foreground";
 
 /**
  * The page's view toggle / live status / search / add-row controls. All state
@@ -81,10 +78,10 @@ const DataBrowserViewControls = ({
     return (
         <div className="flex flex-col gap-2" data-testid="db-view-toggle">
             <div className="flex flex-wrap items-center gap-1.5">
-                <button aria-pressed={viewMode === "table"} className={CONTROL_BTN} data-testid="db-view-table" onClick={onShowTable} type="button">
+                <button aria-pressed={viewMode === "table"} className={CONTROL_TOGGLE_BTN} data-testid="db-view-table" onClick={onShowTable} type="button">
                     Table
                 </button>
-                <button aria-pressed={viewMode === "json"} className={CONTROL_BTN} data-testid="db-view-json" onClick={onShowJson} type="button">
+                <button aria-pressed={viewMode === "json"} className={CONTROL_TOGGLE_BTN} data-testid="db-view-json" onClick={onShowJson} type="button">
                     JSON
                 </button>
                 <span
@@ -97,17 +94,17 @@ const DataBrowserViewControls = ({
                     {liveError === undefined ? t("Live") : t("Live unavailable")}
                 </span>
                 {hasMaskedColumns && (
-                    <button aria-pressed={maskOn} className={CONTROL_BTN} data-testid="db-mask-toggle" onClick={onToggleMask} type="button">
+                    <button aria-pressed={maskOn} className={CONTROL_TOGGLE_BTN} data-testid="db-mask-toggle" onClick={onToggleMask} type="button">
                         {t("Mask sensitive columns")}
                     </button>
                 )}
                 {editable && (
-                    <button className={CONTROL_BTN} data-testid="db-add-row" onClick={onAddRow} type="button">
+                    <button className={CONTROL_TOGGLE_BTN} data-testid="db-add-row" onClick={onAddRow} type="button">
                         Add row
                     </button>
                 )}
                 {editable && (
-                    <button className={CONTROL_BTN} data-testid="db-generate-rows" onClick={onGenerateRows} type="button">
+                    <button className={CONTROL_TOGGLE_BTN} data-testid="db-generate-rows" onClick={onGenerateRows} type="button">
                         {t("Generate rows")}
                     </button>
                 )}
