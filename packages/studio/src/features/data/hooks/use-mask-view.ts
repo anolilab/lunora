@@ -61,10 +61,12 @@ const useMaskView = ({ columns, selectedTable }: { readonly columns: ReadonlyArr
 
     // Same layering as above, for a table that is not the open one. The policies are
     // deployment-wide, so a target table resolves without another fetch.
-    const maskViewFor = (table: string, targetColumns: ReadonlyArray<string>): MaskView => {return {
-        columns: mergeSensitiveColumns(maskColumnsForTable(maskPolicies, table), targetColumns),
-        enabled: maskOn,
-    }};
+    const maskViewFor = (table: string, targetColumns: ReadonlyArray<string>): MaskView => {
+        return {
+            columns: mergeSensitiveColumns(maskColumnsForTable(maskPolicies, table), targetColumns),
+            enabled: maskOn,
+        };
+    };
 
     // The chips show whenever a column is covered; cell values are only rewritten
     // when the toggle is on.
