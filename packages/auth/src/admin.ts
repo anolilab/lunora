@@ -1227,9 +1227,12 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     await context_.internalAdapter.updatePassword(userId, hashed);
                 } else {
                     await context_.internalAdapter.linkAccount({
+                        // `accountId`, not the `providerAccountId` 1.7.0's prereleases
+                        // briefly used — GA reverted that rename. Same shape as the
+                        // create-user path above.
+                        accountId: userId,
                         issuer: createLocalAccountIssuer("credential"),
                         password: hashed,
-                        providerAccountId: userId,
                         providerId: "credential",
                         userId,
                     });
