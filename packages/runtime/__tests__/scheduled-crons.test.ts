@@ -192,7 +192,7 @@ describe("createWorker — `authorizeShard` gates callers, never system dispatch
         const response = await worker.fetch(
             new Request("https://app.example/_lunora/scheduler/dispatch", {
                 body: JSON.stringify({ args: {}, functionPath: "digests:flush", id: "job-1", shardKey: "tenant-7" }),
-                headers: { authorization: "Bearer admin-secret" },
+                headers: { authorization: "Bearer admin-secret" }, // gitleaks:allow -- test fixture bearer, matches the stub admin token below
                 method: "POST",
             }),
             {},
