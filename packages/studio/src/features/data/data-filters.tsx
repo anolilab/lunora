@@ -66,6 +66,53 @@ const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[]
  * (the data-browser model); this is the control markup, emitting the full
  * filter array up on every edit. Raw strings (no i18n) to match the surrounding
  * data-browser controls.
+ *
+ * ## Why these rows are NOT run through the mask preview
+ *
+ * Every other read surface in the shard browser honours the "Mask sensitive
+ * columns" toggle — grid cells, the transposed and JSON views, the row-detail
+ * drawer, all three exports, the facet sidebar — and the `.global()` browser
+ * masks its drill-down chips too. This bar deliberately does not, and the
+ * question has been raised twice, so here is the enumeration it rests on.
+ *
+ * A value can reach one of these rows in exactly five ways.
+ *
+ * 1. The operator TYPES it into the `db-filter-value` input. Masking an input
+ * renders it uneditable, and hides a value from the one person who just wrote it.
+ *
+ * 2. `addFilter` seeds a new row with an EMPTY value. Nothing to hide.
+ *
+ * 3. A FACET-VALUE CLICK (`facetFilter` in `use-data-browser`). `DataFacets`
+ * withholds both the toggle and any open section for a mask-covered column while
+ * the preview is on, so this path can only reach a covered column after the
+ * operator has switched the preview OFF — a deliberate reveal of the same value,
+ * from the same screen.
+ *
+ * 4. HYDRATION FROM THE URL or a saved query (`initialFilters` →
+ * `toEditableFilters`). This is the shared-link case, and the one that looks like
+ * the `.global()` drill-down chips — but it is not, because of the invariant below.
+ *
+ * 5. The AI "describe a filter" affordance. `aiTableFilter` is grounded in the
+ * browsed table's COLUMN NAMES only (`shard-do.ts#handleAiTableFilter`); no row
+ * values are ever sent to the model, so it cannot lift a stored secret into a clause.
+ *
+ * The invariant that makes 3 and 4 harmless: **a filter clause rendered here is
+ * always simultaneously rendered verbatim in the address bar.** `useDataBrowser`
+ * mirrors the loaded view through `onViewChange`, and `table-editor.tsx` writes
+ * it straight into `?filters=<json>` on every change. So masking a row would
+ * blank a value that is legible, unmasked, three inches above the input — while
+ * making the filter impossible to edit. It would cost usability and buy nothing.
+ *
+ * That is exactly what separates this bar from the `.global()` browser's
+ * drill-down chips, which ARE masked: those are read-only (nothing to edit),
+ * they are fed ONLY by a facet click, and `global-data-browser` keeps them in
+ * local state that never reaches the URL — so masking them genuinely removes a
+ * value from the screen.
+ *
+ * **If either half of that stops being true — a filter row that is not mirrored
+ * to `?filters=`, or a read-only filter display — revisit this.** Both halves are
+ * pinned by `__tests__/features/data/data-browser-mask.test.tsx`'s
+ * "dataBrowser masking — filters" block.
  */
 const DataFilters = ({
     columns,

@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { createElement, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import type { GridRow } from "../../../src/features/data/grid-features";
 import { toCsv, toJson, toSql } from "../../../src/features/data/grid-features";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import { maskValue } from "../../../src/lib/mask-preview";
+import type { DataView } from "../../../src/lib/saved-queries";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -450,6 +451,86 @@ describe("dataBrowser masking — facets", () => {
         fireEvent.click(screen.getByTestId("db-mask-toggle"));
 
         expect(screen.queryByTestId("db-facet-email")).toBeNull();
+    });
+});
+
+/**
+ * The shard browser's filter bar is the one read surface that deliberately does
+ * NOT honour the mask preview. `data-filters.tsx` carries the enumeration; these
+ * two tests pin the two facts that enumeration rests on, so a later change that
+ * invalidates either goes red instead of leaving a stale rationale in a comment:
+ *
+ * (a) a mask-covered filter row still renders its raw, editable value, and (b)
+ * that same value is mirrored to the host for the URL (`?filters=`), which is what
+ * makes leaving it raw cost nothing.
+ */
+describe("dataBrowser masking — filters", () => {
+    /** A deep link that already carries a covered column's value — the shared-link case. */
+    const LINKED_FILTERS = [{ column: "email", operator: "eq" as const, value: "ada@example.com" }];
+
+    /**
+     * The URL-controlled host, minus the URL: `initialFilters` stays fixed (as a
+     * deep link's `?filters=` would) while the table selection is fed back through
+     * `onSelectTable`, so opening `users` re-seeds the bar from those filters.
+     */
+    const LinkedDataBrowser = ({ onViewChange }: { onViewChange?: (view: Pick<DataView, "filters">) => void }): ReactElement => {
+        const [table, setTable] = useState<string | undefined>(undefined);
+
+        return <DataBrowser initialFilters={LINKED_FILTERS} onSelectTable={setTable} onViewChange={onViewChange} tableParam={table} />;
+    };
+
+    const openLinked = async (mock: MockClientHooks, onViewChange?: (view: Pick<DataView, "filters">) => void): Promise<void> => {
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <LinkedDataBrowser onViewChange={onViewChange} />
+            </LunoraProvider>,
+        );
+        fireEvent.click(await screen.findByTestId("db-table-users"));
+        await screen.findByTestId("db-page");
+    };
+
+    it("keeps a mask-covered filter row raw and editable while the preview masks the grid", async () => {
+        expect.assertions(3);
+
+        const mock = createMaskedClient();
+
+        await openLinked(mock);
+
+        // The toggle defaults ON, so the grid hides the very value the filter is on…
+        const firstRow = screen.getAllByTestId("db-row")[0] as HTMLElement;
+
+        expect(within(firstRow).queryByText("ada@example.com")).toBeNull();
+
+        // …while the filter row keeps it, because the operator cannot edit `•••`
+        // and the value is in the address bar anyway (pinned by the next test).
+        const valueInput = screen.getByTestId<HTMLInputElement>("db-filter-value");
+
+        expect(valueInput.value).toBe("ada@example.com");
+        expect(screen.getByTestId<HTMLSelectElement>("db-filter-column").value).toBe("email");
+    });
+
+    it("mirrors a mask-covered filter value to the host, so it is already in the URL", async () => {
+        expect.assertions(1);
+
+        const mock = createMaskedClient();
+        const onViewChange = vi.fn<(view: Pick<DataView, "filters">) => void>();
+
+        await openLinked(mock, onViewChange);
+
+        // Edit the covered row: the mirror is what puts the value into `?filters=`.
+        fireEvent.change(screen.getByTestId("db-filter-value"), { target: { value: "grace@example.com" } });
+
+        await waitFor(() => {
+            if (onViewChange.mock.calls.length === 0) {
+                throw new Error("the view was never mirrored to the host");
+            }
+        });
+
+        // Every clause the host was handed — this is verbatim what `table-editor`
+        // writes into `?filters=`, and therefore what the address bar already shows.
+        const mirrored = onViewChange.mock.calls.flatMap(([view]) => view.filters ?? []);
+
+        expect(mirrored).toContainEqual({ column: "email", operator: "eq", value: "grace@example.com" });
     });
 });
 
