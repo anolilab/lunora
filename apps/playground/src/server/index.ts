@@ -145,21 +145,18 @@ const app = defineApp<Env>()
     })
     // This playground has `.auth()` but no per-row RLS on every table, so leaving
     // shard access OPEN would let an unauthenticated caller reach any channel's
-    // shard. Gate it on authentication instead: a NON-DEFAULT shard requires a
+    // shard. Gate it on authentication instead: reaching a shard requires a
     // signed-in user.
     //
-    // The default (`__root__`) shard is deliberately exempt. Server-initiated
-    // dispatch — a scheduled job or a firing cron — re-enters this gate with a
-    // `null` system identity and no shard key, so it lands on `__root__`; a gate
-    // that demanded a `userId` there rejected EVERY scheduled job with a 403
-    // `FORBIDDEN_SHARD` and no app-visible error. `__root__`'s own tables carry
-    // per-row RLS (see `lunora/notes.ts`), which is what isolates callers there.
+    // `authorizeShard` only ever sees client-originated access, so `identity ===
+    // null` here means an anonymous end user and nothing else — crons and
+    // scheduled jobs are dispatched inside the trust boundary and never reach it.
     //
     // (This is a coarse gate — a real multi-tenant app should check the caller
     // OWNS the shard, e.g. `identity?.userId === ownerOf(shardKey)`, and add
     // per-row RLS as defense-in-depth.)
     .extend(() => {
-        return { authorizeShard: (identity, shardKey) => shardKey === ROOT_SHARD_KEY || identity?.userId !== undefined };
+        return { authorizeShard: ({ identity }) => identity?.userId !== undefined };
     })
     .build();
 

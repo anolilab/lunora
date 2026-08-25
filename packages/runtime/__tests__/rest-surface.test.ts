@@ -109,7 +109,8 @@ describe("createWorker — opt-in public REST surface", () => {
         const response = await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list"), {}, fakeContext);
 
         expect(response.status).toBe(403);
-        expect(authorizeShard).toHaveBeenCalledWith(null, "__root__");
+         
+        expect(authorizeShard).toHaveBeenCalledWith({ identity: null, shardKey: "__root__" });
     });
 
     it("forwards resolved identity to the shard (so ctx.auth / RLS apply)", async () => {

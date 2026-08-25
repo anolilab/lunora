@@ -57,6 +57,7 @@ export type {
     RpcContext,
     RpcEnvelope,
     ScheduledControllerLike,
+    ShardCaller,
     ShardingInfo,
     StorageListFn,
     StorageObject,
