@@ -3213,6 +3213,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `DEFAULT_RETRY_POLICY` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `DirectShardDirectory` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
@@ -3326,6 +3330,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `R2UploadedPartLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `RIVET_CAPABILITIES` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -3446,6 +3454,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `resolveShard` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `retryBackoffMs` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 

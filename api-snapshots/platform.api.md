@@ -97,6 +97,17 @@ interface D1SessionLike {
 }
 ```
 
+### `DEFAULT_RETRY_POLICY` (const)
+
+```ts
+const DEFAULT_RETRY_POLICY: {
+    readonly backoffMultiplier: 2;
+    readonly initialDelayMs: 1000;
+    readonly maxAttempts: 5;
+    readonly maxDelayMs: 60000;
+};
+```
+
 ### `DirectShardDirectory` (interface)
 
 ```ts
@@ -459,6 +470,12 @@ interface R2UploadedPartLike {
 }
 ```
 
+### `RIVET_CAPABILITIES` (const)
+
+```ts
+const RIVET_CAPABILITIES: PlatformCapabilities;
+```
+
 ### `ScheduleOptions` (interface)
 
 ```ts
@@ -753,6 +770,16 @@ interface VectorizeVector {
 const resolveShard: (directory: ShardDirectory, name: string, locationHint?: ShardRegionHint) => ShardStub;
 ```
 
+### `retryBackoffMs` (const)
+
+```ts
+const retryBackoffMs: (attempts: number, policy: {
+    backoffMultiplier: number;
+    initialDelayMs: number;
+    maxDelayMs: number;
+}) => number;
+```
+
 ## `@lunora/platform/conformance`
 
 ### `ConformanceHost` (interface)
@@ -813,37 +840,19 @@ const createReferenceHost: () => ReferenceHost;
 const defineHostContractSuite: (name: string, factory: ConformanceHostFactory, vitest: VitestApi) => void;
 ```
 
+### `pollJobDispatched` (const)
+
+```ts
+const pollJobDispatched: (scheduler: SchedulerHost, dispatched: ReadonlySet<string>, id: string) => Promise<boolean>;
+```
+
+### `waitPastTarget` (const)
+
+```ts
+const waitPastTarget: (target: number) => Promise<void>;
+```
+
 ## `@lunora/platform/conformance/suite`
-
-### `C` (interface)
-
-```ts
-interface ConformanceHost {
-    awaitAlarmFired?: (target: number) => Promise<void>;
-    awaitJobDispatched?: (id: string) => Promise<boolean>;
-    cleanup?: () => void;
-    createSocket?: () => unknown;
-    directory: ShardDirectory;
-    disposeTerminally?: () => void;
-    kv?: ShardKvStore;
-    readFrames?: (socket: SocketHandle) => string[];
-    restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
-    scheduler?: SchedulerHost;
-    shard: ShardHost;
-    simulateDeadLetter?: (id: string) => Promise<boolean>;
-    simulateRecycle?: () => void;
-    socket: SocketHost;
-}
-```
-
-### `R` (interface)
-
-```ts
-interface ReferenceHost extends ConformanceHost {
-    restoreSocket: (id: string, attachment: unknown) => SocketHandle;
-    simulateRecycle: () => void;
-}
-```
 
 ### `VitestApi` (type)
 
@@ -853,18 +862,6 @@ type VitestApi = {
     expect: typeof import("vitest").expect;
     it: typeof import("vitest").it;
 };
-```
-
-### `a` (type)
-
-```ts
-type ConformanceHostFactory = () => ConformanceHost | Promise<ConformanceHost>;
-```
-
-### `c` (const)
-
-```ts
-const createReferenceHost: () => ReferenceHost;
 ```
 
 ### `defineHostContractSuite` (const)
