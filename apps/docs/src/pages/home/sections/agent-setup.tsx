@@ -5,7 +5,7 @@ import type { FC, ReactNode } from "react";
 import { useState } from "react";
 
 import { Kicker } from "@/kit/layout";
-import posthog from "@/lib/posthog";
+import { posthog } from "@/lib/posthog";
 import { cn } from "@/lib/utils";
 import { siteConfig } from "~/site.config";
 

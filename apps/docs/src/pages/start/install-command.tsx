@@ -4,7 +4,7 @@ import { Check, Copy } from "lucide-react";
 import type { FC } from "react";
 import { useState } from "react";
 
-import posthog from "@/lib/posthog";
+import { posthog } from "@/lib/posthog";
 
 /**
  * Copyable install command for the starter-kits page — mirrors the home hero's
