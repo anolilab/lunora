@@ -183,6 +183,14 @@ const openRivetShardState = async (actor: Pick<RivetActorLike, "db">): Promise<R
 
     let dirty = false;
     let registryDirty = false;
+    // Bumped by every mark. `flush` captures the value before it awaits and only
+    // clears the flag if it has not moved, so a write that lands DURING the
+    // await — a socket callback marking the registry while its snapshot is being
+    // persisted — is not mistaken for one the snapshot contains. Without this the
+    // flag was cleared for a write that was never serialized, and the next sleep
+    // lost it with no error.
+    let revision = 0;
+    let registryRevision = 0;
     let closed = false;
 
     const persist = async (slot: number, source: Database.Database): Promise<void> => {
@@ -210,19 +218,29 @@ const openRivetShardState = async (actor: Pick<RivetActorLike, "db">): Promise<R
         // (`runSerialized`, `transaction`) flush again after their own
         // `COMMIT`, so the write is deferred rather than dropped.
         if (dirty && !database.inTransaction) {
+            const snapshotRevision = revision;
+
             await persist(SHARD_SLOT, database);
 
-            // Cleared only after the durable write resolves. Clearing first
-            // would drop the very writes a failed flush still owes, and the
-            // next boundary would find nothing to retry.
-            dirty = false;
+            // Cleared only after the durable write resolves, and only if nothing
+            // was written while it was in flight. Clearing first would drop the
+            // very writes a failed flush still owes, and the next boundary would
+            // find nothing to retry.
+            if (revision === snapshotRevision) {
+                dirty = false;
+            }
         }
 
         // No guard here, and none needed: nothing ever opens a transaction on
         // the registry copy — that is what it is separate for.
         if (registryDirty) {
+            const snapshotRevision = registryRevision;
+
             await persist(REGISTRY_SLOT, registry);
-            registryDirty = false;
+
+            if (registryRevision === snapshotRevision) {
+                registryDirty = false;
+            }
         }
     };
 
@@ -241,9 +259,11 @@ const openRivetShardState = async (actor: Pick<RivetActorLike, "db">): Promise<R
         },
         markDirty: () => {
             dirty = true;
+            revision += 1;
         },
         markRegistryDirty: () => {
             registryDirty = true;
+            registryRevision += 1;
         },
         registry,
     };

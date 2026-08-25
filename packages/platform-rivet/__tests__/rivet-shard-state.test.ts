@@ -12,6 +12,38 @@ import { clearRivetShardSnapshot, openRivetShardState } from "../src/rivet-shard
  * uncommitted one is not.
  */
 describe("rivet shard state", () => {
+    it("stays dirty when a write lands while the snapshot is being persisted", async () => {
+        expect.assertions(2);
+
+        const actor = createRivetActorDouble();
+
+        try {
+            const state = await openRivetShardState(actor);
+
+            state.database.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
+            state.markDirty();
+
+            const flushing = state.flush();
+
+            // A second write inside the flush's await window — the shape a socket
+            // callback takes while its own snapshot is being written. Before the
+            // fix the flag was cleared for this write too, even though the
+            // serialized copy predates it, and the next wake lost it silently.
+            state.markDirty();
+
+            await flushing;
+
+            // Still owed: the second mark is not in what was just persisted.
+            expect(state.isDirty).toBe(true);
+
+            await state.flush();
+
+            expect(state.isDirty).toBe(false);
+        } finally {
+            await clearRivetShardSnapshot(actor.db);
+        }
+    });
+
     it("restores a committed write into a second wake's working copy", async () => {
         expect.assertions(2);
 
