@@ -14,6 +14,31 @@ interface AgentRegisteredFunction {
     readonly visibility?: "internal" | "public";
 }
 
+/**
+ * The longest a HITL approval wait may hibernate, however it is configured.
+ *
+ * A configured `approvalTimeout` is CLAMPED to this at read. The bound is not
+ * cosmetic: a wait that outlives {@link ABANDONED_APPROVAL_MS} lets the thread
+ * be reclaimed (its `instanceId` re-stamped) while the approval is still
+ * pending, which is precisely the stranded-approval failure the timeout exists
+ * to prevent. A week already exceeds any plausible human turnaround.
+ */
+const APPROVAL_TIMEOUT_MAX_MS: number = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * How long an `"awaiting_input"` (HITL-paused) thread may sit untouched before
+ * a new run may reclaim it.
+ *
+ * DERIVED from {@link APPROVAL_TIMEOUT_MAX_MS} rather than written as its own
+ * duration, so the ordering is structural instead of a comment two files apart:
+ * at twice the longest possible wait, the wait ALWAYS times out — freeing the
+ * thread through the normal rejection path — with a full timeout's margin
+ * before the reclaim can consider the thread abandoned. The reclaim still
+ * exists for the case the timeout cannot cover: an instance that died without
+ * ever running its wait to completion.
+ */
+const ABANDONED_APPROVAL_MS: number = 2 * APPROVAL_TIMEOUT_MAX_MS;
+
 /** Stamp a registered function internal — server-side callable only. */
 const asInternal = <T>(function_: T): T => {
     return { ...function_, visibility: "internal" };
@@ -39,4 +64,4 @@ const definedColumns = (columns: Record<string, unknown>): Record<string, unknow
 };
 
 export type { AgentRegisteredFunction };
-export { AGENT_EXTENSION_KEY, asInternal, definedColumns };
+export { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, APPROVAL_TIMEOUT_MAX_MS, asInternal, definedColumns };

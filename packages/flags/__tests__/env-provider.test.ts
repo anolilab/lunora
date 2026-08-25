@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { defineFlags } from "../src/define-flags";
 import { createFlags, resetFlags } from "../src/flags";
 import { envProvider } from "../src/providers/env";
 
@@ -173,7 +174,7 @@ describe("envProvider", () => {
             // Codegen wraps a FlagsProviderFactory as `() => factory(env)`; mirror that.
             const factory = envProvider();
             const env = { FLAG_DARK_MODE: "true", FLAG_PAGE_SIZE: "25" };
-            const flags = createFlags({ provider: () => factory(env) });
+            const flags = createFlags(defineFlags({ provider: factory }), env);
 
             await expect(flags.boolean("dark-mode", false)).resolves.toBe(true);
             await expect(flags.number("page-size", 10)).resolves.toBe(25);

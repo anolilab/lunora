@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AnalyticsSqlError, createAnalyticsSqlClient } from "../../src/analytics/sql-api";
 
@@ -103,5 +103,66 @@ describe("createAnalyticsSqlClient", () => {
 
         expect(error).toBeInstanceOf(AnalyticsSqlError);
         expect((error as AnalyticsSqlError).status).toBe(403);
+    });
+});
+
+describe("timeout", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    // A fetch that never settles until its signal aborts — the stalled-endpoint shape.
+    const hungFetch = () =>
+        vi.fn<(url: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+            async (_url, init) =>
+                new Promise<Response>((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(new DOMException("The operation was aborted.", "AbortError"));
+                    });
+                }),
+        );
+
+    it("aborts a hung fetch after the default 60s as a 504 AnalyticsSqlError naming the deadline", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const client = createAnalyticsSqlClient({ accountId: "a", apiToken: "t", fetch: hungFetch() });
+        const caught = client.query("SELECT 1").catch((error_: unknown) => error_);
+
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        const error = await caught;
+
+        expect(error).toBeInstanceOf(AnalyticsSqlError);
+        expect((error as AnalyticsSqlError).status).toBe(504);
+        expect(String(error)).toMatch(/timed out after 60000ms/);
+    });
+
+    it("honours a timeoutMs override", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        const client = createAnalyticsSqlClient({ accountId: "a", apiToken: "t", fetch: hungFetch(), timeoutMs: 5 });
+        const caught = client.query("SELECT 1").catch((error_: unknown) => error_);
+
+        await vi.advanceTimersByTimeAsync(5);
+
+        expect(String(await caught)).toMatch(/timed out after 5ms/);
+    });
+
+    it("leaves no pending timer behind a fast response", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<(url: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (_url, _init) =>
+            okResponse({ data: [], meta: [], rows: 0 }),
+        );
+        const client = createAnalyticsSqlClient({ accountId: "a", apiToken: "t", fetch: fetchMock });
+
+        await expect(client.query("SELECT 1")).resolves.toBeDefined();
+        expect(vi.getTimerCount()).toBe(0);
     });
 });

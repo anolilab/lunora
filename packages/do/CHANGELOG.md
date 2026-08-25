@@ -1,3 +1,14 @@
+## @lunora/do [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.94...@lunora/do@1.0.0-alpha.95) (2026-08-24)
+
+### Bug Fixes
+
+* **do:** guarantee socket-close teardown ([#451](https://github.com/anolilab/lunora/issues/451)) ([1b22b67](https://github.com/anolilab/lunora/commit/1b22b679989f0f5593089232e77d440422b6dcbc))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/do [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.93...@lunora/do@1.0.0-alpha.94) (2026-08-24)
 
 

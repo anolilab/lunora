@@ -1,3 +1,15 @@
+## @lunora/agent [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.60...@lunora/agent@1.0.0-alpha.61) (2026-08-24)
+
+### Bug Fixes
+
+* **agent:** unstrand HITL approvals ([#438](https://github.com/anolilab/lunora/issues/438)) ([45c3b42](https://github.com/anolilab/lunora/commit/45c3b42297a1564a62a86ba8563d4e6c2d439106))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.80
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.31
+
 ## @lunora/agent [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.59...@lunora/agent@1.0.0-alpha.60) (2026-08-23)
 
 

@@ -88,6 +88,7 @@ interface RunFunctionOptions {
 ```ts
 interface RunStepOptions {
     config?: WorkflowStepConfigLike;
+    name?: string;
 }
 ```
 

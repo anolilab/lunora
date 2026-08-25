@@ -4,7 +4,7 @@ import { defineSchemaExtension, defineTable, initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
 import type { AgentRegisteredFunction } from "./component-shared";
-import { AGENT_EXTENSION_KEY, asInternal, definedColumns } from "./component-shared";
+import { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, asInternal, definedColumns } from "./component-shared";
 import { episodeTables, episodicComponent } from "./episodic-component";
 import { graphComponent, graphTables } from "./graph-component";
 import type { EnsureThreadOutcome } from "./types";
@@ -39,7 +39,8 @@ const MAX_QUEUE_DEPTH = 5;
  * instance terminated while parked leaves the thread pointing at a workflow that
  * will never resume — and nothing else would ever free it. The window is longer
  * than the loop's own dequeue timeout so a genuinely parked run is never
- * reclaimed out from under itself.
+ * reclaimed out from under itself. Applies to `"running"` threads only — an
+ * `"awaiting_input"` thread uses {@link ABANDONED_APPROVAL_MS}.
  */
 const ABANDONED_RUN_MS = 13 * 60 * 60 * 1000;
 
@@ -302,6 +303,7 @@ export interface AgentComponent {
     functions: {
         agentAppendMessage: AgentRegisteredFunction;
         agentCompleteRun: AgentRegisteredFunction;
+        agentDeleteMessage: AgentRegisteredFunction;
         agentEnsureThread: AgentRegisteredFunction;
         agentEpisodeRecall: AgentRegisteredFunction;
         agentEpisodeUpsert: AgentRegisteredFunction;
@@ -382,9 +384,13 @@ export const agentComponent = (): AgentComponent => {
                 // Nothing else reaps that: under `"reject"` every later run
                 // CONFLICTs, and under `"queue"` every later run parks behind a
                 // corpse. A thread untouched for longer than any run could
-                // plausibly hold it is treated as free.
+                // plausibly hold it is treated as free — but an `awaiting_input`
+                // thread is measured against the far longer approval horizon,
+                // because its instance really is alive and hibernating on a slow
+                // human decision (see ABANDONED_APPROVAL_MS).
                 const updatedAt = typeof existing["updatedAt"] === "number" ? existing["updatedAt"] : 0;
-                const abandoned = now - updatedAt > ABANDONED_RUN_MS;
+                const staleAfter = existing["status"] === "awaiting_input" ? ABANDONED_APPROVAL_MS : ABANDONED_RUN_MS;
+                const abandoned = now - updatedAt > staleAfter;
                 const isConcurrentRun =
                     !abandoned &&
                     (existing["status"] === "running" || existing["status"] === "awaiting_input") &&
@@ -485,6 +491,46 @@ export const agentComponent = (): AgentComponent => {
             await context.db.patch(thread["_id"] as never, { messageCount: seq + 1, updatedAt: now });
 
             return { seq };
+        });
+
+    /**
+     * Delete a message by `(threadKey, messageKey)`. A no-op when absent, so a
+     * workflow replay re-running the delete is harmless.
+     *
+     * Used for exactly one thing: retiring the spent HITL approval marker. The
+     * marker is a pending-decision AFFORDANCE, not conversation content — every
+     * client renders its Approve/Reject purely from `status ===
+     * "awaiting_approval"`, and `model-messages.ts` drops rows with that status
+     * so the model never sees a duplicate tool-result part for the call.
+     *
+     * That is why the marker is DELETED rather than moved to a terminal status:
+     * a terminal status would flip it into a second, bogus tool RESULT on both
+     * surfaces at once — an extra result event carrying the placeholder's text
+     * in every client, and a duplicated tool-result part in the model prompt
+     * (breaking provider tool-call pairing). The real outcome is already
+     * recorded on the tool-result row under the same `toolCallId`, so removing
+     * the placeholder loses nothing.
+     *
+     * `messageCount` is deliberately NOT decremented — it is the thread's next-
+     * `seq` high-water mark, and rolling it back would hand a later message a
+     * `seq` that is already taken.
+     */
+    const agentDeleteMessage = mutation
+        .input({
+            messageKey: v.string(),
+            threadKey: v.string(),
+        })
+        .mutation(async ({ args, ctx: context }): Promise<void> => {
+            const existing = await context.db
+                .query(MESSAGES_TABLE)
+                .withIndex("byMessageKey", (q) => q.eq("threadKey", args.threadKey).eq("messageKey", args.messageKey))
+                .first();
+
+            if (!existing) {
+                return;
+            }
+
+            await context.db.delete(existing["_id"] as never);
         });
 
     const agentPatchThread = mutation
@@ -941,6 +987,7 @@ export const agentComponent = (): AgentComponent => {
             agentGraphTraverse: graph.agentGraphTraverse,
             agentGraphUpsert: graph.agentGraphUpsert,
             agentMessages,
+            agentDeleteMessage: asInternal(agentDeleteMessage),
             agentPatchThread: asInternal(agentPatchThread),
             agentResolveApproval,
             agentRun,

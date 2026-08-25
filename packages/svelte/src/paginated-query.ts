@@ -7,9 +7,14 @@ import { derived, get, readable, writable } from "svelte/store";
 import { stableWireKey } from "../../../shared/wire-key";
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
+import { isReadableStore } from "./is-readable-store";
+import { subscribeReactiveArgs } from "./subscribe-reactive-args";
 
 /** The args a paginated query exposes minus the framework-supplied page cursor. */
 type PaginatedArgs<F extends FunctionReference> = Omit<ArgsOf<F>, "paginationOpts">;
+
+/** Paginated args, the skip sentinel, or a reactive (`Readable`) source of either. */
+type ReactivePaginatedArgs<F extends FunctionReference> = "skip" | PaginatedArgs<F> | Readable<"skip" | PaginatedArgs<F>>;
 
 /** The element type of the `page` array a paginated query returns. */
 type PageItemOf<F extends FunctionReference> = ReturnOf<F> extends { page: (infer T)[] } ? T : unknown;
@@ -78,7 +83,7 @@ const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): 
 const createPaginatedEngine = <T>(
     client: LunoraClient,
     function_: FunctionReference,
-    baseArgs: "skip" | Record<string, unknown>,
+    baseArgs: "skip" | Record<string, unknown> | Readable<"skip" | Record<string, unknown>>,
     options: { initialNumItems: number; shardKey?: string },
 ): {
     loadMore: (numberItems: number) => void;
@@ -102,7 +107,9 @@ const createPaginatedEngine = <T>(
      */
     const pendingPageKeys = new Set<string>();
 
-    const currentBaseArgs: "skip" | Record<string, unknown> = baseArgs;
+    // For a reactive args source this starts at `"skip"` and is replaced by the
+    // store's first (synchronous) emission when `pageResults` gains a subscriber.
+    let currentBaseArgs: "skip" | Record<string, unknown> = isReadableStore<"skip" | Record<string, unknown>>(baseArgs) ? "skip" : baseArgs;
 
     const rebuildPageResults = (): void => {
         if (currentBaseArgs === "skip") {
@@ -111,8 +118,10 @@ const createPaginatedEngine = <T>(
             return;
         }
 
+        const baseArgsRecord = currentBaseArgs;
+
         const updated = get(pagesStore).map((page) => {
-            const key = buildPageKey(function_["__lunoraRef"], buildPageArgs(page, currentBaseArgs));
+            const key = buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgsRecord));
 
             return resultsByKey.get(key);
         });
@@ -138,7 +147,8 @@ const createPaginatedEngine = <T>(
             return;
         }
 
-        const keyOf = (page: Page): string => buildPageKey(function_["__lunoraRef"], buildPageArgs(page, currentBaseArgs));
+        const baseArgsRecord = currentBaseArgs;
+        const keyOf = (page: Page): string => buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgsRecord));
 
         for (const newPage of newPages) {
             const newKey = keyOf(newPage);
@@ -293,17 +303,24 @@ const createPaginatedEngine = <T>(
         // Wire internal store updates through to this readable's subscribers.
         const unsubInternal = pageResultsInternal.subscribe(set);
 
-        // Eagerly open subscriptions now that someone is watching.
-        if (currentBaseArgs !== "skip") {
+        // Open the page subscriptions now that someone is watching. With a
+        // reactive args source every emission is a full teardown + fresh
+        // construction — the teardown resets pagination to the first page, so a
+        // new emission builds exactly as if the engine were new.
+        const stopArgs = subscribeReactiveArgs<"skip" | Record<string, unknown>>(baseArgs, (resolved) => {
+            currentBaseArgs = resolved;
             syncSubscriptions();
             rebuildPageResults();
-        }
+
+            return () => {
+                teardownAll();
+                pagesStore.set(initialPages(initialNumItems));
+            };
+        });
 
         return () => {
+            stopArgs();
             unsubInternal();
-            teardownAll();
-            // Reset so a re-subscribe starts clean.
-            pagesStore.set(initialPages(initialNumItems));
             pageResultsInternal.set([]);
         };
     });
@@ -371,28 +388,32 @@ const createPaginatedEngine = <T>(
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client from the
  * Svelte context.
+ *
+ * `args` may also be a `Readable` store: each emission tears the engine down
+ * and rebuilds it against the new args (pagination resets to the first page);
+ * a `"skip"` emission tears down without re-opening.
  */
 export function paginatedQuery<F extends FunctionReference>(
     function_: F,
-    args: "skip" | PaginatedArgs<F>,
+    args: ReactivePaginatedArgs<F>,
     options: PaginatedQueryOptions,
 ): PaginatedQueryHandle<PageItemOf<F>>;
 export function paginatedQuery<F extends FunctionReference>(
     client: LunoraClient,
     function_: F,
-    args: "skip" | PaginatedArgs<F>,
+    args: ReactivePaginatedArgs<F>,
     options: PaginatedQueryOptions,
 ): PaginatedQueryHandle<PageItemOf<F>>;
 export function paginatedQuery<F extends FunctionReference>(
     clientOrFunction: F | LunoraClient,
-    functionOrArguments: F | "skip" | PaginatedArgs<F>,
-    argumentsOrOptions: PaginatedQueryOptions | "skip" | PaginatedArgs<F>,
+    functionOrArguments: F | ReactivePaginatedArgs<F>,
+    argumentsOrOptions: PaginatedQueryOptions | ReactivePaginatedArgs<F>,
     maybeOptions?: PaginatedQueryOptions,
 ): PaginatedQueryHandle<PageItemOf<F>> {
     const hasExplicitClient = !isFunctionReference(clientOrFunction);
     const client = hasExplicitClient ? clientOrFunction : getLunoraClient();
     const functionRef = (hasExplicitClient ? functionOrArguments : clientOrFunction) as F;
-    const args = (hasExplicitClient ? argumentsOrOptions : functionOrArguments) as "skip" | PaginatedArgs<F>;
+    const args = (hasExplicitClient ? argumentsOrOptions : functionOrArguments) as ReactivePaginatedArgs<F>;
     const options = (hasExplicitClient ? maybeOptions : argumentsOrOptions) as PaginatedQueryOptions;
 
     const { loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
@@ -457,4 +478,4 @@ export function infiniteQuery<F extends FunctionReference>(
     return { fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, pages, status };
 }
 
-export type { InfiniteQueryHandle, InfiniteQueryOptions, PageItemOf, PaginatedArgs, PaginatedQueryHandle, PaginatedQueryOptions };
+export type { InfiniteQueryHandle, InfiniteQueryOptions, PageItemOf, PaginatedArgs, PaginatedQueryHandle, PaginatedQueryOptions, ReactivePaginatedArgs };
