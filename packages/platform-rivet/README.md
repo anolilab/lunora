@@ -6,7 +6,7 @@ A [Rivet](https://rivet.dev/actors) implementation of the `@lunora/platform` hos
 
 ## Why Rivet
 
-A Rivet Actor is the closest primitive to a Durable Object outside Cloudflare: one addressable, single-writer instance per key, with its own SQLite database, its own durable schedules, and a sleep/wake lifecycle. Five things this host gets from the platform rather than rebuilding are things `@lunora/platform-node` has to emulate:
+A Rivet Actor is the closest primitive to a Durable Object outside Cloudflare: one addressable, single-writer instance per key, with its own SQLite database, its own durable schedules, and a sleep/wake lifecycle. Most of what this host needs comes from the platform rather than being rebuilt — the rows below read `native` where `@lunora/platform-node`'s read `emulated`:
 
 | Contract                          | Rivet primitive                           | Rating     |
 | --------------------------------- | ----------------------------------------- | ---------- |

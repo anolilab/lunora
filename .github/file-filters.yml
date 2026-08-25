@@ -145,12 +145,14 @@ templates:
     - "pnpm-lock.yaml"
     - "pnpm-workspace.yaml"
 
-# packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES in
-# packages/platform/src/capabilities.ts. Separate from `packages` per the self-listing
-# rule at the top.
+# Each host package's docs/index.mdx capability table vs its matrix in
+# packages/platform/src/capabilities.ts. Separate from `packages` per the
+# self-listing rule at the top. The key keeps its `node_` name because the CI
+# job and root script do — it covers every host with a capability page.
 node_capabilities_docs:
     - "packages/platform/src/capabilities.ts"
     - "packages/platform-node/docs/index.mdx"
+    - "packages/platform-rivet/docs/index.mdx"
     - "scripts/check-node-capabilities-docs.js"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"

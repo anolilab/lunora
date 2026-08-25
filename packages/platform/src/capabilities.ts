@@ -346,8 +346,8 @@ export const RIVET_CAPABILITIES: PlatformCapabilities = {
             note: "The backup commands need a bucket to write snapshots to, and this target binds none",
         },
         keyValueStore: {
-            level: "native",
-            note: "`c.kv` — durable, actor-scoped, with the prefix and range scans `ShardKvStore.list` needs. Rivet marks it a low-level escape hatch kept for compatibility, which is precisely the shape of the record-keeping DO (`SessionDO`) this contract exists for",
+            level: "emulated",
+            note: "A `_lunora_kv` table in the actor's own SQLite, written through per put. Rivet's `c.kv` is an almost literal match for this contract — actor-scoped, durable, prefix and range scans — and would rate `native`, but it carries an `@deprecated` tag on every member ('a low-level escape hatch kept for backward compatibility'), so the host builds on the storage Rivet recommends instead. Revisit the rating if `c.kv` is un-deprecated",
         },
         vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
         ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },

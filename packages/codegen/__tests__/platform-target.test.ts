@@ -7,7 +7,7 @@ import type { PlatformCapabilities } from "@lunora/platform";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { FeatureUsage } from "../src/discover-feature-usage";
-import { readProjectTarget, resolveCodegenTarget } from "../src/platform-target";
+import { platformMatrixIds, readProjectTarget, resolveCodegenTarget } from "../src/platform-target";
 import { runCodegen } from "../src/run-codegen";
 
 const ALL_OFF: FeatureUsage = {
@@ -224,6 +224,17 @@ describe("project-declared target", () => {
         expect(diagnosticNames()).toStrictEqual([]);
     });
 
+    it("recognises rivet as a registered target end-to-end through runCodegen", () => {
+        expect.assertions(1);
+
+        // Same shape as the `node` leg above, for the same reason: proving the
+        // id resolves through the real registry rather than falling through to
+        // `platform_unknown_target`.
+        writeConfig(`{ "target": "rivet" }`);
+
+        expect(diagnosticNames()).toStrictEqual([]);
+    });
+
     it("reads the target as JSONC, matching how the rest of lunora.json is parsed", () => {
         expect.assertions(1);
 
@@ -256,5 +267,39 @@ describe("project-declared target", () => {
         // misspelled string, which must reach the registry and be rejected.
         expect(readProjectTarget(workdir)).toBeUndefined();
         expect(resolveCodegenTarget(workdir)).toBe("cloudflare");
+    });
+});
+
+describe("matrix registry coverage", () => {
+    /**
+     * Every capability matrix `@lunora/platform` exports must be registered in
+     * `PLATFORM_MATRICES`.
+     *
+     * This is a real miss caught late, not a hypothetical: `RIVET_CAPABILITIES`
+     * shipped with a complete, honest matrix and no registry entry, which makes
+     * it a document rather than a gate — `gatePlatformFeatures` answers
+     * `platform_unknown_target` for an unregistered id and leaves the usage set
+     * untouched, so an app declaring `"target": "rivet"` would emit the full
+     * Cloudflare-shaped surface against a host that cannot serve half of it,
+     * with no diagnostic until runtime.
+     *
+     * Driven off the package's own exports rather than a hand-written list, so
+     * the next host is covered the day its matrix lands instead of the day
+     * someone remembers to extend this.
+     */
+    it("registers every *_CAPABILITIES matrix @lunora/platform exports", async () => {
+        expect.assertions(1);
+
+        // Imported dynamically rather than as a namespace: the enumeration is
+        // the point (a new host is covered the day its matrix lands), and a
+        // static `import * as` is banned by `import/no-namespace`.
+        const platformContracts: Record<string, unknown> = await import("@lunora/platform");
+
+        const exported = Object.entries(platformContracts)
+            .filter(([name]) => name.endsWith("_CAPABILITIES"))
+            .map(([, matrix]) => (matrix as PlatformCapabilities).id)
+            .toSorted((a, b) => a.localeCompare(b));
+
+        expect(exported).toStrictEqual([...platformMatrixIds()]);
     });
 });
