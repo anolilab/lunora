@@ -331,17 +331,17 @@ Run `pageDeltaFrames` only once you announce the token.
 
 ### 5.2 Server → client frames
 
-| `type`     | Shape                                                          | Effect                                                                     |
-| ---------- | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `ack`      | `{ type, id }`                                                 | subscription acknowledged                                                  |
-| `data`     | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }` | deliver `decodeWire(data)` as the new value                                |
-| `delta`    | `{ type, id, delta: <wire>, cursor?, epoch? }`                 | merge delta into server base; the LAST frame of a run carries the cursor   |
-| `resume`   | `{ type, id, cursor?, epoch?, lastMutationId? }`               | nothing changed; keep value, advance cursor                                |
-| `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`               | write touched tables, byte-identical result; advance only                  |
-| `error`    | `{ type, id?, error: { code?, message? }, message? }`          | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)  |
-| `complete` | `{ type, id }`                                                 | subscription/stream closed server-side                                     |
-| `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
-| `whisper`  | `{ type, topic, data: <wire>, from? }`                         | ephemeral relay                                                            |
+| `type`     | Shape                                                           | Effect                                                                     |
+| ---------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `ack`      | `{ type, id }`                                                  | subscription acknowledged                                                  |
+| `data`     | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`  | deliver `decodeWire(data)` as the new value                                |
+| `delta`    | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId? }` | merge delta into server base; the LAST frame of a run carries the cursor   |
+| `resume`   | `{ type, id, cursor?, epoch?, lastMutationId? }`                | nothing changed; keep value, advance cursor                                |
+| `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`                | write touched tables, byte-identical result; advance only                  |
+| `error`    | `{ type, id?, error: { code?, message? }, message? }`           | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)  |
+| `complete` | `{ type, id }`                                                  | subscription/stream closed server-side                                     |
+| `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                 | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
+| `whisper`  | `{ type, topic, data: <wire>, from? }`                          | ephemeral relay                                                            |
 
 ### 5.3 Shape poke protocol (partial replication)
 

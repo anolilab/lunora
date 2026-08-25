@@ -79,12 +79,16 @@ const createReadFootprint = (): ReadFootprint => {
  * for forces a re-snapshot instead of a resume.
  *
  * That rule is only as good as what reaches the read-set. `ctx.kv`, `ctx.storage`,
- * `ctx.vectors`, `ctx.flags` and `ctx.db.system` all read state that lives outside
- * this shard's SQLite and none of them stamped anything, so a query reading a
- * local table AND one of them arrived with a read-set of `{table}` — fully
- * vouchable — and was told `resumable: true` while the KV/R2/Vectorize value it
- * returned had since moved. This sentinel is the missing stamp: it is a name no
- * table can carry, so it can only ever fall to "cannot vouch".
+ * `ctx.vectors` and `ctx.db.system` all read state that lives outside this
+ * shard's SQLite and none of them stamped anything, so a query reading a local
+ * table AND one of them arrived with a read-set of `{table}` — fully vouchable —
+ * and was told `resumable: true` while the KV/R2/Vectorize value it returned had
+ * since moved. This sentinel is the missing stamp: it is a name no table can
+ * carry, so it can only ever fall to "cannot vouch".
+ *
+ * `ctx.flags` is the deliberate exception and is NOT stamped — see
+ * `emitFlagsFragments` in `@lunora/codegen`'s `emit.ts` for why, and for the
+ * advisor lint that tells an app author instead.
  *
  * Deliberately NOT `"*"` (the admin wildcard in `shard-do.ts`). That one has a
  * second meaning — `refreshSubscriptions` re-runs a memo carrying it on EVERY

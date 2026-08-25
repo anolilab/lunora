@@ -3061,6 +3061,8 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
 
 /* eslint-enable no-secrets/no-secrets */
 
+/* eslint-disable no-secrets/no-secrets -- the flagged string is the `flag_read_in_subscription` advisory's rule id, quoted in the docblock below, not a credential. */
+
 /**
  * `ctx.flags` (OpenFeature feature flags) fragments. A flag read is an external
  * lookup like `ctx.kv` — sanctioned in deterministic read paths and memoized per
@@ -3070,46 +3072,42 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
  * it. The default `targetingKey` is derived from `flagsConfig.identify(auth)`
  * over the request's verified identity. `createFlags` never throws, so there is
  * no stub fallback — provider/init errors resolve as the supplied default value.
+ *
+ * **`flags` is deliberately NOT stamped unvouchable**, unlike the other external
+ * reads on this ctx (`ctx.kv`, `ctx.storage`, `ctx.vectors`, `ctx.db.system`).
+ * Flags are an input the invalidation system does not model at all: a flip
+ * appends nothing to `__cdc_log`, so it re-runs no live subscription either.
+ * Refusing the resume would converge the ONE moment a client reconnects while
+ * leaving it stale for the whole time it stays connected — a permanent cost for
+ * half the property, and an inconsistency between the two states harder to
+ * explain than either extreme.
+ *
+ * The reactive path already exists and is correct: a `useFlag` subscription is
+ * served through `FLAGS_FUNCTION_PREFIX`, tagged `ADMIN_WILDCARD`, and
+ * re-evaluated on every write-flush. Branching on a flag INSIDE a cached query
+ * is a point-in-time evaluation, and the `flag_read_in_subscription` advisory
+ * says so — the same answer the repo gives for `Date.now()` in a query, which is
+ * the identical class of unmodellable input.
  */
 const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFragments => {
     if (!hasFlags) {
         return EMPTY_HELPER_FRAGMENTS;
     }
-
-    /* eslint-disable no-secrets/no-secrets -- the flagged string is the `flag_read_in_subscription` advisory's rule id in a comment, not a credential. */
     return {
         build: `
-            const flagsClient: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
+            const flags: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
                 provider: () => config.flags?.(env),
                 targetingKey: () => flagsConfig.identify?.({ identity: identity ?? null, userId: userId ?? null }),
             });
-            // Deliberately NOT stamped unvouchable, unlike the other external
-            // reads on this ctx.
-            //
-            // Flags are an input the invalidation system does not model at all:
-            // a flip appends nothing to \`__cdc_log\`, so it re-runs no live
-            // subscription either. Refusing the resume would converge the ONE
-            // moment a client reconnects while leaving it stale for the whole
-            // time it stays connected — a permanent cost for half the property,
-            // and an inconsistency between the two states that is harder to
-            // explain than either extreme.
-            //
-            // The reactive path already exists and is correct: a \`useFlag\`
-            // subscription is served through \`FLAGS_FUNCTION_PREFIX\`, tagged
-            // \`ADMIN_WILDCARD\`, and re-evaluated on every write-flush. Branching
-            // on a flag INSIDE a cached query is a point-in-time evaluation, and
-            // the \`flag_read_in_subscription\` advisory says so — the same answer
-            // the repo gives for \`Date.now()\` in a query, which is the identical
-            // class of unmodellable input.
-            const flags: import("${flagsSpecifier}").LunoraFlags = flagsClient;
 `,
         configField: `\n    flags?: (env: Record<string, unknown>) => import("${flagsSpecifier}").Provider;`,
-        /* eslint-enable no-secrets/no-secrets */
         contextField: `\n                flags,`,
         importLines: [`import { createFlags } from "${flagsSpecifier}";`, `import flagsConfig from "../flags.js";`],
         stub: "",
     };
 };
+
+/* eslint-enable no-secrets/no-secrets */
 
 /**
  * `ctx.notify` / `ctx.push` (`@lunora/notify`) fragments. Mirrors

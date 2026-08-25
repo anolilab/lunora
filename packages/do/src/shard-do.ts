@@ -2574,7 +2574,7 @@ abstract class ShardDO {
         // `NOT_IMPLEMENTED`, not `INTERNAL`: the latter is catalogued `internal`, so
         // `errorToResponse` would replace this message with "internal error" and the
         // caller would get a bare 501 with nothing actionable in it.
-        throw new LunoraError("NOT_IMPLEMENTED", "search backfill is unavailable: this shard was built without a generated schema", { status: 501 });
+        throw new LunoraError("NOT_IMPLEMENTED", "search backfill is unavailable: this shard was built without a generated schema");
     }
 
     /**

@@ -27,10 +27,15 @@ class GlobalPollTick {
 
     /**
      * Membership reads keyed by predicate AND identity, so N sockets on one shape
-     * drain the backend once. Holds the in-flight PROMISE, not the settled rows:
-     * storing only the result left a window between `load()` starting and its
-     * entry landing in which every concurrent caller started its own read, which
-     * is exactly the fan-out this cache exists to collapse.
+     * drain the backend once.
+     *
+     * Holds the in-flight promise rather than the settled rows, so an entry is
+     * present from the moment a read starts. Today's only caller drains this
+     * serially (`pollGlobalShapes` awaits per socket, `pollSocketGlobalShapes`
+     * per shape, both deliberately — see their `no-await-in-loop` disables), so
+     * nothing can currently arrive mid-flight; storing the promise is what keeps
+     * that an implementation detail of the caller rather than a requirement of
+     * this cache.
      */
     private readonly reads = new Map<string, Promise<ShapeRow[]>>();
 
@@ -78,27 +83,16 @@ class GlobalPollTick {
             return load();
         }
 
-        const cached = this.reads.get(key);
+        // No catch: a failed read is already owned by the caller, which calls
+        // `requestResync()` so the next tick makes one unconditional pass. Adding
+        // recovery here would be a second, weaker copy of that — and this tick is
+        // discarded at the end of the poll, so there is no longer-lived state for
+        // a failure to poison.
+        const pending = this.reads.get(key) ?? load();
 
-        if (cached !== undefined) {
-            return cached;
-        }
-
-        const pending = load();
-
-        // Published BEFORE the await, so a caller arriving mid-flight joins this
-        // read instead of starting a second one.
         this.reads.set(key, pending);
 
-        try {
-            return await pending;
-        } catch (error) {
-            // Drop the failed read so the next poll retries rather than
-            // re-throwing this tick's error for the rest of the object's life.
-            this.reads.delete(key);
-
-            throw error;
-        }
+        return pending;
     }
 
     /** Whether `table` needs reading this tick; counts the skip when it does not. */

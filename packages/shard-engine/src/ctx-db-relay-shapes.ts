@@ -110,18 +110,41 @@ interface StoredRelayShape {
 }
 
 /**
+ * The JSON-column codec this table's two structured columns share.
+ *
+ * Named as a pair, and used as a pair, because the halves living apart is how
+ * this module drifted once already: `args` went through the wire codec while
+ * `identity` went through bare JSON, and nothing structural said they had to
+ * agree. Mirrors `encodeDocJson`/`decodeDocJson` in `do-sql.ts`, which exists
+ * for the same reason.
+ */
+const encodeColumn = (value: unknown): string => JSON.stringify(encodeWire(value));
+
+/** The read half of {@link encodeColumn}. */
+const decodeColumn = (raw: string): unknown => decodeWire(JSON.parse(raw));
+
+/**
  * Every registered relayed shape, for an owner rehydrating its registry after
  * an eviction.
  *
- * `args` AND `identity` round-trip through the wire codec, not bare JSON: either
- * can hold a `bigint`/`Date`/`Uint8Array`, and `JSON.stringify` of a `bigint`
- * throws outright — the same reason the args are wire-encoded before they cross
- * the owner↔relay hop.
+ * Both structured columns go through {@link encodeColumn}/{@link decodeColumn}
+ * rather than bare JSON. For `args` that is load-bearing today: they arrive
+ * already wire-encoded from the relay, and a `bigint` would make
+ * `JSON.stringify` throw outright.
  *
- * `identity` matters for a second reason: it is the claim set RLS resolves
- * against. Bare JSON turns a `Date` claim into a string, so a rehydrated shape
- * would resolve under a claim of a different type than the live registry used —
- * a silent authorization divergence rather than a loud failure.
+ * For `identity` it is consistency rather than a live bug, and the distinction
+ * is worth recording. `identity` is the claim set RLS resolves against, so a
+ * `Date` claim silently becoming a string WOULD be an authorization divergence —
+ * but claims reach a shard only through the `x-lunora-identity` header, which is
+ * itself `JSON.stringify`d (`shared/identity-header.ts`), so a `bigint` claim
+ * already throws at the worker and a `Date` claim is already an ISO string
+ * before anything here sees it.
+ *
+ * The transport half is also still asymmetric: `seedRelayShape` wire-encodes
+ * `args` across the relay→owner hop and forwards `identity` raw
+ * (`relay-hub.ts`), with no matching decode. Closing that is a wire-format
+ * change on the relay path and is deliberately NOT done here — this column pair
+ * is simply no longer the place the asymmetry lives.
  */
 const readRelayShapes = (sql: SqlExec): RelayShapeRow[] => {
     const rows = runDrizzle<StoredRelayShape>(
@@ -131,10 +154,10 @@ const readRelayShapes = (sql: SqlExec): RelayShapeRow[] => {
 
     return rows.map((row) => {
         return {
-            args: decodeWire(JSON.parse(row.args)) as Record<string, unknown>,
+            args: decodeColumn(row.args) as Record<string, unknown>,
             connectionId: row.connection_id ?? undefined,
             cursor: Number(row.cursor),
-            identity: decodeWire(JSON.parse(row.identity)) as SubscriptionIdentity,
+            identity: decodeColumn(row.identity) as SubscriptionIdentity,
             key: row.key,
             name: row.name,
             relayIndex: row.relay_idx === null ? undefined : Number(row.relay_idx),
@@ -147,7 +170,7 @@ const writeRelayShape = (sql: SqlExec, row: RelayShapeRow): void => {
     runDrizzle(
         sql,
         dsql`INSERT INTO ${dsql.identifier(RELAY_SHAPES_TABLE)} (key, relay_idx, connection_id, name, args, identity, cursor)
-             VALUES (${row.key}, ${row.relayIndex ?? SQL_NULL}, ${row.connectionId ?? SQL_NULL}, ${row.name}, ${JSON.stringify(encodeWire(row.args))}, ${JSON.stringify(encodeWire(row.identity ?? {}))}, ${row.cursor})
+             VALUES (${row.key}, ${row.relayIndex ?? SQL_NULL}, ${row.connectionId ?? SQL_NULL}, ${row.name}, ${encodeColumn(row.args)}, ${encodeColumn(row.identity ?? {})}, ${row.cursor})
              ON CONFLICT(key) DO UPDATE SET
                 relay_idx = excluded.relay_idx,
                 connection_id = excluded.connection_id,

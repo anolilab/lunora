@@ -27,20 +27,29 @@ const seed = (row: RelayShapeRow): RelayShapeRow | undefined => {
 
 describe("relay shape persistence", () => {
     it("round-trips a bigint identity claim, which bare JSON cannot even write", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // `JSON.stringify` throws outright on a bigint, so before the fix this
         // failed on the seed path rather than producing a wrong value.
+        // A PROXY row (relayIndex + connectionId), which is the only shape that
+        // carries identity: `OwnerRelay.relayShapes` hydrates a cohort row into a
+        // `CohortShapeEntry` and discards identity entirely, so seeding a cohort
+        // row here would pin the codec on a shape production never stores it in.
         const stored = seed({
             args: { since: 1n },
+            connectionId: "conn_1",
             cursor: 0,
             identity: { identity: { orgId: 42n }, userId: "user_1" },
-            key: "k1",
+            key: "0:conn_1:sub_1",
             name: "messages:list",
+            relayIndex: 0,
         });
 
         expect(stored?.identity).toStrictEqual({ identity: { orgId: 42n }, userId: "user_1" });
         expect(stored?.args).toStrictEqual({ since: 1n });
+        // The proxy addressing survives too — an owner rehydrating the registry
+        // needs it to route the delta back to the one connection it belongs to.
+        expect({ connectionId: stored?.connectionId, relayIndex: stored?.relayIndex }).toStrictEqual({ connectionId: "conn_1", relayIndex: 0 });
     });
 
     it("keeps a Date identity claim a Date rather than a string", () => {
@@ -52,10 +61,12 @@ describe("relay shape persistence", () => {
         const issuedAt = new Date("2026-01-02T03:04:05.000Z");
         const stored = seed({
             args: {},
+            connectionId: "conn_2",
             cursor: 0,
             identity: { identity: { issuedAt }, userId: "user_1" },
-            key: "k2",
+            key: "1:conn_2:sub_2",
             name: "messages:list",
+            relayIndex: 1,
         });
 
         expect(stored?.identity).toStrictEqual({ identity: { issuedAt }, userId: "user_1" });
