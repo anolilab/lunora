@@ -655,6 +655,26 @@ Where the manifest drives the run, a required name with no dispatch arm fails,
 which is the same guarantee from the other direction: the only way to go green is
 to execute a case under that name.
 
+**The manifest holds a suite to 33 named cases; it cannot hold one that ran
+nothing at all.** Six of these eight test tools exit 0 having collected NO tests
+— `unittest discover` finding no matching module, an empty `test/test_*.rb`
+glob, a Go package with no `_test.go`, `cargo test` and `swift test` with
+nothing to run — and in every one of those the manifest check is itself a test
+that did not run either. So `run-all.sh` reads each leg's own summary line for
+the number of cases it executed, prints it (`PASS python (85 cases)`), and fails
+a leg that exited 0 having executed none. That read is fail-closed: a leg whose
+summary cannot be parsed counts as zero, so a change to a runner's output format
+turns this red rather than quietly reverting it to an exit-code-only check.
+
+**The dart leg needs two more guards, because Dart's failure mode is silence.** A
+case that awaits a future nothing will ever complete does not hang the process:
+the event loop drains, `main()` is abandoned part-way, and the VM exits 0 having
+printed nothing — indistinguishable from a full green run, and exactly how this
+suite once reported PASS with 16 of its 69 cases executed. So `main()` sets
+`exitCode = 1` on entry and clears it only at the bottom, which makes every path
+that does not reach the end a failure; and `run()` gives each case a 30-second
+timeout, so the abandoned one is named rather than merely turning the leg red.
+
 Run all of them at once with `./sdks/run-all.sh`, which fans the suites out in
 parallel — they are eight independent toolchains reading the same read-only
 fixtures, so the whole set costs about as long as the slowest compiler rather
@@ -722,6 +742,14 @@ not encode its own argument model, and Ruby called a `to_dynamic` the models wer
 not rendered with. A third — Rust — sent `"limit": null` for an unset optional,
 which `v.optional()` rejects; the smoke that calls it is what surfaced that, one
 build after the same bug was fixed in Ruby.
+
+**The setup steps in each leg are `&&`-chained, and that is load-bearing.** This
+script runs without `set -e`, so an unchained `cp` failure was simply stepped
+over — and the two legs that assemble their smoke as a TEST rather than as a
+program (go, rust) then ran a project with no tests in it. `cargo test` reported
+"0 passed" and exited 0, so a rust leg that had copied nothing read as a PASS;
+`cargo test --test generated_smoke` names the target instead, so its absence is
+"no test target named `generated_smoke`" and a non-zero exit.
 
 The smoke programs are `sdks/smoke/<lang>/`, and each asserts the same thing: that
 a generated call reaches the wire as

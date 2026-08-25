@@ -83,9 +83,17 @@ Future<void> caseSubscriptionStreamYieldsFrameValuesInOrder() async {
   final seen = <Object?>[];
 
   for (final frame in case_['frames']! as List<Object?>) {
+    // moveNext() BEFORE the frame, and deliberately so: `watch` opens its
+    // subscription on first listen, and a StreamIterator does not listen until
+    // moveNext() is called. Feeding the frame first therefore pushed it at a
+    // client with no such subscription registered, it was dropped, and the
+    // await that followed never completed — which is how this case hung and
+    // took the other 53 with it.
+    final next = events.moveNext();
+
     client.handleFrame(jsonEncode(frame));
 
-    equals(await events.moveNext(), true, 'the stream delivers a value per frame');
+    equals(await next, true, 'the stream delivers a value per frame');
     seen.add(events.current);
   }
 

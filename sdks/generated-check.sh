@@ -74,9 +74,9 @@ run_consumer() {
                 echo "require lunorasdk v0.0.0"
                 echo
                 echo "replace lunorasdk => $out"
-            } >"$app/go.mod"
-            cp "$ROOT/sdks/smoke/go/generated_smoke_test.go" "$app/"
-            (cd "$app" && go test ./... -count=1)
+            } >"$app/go.mod" \
+                && cp "$ROOT/sdks/smoke/go/generated_smoke_test.go" "$app/" \
+                && (cd "$app" && go test ./... -count=1)
             ;;
         # `require "lunora"` and `require "api"` both resolve off the one load-path
         # entry the smoke adds, which is the output directory.
@@ -85,6 +85,18 @@ run_consumer() {
             ;;
         # A path dependency on the generated crate, plus one on the transport
         # vendored beneath it, because the smoke names both.
+        #
+        # `src/lib.rs` is empty on purpose: the assertion is an integration test
+        # and a package needs some target for cargo to build one.
+        #
+        # `--test generated_smoke` names the target rather than letting `cargo
+        # test` run whatever it finds, because whatever it finds may be nothing:
+        # a bare `cargo test` over a crate whose `tests/` is empty reports "0
+        # passed" and exits 0, so a smoke file that failed to copy read as a
+        # PASS. Naming the target makes its absence "no test target named
+        # `generated_smoke`" and a non-zero exit. The `&&` chain closes the same
+        # hole one step earlier — this script runs without `set -e`, so an
+        # unchained `cp` failure was simply stepped over.
         rust)
             {
                 echo '[package]'
@@ -100,12 +112,10 @@ run_consumer() {
                 echo "lunora = { path = \"$out/lunora\" }"
                 echo 'serde_json = "1"'
             } >"$app/Cargo.toml"
-            mkdir -p "$app/src" "$app/tests"
-            # An empty lib, because the assertion is a test and a package needs a
-            # target for cargo to build one.
-            : >"$app/src/lib.rs"
-            cp "$ROOT/sdks/smoke/rust/generated_smoke.rs" "$app/tests/"
-            (cd "$app" && cargo test --quiet)
+            mkdir -p "$app/src" "$app/tests" \
+                && : >"$app/src/lib.rs" \
+                && cp "$ROOT/sdks/smoke/rust/generated_smoke.rs" "$app/tests/" \
+                && (cd "$app" && cargo test --quiet --test generated_smoke)
             ;;
         # `.package(path:)` on the generated package, then both products by
         # `.product(name:package:)` — where `package:` is the output DIRECTORY's
@@ -131,22 +141,22 @@ run_consumer() {
                 echo '        )'
                 echo '    ]'
                 echo ')'
-            } >"$app/Package.swift"
-            mkdir -p "$app/Sources/LunoraSmoke"
-            cp "$ROOT/sdks/smoke/swift/main.swift" "$app/Sources/LunoraSmoke/"
-            (cd "$app" && swift run LunoraSmoke)
+            } >"$app/Package.swift" \
+                && mkdir -p "$app/Sources/LunoraSmoke" \
+                && cp "$ROOT/sdks/smoke/swift/main.swift" "$app/Sources/LunoraSmoke/" \
+                && (cd "$app" && swift run LunoraSmoke)
             ;;
         # The generated tree as the ONLY source path: javac compiles `dev.lunora`
         # and `lunoraapi` out of it on demand, with nothing on the classpath.
         java)
-            javac -Xlint:all -sourcepath "$out" -d "$app/classes" "$ROOT/sdks/smoke/java/GeneratedSmoke.java"
-            java -cp "$app/classes" GeneratedSmoke
+            javac -Xlint:all -sourcepath "$out" -d "$app/classes" "$ROOT/sdks/smoke/java/GeneratedSmoke.java" \
+                && java -cp "$app/classes" GeneratedSmoke
             ;;
         # kotlinc takes the generated tree as a source directory; packages come
         # from the declarations, so no layout flag is needed.
         kotlin)
-            kotlinc "$out" "$ROOT/sdks/smoke/kotlin/GeneratedSmoke.kt" -include-runtime -d "$app/smoke.jar" -nowarn
-            java -cp "$app/smoke.jar" dev.lunora.GeneratedSmokeKt
+            kotlinc "$out" "$ROOT/sdks/smoke/kotlin/GeneratedSmoke.kt" -include-runtime -d "$app/smoke.jar" -nowarn \
+                && java -cp "$app/smoke.jar" dev.lunora.GeneratedSmokeKt
             ;;
         # A path dependency, which is the one stanza a consumer writes. pub takes
         # a path dependency's identity from the DEPENDED-ON pubspec's `name:`, so
@@ -162,9 +172,9 @@ run_consumer() {
                 echo 'dependencies:'
                 echo '    lunora_sdk:'
                 echo "        path: $out"
-            } >"$app/pubspec.yaml"
-            mkdir -p "$app/bin"
-            cp "$ROOT/sdks/smoke/dart/generated_smoke.dart" "$app/bin/"
+            } >"$app/pubspec.yaml" \
+                && mkdir -p "$app/bin" \
+                && cp "$ROOT/sdks/smoke/dart/generated_smoke.dart" "$app/bin/" \
             # Analysed in BOTH directories, and the first is the one that matters.
             # `dart analyze` only reports on the package it is run in: from the
             # consumer it type-checks the smoke's use of the surface but stays
