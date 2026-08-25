@@ -1,3 +1,17 @@
+## @lunora/platform-node [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.21...@lunora/platform-node@1.0.0-alpha.22) (2026-08-24)
+
+### Bug Fixes
+
+* **bindings:** gate ctx.images, bound sql fetches ([#448](https://github.com/anolilab/lunora/issues/448)) ([a6bf09e](https://github.com/anolilab/lunora/commit/a6bf09e0d1348af5deda061d63164cc47a9059e9))
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.31
+* **@lunora/do:** upgraded to 1.0.0-alpha.95
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.70
+* **@lunora/storage:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/platform-node [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.20...@lunora/platform-node@1.0.0-alpha.21) (2026-08-24)
 
 

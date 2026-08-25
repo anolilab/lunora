@@ -1,6 +1,6 @@
 {
     "name": "@lunora/scheduler",
-    "version": "1.0.0-alpha.35",
+    "version": "1.0.0-alpha.36",
     "description": "Scheduling for Lunora: runAfter / runAt and Cron Triggers via SchedulerDO",
     "keywords": [
         "cloudflare",
@@ -62,13 +62,14 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.22",
-        "@lunora/platform": "1.0.0-alpha.15",
+        "@lunora/platform": "1.0.0-alpha.16",
         "cron-parser": "catalog:tooling"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/dispatch": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

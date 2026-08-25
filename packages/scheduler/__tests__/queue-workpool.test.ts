@@ -1,7 +1,8 @@
+import { getDispatchMessageId } from "@lunora/dispatch";
 import { describe, expect, it, vi } from "vitest";
 
 import { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "../src/queue-workpool";
-import type { FunctionReference, MessageBatchLike, QueueJob, QueueLike, QueueMessageLike, QueueSendOptionsLike } from "../src/types";
+import type { FunctionReference, MessageBatchLike, QueueDispatch, QueueJob, QueueLike, QueueMessageLike, QueueSendOptionsLike } from "../src/types";
 
 const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
@@ -159,6 +160,18 @@ describe("createQueueConsumer", () => {
         expect(message.retried).toBe(false);
     });
 
+    it("threads the queue message id through to the dispatcher", async () => {
+        expect.assertions(1);
+
+        const dispatch = vi.fn<QueueDispatch>(async () => undefined);
+        const consume = createQueueConsumer({ dispatch });
+        const message = fakeMessage({ functionPath: "jobs:a" });
+
+        await consume(fakeBatch([message]));
+
+        expect(dispatch).toHaveBeenCalledWith({ functionPath: "jobs:a" }, "msg-1");
+    });
+
     it("retries a message when the dispatcher throws", async () => {
         expect.assertions(2);
 
@@ -195,7 +208,7 @@ describe("httpDispatcher", () => {
     it("pOSTs the job to the scheduler dispatch endpoint with the admin bearer", async () => {
         expect.assertions(4);
 
-        const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok", { status: 200 }));
+        const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
         const dispatch = httpDispatcher({ adminToken: "admintok", fetchImpl: fetchMock, originUrl: "https://app.example/" });
 
         await dispatch({ args: { x: 1 }, functionPath: "jobs:a", shardKey: "s1" });
@@ -216,5 +229,44 @@ describe("httpDispatcher", () => {
         const dispatch = httpDispatcher({ adminToken: "admintok", fetchImpl: fetchMock, originUrl: "https://app.example" });
 
         await expect(dispatch({ functionPath: "jobs:a" })).rejects.toThrow(/403/u);
+    });
+
+    it("stamps the threaded message id onto a dispatch failure for attribution", async () => {
+        expect.assertions(1);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => new Response("gone", { status: 404 }));
+        const dispatch = httpDispatcher({ adminToken: "admintok", fetchImpl: fetchMock, originUrl: "https://app.example" });
+
+        const error: unknown = await dispatch({ functionPath: "jobs:a" }, "msg-42").catch((error_: unknown) => error_);
+
+        expect(getDispatchMessageId(error)).toBe("msg-42");
+    });
+
+    // A hanging fetch bound to a SHORT configured deadline. Deliberately driven
+    // by the real clock and asserted only through the error the runner throws:
+    // the deadline's mechanism is `@lunora/dispatch`'s business (it has moved
+    // between `AbortSignal.timeout` and an explicit controller + timer), and a
+    // test here that stubs or fake-times that mechanism breaks whenever the
+    // runner changes it. What this package owns is that `timeoutMs` reaches the
+    // runner and that the resulting failure is retryable — that is what is
+    // asserted. The 5-minute default is a constant; proving it fires would mean
+    // re-testing the runner's clock from here.
+    it("bounds a hung dispatch with the configured deadline and rejects retryable", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(
+            (_url, init) =>
+                new Promise((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(init.signal?.reason as Error);
+                    });
+                }),
+        );
+        const dispatch = httpDispatcher({ adminToken: "admintok", fetchImpl: fetchMock, originUrl: "https://app.example", timeoutMs: 20 });
+
+        const error = (await dispatch({ functionPath: "jobs:a" }).catch((error_: unknown) => error_)) as Error & { status?: unknown };
+
+        expect(error.status).toBe(503);
+        expect(error.message).toMatch(/timed out after 20ms/u);
     });
 });

@@ -1,3 +1,69 @@
+## @lunora/flags [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.32...@lunora/flags@1.0.0-alpha.33) (2026-08-24)
+
+### ⚠ BREAKING CHANGES
+
+* **flags:** createFlags(options) is now
+createFlags(definition, env, options); callers must pass the
+defineFlags(...) result and the Worker env as identity keys.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* fix(flags): bind each definition to its own openfeature domain
+
+Keying the client memo by (definition, env) was not enough on its own:
+every binding still went into the single global "lunora" OpenFeature
+domain, so a second definition's setProviderAndWait replaced the first's
+provider in the registry and the first's cached client silently began
+evaluating the second's values. The memo hid the collision rather than
+preventing it, and a module-scalar warning apologised for it.
+
+Each (definition, env) pair now owns its OpenFeature domain: the first —
+the only case a real app hits, one flags.ts and one env per isolate —
+keeps the stable "lunora" name so an external OpenFeature.getClient
+("lunora") still reads the app's provider; additional pairs get
+"lunora-2", "lunora-3", … The domain is allocated once per pair and
+survives a failed bind, so a provider whose initialize throws retries on
+the same domain instead of stranding readers on a dead one. The
+lastBoundDefinition scalar and its console.warn are gone.
+
+createFlags also stopped taking config it was already handed: hooks,
+logger, and the provider factory are read from the definition, and the
+options bag shrank to the genuinely per-request extras — the
+config.flags override (undefined falls back to the definition) and the
+targeting-key thunk. Both codegen emission sites emit the smaller call.
+* **flags:** CreateFlagsOptions no longer accepts `hooks` or
+`logger` (read from the definition), and `provider` is now an optional
+override returning `Provider | undefined` instead of a required factory.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+* fix(flags): give a binding-less env a stable memo identity
+
+Generated workers build their env as `this.env ?? {}`, so when `this.env`
+is nullish every context build yields a FRESH object. Keyed on that, each
+request missed the client cache, allocated another `lunora-N` domain and
+ran `setProviderAndWait` again — and OpenFeature's registry holds a
+strong reference to every provider by domain name, so the WeakMap being
+weak would not release them: unbounded growth on the nullish path.
+
+An env carrying no bindings is indistinguishable to any provider factory,
+so they now share one `EMPTY_ENV` key and bind exactly once.
+
+Also record on `DEFAULT_DOMAIN` that which pair wins the unsuffixed
+"lunora" name is allocation-order dependent — "first definition wins"
+would be equally order-dependent, so the constraint is documented rather
+than papered over, with the note that code needing a specific client
+should be handed it instead of looking it up by domain.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+### Bug Fixes
+
+* **flags:** key the flags memo per definition ([#463](https://github.com/anolilab/lunora/issues/463)) ([ad76ea9](https://github.com/anolilab/lunora/commit/ad76ea984a77d52801370e0194d7339c6a241cf5))
+
 ## @lunora/flags [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/%40lunora%2Fflags%401.0.0-alpha.31...%40lunora%2Fflags%401.0.0-alpha.32) (2026-08-18)
 
 ## @lunora/flags [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/%40lunora%2Fflags%401.0.0-alpha.30...%40lunora%2Fflags%401.0.0-alpha.31) (2026-08-14)

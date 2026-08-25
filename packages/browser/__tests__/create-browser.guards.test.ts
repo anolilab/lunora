@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { stubDohFetch } from "../../__tests__/_helpers/stub-doh";
-import { createBrowser } from "../create-browser";
-import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, PageLike, RouteLike } from "../types";
+import { createBrowser } from "../src/create-browser";
+import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, PageLike, RouteLike } from "../src/types";
+import { stubDohFetch } from "./_helpers/stub-doh";
 
 /**
  * A throwaway binding marker — the helpers never touch it directly; Playwright

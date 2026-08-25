@@ -1,6 +1,6 @@
 {
     "name": "@lunora/workflow",
-    "version": "1.0.0-alpha.30",
+    "version": "1.0.0-alpha.31",
     "description": "Durable workflows for Lunora: defineWorkflow over Cloudflare Workflows, generated WorkflowEntrypoint classes, and the ctx.workflows surface",
     "keywords": [
         "cloudflare",
@@ -69,7 +69,7 @@
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/dispatch": "workspace:*",
-        "@lunora/server": "1.0.0-alpha.76",
+        "@lunora/server": "1.0.0-alpha.80",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
