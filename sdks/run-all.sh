@@ -1,19 +1,38 @@
 #!/usr/bin/env bash
 # Run every SDK's conformance suite in parallel and report one line per language.
 #
-# The suites are genuinely independent — seven toolchains reading the same
+# The suites are genuinely independent — eight toolchains reading the same
 # read-only fixtures — so there is nothing to serialise. Sequentially the run is
-# the sum of seven compilers; in parallel it costs about the slowest one.
+# the sum of eight compilers; in parallel it costs about the slowest one.
 #
-#   ./sdks/run-all.sh            # all seven
+#   ./sdks/run-all.sh            # all eight
 #   ./sdks/run-all.sh go rust    # a subset
 #
 # Exits non-zero if any language fails, and prints the tail of a failing log
 # only for the languages that failed, so a green run stays one screen.
+#
+# CI runs this same script, one language per matrix leg — the command a leg
+# executes must have exactly one definition, or the assertions added here
+# protect local runs only. That already happened: the workflow's own copy of
+# these commands drifted from this file in three places before the two were
+# merged. Anything CI wants and a local run does not is an environment switch
+# below, never a second command list.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
+
+# The swift leg's thread sanitizer, on in CI and off locally. It is the only
+# flag that legitimately differs: the concurrency case asserts a subscription
+# count, so a lock dropped on a path it does not drive passes without TSan —
+# and a TSan build roughly triples the slowest leg, which CI has a 30-minute
+# budget for and a developer's `run-all.sh` should not have to wait on.
+#
+# A switch rather than an omission, so `PASS swift` says which one ran.
+SWIFT_TSAN_FLAG=""
+if [ "${SDK_TEST_TSAN:-0}" = "1" ]; then
+    SWIFT_TSAN_FLAG="--sanitize=thread"
+fi
 
 # A Homebrew JDK is not on the default PATH, and Kotlin needs it too.
 if [ -d /opt/homebrew/opt/openjdk/bin ]; then
@@ -45,7 +64,8 @@ run_suite() {
         go) (cd "$ROOT/sdks/go" && go test ./... -race -count=1 -v) ;;
         ruby) (cd "$ROOT/sdks/ruby" && ruby -Ilib -e 'Dir["test/test_*.rb"].each { |f| require File.expand_path(f) }') ;;
         rust) (cd "$ROOT/sdks/rust" && cargo test) ;;
-        swift) (cd "$ROOT/sdks/swift" && swift test) ;;
+        # Unquoted on purpose: empty means "no flag", not an empty argument.
+        swift) (cd "$ROOT/sdks/swift" && swift test $SWIFT_TSAN_FLAG) ;;
         java) (cd "$ROOT/sdks/java" && bash build.sh) ;;
         kotlin) (cd "$ROOT/sdks/kotlin" && bash build.sh) ;;
         # `pub get` first, because `dart run` needs .dart_tool/package_config.json
@@ -110,12 +130,21 @@ for lang in "${LANGS[@]}"; do
     status="$(cat "$WORK/$lang.status" 2>/dev/null || echo 1)"
     cases="$(count_cases "$lang" "$WORK/$lang.log" 2>/dev/null)"
 
+    # A flag that is on in one environment and off in another has to say so on
+    # the line a green run prints, or "did TSan actually run in CI" is only
+    # answerable by reading the workflow — which is the drift this file exists
+    # to remove.
+    note=""
+    if [ "$lang" = swift ] && [ -n "$SWIFT_TSAN_FLAG" ]; then
+        note=" [$SWIFT_TSAN_FLAG]"
+    fi
+
     if ! [ "${cases:-0}" -gt 0 ] 2>/dev/null; then
         cases=0
     fi
 
     if [ "$status" -ne 0 ]; then
-        printf 'FAIL  %s (exit %s, %s cases)\n' "$lang" "$status" "$cases"
+        printf 'FAIL  %s%s (exit %s, %s cases)\n' "$lang" "$note" "$status" "$cases"
         : >"$WORK/$lang.failed"
         failed=1
     elif [ "$cases" -eq 0 ]; then
@@ -123,7 +152,7 @@ for lang in "${LANGS[@]}"; do
         : >"$WORK/$lang.failed"
         failed=1
     else
-        printf 'PASS  %s (%s cases)\n' "$lang" "$cases"
+        printf 'PASS  %s%s (%s cases)\n' "$lang" "$note" "$cases"
     fi
 done
 

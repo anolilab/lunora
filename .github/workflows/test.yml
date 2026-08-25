@@ -404,55 +404,32 @@
                     - "language": "python"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
-                      "directory": "sdks/python"
-                      "run": "python -m unittest discover -s tests -t . -v"
                     - "language": "go"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
-                      "directory": "sdks/go"
-                      # -count=1 disables the test cache: the fixtures live outside the
-                      # Go module, so the cache cannot see them change and replays a
-                      # stale PASS.
-                      "run": "go test ./... -v -race -count=1"
                     - "language": "ruby"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
-                      "directory": "sdks/ruby"
-                      "run": "ruby -Ilib -e 'Dir.glob(%q{test/test_*.rb}).each { |f| require File.expand_path(f) }'"
                     - "language": "rust"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
-                      "directory": "sdks/rust"
-                      "run": "cargo test"
                     - "language": "java"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
-                      "directory": "sdks/java"
-                      "run": "bash build.sh"
                     - "language": "kotlin"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
-                      "directory": "sdks/kotlin"
-                      "run": "bash build.sh"
                     - "language": "dart"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
-                      "directory": "sdks/dart"
-                      # `pub get` first: `dart run` resolves `package:lunora/…` through
-                      # the gitignored .dart_tool/package_config.json. --offline because
-                      # the package declares no dependencies, so a conformance run can
-                      # never turn into a network call.
-                      "run": "dart pub get --offline && dart run test/conformance.dart"
                     - "language": "swift"
                       # Swift ships with the macOS image, so this leg needs no
                       # third-party setup action.
                       "runner": "macos-latest"
                       # 30 against the Linux legs' 15 — see the spread noted above.
+                      # It also runs under the thread sanitizer (SDK_TEST_TSAN
+                      # below), which is most of the difference.
                       "timeoutMinutes": 30
-                      "directory": "sdks/swift"
-                      # TSan: the concurrency case only asserts a count, so a lock
-                      # dropped on a path it does not drive would pass silently.
-                      "run": "swift test --sanitize=thread"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -577,8 +554,23 @@
               "run": "bash sdks/lint-all.sh ${{ matrix.sdk.language }}"
 
             - "name": "Run the ${{ matrix.sdk.language }} conformance suite"
-              "working-directory": "${{ matrix.sdk.directory }}"
-              "run": "${{ matrix.sdk.run }}"
+              # The same script a developer runs, for the same reason the lint step
+              # above runs `lint-all.sh`. A per-language command list kept in this
+              # matrix instead drifts from the local one — this one already had, in
+              # three places — and a guard added to the runner then protects local
+              # runs only. `run-all.sh` is what fails a leg that exited 0 having
+              # executed no cases; invoked this way, that assertion is live here.
+              #
+              # One language per leg, so the eight still run in parallel and a
+              # failure still names the language.
+              #
+              # SDK_TEST_TSAN is the swift leg's thread sanitizer — the one flag CI
+              # wants and a local run does not, expressed as a switch rather than as
+              # a second command. The script prints it on the summary line, so a
+              # green leg says which build ran. Harmless on the other seven.
+              "env":
+                  "SDK_TEST_TSAN": "1"
+              "run": "bash sdks/run-all.sh ${{ matrix.sdk.language }}"
 
             # The generated surface hardcodes the runtime's call signatures, and nothing
             # else pins that coupling: change a signature and every suite above still

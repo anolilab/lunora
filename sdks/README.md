@@ -349,7 +349,8 @@ because each one reads a `cursor` the frame handler writes. Every one of those
 six has a test that starts a socket reader and four subscriber threads and
 asserts on the resulting subscription count — a lost `nextId++` silently forgets
 a live subscription, and that is deterministic where waiting for a hash map to
-corrupt is not. The Swift leg additionally runs under `--sanitize=thread`; the
+corrupt is not. The Swift leg additionally runs under `--sanitize=thread` in CI
+(`SDK_TEST_TSAN=1`, see [Conformance](#conformance)); the
 Ruby one gives its injected sender a `Thread.pass`, because MRI's 100ms time
 slice otherwise lets four CPU-bound threads each run to completion without ever
 interleaving, and the case then passes with the lock removed.
@@ -714,7 +715,20 @@ a PASS recorded before the edit. Without it, editing a fixture or the manifest
 leaves the go leg green without having run.
 
 CI runs all eight per PR (`sdk-conformance` in `.github/workflows/test.yml`),
-and each leg also runs `./sdks/generated-check.sh <lang>` — the generated surface
+one language per matrix leg — and each leg invokes **this same script**,
+`bash sdks/run-all.sh <lang>`, exactly as the lint leg invokes `lint-all.sh`. The
+workflow used to carry its own copy of the eight commands, which drifted from
+this file in three places and left the zero-executed-cases assertion above
+protecting local runs only. There is no second command list to keep in step.
+
+The one flag CI wants and a local run does not is the swift leg's thread
+sanitizer, and it is a switch rather than an omission: the step sets
+`SDK_TEST_TSAN=1`, `run_suite` adds `--sanitize=thread` for it, and the summary
+line names it (`PASS swift [--sanitize=thread] (7 cases)`) so a green leg says
+which build ran. Locally it is off, because a TSan build roughly triples the
+slowest leg; `SDK_TEST_TSAN=1 ./sdks/run-all.sh swift` reproduces CI's.
+
+Each leg also runs `./sdks/generated-check.sh <lang>` — the generated surface
 hardcodes the runtime's call signatures, and nothing else pins that coupling.
 
 ## The generated-SDK check
