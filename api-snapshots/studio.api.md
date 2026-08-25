@@ -15,7 +15,10 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 const ADMIN_FUNCTIONS: {
     readonly aiAvailable: "__lunora_admin__:aiAvailable";
     readonly aiChartConfig: "__lunora_admin__:aiChartConfig";
+    readonly aiChat: "__lunora_admin__:aiChat";
+    readonly aiCronExpression: "__lunora_admin__:aiCronExpression";
     readonly aiGenerateSql: "__lunora_admin__:aiGenerateSql";
+    readonly aiNameQuery: "__lunora_admin__:aiNameQuery";
     readonly aiTableFilter: "__lunora_admin__:aiTableFilter";
     readonly assignIssue: "__lunora_admin__:assignIssue";
     readonly backRelationCounts: "__lunora_admin__:backRelationCounts";
