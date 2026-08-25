@@ -713,6 +713,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageObjectHead` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageOperation` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -3761,10 +3765,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `EDGE_CACHE_HEADER` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
 ### `ExecutionContextLike` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4313,10 +4313,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `VARY_KEY_PARAM` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
 ### `VERSION` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4445,10 +4441,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `defaultHttpCache` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
 ### `defineExportSink` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4482,14 +4474,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `isBackupManifestKey` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `isEdgeCacheable` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `lookupRestEdgeCache` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4553,10 +4537,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `restCacheKey` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
 ### `restSurfaceFromRegistry` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4574,10 +4554,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `sentrySink` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `storeRestEdgeCache` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -5308,6 +5284,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageMetadata` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageObjectHead` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7058,6 +7038,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageMetadata` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageObjectHead` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

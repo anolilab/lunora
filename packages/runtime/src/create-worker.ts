@@ -4549,9 +4549,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         functions: options.functions ?? {},
         invoke: invokeExposed,
         readJsonBody: readJsonBodyWithLimit,
-        // `null` is a meaningful value here (the explicit opt-out), so it is
-        // forwarded when PRESENT rather than when truthy.
-        ...(options.restEdgeCache === undefined ? {} : { edgeCache: options.restEdgeCache }),
+        // `null` is a meaningful value here (the explicit opt-out) and `undefined`
+        // means "whatever the host has", so the option is forwarded as-is rather
+        // than spread when truthy.
+        edgeCache: options.restEdgeCache,
         ...(options.restRateLimit ? { rateLimit: options.restRateLimit } : {}),
     });
 

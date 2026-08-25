@@ -1,10 +1,10 @@
-import type { HttpCacheLike } from "@lunora/platform";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
-import { defaultHttpCache } from "../src/rest-edge-cache";
+import { defaultHttpCache, VARY_KEY_PARAM } from "../src/rest-edge-cache";
 import { argsFromQuery } from "../src/rest-routes";
+import { fakeCache } from "./helpers/edge-cache";
 
 /**
  * The public REST surface (`/_lunora/rest/<namespace>/<fn>`, plan 167) — RUNTIME-02
@@ -150,20 +150,6 @@ describe("createWorker — REST edge cache", () => {
         "messages:list": { expose: { cache: { maxAge: 60, scope: "public" }, rest: true }, kind: "query" },
     } as const;
 
-    /** An in-memory `HttpCacheLike` keyed by the cache-key request's URL. */
-    const fakeCache = () => {
-        const entries = new Map<string, Response>();
-        const cache: HttpCacheLike = {
-            delete: async (request) => entries.delete(typeof request === "string" ? request : request.url),
-            match: async (request) => entries.get(typeof request === "string" ? request : request.url)?.clone(),
-            put: async (request, response) => {
-                entries.set(typeof request === "string" ? request : request.url, response);
-            },
-        };
-
-        return { cache, entries };
-    };
-
     /** `fakeContext` but collecting `waitUntil` promises, so a test can await the deferred `put`. */
     const collectingContext = () => {
         const pending: Promise<unknown>[] = [];
@@ -287,6 +273,54 @@ describe("createWorker — REST edge cache", () => {
 
         expect(entries.size).toBe(0);
         expect(shard.calls).toHaveLength(2);
+    });
+
+    it("never serves a paid response to a caller who did not pay", async () => {
+        expect.assertions(4);
+
+        const shard = createShardSpy(Response.json({ premium: true }));
+        const { cache, entries } = fakeCache();
+        const { context, settled } = collectingContext();
+        const worker = createWorker({ functions: cachedFunctions, restEdgeCache: cache, shardDO: shard.namespace });
+        // The x402 charge gate runs INSIDE the dispatch, downstream of the cache
+        // lookup, so a stored paid response would be replayed for free — together
+        // with the payer's settlement receipt.
+        const paid = new Request("https://app.example/_lunora/rest/messages/list", { headers: { "x-payment": "signed-payload" } });
+
+        const answered = await worker.fetch(paid, {}, context);
+
+        await settled();
+
+        expect(answered.headers.get("cache-control")).toContain("private");
+        expect(entries.size).toBe(0);
+
+        const unpaid = await worker.fetch(listRequest(), {}, context);
+
+        expect(unpaid.headers.get("x-lunora-edge-cache")).toBeNull();
+        expect(shard.calls).toHaveLength(2);
+    });
+
+    it("does not let the reserved cache-key parameter reach the procedure or move the key", async () => {
+        expect.assertions(3);
+
+        const shard = createShardSpy(Response.json({ items: [] }));
+        const { cache } = fakeCache();
+        const { context, settled } = collectingContext();
+        const worker = createWorker({ functions: cachedFunctions, restEdgeCache: cache, shardDO: shard.namespace });
+
+        await worker.fetch(new Request(`https://app.example/_lunora/rest/messages/list?${VARY_KEY_PARAM}=evil`), {}, context);
+        await settled();
+
+        const forwarded = (await shard.calls[0]?.request.clone().json()) as { args?: Record<string, unknown> };
+
+        // It is reserved, so it is not an argument...
+        expect(forwarded.args ?? {}).not.toHaveProperty(VARY_KEY_PARAM);
+
+        // ...and it keyed where the clean request keys, so a hit answers that one.
+        const clean = await worker.fetch(listRequest(), {}, context);
+
+        expect(clean.headers.get("x-lunora-edge-cache")).toBe("hit");
+        expect(shard.calls).toHaveLength(1);
     });
 });
 

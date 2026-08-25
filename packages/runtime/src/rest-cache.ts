@@ -43,11 +43,25 @@ const requestCarriesCredentials = (request: Request, policy: RestCachePolicy, co
     context?.access !== undefined || credentialHeadersFor(policy).some((header) => request.headers.has(header));
 
 /**
+ * The scope this exchange actually gets: `policy.scope` narrowed by
+ * {@link requestCarriesCredentials}, so `"public"` survives only for a genuinely
+ * anonymous request.
+ *
+ * The ONE derivation of that question. The header path and the edge store both
+ * call it, which is what makes "a response labelled `private` is never written to
+ * a shared cache" structural rather than a documented ordering between two
+ * modules. A second copy could gain a credential source this one has and quietly
+ * store a per-caller body.
+ */
+const effectiveRestScope = (policy: RestCachePolicy, request: Request, context?: ExecutionContextLike): "private" | "public" =>
+    policy.scope === "public" && !requestCarriesCredentials(request, policy, context) ? "public" : "private";
+
+/**
  * Build the cache headers for one exchange, or `undefined` when the exchange
  * isn't cacheable at all (non-`GET`, or a non-2xx result — an error body must
  * never be stored as if it were the resource).
  *
- * The effective scope is `policy.scope` narrowed by {@link requestCarriesCredentials};
+ * The effective scope is `policy.scope` narrowed by {@link effectiveRestScope};
  * `"public"` survives only for a genuinely anonymous request.
  */
 const restCacheHeaders = (policy: RestCachePolicy, request: Request, status: number, context?: ExecutionContextLike): Record<string, string> | undefined => {
@@ -55,8 +69,7 @@ const restCacheHeaders = (policy: RestCachePolicy, request: Request, status: num
         return undefined;
     }
 
-    const effectiveScope = policy.scope === "public" && !requestCarriesCredentials(request, policy, context) ? "public" : "private";
-    const headers: Record<string, string> = { "cache-control": cacheControlValue(policy, effectiveScope) };
+    const headers: Record<string, string> = { "cache-control": cacheControlValue(policy, effectiveRestScope(policy, request, context)) };
 
     if (policy.tag !== undefined && policy.tag !== "") {
         headers["cache-tag"] = policy.tag;
@@ -101,4 +114,4 @@ const applyRestCache = (response: Response, policy: RestCachePolicy | undefined,
     return cached;
 };
 
-export { applyRestCache, requestCarriesCredentials, restCacheHeaders };
+export { applyRestCache, effectiveRestScope, requestCarriesCredentials, restCacheHeaders };

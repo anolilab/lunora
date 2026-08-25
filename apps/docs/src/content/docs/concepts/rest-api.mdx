@@ -191,6 +191,12 @@ or those callers read as anonymous:
 .expose({ rest: true, cache: { scope: "public", maxAge: 60, credentialHeaders: ["x-api-key"] } })
 ```
 
+The same applies to a body that varies on something the request does not carry as
+a credential. A `scope: "public"` query whose result depends on `ctx.ip` — geo
+content, a per-IP quota display — has one caller's answer served to the whole
+colo. Either declare `vary: "cf-connecting-ip"` (which keys per IP, and so caches
+almost nothing) or leave the endpoint `private`.
+
 ### `Vary` is enforced in the key
 
 Cloudflare's cache honours `Vary` for `Accept-Encoding` only, so Lunora does not
@@ -198,7 +204,14 @@ delegate it: every header the policy varies on — including `x-lunora-shard-key
 and `x-d1-bookmark`, which select _which_ data a request sees — is folded into the
 cache key itself. Two requests that differ on any of them can never share an entry.
 
-Only a `200` is stored, and a response carrying `Set-Cookie` is skipped.
+Only a `200` is stored, and a response carrying `Set-Cookie` is skipped. So is a
+response advertising a `Vary` header the key does not fence on — a procedure that
+negotiates on `Accept-Language` of its own accord costs a cache miss rather than
+risking one variant being served in place of another.
+
+The stored copy also drops the headers that describe the exchange rather than the
+resource (`X-D1-Bookmark`, `X-Lunora-Shard-Key`): the first caller still receives
+them, but replaying them would hand a later caller someone else's read cursor.
 
 ### Opting out
 

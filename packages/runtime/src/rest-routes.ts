@@ -24,7 +24,7 @@ import { describeRestSurface } from "../../../shared/rest-surface";
 import { assertArgsObject } from "./assert-args-object";
 import { methodGuard } from "./method-guard";
 import { applyRestCache } from "./rest-cache";
-import { defaultHttpCache, lookupRestEdgeCache, storeRestEdgeCache } from "./rest-edge-cache";
+import { restEdgeCacheFor, VARY_KEY_PARAM } from "./rest-edge-cache";
 
 /** The bits of a registered function the REST router reads: its kind and its `.expose` tag. */
 interface RestRegistryEntry {
@@ -112,7 +112,8 @@ const readShardKey = (url: URL, request: Request): string | undefined => {
 /**
  * Decode GET args from the query string. Each value is parsed as JSON when it
  * looks like a JSON scalar/array/object (so `?limit=10` → number, `?ids=[1,2]` →
- * array), else kept as a string. `shardKey` is reserved for routing and excluded.
+ * array), else kept as a string. `shardKey` (routing) and `__lunora_vary` (the
+ * edge cache key) are reserved and excluded.
  */
 const argsFromQuery = (url: URL): Record<string, unknown> => {
     // `Object.create(null)` so the result has no prototype chain — a query key
@@ -123,7 +124,11 @@ const argsFromQuery = (url: URL): Record<string, unknown> => {
     const args: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
 
     for (const [key, value] of url.searchParams.entries()) {
-        if (key === "shardKey") {
+        // `shardKey` is reserved for routing; `VARY_KEY_PARAM` is reserved for the
+        // edge cache key. Neither is an argument, and letting the latter through
+        // would hand a caller the one query key it can vary without varying the
+        // cache key.
+        if (key === "shardKey" || key === VARY_KEY_PARAM) {
             continue;
         }
 
@@ -145,10 +150,6 @@ const argsFromQuery = (url: URL): Record<string, unknown> => {
  */
 const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
     const { edgeCache, functions, invoke, rateLimit, readJsonBody } = deps;
-    // `null` is the explicit opt-out; `undefined` means "whatever the host has",
-    // resolved per request because the `caches` global cannot be read at
-    // construction time in workerd.
-    const resolveEdgeCache = (): HttpCacheLike | undefined => (edgeCache === null ? undefined : (edgeCache ?? defaultHttpCache()));
     const routes: Record<string, RestRoute> = {};
 
     for (const entry of restSurfaceFromRegistry(functions)) {
@@ -159,6 +160,10 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
         // no response policy. `entry.functionPath` came out of this same map, so
         // the lookup cannot miss.
         const cache = (functions[entry.functionPath] as RestRegistryEntry).expose?.cache;
+        // Built once per route: `undefined` when this route can never edge-cache,
+        // so the whole path drops out of the handler for a procedure that declared
+        // no policy (or opted out with `edgeCache: null`).
+        const edge = restEdgeCacheFor(cache, edgeCache);
 
         routes[entry.path] = async (request: Request, env: unknown, _url?: URL, context?: ExecutionContextLike): Promise<Response> => {
             const wrongMethod = methodGuard(request, allowed);
@@ -183,8 +188,7 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
             // cache hit must still be metered (it is a request this caller made,
             // and it still costs a Worker invocation), but it must not cost a
             // shard round trip.
-            const httpCache = resolveEdgeCache();
-            const hit = await lookupRestEdgeCache(httpCache, cache, request, context);
+            const hit = await edge?.lookup(request, context);
 
             if (hit) {
                 return hit;
@@ -228,7 +232,7 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
 
             // Stored only once the headers are on it, so a later hit replays the
             // exact response the first caller got rather than a bare body.
-            return storeRestEdgeCache(httpCache, answered, cache, request, context);
+            return edge ? edge.store(answered, request, context) : answered;
         };
     }
 

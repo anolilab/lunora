@@ -4,151 +4,55 @@ import { describe, expect, it, vi } from "vitest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
 import { applyRestCache } from "../src/rest-cache";
-import { EDGE_CACHE_HEADER, isEdgeCacheable, lookupRestEdgeCache, restCacheKey, storeRestEdgeCache, VARY_KEY_PARAM } from "../src/rest-edge-cache";
+import { EDGE_CACHE_HEADER, restEdgeCacheFor, VARY_KEY_PARAM } from "../src/rest-edge-cache";
+import { contextWith, fakeCache } from "./helpers/edge-cache";
 
 const publicCache: RestCachePolicy = { maxAge: 60, scope: "public" };
 
 const get = (init: { headers?: Record<string, string>; method?: string; url?: string } = {}): Request =>
     new Request(init.url ?? "https://api.example.com/_lunora/rest/messages/list", { headers: init.headers, method: init.method ?? "GET" });
 
-/** An in-memory `HttpCacheLike` keyed by the cache-key request's URL. */
-const fakeCache = () => {
-    const entries = new Map<string, Response>();
-    const cache: HttpCacheLike = {
-        delete: async (request) => entries.delete(typeof request === "string" ? request : request.url),
-        match: async (request) => {
-            const stored = entries.get(typeof request === "string" ? request : request.url);
+/** The URL a stored entry landed under — the cache key, observed through the double. */
+const onlyKey = (entries: Map<string, Response>): string => [...entries.keys()][0] ?? "";
 
-            return stored?.clone();
-        },
-        put: async (request, response) => {
-            entries.set(typeof request === "string" ? request : request.url, response);
-        },
-    };
+describe("restEdgeCacheFor", () => {
+    it("is undefined for a route that can never use a shared cache", () => {
+        expect.assertions(4);
 
-    return { cache, entries };
-};
+        const { cache } = fakeCache();
 
-/** A context whose `waitUntil` collects promises so a test can await the deferred `put`. */
-const contextWith = (overrides: Partial<ExecutionContextLike> = {}) => {
-    const pending: Promise<unknown>[] = [];
+        // No declared policy at all.
+        expect(restEdgeCacheFor(undefined, cache)).toBeUndefined();
+        // The explicit opt-out.
+        expect(restEdgeCacheFor(publicCache, null)).toBeUndefined();
+        // A declared-private policy: the browser may keep it, a shared cache must not.
+        expect(restEdgeCacheFor({ maxAge: 60, scope: "private" }, cache)).toBeUndefined();
+        // No window in which a stored copy would be fresh.
+        expect(restEdgeCacheFor({ maxAge: 0, scope: "public" }, cache)).toBeUndefined();
+    });
 
-    return {
-        context: { waitUntil: (promise: Promise<unknown>) => pending.push(promise), ...overrides } as ExecutionContextLike,
-        settled: async () => {
-            await Promise.all(pending);
-        },
-    };
-};
-
-describe("isEdgeCacheable", () => {
-    it("accepts an anonymous GET under a public policy with a real max-age", () => {
+    it("is built for a public policy with a real max-age", () => {
         expect.assertions(1);
 
-        expect(isEdgeCacheable(publicCache, get())).toBe(true);
-    });
-
-    it("refuses a declared-private policy — the browser may keep it, a shared cache must not", () => {
-        expect.assertions(1);
-
-        expect(isEdgeCacheable({ maxAge: 60, scope: "private" }, get())).toBe(false);
-    });
-
-    it("refuses a credentialed caller even under a public policy", () => {
-        expect.assertions(3);
-
-        expect(isEdgeCacheable(publicCache, get({ headers: { authorization: "Bearer t" } }))).toBe(false); // secret-scanner:allow -- fake test fixture, not a real credential
-        expect(isEdgeCacheable(publicCache, get({ headers: { cookie: "session=abc" } }))).toBe(false);
-        expect(isEdgeCacheable(publicCache, get({ headers: { "cf-access-jwt-assertion": "jwt" } }))).toBe(false);
-    });
-
-    it("refuses a caller Cloudflare Access authenticated out-of-band on the execution context", () => {
-        expect.assertions(1);
-
-        const context = { access: { email: "a@b.c" }, waitUntil: () => {} } as unknown as ExecutionContextLike;
-
-        expect(isEdgeCacheable(publicCache, get(), context)).toBe(false);
-    });
-
-    it("refuses an app-declared credential header", () => {
-        expect.assertions(1);
-
-        const policy: RestCachePolicy = { credentialHeaders: ["x-api-key"], maxAge: 60, scope: "public" };
-
-        expect(isEdgeCacheable(policy, get({ headers: { "x-api-key": "k" } }))).toBe(false);
-    });
-
-    it("refuses a zero (or non-finite) max-age — no window in which a stored copy is fresh", () => {
-        expect.assertions(2);
-
-        expect(isEdgeCacheable({ maxAge: 0, scope: "public" }, get())).toBe(false);
-        expect(isEdgeCacheable({ maxAge: Number.NaN, scope: "public" }, get())).toBe(false);
-    });
-
-    it("refuses a non-GET", () => {
-        expect.assertions(1);
-
-        expect(isEdgeCacheable(publicCache, get({ method: "POST" }))).toBe(false);
+        expect(restEdgeCacheFor(publicCache, fakeCache().cache)).toBeDefined();
     });
 });
 
-describe("restCacheKey", () => {
-    it("folds the varying header values into the key rather than trusting Vary", () => {
-        expect.assertions(2);
-
-        const withShard = restCacheKey(publicCache, get({ headers: { "x-lunora-shard-key": "tenant-a" } }));
-        const withOther = restCacheKey(publicCache, get({ headers: { "x-lunora-shard-key": "tenant-b" } }));
-
-        expect(withShard.url).not.toBe(withOther.url);
-        expect(new URL(withShard.url).searchParams.get(VARY_KEY_PARAM)).toContain("x-lunora-shard-key=tenant-a");
-    });
-
-    it("keys two requests that differ only in an absent vs empty varying header alike only when they truly match", () => {
-        expect.assertions(2);
-
-        const absent = restCacheKey(publicCache, get());
-        const empty = restCacheKey(publicCache, get({ headers: { "x-lunora-shard-key": "" } }));
-        const present = restCacheKey(publicCache, get({ headers: { "x-lunora-shard-key": "a" } }));
-
-        // An absent header and an empty one select the same data, so they may share a key.
-        expect(absent.url).toBe(empty.url);
-        expect(absent.url).not.toBe(present.url);
-    });
-
-    it("separates values that would otherwise concatenate into the same key", () => {
-        expect.assertions(1);
-
-        const policy: RestCachePolicy = { maxAge: 60, scope: "public", vary: "x-a, x-b" };
-        const first = restCacheKey(policy, get({ headers: { "x-a": "1", "x-b": "23" } }));
-        const second = restCacheKey(policy, get({ headers: { "x-a": "12", "x-b": "3" } }));
-
-        expect(first.url).not.toBe(second.url);
-    });
-
-    it("keeps the original request's own query string", () => {
-        expect.assertions(1);
-
-        const key = restCacheKey(publicCache, get({ url: "https://api.example.com/_lunora/rest/messages/list?limit=10" }));
-
-        expect(new URL(key.url).searchParams.get("limit")).toBe("10");
-    });
-});
-
-describe("storeRestEdgeCache + lookupRestEdgeCache", () => {
+describe("the shareable exchange", () => {
     it("stores a public GET and serves the next identical request from the cache", async () => {
         expect.assertions(4);
 
         const { cache, entries } = fakeCache();
         const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
         const request = get();
-        const answered = applyRestCache(Response.json({ items: [1, 2] }), publicCache, request, context);
 
-        storeRestEdgeCache(cache, answered, publicCache, request, context);
+        edge?.store(applyRestCache(Response.json({ items: [1, 2] }), publicCache, request, context), request, context);
         await settled();
 
         expect(entries.size).toBe(1);
 
-        const hit = await lookupRestEdgeCache(cache, publicCache, get(), context);
+        const hit = await edge?.lookup(get(), context);
 
         expect(hit?.status).toBe(200);
         expect(hit?.headers.get(EDGE_CACHE_HEADER)).toBe("hit");
@@ -161,44 +65,101 @@ describe("storeRestEdgeCache + lookupRestEdgeCache", () => {
 
         const { cache } = fakeCache();
         const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
         const request = get();
-        const answered = applyRestCache(Response.json({ items: [1, 2] }), publicCache, request, context);
-        const served = storeRestEdgeCache(cache, answered, publicCache, request, context);
+        const served = edge?.store(applyRestCache(Response.json({ items: [1, 2] }), publicCache, request, context), request, context);
 
         await settled();
 
-        await expect(served.json()).resolves.toStrictEqual({ items: [1, 2] });
+        await expect(served?.json()).resolves.toStrictEqual({ items: [1, 2] });
     });
 
-    it("never stores a credentialed exchange, and never serves one from the shared cache", async () => {
-        expect.assertions(2);
-
-        const { cache, entries } = fakeCache();
-        const { context, settled } = contextWith();
-
-        // Seed the cache from an anonymous request.
-        const anonymous = get();
-
-        storeRestEdgeCache(cache, applyRestCache(Response.json({ secret: false }), publicCache, anonymous, context), publicCache, anonymous, context);
-        await settled();
-
-        expect(entries.size).toBe(1);
-
-        // A credentialed caller must not be handed the stored anonymous body.
-        const credentialed = get({ headers: { cookie: "session=abc" } });
-
-        await expect(lookupRestEdgeCache(cache, publicCache, credentialed, context)).resolves.toBeUndefined();
-    });
-
-    it("does not store a declared-private policy", async () => {
+    it("refuses a non-GET", async () => {
         expect.assertions(1);
 
         const { cache, entries } = fakeCache();
         const { context, settled } = contextWith();
-        const request = get();
-        const policy: RestCachePolicy = { maxAge: 60, scope: "private" };
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get({ method: "POST" });
 
-        storeRestEdgeCache(cache, applyRestCache(Response.json({}), policy, request, context), policy, request, context);
+        edge?.store(Response.json({}), request, context);
+        await settled();
+
+        expect(entries.size).toBe(0);
+    });
+
+    it("never stores a credentialed exchange, and never serves one from the shared cache", async () => {
+        expect.assertions(5);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const anonymous = get();
+
+        edge?.store(applyRestCache(Response.json({ secret: false }), publicCache, anonymous, context), anonymous, context);
+        await settled();
+
+        expect(entries.size).toBe(1);
+
+        // Each credential form must be refused the stored anonymous body.
+        // secret-scanner:allow -- fake test fixture, not a real credential
+        await expect(edge?.lookup(get({ headers: { authorization: "Bearer t" } }), context)).resolves.toBeUndefined();
+        await expect(edge?.lookup(get({ headers: { cookie: "session=abc" } }), context)).resolves.toBeUndefined();
+        await expect(edge?.lookup(get({ headers: { "cf-access-jwt-assertion": "jwt" } }), context)).resolves.toBeUndefined();
+
+        // Cloudflare Access authenticates out-of-band, so the credential is on the
+        // execution context with no header to see.
+        const accessContext = { access: { email: "a@b.c" }, waitUntil: () => {} } as unknown as ExecutionContextLike;
+
+        await expect(edge?.lookup(get(), accessContext)).resolves.toBeUndefined();
+    });
+
+    it("refuses an app-declared credential header", async () => {
+        expect.assertions(1);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const policy: RestCachePolicy = { credentialHeaders: ["x-api-key"], maxAge: 60, scope: "public" };
+        const edge = restEdgeCacheFor(policy, cache);
+        const request = get({ headers: { "x-api-key": "k" } });
+
+        edge?.store(applyRestCache(Response.json({}), policy, request, context), request, context);
+        await settled();
+
+        expect(entries.size).toBe(0);
+    });
+
+    it("treats an x402 payment as the credential it is, so a paid response is never shared", async () => {
+        expect.assertions(3);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        // A payer's request: the charge gate runs INSIDE the dispatch, so a stored
+        // response would be replayed to callers who never paid.
+        const paid = get({ headers: { "x-payment": "signed-payload" } });
+        const answered = applyRestCache(Response.json({ premium: true }), publicCache, paid, context);
+
+        // The header path agrees: a paid exchange is caller-specific.
+        expect(answered.headers.get("cache-control")).toContain("private");
+
+        edge?.store(answered, paid, context);
+        await settled();
+
+        expect(entries.size).toBe(0);
+        // And an unpaid caller finds nothing to be served.
+        await expect(edge?.lookup(get(), context)).resolves.toBeUndefined();
+    });
+
+    it("does not store a settlement receipt even if one reaches it", async () => {
+        expect.assertions(1);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get();
+
+        edge?.store(Response.json({ premium: true }, { headers: { "x-payment-response": "settled" } }), request, context);
         await settled();
 
         expect(entries.size).toBe(0);
@@ -209,47 +170,173 @@ describe("storeRestEdgeCache + lookupRestEdgeCache", () => {
 
         const { cache, entries } = fakeCache();
         const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
         const request = get();
 
-        storeRestEdgeCache(cache, Response.json({ error: "nope" }, { status: 403 }), publicCache, request, context);
-        storeRestEdgeCache(cache, Response.json({}, { headers: { "set-cookie": "a=1" } }), publicCache, request, context);
+        edge?.store(Response.json({ error: "nope" }, { status: 403 }), request, context);
+        edge?.store(Response.json({}, { headers: { "set-cookie": "a=1" } }), request, context);
         await settled();
 
         expect(entries.size).toBe(0);
-        await expect(lookupRestEdgeCache(cache, publicCache, request, context)).resolves.toBeUndefined();
+        await expect(edge?.lookup(request, context)).resolves.toBeUndefined();
     });
 
-    it("does not serve a stored entry to a request with a different varying header", async () => {
-        expect.assertions(2);
+    it("still stores when the host gives no waitUntil", async () => {
+        expect.assertions(1);
 
-        const { cache } = fakeCache();
-        const { context, settled } = contextWith();
-        const tenantA = get({ headers: { "x-lunora-shard-key": "a" } });
+        const { cache, entries } = fakeCache();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get();
 
-        storeRestEdgeCache(cache, applyRestCache(Response.json({ tenant: "a" }), publicCache, tenantA, context), publicCache, tenantA, context);
-        await settled();
+        edge?.store(applyRestCache(Response.json({}), publicCache, request), request);
+        // The unawaited `put` settles on the microtask queue.
+        await Promise.resolve();
 
-        await expect(lookupRestEdgeCache(cache, publicCache, get({ headers: { "x-lunora-shard-key": "a" } }), context)).resolves.toBeDefined();
-        await expect(lookupRestEdgeCache(cache, publicCache, get({ headers: { "x-lunora-shard-key": "b" } }), context)).resolves.toBeUndefined();
+        expect(entries.size).toBe(1);
     });
+});
 
-    it("is a no-op with no policy, and on a host with no cache", async () => {
+describe("the cache key", () => {
+    it("folds the varying header values into the key rather than trusting Vary", async () => {
         expect.assertions(3);
 
         const { cache, entries } = fakeCache();
         const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const tenantA = get({ headers: { "x-lunora-shard-key": "a" } });
+
+        edge?.store(applyRestCache(Response.json({ tenant: "a" }), publicCache, tenantA, context), tenantA, context);
+        await settled();
+
+        expect(onlyKey(entries)).toContain("x-lunora-shard-key%3Da");
+        await expect(edge?.lookup(get({ headers: { "x-lunora-shard-key": "a" } }), context)).resolves.toBeDefined();
+        // A different shard is a different body, so it must miss rather than hit.
+        await expect(edge?.lookup(get({ headers: { "x-lunora-shard-key": "b" } }), context)).resolves.toBeUndefined();
+    });
+
+    it("treats an absent and an empty varying header alike, and neither like a present one", async () => {
+        expect.assertions(2);
+
+        const { cache } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const absent = get();
+
+        edge?.store(applyRestCache(Response.json({}), publicCache, absent, context), absent, context);
+        await settled();
+
+        // An absent header and an empty one select the same data, so they share a key.
+        await expect(edge?.lookup(get({ headers: { "x-lunora-shard-key": "" } }), context)).resolves.toBeDefined();
+        await expect(edge?.lookup(get({ headers: { "x-lunora-shard-key": "a" } }), context)).resolves.toBeUndefined();
+    });
+
+    it("separates values that would otherwise concatenate into the same key", async () => {
+        expect.assertions(1);
+
+        const { cache } = fakeCache();
+        const { context, settled } = contextWith();
+        const policy: RestCachePolicy = { maxAge: 60, scope: "public", vary: "x-a, x-b" };
+        const edge = restEdgeCacheFor(policy, cache);
+        const first = get({ headers: { "x-a": "1", "x-b": "23" } });
+
+        edge?.store(applyRestCache(Response.json({}), policy, first, context), first, context);
+        await settled();
+
+        await expect(edge?.lookup(get({ headers: { "x-a": "12", "x-b": "3" } }), context)).resolves.toBeUndefined();
+    });
+
+    it("keeps the original request's own query string", async () => {
+        expect.assertions(2);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get({ url: "https://api.example.com/_lunora/rest/messages/list?limit=10" });
+
+        edge?.store(applyRestCache(Response.json({}), publicCache, request, context), request, context);
+        await settled();
+
+        expect(new URL(onlyKey(entries)).searchParams.get("limit")).toBe("10");
+        await expect(edge?.lookup(get({ url: "https://api.example.com/_lunora/rest/messages/list?limit=20" }), context)).resolves.toBeUndefined();
+    });
+
+    it("ignores a caller-supplied copy of the reserved parameter rather than keying on it", async () => {
+        expect.assertions(2);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        // Two forged copies: `set` alone replaces only the first occurrence, so a
+        // second would otherwise ride into the key.
+        const forged = get({ url: `https://api.example.com/_lunora/rest/messages/list?${VARY_KEY_PARAM}=evil&${VARY_KEY_PARAM}=eviler` });
+
+        edge?.store(applyRestCache(Response.json({}), publicCache, forged, context), forged, context);
+        await settled();
+
+        expect(onlyKey(entries)).not.toContain("evil");
+        // Which means the forged request keyed exactly where the clean one does —
+        // it bought the attacker no partition of its own.
+        await expect(edge?.lookup(get(), context)).resolves.toBeDefined();
+    });
+});
+
+describe("what never reaches a second caller", () => {
+    it("strips the per-caller headers a shard response carries", async () => {
+        expect.assertions(3);
+
+        const { cache } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
         const request = get();
-        const response = Response.json({});
+        const answered = applyRestCache(
+            Response.json({}, { headers: { "x-d1-bookmark": "bookmark-1", "x-lunora-shard-key": "shard-a" } }),
+            publicCache,
+            request,
+            context,
+        );
 
-        expect(storeRestEdgeCache(cache, response, undefined, request, context)).toBe(response);
-        expect(storeRestEdgeCache(undefined, response, publicCache, request, context)).toBe(response);
+        // The first caller still gets them — they describe the exchange it made.
+        expect(answered.headers.get("x-d1-bookmark")).toBe("bookmark-1");
 
+        edge?.store(answered, request, context);
+        await settled();
+
+        const hit = await edge?.lookup(get(), context);
+
+        // A later caller holding a NEWER bookmark must not be handed this stale one.
+        expect(hit?.headers.get("x-d1-bookmark")).toBeNull();
+        expect(hit?.headers.get("x-lunora-shard-key")).toBeNull();
+    });
+
+    it("refuses to store a response advertising a Vary the key does not fence on", async () => {
+        expect.assertions(2);
+
+        const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        const edge = restEdgeCacheFor(publicCache, cache);
+        const request = get();
+        // `applyRestCache` MERGES the procedure's own `Vary` into the emitted
+        // header, so a shard negotiating on `Accept-Language` advertises more than
+        // the key fences. Serving one variant for another is the hazard; a miss is
+        // the price.
+        const negotiated = applyRestCache(Response.json({}), publicCache, request, context);
+
+        negotiated.headers.set("vary", `${negotiated.headers.get("vary") ?? ""}, Accept-Language`);
+        edge?.store(negotiated, request, context);
+
+        const wildcard = applyRestCache(Response.json({}), publicCache, request, context);
+
+        wildcard.headers.set("vary", "*");
+        edge?.store(wildcard, request, context);
         await settled();
 
         expect(entries.size).toBe(0);
+        await expect(edge?.lookup(request, context)).resolves.toBeUndefined();
     });
+});
 
-    it("treats a rejecting cache as a miss rather than failing the request", async () => {
+describe("a cache is never allowed to fail a request", () => {
+    it("treats a rejecting cache as a miss", async () => {
         expect.assertions(2);
 
         const { context, settled } = contextWith();
@@ -262,25 +349,52 @@ describe("storeRestEdgeCache + lookupRestEdgeCache", () => {
                 throw new Error("cache unavailable");
             }),
         };
-        const request = get();
+        const edge = restEdgeCacheFor(publicCache, broken);
         const response = Response.json({});
 
-        await expect(lookupRestEdgeCache(broken, publicCache, request, context)).resolves.toBeUndefined();
-        expect(storeRestEdgeCache(broken, response, publicCache, request, context)).toBe(response);
+        await expect(edge?.lookup(get(), context)).resolves.toBeUndefined();
+        expect(edge?.store(response, get(), context)).toBe(response);
 
         await settled();
     });
 
-    it("still stores when the host gives no waitUntil", async () => {
+    it("survives a host whose put throws synchronously rather than rejecting", () => {
         expect.assertions(1);
 
+        const { context } = contextWith();
+        const throwing: HttpCacheLike = {
+            delete: async () => false,
+            match: async () => undefined,
+            put: () => {
+                throw new Error("cache unavailable");
+            },
+        };
+        const edge = restEdgeCacheFor(publicCache, throwing);
+        const response = Response.json({});
+
+        // A served response must not become a 500 because the write failed.
+        expect(edge?.store(response, get(), context)).toBe(response);
+    });
+
+    it("degrades to a miss when the policy's vary is malformed, instead of throwing", async () => {
+        expect.assertions(3);
+
         const { cache, entries } = fakeCache();
+        const { context, settled } = contextWith();
+        // A space instead of a comma: `Headers.get("accept language")` throws a
+        // `TypeError` on an invalid header name. Before this was guarded, every
+        // request to the endpoint became a 500.
+        const policy: RestCachePolicy = { maxAge: 60, scope: "public", vary: "Accept Language" };
+        const edge = restEdgeCacheFor(policy, cache);
         const request = get();
+        const response = Response.json({});
 
-        storeRestEdgeCache(cache, applyRestCache(Response.json({}), publicCache, request), publicCache, request);
-        // The unawaited `put` settles on the microtask queue.
-        await Promise.resolve();
+        expect(edge?.store(response, request, context)).toBe(response);
 
-        expect(entries.size).toBe(1);
+        await settled();
+
+        await expect(edge?.lookup(request, context)).resolves.toBeUndefined();
+
+        expect(entries.size).toBe(0);
     });
 });
