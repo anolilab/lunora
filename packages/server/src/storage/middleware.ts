@@ -49,6 +49,15 @@ interface WrappableStorage {
     generateUploadUrl?: (key: string, options?: unknown) => Promise<string>;
     getMetadata?: (key: string) => Promise<unknown>;
     getSignedUrl?: (key: string, options?: unknown) => Promise<string>;
+
+    /**
+     * The one SYNCHRONOUS member of the guarded surface (every sibling returns
+     * a Promise). The wrapping loop must keep returning its value directly —
+     * making the wrapper `async` (or `await`ing the original) would silently
+     * turn `ctx.storage.getUrl` into a Promise for guarded procedures only.
+     * A test pins the sync return; if `getUrl` ever goes async upstream,
+     * delete that pin and this note in the same change.
+     */
     getUrl?: (key: string) => string;
     store?: (key: string, body: unknown, options?: unknown) => Promise<unknown>;
 }

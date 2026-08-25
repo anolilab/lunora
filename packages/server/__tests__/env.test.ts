@@ -235,6 +235,44 @@ describe("redactSecrets", () => {
         expect(redactSecrets("DB_PASSWORD: short")).toContain("DB_PASSWORD=[redacted]");
     });
 
+    it("masks secret-named keys in every convention keys arrive in", () => {
+        expect.assertions(8);
+
+        // camelCase / lowercase — the spellings request bodies and thrown
+        // errors actually use.
+        expect(redactSecrets("password: hunter2")).toBe("password=[redacted]");
+        expect(redactSecrets("apiToken=abc123")).toBe("apiToken=[redacted]");
+        expect(redactSecrets("authSecret: x")).toBe("authSecret=[redacted]");
+        // No-separator compounds: the suffix is not preceded by `_`, so a
+        // boundary-only rule silently misses these.
+        expect(redactSecrets("OPENAI_APIKEY=abc")).toBe("OPENAI_APIKEY=[redacted]");
+        expect(redactSecrets("APITOKEN=abc")).toBe("APITOKEN=[redacted]");
+        expect(redactSecrets("MYPASSWORD=abc")).toBe("MYPASSWORD=[redacted]"); // gitleaks:allow -- redaction test fixture, not a secret
+        expect(redactSecrets("AUTHSECRET=abc")).toBe("AUTHSECRET=[redacted]");
+        expect(redactSecrets("TOKEN=abc")).toBe("TOKEN=[redacted]");
+    });
+
+    it("masks Title-case and kebab separated secret keys", () => {
+        expect.assertions(1);
+
+        // `KEYED_VALUE` captures `[A-Za-z_]\w*`, so a kebab key is only ever
+        // seen from its last `-` segment (`Token` here) — which still redacts.
+        expect(redactSecrets("Api_Key=abc")).toBe("Api_Key=[redacted]");
+    });
+
+    it("over-redacts ordinary words ending in a secret suffix, by design", () => {
+        expect.assertions(3);
+
+        // `MONKEY` and `APIKEY` are structurally identical — all-caps compound,
+        // suffix at the end, no separator — so no rule can mask one and not the
+        // other. Masking `MONKEY` costs a confusing log line; missing `APITOKEN`
+        // costs the credential, so redaction fails toward masking. See
+        // shared/secret-key.ts.
+        expect(redactSecrets("MONKEY=banana")).toBe("MONKEY=[redacted]");
+        expect(redactSecrets("monkey: banana")).toBe("monkey=[redacted]");
+        expect(redactSecrets("sortKey=created_at")).toBe("sortKey=[redacted]");
+    });
+
     it("masks bare high-entropy >=24-char tokens", () => {
         expect.assertions(1);
 

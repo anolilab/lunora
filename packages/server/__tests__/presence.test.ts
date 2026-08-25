@@ -33,15 +33,37 @@ const createMemoryDb = (): MutationContext["db"] => {
     const makeReader = (table: string) => {
         const eqs: Eq[] = [];
         const predicates: Predicate[] = [];
+        let direction: "asc" | "desc" | undefined;
+
+        // The only ordered reads the presence handlers issue go through the
+        // `byRoomLastSeen` index with `roomId` eq-fixed, so ordering by
+        // `lastSeen` emulates the index order faithfully.
+        const sorted = (): Record<string, unknown>[] => {
+            const resolved = resolveRows(rows, table, eqs, predicates);
+
+            if (direction === undefined) {
+                return resolved;
+            }
+
+            return resolved.toSorted((a, b) =>
+                direction === "asc" ? (a["lastSeen"] as number) - (b["lastSeen"] as number) : (b["lastSeen"] as number) - (a["lastSeen"] as number),
+            );
+        };
 
         const reader = {
-            collect: async () => resolveRows(rows, table, eqs, predicates),
+            collect: async () => sorted(),
             filter(predicate: Predicate) {
                 predicates.push(predicate);
 
                 return reader;
             },
-            first: async () => resolveRows(rows, table, eqs, predicates)[0] ?? null,
+            first: async () => sorted()[0] ?? null,
+            order(requested: "asc" | "desc") {
+                direction = requested;
+
+                return reader;
+            },
+            take: async (limit: number) => sorted().slice(0, limit),
             withIndex(_name: string, range?: (q: unknown) => unknown) {
                 const builder = {
                     eq(field: string, value: unknown) {
@@ -187,6 +209,110 @@ describe("definePresence", () => {
 
         expect(present).toHaveLength(1);
         expect(present[0]?.userId).toBe("user-a");
+    });
+
+    it("listPresent caps the read at maxSessions, keeping the newest heartbeats", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ maxSessions: 3, ttlMs: 10_000 });
+
+        // Five distinct anonymous sessions (no userId, so no dedup), each with
+        // a fresher heartbeat than the last.
+        for (let index = 0; index < 5; index += 1) {
+            vi.setSystemTime(1000 + index * 100);
+            // eslint-disable-next-line no-await-in-loop -- sequential heartbeats are the point
+            await presence.functions.heartbeat.handler(makeMutationContext(db), { roomId: "room-1", sessionId: `sess-${String(index)}` });
+        }
+
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(present).toHaveLength(3);
+        // Newest-first and truncated from the oldest end: 1400, 1300, 1200.
+        expect(present.map((member) => member.lastSeen)).toEqual([1400, 1300, 1200]);
+    });
+
+    it("counts maxSessions in session rows, so one user's tabs consume several", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ maxSessions: 2, ttlMs: 10_000 });
+
+        // "multi" has two tabs (two rows) and heartbeats last, so it fills the
+        // whole cap and "solo" — equally live — falls off the bottom. This is
+        // why the option is named for sessions: sizing it by head count would
+        // drop currently-heartbeating members from "who's here".
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "solo"), { roomId: "room-1", sessionId: "solo-1" });
+        vi.setSystemTime(2000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "multi"), { roomId: "room-1", sessionId: "multi-1" });
+        vi.setSystemTime(3000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "multi"), { roomId: "room-1", sessionId: "multi-2" });
+
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(present.map((member) => member.userId)).toEqual(["multi"]);
+
+        // Raising the cap past the session count restores the dropped member.
+        const roomy = definePresence({ maxSessions: 3, ttlMs: 10_000 });
+        const all = await roomy.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(all.map((member) => member.userId)).toEqual(["multi", "solo"]);
+    });
+
+    it("falls back to the default cap for a non-finite maxSessions", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        // `Math.max(1, Math.floor(NaN))` is NaN, which would reach the reader
+        // as `LIMIT NaN` and return nothing.
+        const presence = definePresence({ maxSessions: Number.NaN, ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-1"), { roomId: "room-1", sessionId: "sess-1" });
+
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(present.map((member) => member.userId)).toEqual(["user-1"]);
+    });
+
+    it("heartbeat reaps long-expired rows but never one inside the grace window", async () => {
+        expect.assertions(3);
+
+        const db = createMemoryDb();
+        const deleteSpy = vi.spyOn(db, "delete");
+        const presence = definePresence({ disconnectGraceMs: 5000, ttlMs: 10_000 });
+
+        // A row that will age far past every cutoff.
+        vi.setSystemTime(0);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "old"), { roomId: "room-1", sessionId: "ancient" });
+
+        // A gracefully-closed session: aged, but revivable within the grace window.
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "graced"), { roomId: "room-1", sessionId: "graced" });
+        await presence.functions.disconnect.handler(
+            makeMutationContext(db, "graced"),
+            lifecycleEvent({ context: { roomId: "room-1", sessionId: "graced" }, userId: "graced" }),
+        );
+
+        // At t=2_000 the reap cutoff is 2_000 - 10_000 - 10_000 = -18_000:
+        // neither "ancient" (lastSeen 0) nor the aged "graced" row (lastSeen
+        // -4_000) is old enough — a graced reconnect must keep working.
+        vi.setSystemTime(2000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "beater"), { roomId: "room-1", sessionId: "beater" });
+
+        expect(deleteSpy).not.toHaveBeenCalled();
+
+        // At t=50_000 the cutoff is 30_000: both aged-out rows are reclaimed by
+        // the next heartbeat, no sweep scheduled.
+        vi.setSystemTime(50_000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "beater"), { roomId: "room-1", sessionId: "beater" });
+
+        expect(deleteSpy).toHaveBeenCalledTimes(2);
+
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(present.map((member) => member.userId)).toEqual(["beater"]);
     });
 
     it("sweep hard-deletes only expired rows", async () => {
@@ -442,13 +568,14 @@ describe("presenceExtension", () => {
         expect(schema.tables).not.toHaveProperty("present");
     });
 
-    it("declares the (roomId, sessionId) and roomId indexes on the table", () => {
-        expect.assertions(2);
+    it("declares the (roomId, sessionId), roomId, and (roomId, lastSeen) indexes on the table", () => {
+        expect.assertions(3);
 
         const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(presenceExtension);
         const indexNames = schema.tables[PRESENCE_TABLE]?.indexes.map((index) => index.name);
 
         expect(indexNames).toContain("byRoomSession");
         expect(indexNames).toContain("byRoom");
+        expect(indexNames).toContain("byRoomLastSeen");
     });
 });

@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 
+import { isSecretKeyName } from "../../../shared/secret-key";
 import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_NEWLINE, parseDevVariableEntries, parseDevVariableLine } from "./dev-variables-format";
 import type { SecretEntry } from "./package-secrets-registry";
 import { CORE_SECRETS, PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
@@ -31,9 +32,6 @@ const requiredSecrets = (packageNames: ReadonlyArray<string>): SecretEntry[] => 
 
 /** Bytes of entropy per generated secret — 32 bytes → 64 hex chars (matches `openssl rand -hex 32`). */
 const SECRET_BYTES = 32;
-
-/** A key whose value is a secret we should generate rather than copy from the example. */
-const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
 
 /**
  * Markers that flag a value as a fill-me-in placeholder rather than a usable
@@ -121,7 +119,7 @@ const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString(
  */
 const PROVIDER_SECRET_KEYS: ReadonlySet<string> = new Set(
     [...CORE_SECRETS, ...Object.values(PACKAGE_SECRETS_REGISTRY).flat()]
-        .filter((entry) => SECRET_KEY.test(entry.key) && entry.placeholderValue.startsWith("<"))
+        .filter((entry) => isSecretKeyName(entry.key) && entry.placeholderValue.startsWith("<"))
         .map((entry) => entry.key),
 );
 
@@ -131,7 +129,7 @@ const PROVIDER_SECRET_KEYS: ReadonlySet<string> = new Set(
  * `LUNORA_ADMIN_TOKEN`, `STORAGE_SIGNING_SECRET`. False for provider-issued keys
  * ({@link PROVIDER_SECRET_KEYS}) and any non-secret key.
  */
-const isMintableSecretKey = (key: string): boolean => SECRET_KEY.test(key) && !PROVIDER_SECRET_KEYS.has(key);
+const isMintableSecretKey = (key: string): boolean => isSecretKeyName(key) && !PROVIDER_SECRET_KEYS.has(key);
 
 /**
  * The fresh secret to substitute for an example `key=value` entry, or `undefined`
@@ -646,7 +644,7 @@ const planDevSecretsFill = (input: { existingContent: string; randomHex?: (bytes
     const lines = fillSecretLines(input.existingContent, randomHex, filledKeys);
 
     // 2. Append any missing core secret (a present-but-empty one is already
-    //    handled by the fill pass — every CORE_SECRETS key matches SECRET_KEY).
+    //    handled by the fill pass — every CORE_SECRETS key is secret-named).
     const present = new Set(parseDevVariableEntries(input.existingContent).map((entry) => entry.key));
     const addedKeys: string[] = [];
     const additions: string[] = [];

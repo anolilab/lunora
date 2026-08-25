@@ -4,6 +4,7 @@ import { ValidationError } from "@lunora/values";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
+import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
 import { LunoraError } from "./error";
 import { parseValidatorMap } from "./functions";
@@ -348,22 +349,6 @@ const parseBody = async (validators: ArgsValidator, c: Context<LunoraHttpEnv>): 
     }
 
     return parseValidatorMap(validators, json as Record<string, unknown>, "body");
-};
-
-/**
- * Parse the handler result through `.output()`. A mismatch here is a server
- * contract bug, not a client error, so re-tag it as a 500.
- */
-const applyOutput = (output: Validator, result: unknown): unknown => {
-    try {
-        return output.parse(result);
-    } catch (error: unknown) {
-        if (error instanceof ValidationError) {
-            throw new LunoraError("INTERNAL_SERVER_ERROR", `Response did not match the declared output schema: ${error.message}`);
-        }
-
-        throw error;
-    }
 };
 
 /** Map a thrown error to its HTTP response, re-throwing anything unrecognised. */
