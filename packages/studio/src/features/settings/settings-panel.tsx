@@ -69,10 +69,17 @@ const LEVEL_SUMMARY: Readonly<Record<AiOptInLevel, MessageId>> = {
 };
 
 /** The tools a tier unlocks, read from the server's own gate map so the two cannot drift. */
-const toolsAt = (level: AiOptInLevel): string[] =>
-    Object.entries(TOOL_LEVEL)
-        .filter(([, tier]) => tier === level)
-        .map(([tool]) => tool);
+const toolsAt = (level: AiOptInLevel): string[] => {
+    const tools: string[] = [];
+
+    for (const [tool, tier] of Object.entries(TOOL_LEVEL)) {
+        if (tier === level) {
+            tools.push(tool);
+        }
+    }
+
+    return tools;
+};
 
 /**
  * The deployment's AI data-sharing level, and the ladder it sits on.
