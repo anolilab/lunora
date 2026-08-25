@@ -1,3 +1,47 @@
+/** Tab, CR and LF — removed from anywhere in the input by WHATWG URL parsing. */
+const REMOVED_ANYWHERE = new Set(["\t", "\n", "\r"]);
+
+/** The C0-and-space range WHATWG URL parsing trims from both ends. */
+const TRIMMED_MAX = "\u0020";
+
+/**
+ * Reduce `path` to what `fetch` will actually parse.
+ *
+ * WHATWG URL parsing strips leading and trailing C0-and-space and removes every
+ * ASCII tab, CR and LF from ANYWHERE in the input — so `" https://host/x"` and
+ * `"htt\tps://host/x"` both reach the network as `https://host/x`. Testing the
+ * raw string would let either walk straight past {@link NAMES_ITS_OWN_HOST} with
+ * the admin bearer attached. Normalize first, then both test AND fetch the
+ * normalized form, so the string that was checked is the string that is sent.
+ *
+ * Written with explicit scans rather than a regex: the trims need the full
+ * `\u0000`-`\u0020` range (`String.trim` stops short of the C0 controls, which
+ * would leave `"\u0001https://host/x"` a hole), and a character-class quantifier
+ * over that range is what `sonarjs/slow-regex` refuses.
+ */
+const normalizeForFetch = (path: string): string => {
+    let collapsed = "";
+
+    for (const character of path) {
+        if (!REMOVED_ANYWHERE.has(character)) {
+            collapsed += character;
+        }
+    }
+
+    let first = 0;
+    let last = collapsed.length;
+
+    while (first < last && (collapsed[first] ?? "") <= TRIMMED_MAX) {
+        first += 1;
+    }
+
+    while (last > first && (collapsed[last - 1] ?? "") <= TRIMMED_MAX) {
+        last -= 1;
+    }
+
+    return collapsed.slice(first, last);
+};
+
 /** `https://host/x` or the protocol-relative `//host/x` — a path that names its own host. */
 const NAMES_ITS_OWN_HOST = /^(?:[a-z][\d+.a-z-]*:)?\/\//i;
 
@@ -19,21 +63,22 @@ const resolveTarget = (httpPath: string, origin: string): string => {
     // rather than an optional chain the type checker calls redundant.
     const consoleOrigin = (globalThis as { location?: { origin?: string } }).location?.origin ?? "";
     const base = origin === "" ? consoleOrigin : origin;
+    const target = normalizeForFetch(httpPath);
 
     if (base === "") {
         // No `location` to resolve against (outside a browser). A relative path
         // is safe as written; one that names its own host cannot be checked, so
         // it is refused rather than sent with the bearer attached.
-        if (NAMES_ITS_OWN_HOST.test(httpPath)) {
+        if (NAMES_ITS_OWN_HOST.test(target)) {
             throw new Error(
-                `restDispatch: refusing to send the admin token off-origin (${httpPath} names its own host and there is no origin to check it against)`,
+                `restDispatch: refusing to send the admin token off-origin (${target} names its own host and there is no origin to check it against)`,
             );
         }
 
-        return httpPath;
+        return target;
     }
 
-    const resolved = new URL(httpPath, base);
+    const resolved = new URL(target, base);
 
     if (resolved.origin !== new URL(base).origin) {
         throw new Error(`restDispatch: refusing to send the admin token off-origin (${resolved.origin} is not ${base})`);
