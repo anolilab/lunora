@@ -999,7 +999,7 @@ class LunoraClient {
      */
     private readonly streams = new Map<
         string,
-        { durable: boolean; handle: StreamHandle; lastSeq: number; message: ClientMessage; shardKey: string | undefined }
+        { durable: boolean; generation: number | undefined; handle: StreamHandle; lastSeq: number; message: ClientMessage; shardKey: string | undefined }
     >();
 
     /** Live shape subscriptions (partial replication), keyed by their wire id. */
@@ -3365,7 +3365,7 @@ class LunoraClient {
         // `durable` starts from the caller's intent and is corrected by the first
         // `seq`-bearing chunk; a server that did not declare the procedure durable
         // never sends one, so the stream stays non-resumable.
-        this.streams.set(id, { durable: options.durable === true, handle: handle as StreamHandle, lastSeq: 0, message, shardKey });
+        this.streams.set(id, { durable: options.durable === true, generation: undefined, handle: handle as StreamHandle, lastSeq: 0, message, shardKey });
 
         // Fast path: socket is open, try to send immediately. `sendOn` can still
         // return `false` if the socket closed between the `wsState` check and the
@@ -4915,7 +4915,14 @@ class LunoraClient {
                 // and persists every chunk, so re-send the start frame carrying
                 // the last seq we saw and the reconnect replays the gap. The
                 // consumer's `for await` never observes the interruption.
-                const resume = { ...(stream.message as { id: string; type: "stream" }), sinceChunk: stream.lastSeq } as ClientMessage;
+                // The stored `generation` (stamped on every durable chunk) rides
+                // along so the server can tell "continuing this run" from
+                // "splicing onto a different run under the same key".
+                const resume = {
+                    ...(stream.message as { id: string; type: "stream" }),
+                    ...(stream.generation === undefined ? {} : { generation: stream.generation }),
+                    sinceChunk: stream.lastSeq,
+                } as ClientMessage;
 
                 stream.message = resume;
                 // Replace, don't append: repeated bounces before the socket comes
@@ -5104,11 +5111,15 @@ class LunoraClient {
                 return;
             }
             case "chunk": {
-                const { data, id, seq } = message;
+                const { data, generation, id, seq } = message;
                 const stream = this.streams.get(id);
 
                 if (stream && typeof seq === "number") {
                     stream.lastSeq = seq;
+
+                    if (typeof generation === "number") {
+                        stream.generation = generation;
+                    }
                     // `seq` rides only a DURABLE run, so the server's answer —
                     // not the caller's `durable` flag — decides whether this
                     // stream can resume. Trusting the caller meant a `durable:
