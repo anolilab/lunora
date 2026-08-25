@@ -1,3 +1,12 @@
+## @lunora/studio [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.121...@lunora/studio@1.0.0-alpha.122) (2026-08-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.87
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.36
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.72
+
 ## @lunora/studio [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.120...@lunora/studio@1.0.0-alpha.121) (2026-08-25)
 
 ### Bug Fixes
