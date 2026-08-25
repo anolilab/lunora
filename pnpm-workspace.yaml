@@ -358,6 +358,11 @@ catalogs:
     "@visulima/tui-kit": 1.0.3
     cfonts: ^3.3.1
     giget: 3.3.1
+    # The runtime TypeScript loader `lunora eval` uses to execute a discovered
+    # `*.eval.ts` (and everything it imports) on plain Node. Pure JavaScript, no
+    # per-platform native binary — unlike esbuild/tsx, which the published CLI
+    # would then make every consumer download.
+    jiti: 2.7.0
     magic-string: ^1.1.0
     react-reconciler: ^0.33.0
     smol-toml: 1.7.1
@@ -406,6 +411,17 @@ catalogs:
     class-variance-authority: ^0.7.1
     clsx: ^2.1.1
     shadcn: ^4.16.2
+    # Markdown renderer for the Studio assistant's replies. Chosen over
+    # `react-markdown` (whose API it is deliberately compatible with) for the
+    # hardening it ships — `rehype-harden` + `rehype-sanitize` — which matters
+    # because what it renders is model output. Its other headline feature,
+    # parsing markdown that is still arriving, buys nothing until plan 364's W5
+    # lands; picking it now means not swapping twice.
+    #
+    # It pulls mermaid and shiki, both of which its build code-splits into their
+    # own chunks, so a panel that renders neither a diagram nor a highlighted
+    # block does not download them.
+    streamdown: ^2.5.0
     tailwind-merge: ^3.6.0
   frontend:
     # Meta-frameworks the `@lunora/astro` / `@lunora/nuxt` integrations build against.

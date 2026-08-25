@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { SqlSchema } from "../sql-autocomplete";
 import type { SqlAutocomplete } from "../sql-autocomplete-ui";
@@ -16,12 +16,40 @@ interface EditorHandlers {
     readonly onSelect: (event: React.SyntheticEvent<HTMLTextAreaElement>) => void;
 }
 
+/**
+ * The inline-rewrite chord: ⌘/Ctrl+I with nothing else held.
+ *
+ * Bound on the TEXTAREA rather than globally, so the only chords it can collide
+ * with are this file's own map — the console's Ctrl+`, the palette's ⌘K and the
+ * sidebar's ⌘B are global listeners on other keys. Shift is excluded because
+ * ⌘⇧I is the browser's devtools.
+ */
+const isInlineEditChord = (event: React.KeyboardEvent): boolean =>
+    (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "i";
+
+/**
+ * The span the inline AI rewrite is targeting: the operator's selection, or the
+ * whole draft when the caret was collapsed.
+ *
+ * Offsets rather than the text itself, because the panel must splice the
+ * accepted rewrite back into the draft it came out of — and because holding the
+ * text would be a second copy of the draft to keep in step.
+ */
+interface InlineEditTarget {
+    readonly end: number;
+    readonly start: number;
+}
+
 /** Everything {@link useSqlEditorSurface} hands back — what the editor pane renders and wires. */
 interface SqlEditorSurface {
     /** The completion popover's state, or `null` when closed. */
+    /** Splice an accepted AI rewrite over `inlineEdit`'s span and close the panel. */
+    readonly acceptInlineEdit: (sql: string) => void;
     readonly autocompleteState: SqlAutocomplete["state"];
     /** Dismiss the popover — also called when the panel switches tabs. */
     readonly closeAutocomplete: () => void;
+    /** Dismiss the inline rewrite panel, leaving the draft exactly as it was. */
+    readonly closeInlineEdit: () => void;
 
     /**
      * The textarea, plus the gutter and overlay that follow its scroll. Flat, not
@@ -31,6 +59,8 @@ interface SqlEditorSurface {
     readonly editorRef: RefObject<HTMLTextAreaElement | null>;
     readonly gutterRef: RefObject<HTMLDivElement | null>;
     readonly handlers: EditorHandlers;
+    /** The span ⌘/Ctrl+I armed, or `null` when the rewrite panel is closed. */
+    readonly inlineEdit: InlineEditTarget | null;
     /** The listbox id the textarea owns through `aria-controls`. */
     readonly listboxId: string;
     readonly onPickSuggestion: (index: number) => void;
@@ -49,11 +79,14 @@ interface SqlEditorSurface {
  * behaviour and the query lifecycle looked like one thing.
  */
 const useSqlEditorSurface = ({
+    inlineEditEnabled,
     onSubmit,
     probe,
     schema,
     setDraft,
 }: {
+    /** Whether ⌘/Ctrl+I arms the AI rewrite — false when the deployment cannot run the assistant. */
+    readonly inlineEditEnabled: boolean;
     /** Run the query — Cmd/Ctrl-Enter in the editor. */
     readonly onSubmit: () => void;
     /** Pre-load a table's columns as soon as the draft names it. */
@@ -64,6 +97,7 @@ const useSqlEditorSurface = ({
 }): SqlEditorSurface => {
     const listboxId = useId();
 
+    const [inlineEdit, setInlineEdit] = useState<InlineEditTarget | null>(null);
     const gutterRef = useRef<HTMLDivElement | null>(null);
     const overlayRef = useRef<HTMLDivElement | null>(null);
     const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -100,6 +134,11 @@ const useSqlEditorSurface = ({
         const { selectionStart, value } = event.target;
 
         setDraft(value);
+        // An armed rewrite holds OFFSETS into the draft it was armed over, so an
+        // edit underneath it would have Accept splice the proposal across the
+        // wrong characters. Dismissing is the honest answer: what the operator
+        // asked to rewrite is not there any more.
+        setInlineEdit(null);
 
         for (const table of referencedTables(value)) {
             probe(table);
@@ -115,40 +154,65 @@ const useSqlEditorSurface = ({
         refreshAutocomplete(node.value, node.selectionStart);
     };
 
+    /**
+     * Autocomplete navigation, which takes the keys while the popover is open.
+     *
+     * Answers whether it CONSUMED the key: Enter and Tab fall through to the
+     * editor's own map when there is nothing to commit, so ⌘Enter still runs the
+     * query with a popover on screen.
+     */
+    const onAutocompleteKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+            moveAutocomplete(1);
+
+            return true;
+        }
+
+        if (event.key === "ArrowUp") {
+            event.preventDefault();
+            moveAutocomplete(-1);
+
+            return true;
+        }
+
+        if (event.key === "Escape") {
+            event.preventDefault();
+            closeAutocomplete();
+
+            return true;
+        }
+
+        if ((event.key === "Enter" || event.key === "Tab") && !event.metaKey && !event.ctrlKey && commitAutocomplete()) {
+            event.preventDefault();
+
+            return true;
+        }
+
+        return false;
+    };
+
     const onEditorKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-        // Autocomplete navigation takes the keys while the popover is open.
-        if (autocompleteState !== null) {
-            if (event.key === "ArrowDown") {
-                event.preventDefault();
-                moveAutocomplete(1);
-
-                return;
-            }
-
-            if (event.key === "ArrowUp") {
-                event.preventDefault();
-                moveAutocomplete(-1);
-
-                return;
-            }
-
-            if (event.key === "Escape") {
-                event.preventDefault();
-                closeAutocomplete();
-
-                return;
-            }
-
-            if ((event.key === "Enter" || event.key === "Tab") && !event.metaKey && !event.ctrlKey && commitAutocomplete()) {
-                event.preventDefault();
-
-                return;
-            }
+        if (autocompleteState !== null && onAutocompleteKeyDown(event)) {
+            return;
         }
 
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
             event.preventDefault();
             onSubmit();
+
+            return;
+        }
+
+        // Arm the inline AI rewrite over the selection, or over the whole draft
+        // when the caret is collapsed.
+        if (inlineEditEnabled && isInlineEditChord(event)) {
+            event.preventDefault();
+            closeAutocomplete();
+
+            const { selectionEnd, selectionStart, value } = event.currentTarget;
+
+            setInlineEdit(selectionStart === selectionEnd ? { end: value.length, start: 0 } : { end: selectionEnd, start: selectionStart });
         }
     };
 
@@ -187,9 +251,44 @@ const useSqlEditorSurface = ({
         node.focus();
         node.setSelectionRange(diagnostic.offset, diagnostic.offset + (diagnostic.length ?? 0));
     };
+
+    const closeInlineEdit = (): void => {
+        setInlineEdit(null);
+        editorRef.current?.focus();
+    };
+
+    /*
+     * Take the rewrite: splice it over the armed span and hand the editor back.
+     *
+     * Read off the live textarea rather than a captured draft so the splice uses
+     * the same string the offsets were measured against. The selection is set in
+     * the next frame because React re-writes a controlled textarea's `value` on
+     * the render this `setDraft` triggers, which drops a selection set now — the
+     * same deferral the blur handler above needs, for the same reason.
+     */
+    const acceptInlineEdit = (sql: string): void => {
+        const node = editorRef.current;
+
+        if (inlineEdit === null || node === null) {
+            return;
+        }
+
+        const { end, start } = inlineEdit;
+
+        setDraft(node.value.slice(0, start) + sql + node.value.slice(end));
+        setInlineEdit(null);
+        node.focus();
+        requestAnimationFrame(() => {
+            node.setSelectionRange(start, start + sql.length);
+        });
+    };
+
     return {
+        acceptInlineEdit,
         autocompleteState,
         closeAutocomplete,
+        closeInlineEdit,
+        inlineEdit,
         handlers: {
             onBlur: onEditorBlur,
             onChange: onDraftChange,
@@ -207,4 +306,4 @@ const useSqlEditorSurface = ({
 };
 
 export { useSqlEditorSurface };
-export type { EditorHandlers, SqlEditorSurface };
+export type { EditorHandlers, InlineEditTarget, SqlEditorSurface };

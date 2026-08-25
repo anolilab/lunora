@@ -293,6 +293,8 @@ export const ERROR_CATALOG = {
      * `@lunora/runtime`'s dispatch/security-boundary codes — RPC/HTTP entry, not
      * admin-gated. Fixed, non-sensitive messages throughout, so none are `internal`.
      */
+    /** The studio assistant's stream transport failed. Fixed, safe message — the turn's internals are never echoed to a browser. */
+    AI_CHAT_FAILED: { status: 500, title: "Assistant turn failed" },
     BAD_ROW: { status: 400, title: "Malformed import row" },
     BAD_SUBSCRIPTION_ARGS: { status: 400, title: "Invalid subscription arguments" },
     BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },

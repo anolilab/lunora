@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 
+import { useAssistant } from "../../components/assistant-provider";
 import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
@@ -13,6 +14,16 @@ import { ADMIN_FUNCTIONS } from "../../lib/admin";
 
 /** The four CRUD operations a policy can guard, in read→write order for the per-table columns. */
 const OPERATIONS: ReadonlyArray<RlsOperation> = ["read", "insert", "update", "delete"];
+
+/**
+ * Tables summarised into the seeded question.
+ *
+ * The whole point of seeding is to save the assistant a `readPolicies` round, so
+ * the summary has to fit a turn rather than be the table again. Past this the
+ * question says how many were left out and the assistant reads the rest itself —
+ * which is the same data through the same op, just one round later.
+ */
+const MAX_SUMMARISED_TABLES = 30;
 
 /** Localized column header per operation. */
 const operationLabel = (t: TFunction, operation: RlsOperation): string =>
@@ -45,6 +56,22 @@ const groupByTable = (policies: RlsPolicyMetadata[]): TableCoverage[] => {
 };
 
 /**
+ * The coverage on screen, as one line the assistant can read.
+ *
+ * Passed VERBATIM for the same reason an advisor finding is: this is exactly what
+ * the operator is looking at, and making the model re-derive it from a tool would
+ * spend a round of the per-turn budget re-reading what the panel already has.
+ */
+const coverageSummary = (tables: ReadonlyArray<TableCoverage>): string => {
+    const shown = tables
+        .slice(0, MAX_SUMMARISED_TABLES)
+        .map((coverage) => `${coverage.table}: ${OPERATIONS.filter((operation) => coverage.operations.has(operation)).join("/")}`)
+        .join("; ");
+
+    return tables.length > MAX_SUMMARISED_TABLES ? `${shown}; and ${String(tables.length - MAX_SUMMARISED_TABLES)} more tables` : shown;
+};
+
+/**
  * The RLS Policy & Role Inspector — a read-only view of the deployment's
  * row-level-security configuration (`definePolicy` / `defineRole` / `rls`). Per
  * table it shows which CRUD operations a policy guards and the procedures that
@@ -55,9 +82,22 @@ const groupByTable = (policies: RlsPolicyMetadata[]): TableCoverage[] => {
  * shape for auditing — DDL-from-UI is a non-goal. The metadata is statically
  * discovered by `@lunora/codegen` and served by `__lunora_admin__:rlsPolicies`,
  * so it refreshes on every codegen run (dev: on save; prod: on deploy).
+ *
+ * "Ask the assistant" does not change that. It opens the shell-wide assistant on
+ * the coverage shown here; the answer is prose containing proposed TypeScript,
+ * and applying it is still the operator's job — by hand, or through the
+ * scaffolder on the Permissions page, which is the only thing in the Studio that
+ * can write a policy file and is reachable only on a loopback dev host.
  */
 const RlsPanel = (): ReactElement => {
     const t = useT();
+
+    // `undefined` when no provider is mounted (a bare-composed Studio panel), and
+    // `unavailable` once the deployment has reported it cannot run a turn. Either
+    // way the control is not rendered rather than rendered dead — the contract
+    // `useAssistant`'s docblock states.
+    const assistant = useAssistant();
+    const canAsk = assistant !== undefined && !assistant.unavailable;
 
     // Deployment-wide metadata (root shard), so no shard selector is needed.
     const { data, error, errorSource } = useAdminQuery<RlsPoliciesResult>(ADMIN_FUNCTIONS.rlsPolicies, {});
@@ -76,8 +116,46 @@ const RlsPanel = (): ReactElement => {
 
             <section className="flex flex-col gap-2">
                 <Card className="overflow-hidden py-0">
-                    <header className="border-b border-border px-4 py-3">
+                    <header className="flex items-center gap-3 border-b border-border px-4 py-3">
                         <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Policies")}</span>
+                        {/* Only once the read has LANDED. The seed is built from the
+                            coverage on screen, and while the query is in flight that is
+                            an empty table — clicking early asked "you have no policies
+                            at all" about a deployment that has plenty. */}
+                        {loaded && canAsk && (
+                            <button
+                                className="ms-auto text-xs underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                data-testid="rls-ask-assistant"
+                                onClick={() => {
+                                    /*
+                                     * A PROPOSAL, not an edit. There is no policy DDL to
+                                     * generate and no admin op that could apply one: a policy
+                                     * is TypeScript under `lunora/`, written by the loopback
+                                     * dev-host scaffolder on the Permissions page. So the
+                                     * assistant answers with source the operator reads, copies
+                                     * and applies there — the same "insert, never execute"
+                                     * boundary the SQL console holds, with the scaffolder
+                                     * standing in for the editor.
+                                     */
+                                    assistant.openAssistant({
+                                        ask:
+                                            tables.length === 0
+                                                ? t(
+                                                      "This app declares no row-level-security policies at all. Which tables most need one, and what policy should I write for them?",
+                                                  )
+                                                : t(
+                                                      "The Lunora RLS inspector shows these declared policies — {coverage}. Which tables and operations are still unguarded, and what policy should I add?",
+                                                      { coverage: coverageSummary(tables) },
+                                                  ),
+                                        suggestions: [t("Which procedures still need .use(rls(...))?"), t("How do I test a policy?")],
+                                        title: t("Access rules"),
+                                    });
+                                }}
+                                type="button"
+                            >
+                                {t("Ask the assistant")}
+                            </button>
+                        )}
                     </header>
                     {loaded && tables.length === 0 ? (
                         <EmptyState

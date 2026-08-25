@@ -16,7 +16,9 @@ const ADMIN_FUNCTIONS: {
     readonly applyCdc: "__lunora_admin__:applyCdc";
     readonly aiAvailable: "__lunora_admin__:aiAvailable";
     readonly aiChartConfig: "__lunora_admin__:aiChartConfig";
+    readonly aiCronExpression: "__lunora_admin__:aiCronExpression";
     readonly aiGenerateSql: "__lunora_admin__:aiGenerateSql";
+    readonly aiNameQuery: "__lunora_admin__:aiNameQuery";
     readonly aiTableFilter: "__lunora_admin__:aiTableFilter";
     readonly assignIssue: "__lunora_admin__:assignIssue";
     readonly backRelationCounts: "__lunora_admin__:backRelationCounts";

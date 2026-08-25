@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, regexScorer, scoreSample } from "../src/scorer";
+import { absentScorer, containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, regexScorer, scoreSample } from "../src/scorer";
 
 describe("heuristic scorers", () => {
     it("containsScorer matches case-insensitively by default", () => {
@@ -8,6 +8,15 @@ describe("heuristic scorers", () => {
 
         expect(containsScorer("Shipped").score({ output: "it SHIPPED tuesday" })).toBe(1);
         expect(containsScorer("Shipped", { caseSensitive: true }).score({ output: "it shipped" })).toBe(0);
+    });
+
+    it("absentScorer is containsScorer inverted, and shares its case handling", () => {
+        expect.assertions(3);
+
+        expect(absentScorer("DELETE").score({ output: "SELECT id FROM messages" })).toBe(1);
+        expect(absentScorer("delete").score({ output: "DELETE FROM messages" })).toBe(0);
+        // Case-sensitive, so the differently-cased occurrence is not a hit.
+        expect(absentScorer("delete", { caseSensitive: true }).score({ output: "DELETE FROM messages" })).toBe(1);
     });
 
     it("regexScorer scores 1 on a match", () => {

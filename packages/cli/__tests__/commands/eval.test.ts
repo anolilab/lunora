@@ -24,6 +24,13 @@ const captureStdout = async (body: () => Promise<void>): Promise<string> => {
     return captured;
 };
 
+// Every eval a fixture declares is loaded through the command's own runtime
+// TypeScript loader, which transforms the file and everything it imports — a
+// second or so on a quiet machine, and multiples of that when the whole CLI
+// suite runs in parallel. Above vitest's 5s default so contention doesn't
+// decide the result.
+vi.setConfig({ testTimeout: 60_000 });
+
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "fixtures");
 
@@ -184,8 +191,8 @@ describe("lunora eval", () => {
 
         expect(parsed).toMatchObject({ code: 0 });
         expect(parsed.evals).toHaveLength(1);
-        // Flat per the documented contract (`plans/245-eval-runner-design.md`
-        // §4/§6): `evals[].average`, not `evals[].result.average`.
+        // Flat per the documented contract: `evals[].average`, not
+        // `evals[].result.average`.
         expect(parsed.evals[0]?.average).toBe(1);
         expect(parsed.evals[0]?.name).toBe("support-triage");
         expect(parsed.evals[0]?.passed).toBe(true);
@@ -227,22 +234,6 @@ describe("lunora eval", () => {
 
         expect(result.code).toBe(1);
         expect(recorded.errors.some((line) => line.includes("--threshold") && line.includes("[0, 1]"))).toBe(true);
-    });
-
-    it("aborts with one distinct, actionable message and a non-zero exit when the Node floor can't load a .ts eval (ERR_UNKNOWN_FILE_EXTENSION), instead of mislabeling it a per-eval failure", async () => {
-        expect.assertions(4);
-
-        const { logger, recorded } = recordingLogger();
-        const cwd = join(fixtureRoot, "eval-floor-sample");
-
-        const result = await runEvalCommand({ cwd, logger });
-
-        expect(result.code).toBe(1);
-        // No per-eval outcome at all — the run aborted before producing one,
-        // rather than recording a mislabeled "failed" entry for it.
-        expect(result.evals).toHaveLength(0);
-        expect(result.error).toContain("Node ≥23.6");
-        expect(recorded.errors.some((line) => line.includes("Node ≥23.6") && line.includes("plans/245-eval-runner-design.md"))).toBe(true);
     });
 
     it("--threshold against an empty/missing eval dir exits non-zero instead of passing vacuously", async () => {

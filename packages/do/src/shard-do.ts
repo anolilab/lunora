@@ -220,6 +220,7 @@ import {
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
+import { asOptInLevel } from "../../../shared/ai-chat";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
@@ -232,6 +233,7 @@ import type { MetricEvent } from "../../../shared/metric-event";
 import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
+import { generateChart, generateCron, generateFilter, generateQueryName, generateSql } from "../../../shared/sql-assistant";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type {
@@ -293,7 +295,6 @@ import {
 } from "./admin-rpc-args";
 import { buildBatchEntryRequest } from "./batch";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
-import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
@@ -7151,7 +7152,7 @@ abstract class ShardDO {
      * no binding at all and so records nothing.
      */
     private async handleExplainIssue(args: Record<string, unknown>): Promise<Response> {
-        const result = await explainIssue((this.env as Record<string, unknown> | undefined)?.["AI"], args);
+        const result = await explainIssue(this.aiBinding(), args);
 
         if (!result.degraded) {
             this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, model: result.model } });
@@ -7184,7 +7185,7 @@ abstract class ShardDO {
         const schema = listTables(sql).map((table) => {
             return { columns: this.tableColumns(table.name).map((column) => column.name), table: table.name };
         });
-        const result = await generateSql((this.env as Record<string, unknown> | undefined)?.["AI"], args, schema);
+        const result = await generateSql(this.aiBinding(), args, schema);
 
         if (result.degraded) {
             if (result.reason !== "no-ai-binding") {
@@ -7202,11 +7203,49 @@ abstract class ShardDO {
     /** The AI-assistant admin writes, keyed by function path. */
     private aiAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response>> {
         return {
-            [ADMIN_FUNCTIONS.aiAvailable]: () => Promise.resolve(this.handleAiAvailable()),
             [ADMIN_FUNCTIONS.aiChartConfig]: async (args) => this.handleAiChartConfig(args),
+            [ADMIN_FUNCTIONS.aiCronExpression]: async (args) => this.handleAiCronExpression(args),
             [ADMIN_FUNCTIONS.aiGenerateSql]: async (args) => this.handleGenerateSql(args),
+            [ADMIN_FUNCTIONS.aiNameQuery]: async (args) => this.handleAiNameQuery(args),
             [ADMIN_FUNCTIONS.aiTableFilter]: async (args) => this.handleAiTableFilter(args),
         };
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiNameQuery` — a title and one-line description for
+     * a saved SQL query, drafted from the statement itself.
+     *
+     * A DEFAULT the operator edits and accepts; the studio's query library is
+     * browser-local, so nothing here writes anything. Grounded in the statement
+     * alone — it already names every table and column it touches.
+     */
+    private async handleAiNameQuery(args: Record<string, unknown>): Promise<Response> {
+        const result = await generateQueryName(this.aiBinding(), args);
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiNameQuery", { detail: { reason: result.reason } });
+        }
+
+        return adminResponse(result);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiCronExpression` — a Cloudflare Cron Trigger
+     * expression from a described schedule.
+     *
+     * The engine validates the answer against the deployable 5-field grammar
+     * before returning it, so an expression `wrangler deploy` would reject never
+     * reaches the operator. Read-only in every sense: cron triggers are compiled
+     * into the worker, and the studio only offers the expression to copy.
+     */
+    private async handleAiCronExpression(args: Record<string, unknown>): Promise<Response> {
+        const result = await generateCron(this.aiBinding(), args);
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiCronExpression", { detail: { reason: result.reason } });
+        }
+
+        return adminResponse(result);
     }
 
     /**
@@ -7221,7 +7260,7 @@ abstract class ShardDO {
 
         const table = typeof args["table"] === "string" ? args["table"] : "";
         const columns = table === "" ? [] : this.tableColumns(table).map((column) => column.name);
-        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns);
+        const result = await generateFilter(this.aiBinding(), args, columns);
 
         if (result.degraded && result.reason !== "no-ai-binding") {
             this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });
@@ -7231,24 +7270,27 @@ abstract class ShardDO {
     }
 
     /**
-     * Serve `__lunora_admin__:aiAvailable` — does this deployment have an `AI`
-     * binding at all?
+     * The `AI` binding this shard may use, or `undefined`.
      *
-     * The studio asks ONCE on mount so it can decide whether to paint the
-     * assistant affordances. Without it the only way to find out was to issue a
-     * real request and read `no-ai-binding` off the failure — which meant an app
-     * with no binding rendered "Draft SQL" and "Suggest chart" buttons that did
-     * nothing until the operator clicked one, and only then made them vanish.
+     * `undefined` for two different deployments — one with no binding, and one
+     * whose operator disabled the assistant through its opt-in var — because every
+     * surface treats them identically: degrade, latch, hide the affordance.
      *
-     * Deliberately NOT part of `studioFeatures()`: those flags are computed at
-     * codegen time from imports and declared dependencies, while a binding is a
-     * runtime property of `env`. Folding a runtime probe into that codegen-owned
-     * contract would make its drift guard meaningless.
+     * Read HERE rather than at each of the four call sites so `disabled` cannot
+     * mean "the chat assistant is off, but Draft SQL, the filter bar, chart
+     * inference and issue explanation still call the provider".
      *
-     * No model call, no audit entry — it reads one property off `env`.
+     * A READER of `LUNORA_AI_OPT_IN`, through the shared `asOptInLevel`, never a
+     * second decision about what the level is. The one surface that REPORTS the
+     * level to the operator — `__lunora_admin__:aiAvailable` — is served at the
+     * worker (`@lunora/runtime`'s `ai-chat-rpc.ts`) off the same deps the chat gate
+     * reads, precisely so the readout cannot disagree with the gate. It used to be
+     * served here, narrowing `env` a second time.
      */
-    private handleAiAvailable(): Response {
-        return adminResponse({ available: (this.env as Record<string, unknown> | undefined)?.["AI"] !== undefined });
+    private aiBinding(): unknown {
+        const env = this.env as Record<string, unknown> | undefined;
+
+        return asOptInLevel(env?.["LUNORA_AI_OPT_IN"]) === "disabled" ? undefined : env?.["AI"];
     }
 
     /**
@@ -7272,7 +7314,7 @@ abstract class ShardDO {
                 ? undefined
                 : Object.fromEntries(Object.entries(rawTypes).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
         const rowCount = typeof args["rowCount"] === "number" ? args["rowCount"] : 0;
-        const result = await generateChart((this.env as Record<string, unknown> | undefined)?.["AI"], args, { columns, rowCount, types });
+        const result = await generateChart(this.aiBinding(), args, { columns, rowCount, types });
 
         if (result.degraded && result.reason !== "no-ai-binding") {
             this.recordAudit("aiChartConfig", { detail: { reason: result.reason } });

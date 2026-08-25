@@ -38,6 +38,14 @@ interface AccessIdentityLike {
 type AdminTableResolver = (table: string) => ShardingInfo | undefined;
 ```
 
+### `AiRunBinding` (interface)
+
+```ts
+interface AiRunBinding {
+    run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+}
+```
+
 ### `AirbyteMessage` (type)
 
 ```ts
@@ -2167,6 +2175,8 @@ interface WebhookSinkOptions extends OnlyErrorsOption {
 interface WorkerOptions {
     adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
     adminToken?: string;
+    aiChatBinding?: AiRunBinding;
+    aiOptInLevel?: AiOptInLevel;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
     authAdmin?: AuthAdmin;

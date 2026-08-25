@@ -2,20 +2,11 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Input } from "../../components/ui/input";
+import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
-import type { GenerateSqlDegradedReason } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
-import type { SqlAssistant } from "./hooks/use-sql-assistant";
-
-/** Operator-facing copy per failure reason. `no-ai-binding` never reaches here — the bar is hidden. */
-const reasonMessage = (reason: GenerateSqlDegradedReason): string => {
-    if (reason === "unsafe-response") {
-        return "The model returned a statement that is not read-only, so it was discarded.";
-    }
-
-    return reason === "empty-response" ? "The model returned nothing usable." : "The model could not be reached.";
-};
+import assistantReasonMessage from "./assistant-reason";
 
 /**
  * Natural-language prompt bar above the SQL editor.
@@ -27,27 +18,27 @@ const reasonMessage = (reason: GenerateSqlDegradedReason): string => {
  * enforces before it gets here.
  */
 const SqlAssistantBar = ({
-    assistant,
+    rpc,
     failed,
     onGenerated,
 }: {
-    readonly assistant: SqlAssistant;
     /** The last failed run, enabling the repair affordance. */
     readonly failed?: { error: string; sql: string };
     readonly onGenerated: (sql: string) => void;
+    readonly rpc: AssistantRpc;
 }): ReactElement | null => {
     const t = useT();
 
     const [prompt, setPrompt] = useState("");
 
-    if (assistant.unavailable) {
+    if (rpc.unavailable) {
         return null;
     }
 
     // Only THIS surface's task — a chart inference running in the editor below
     // must not spin this button or print its error here.
-    const pending = assistant.pending("sql");
-    const reason = assistant.reason("sql");
+    const pending = rpc.pending("sql");
+    const reason = rpc.reason("sql");
 
     const submit = (repair: boolean): void => {
         const text = prompt.trim();
@@ -57,7 +48,7 @@ const SqlAssistantBar = ({
         }
 
         const apply = async (): Promise<void> => {
-            const sql = await assistant.generate(text === "" ? "fix the failing statement" : text, repair ? failed : undefined);
+            const sql = await rpc.generate(text === "" ? "fix the failing statement" : text, repair ? failed : undefined);
 
             if (sql !== undefined) {
                 onGenerated(sql);
@@ -119,7 +110,7 @@ const SqlAssistantBar = ({
             </div>
             {reason !== undefined && (
                 <p className="text-[11px] text-muted-foreground" data-testid="sql-assistant-reason" role="status">
-                    {reasonMessage(reason)}
+                    {assistantReasonMessage(reason, t)}
                 </p>
             )}
         </div>

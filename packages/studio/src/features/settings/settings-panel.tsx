@@ -1,13 +1,14 @@
 import type { ReactElement } from "react";
 
+import { OPT_IN_LADDER, TOOL_LEVEL } from "../../../../../shared/ai-chat";
 import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import type { TFunction } from "../../i18n/i18n-context";
+import type { MessageId, TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
-import type { DeployInfo, SettingEntry, SettingsResult } from "../../lib/admin";
+import type { AiAvailableResult, AiOptInLevel, DeployInfo, SettingEntry, SettingsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_WORKERS_URL } from "../../lib/cf-links";
 import type { Shortcuts } from "../../lib/shortcuts";
@@ -50,6 +51,98 @@ const toDeployRows = (deploy: DeployInfo | undefined, t: TFunction): { label: st
     }
 
     return rows;
+};
+
+/**
+ * What each rung of the data-sharing ladder lets the assistant read.
+ *
+ * An exhaustive `Record` over the closed union, so a tier added to the ladder in
+ * `shared/ai-chat.ts` is a compile error here rather than a rung that renders
+ * blank. The tools a tier unlocks are NOT restated — they are derived from
+ * `TOOL_LEVEL` below, which is the map the server gates on.
+ */
+const LEVEL_SUMMARY: Readonly<Record<AiOptInLevel, MessageId>> = {
+    disabled: "The assistant is off. Nothing about this deployment is sent to a model.",
+    schema: "Table and column names.",
+    schema_and_log: "Table and column names, plus recent log lines.",
+    schema_and_log_and_data: "Table and column names, log lines, and rows read with SELECT.",
+};
+
+/** The tools a tier unlocks, read from the server's own gate map so the two cannot drift. */
+const toolsAt = (level: AiOptInLevel): string[] => {
+    const tools: string[] = [];
+
+    for (const [tool, tier] of Object.entries(TOOL_LEVEL)) {
+        if (tier === level) {
+            tools.push(tool);
+        }
+    }
+
+    return tools;
+};
+
+/**
+ * The deployment's AI data-sharing level, and the ladder it sits on.
+ *
+ * **Here rather than beside the assistant**, which was the other candidate: the
+ * lowest rung HIDES every assistant surface, so an operator on `disabled` — the
+ * one most likely to be wondering why the assistant is missing — could never
+ * reach a readout that lived inside it. Settings is also already the read-only
+ * view of exactly this kind of thing: a wrangler var the studio shows and cannot
+ * edit.
+ *
+ * Strictly a readout. The level is decided server-side (`LUNORA_AI_OPT_IN`, read
+ * by the worker that serves the chat op) and there is deliberately no control
+ * here — a level the browser could raise would not be a gate.
+ */
+const DataSharingCard = (): ReactElement => {
+    const t = useT();
+
+    // The same op, args and shard the assistant provider asks on mount, so
+    // TanStack serves both from one cache entry rather than probing twice.
+    const { data } = useAdminQuery<AiAvailableResult>(ADMIN_FUNCTIONS.aiAvailable, {}, { shardKey: "" });
+    const level = data?.level;
+    const at = level === undefined ? -1 : OPT_IN_LADDER.indexOf(level);
+
+    return (
+        <Card className="py-0" data-testid="set-ai-sharing">
+            <header className="flex items-center justify-between border-b border-border px-4 py-3">
+                <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("AI assistant data sharing")}</span>
+                {level !== undefined && (
+                    <Badge data-testid="set-ai-level" variant={level === "disabled" ? "outline" : "secondary"}>
+                        {level}
+                    </Badge>
+                )}
+            </header>
+            <CardContent className="flex flex-col gap-3 py-3">
+                <ul className="flex flex-col gap-1.5 text-sm">
+                    {OPT_IN_LADDER.map((tier, rung) => {
+                        const granted = at >= rung;
+                        const tools = toolsAt(tier);
+
+                        return (
+                            <li
+                                className={granted ? "flex flex-col gap-0.5" : "flex flex-col gap-0.5 opacity-50"}
+                                data-granted={String(granted)}
+                                data-testid={`set-ai-tier-${tier}`}
+                                key={tier}
+                            >
+                                <span className="flex items-center gap-2">
+                                    <span className="font-mono text-xs">{tier}</span>
+                                    {tier === level && <span className="text-[11px] text-primary">{t("current")}</span>}
+                                </span>
+                                <span className="text-xs text-muted-foreground">{t(LEVEL_SUMMARY[tier])}</span>
+                                {tools.length > 0 && <span className="font-mono text-[11px] text-muted-foreground">{tools.join(", ")}</span>}
+                            </li>
+                        );
+                    })}
+                </ul>
+                <p className="text-xs text-muted-foreground" data-testid="set-ai-howto">
+                    {t("Set LUNORA_AI_OPT_IN in wrangler.jsonc and redeploy to change this. The Studio can read this level but never raise it.")}
+                </p>
+            </CardContent>
+        </Card>
+    );
 };
 
 /**
@@ -170,6 +263,8 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
                     </CardContent>
                 </Card>
             )}
+
+            <DataSharingCard />
 
             {/* Browser preferences, not deployment config — everything above this
                 card is served by the worker and read-only; everything in it lives

@@ -4,6 +4,7 @@ import { ValidationError } from "@lunora/values";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
+import { SSE_HEADERS, sseFrame } from "../../../shared/sse";
 import type { EmptyArgs } from "./builder/index";
 import { LunoraError } from "./error";
 import { parseValidatorMap } from "./functions";
@@ -438,31 +439,13 @@ type LooseStreamHandler = (options: {
     signal: AbortSignal;
 }) => AsyncGenerator<unknown, void, void> | AsyncIterable<unknown>;
 
-/**
- * Headers on every SSE response. SSE responses must stay uncacheable so proxies
- * don't buffer or coalesce live frames — `cacheControl()` is intentionally
- * ignored for stream() routes, and `cacheTag`/`vary` are also omitted because
- * they only make sense alongside a cacheable response. `x-accel-buffering`
- * hints to proxies (including Cloudflare's own buffering layer) that this
- * response must not be coalesced.
+/*
+ * `SSE_HEADERS` and `sseFrame` live in `shared/sse.ts`: the assistant turn in
+ * `@lunora/runtime` writes the same framing, and one reader
+ * (`@lunora/client`'s `pumpSseBody`) parses both. `cacheControl()` is
+ * deliberately ignored for stream() routes — a live stream must not be cached —
+ * and `cacheTag`/`vary` are omitted for the same reason.
  */
-const SSE_HEADERS: Record<string, string> = {
-    "cache-control": "no-cache, no-transform",
-    "content-type": "text/event-stream; charset=utf-8",
-    "x-accel-buffering": "no",
-};
-
-/**
- * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
- * separator. `event:` is omitted for `data` (the default event name); we use
- * named events only for the terminal sentinels (`complete`, `error`).
- */
-const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
-    const data = JSON.stringify(chunk);
-    const prefix = event ? `event: ${event}\n` : "";
-
-    return `${prefix}data: ${data}\n\n`;
-};
 
 /**
  * Compile the accumulated route state into an SSE {@link LunoraRouteHandler}.

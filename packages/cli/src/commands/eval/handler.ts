@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import type { EvalItemResult, EvalResult } from "@lunora/testing";
+import type { Jiti } from "jiti";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -17,35 +17,37 @@ import { isEvalModule, isValidThreshold } from "./types";
 const DEFAULT_EVAL_DIR = "evals";
 
 /**
- * The actionable message printed when the Node floor can't execute a
- * discovered `.ts` eval file — see {@link isUnsupportedTsExtensionError}.
+ * The runtime TypeScript loader discovered eval files are executed through,
+ * created at most once per process — see {@link evalLoader}.
  */
-const NODE_FLOOR_MESSAGE =
-    '"lunora eval" needs native TypeScript execution — run Node ≥23.6, or a TS loader/transform (tracked in plans/245-eval-runner-design.md §8.3)';
-
-/** Matches Node's `ERR_UNKNOWN_FILE_EXTENSION` message shape when `.code` isn't set (see {@link isUnsupportedTsExtensionError}). */
-const TS_EXTENSION_ERROR_PATTERN = /unknown file extension ".ts"/i;
+let loader: Promise<Jiti> | undefined;
 
 /**
- * True when `error` is Node's `ERR_UNKNOWN_FILE_EXTENSION` (or its message
- * shape) thrown by a bare `import()` of a `.ts` file — i.e. there is no
- * runtime TS loader available. This repo's `engines` floor is `^22.15.0`;
- * native `.ts` `import()` is only unflagged from Node ≥23.6, so on the
- * floor EVERY discovered `*.eval.ts` fails identically. That makes it a
- * systemic, top-level failure — not a per-eval one — so callers should abort
- * the whole run on the first occurrence rather than mislabel N evals as
- * "failed".
+ * The runtime TypeScript loader for eval files, created lazily so no other
+ * subcommand pays for it (`lunora eval`'s handler is itself lazy-loaded via
+ * the command's `loader`, and this `import()` only runs once inside it).
+ *
+ * A bare `import()` cannot load a real eval file. Node's native
+ * type-stripping strips types but changes no *resolution*, and every Lunora
+ * project compiles under `moduleResolution: "bundler"` and therefore writes
+ * extension-less relative imports (`./sql-readonly`, never `./sql-readonly.js`)
+ * — which Node's ESM resolver rejects. So the first relative import inside a
+ * discovered eval file, or anything it pulls in, dies with
+ * `ERR_MODULE_NOT_FOUND`. The gap is resolution, not syntax, which is why a
+ * transform-only tool (`esbuild`) cannot close it alone.
+ *
+ * `jiti` resolves and transforms, is pure JavaScript with no per-platform
+ * native binary to make every consumer download (unlike `esbuild`/`tsx`), and
+ * works across the whole supported Node range rather than only where native
+ * type-stripping is unflagged.
  */
-const isUnsupportedTsExtensionError = (error: unknown): boolean => {
-    if (!(error instanceof Error)) {
-        return false;
-    }
+const evalLoader = async (): Promise<Jiti> => {
+    // `interopDefault: false` is jiti's own default, pinned here because
+    // `loadEvalModule` reads `.default` off the namespace: interop would
+    // unwrap a default-only module and make that lookup `undefined`.
+    loader ??= import("jiti").then(({ createJiti }) => createJiti(import.meta.url, { interopDefault: false }));
 
-    if ((error as NodeJS.ErrnoException).code === "ERR_UNKNOWN_FILE_EXTENSION") {
-        return true;
-    }
-
-    return TS_EXTENSION_ERROR_PATTERN.test(error.message);
+    return loader;
 };
 
 /** Strip the directory and `.eval.ts` suffix off a discovered file's path for its default display name. */
@@ -85,8 +87,7 @@ interface EvalCommandResult {
 
     /**
      * Set when the run aborted before completing normally: an invalid
-     * `--format`, the Node-floor `.ts`-execution gap, or a `--threshold`
-     * gate applied to zero discovered evals.
+     * `--format`, or a `--threshold` gate applied to zero discovered evals.
      */
     error?: string;
 
@@ -95,7 +96,7 @@ interface EvalCommandResult {
 
 /**
  * The JSON-output shape for one eval's outcome, matching the documented
- * `--format json` contract (`plans/245-eval-runner-design.md` §4/§6):
+ * `--format json` contract:
  * `{ name, path, average?, threshold?, passed, error?, items? }` — flat, so
  * `jq '.evals[].average'` (or any other single-hop field lookup) works
  * directly against the printed document, unlike the nested `result.average`/
@@ -171,13 +172,9 @@ const discoverFilesLogged = (directory: string, directoryOption: string, logger:
 
 /** Load one discovered file's default export and validate it satisfies {@link EvalModule}. */
 const loadEvalModule = async (filePath: string): Promise<EvalModule> => {
-    // A genuinely dynamic import of an arbitrary, runtime-discovered eval file
-    // — never a static-analysis (glob) candidate. Excluded from packem's
-    // dynamic-import-vars rollup plugin (`packem.config.ts`'s `rollup.dynamicVars.exclude`),
-    // which otherwise tries to turn every non-literal `import()` into a glob
-    // and hard-fails when it can't.
-    const imported: unknown = await import(pathToFileURL(filePath).href);
-    const candidate = (imported as { default?: unknown }).default;
+    const jiti = await evalLoader();
+    const imported = await jiti.import<{ default?: unknown }>(filePath);
+    const candidate = imported.default;
 
     if (!isEvalModule(candidate)) {
         throw new Error("does not default-export an eval module (expected `{ run(): Promise<EvalResult>, name?, threshold? }`)");
@@ -188,11 +185,9 @@ const loadEvalModule = async (filePath: string): Promise<EvalModule> => {
 
 /**
  * Run one discovered eval file, applying its effective threshold (per-eval
- * export, else the global `--threshold`). A load failure shaped like
- * {@link isUnsupportedTsExtensionError} is NOT converted into a per-eval
- * failure — it is rethrown so the caller can abort the whole run with one
- * top-level, actionable message instead of mislabeling every eval as
- * "failed" (see {@link NODE_FLOOR_MESSAGE}).
+ * export, else the global `--threshold`). A file that fails to load — a syntax
+ * error, a missing import, a throw at module scope — is that eval's own
+ * failure, reported in its row rather than aborting the rest of the run.
  */
 const runOneEval = async (filePath: string, globalThreshold: number | undefined): Promise<EvalRunOutcome> => {
     let evalModule: EvalModule;
@@ -200,10 +195,6 @@ const runOneEval = async (filePath: string, globalThreshold: number | undefined)
     try {
         evalModule = await loadEvalModule(filePath);
     } catch (error: unknown) {
-        if (isUnsupportedTsExtensionError(error)) {
-            throw error;
-        }
-
         const message = error instanceof Error ? error.message : String(error);
 
         return { error: message, name: nameFromPath(filePath), passed: false, path: filePath };
@@ -238,12 +229,7 @@ const runOneEval = async (filePath: string, globalThreshold: number | undefined)
     }
 };
 
-/**
- * Run every discovered eval file sequentially, applying `threshold`. A load
- * failure shaped like {@link isUnsupportedTsExtensionError} propagates
- * unchanged (see {@link runOneEval}) so the caller can abort the whole run
- * with one top-level message.
- */
+/** Run every discovered eval file sequentially, applying `threshold`. */
 const runAllEvals = async (files: string[], threshold: number | undefined): Promise<EvalRunOutcome[]> => {
     const outcomes: EvalRunOutcome[] = [];
 
@@ -296,16 +282,12 @@ const renderEvalTable = (outcomes: EvalRunOutcome[]): string[] => {
  * from `@lunora/testing` exactly as a hand-written Vitest suite would, this
  * command adds no scoring logic of its own — print the aggregate table, and
  * exit non-zero when any eval crashed or fell below its effective threshold.
- * Entirely in-process: no live Worker is ever contacted (see
- * `plans/245-eval-runner-design.md` §5).
+ * Entirely in-process: no live Worker is ever contacted.
  *
- * Two additional abort paths guard against silently-wrong CI signal:
- * - The Node-floor `.ts`-execution gap ({@link isUnsupportedTsExtensionError})
- * aborts the whole run with one top-level message instead of N mislabeled
- * per-eval failures.
- * - A `--threshold` applied to zero discovered evals (missing/renamed
- * `--dir`, no `*.eval.ts` match) exits non-zero — a gate that ran against
- * nothing must not report success.
+ * One extra abort path guards against silently-wrong CI signal: a
+ * `--threshold` applied to zero discovered evals (missing/renamed `--dir`, no
+ * `*.eval.ts` match) exits non-zero — a gate that ran against nothing must not
+ * report success.
  */
 const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
@@ -333,17 +315,7 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
     const directory = join(cwd, directoryOption);
     const files = discoverFilesLogged(directory, directoryOption, logger);
 
-    let outcomes: EvalRunOutcome[];
-
-    try {
-        outcomes = await runAllEvals(files, options.threshold);
-    } catch (error: unknown) {
-        if (!isUnsupportedTsExtensionError(error)) {
-            throw error;
-        }
-
-        return abortWithTopLevelError(logger, options.format, NODE_FLOOR_MESSAGE);
-    }
+    const outcomes = await runAllEvals(files, options.threshold);
 
     if (options.threshold !== undefined && outcomes.length === 0) {
         const message = `eval: --threshold ${String(options.threshold)} was set but 0 eval files were discovered under "${directoryOption}" — nothing was gated`;

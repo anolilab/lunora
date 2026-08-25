@@ -428,6 +428,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Function namespace collision";
     };
+    readonly AI_CHAT_FAILED: {
+        readonly status: 500;
+        readonly title: "Assistant turn failed";
+    };
     readonly BAD_ROW: {
         readonly status: 400;
         readonly title: "Malformed import row";

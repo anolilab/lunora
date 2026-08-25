@@ -1,8 +1,9 @@
 import { LunoraProvider } from "@lunora/react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
+import { AssistantProvider, useAssistant } from "../../../src/components/assistant-provider";
 import RlsPanel from "../../../src/features/advisors/rls-panel";
 import type { RlsPoliciesResult } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -36,6 +37,31 @@ const createRlsClient = (result: RlsPoliciesResult = METADATA): MockClientHooks 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
     <LunoraProvider client={mock.asClient}>
         <RlsPanel />
+    </LunoraProvider>
+);
+
+/** Renders whatever question the panel seeded, so a test can read it out of the DOM. */
+const AskProbe = (): ReactElement => <span data-testid="seeded-ask">{useAssistant()?.pendingAsk?.text ?? ""}</span>;
+
+/**
+ * The panel under a mounted assistant that reports itself available.
+ *
+ * `aiAvailable` is asked by the provider on the ROOT shard, so the mock answers
+ * both references — a query double that only knew `rlsPolicies` would latch the
+ * assistant unavailable and hide the very control under test.
+ */
+const renderWithAssistant = (result: RlsPoliciesResult = METADATA): ReactElement => (
+    <LunoraProvider
+        client={
+            createMockClient({
+                query: (reference): unknown => (reference === ADMIN_FUNCTIONS.rlsPolicies ? result : { available: true, level: "schema" }),
+            }).asClient
+        }
+    >
+        <AssistantProvider>
+            <RlsPanel />
+            <AskProbe />
+        </AssistantProvider>
     </LunoraProvider>
 );
 
@@ -101,5 +127,56 @@ describe("rlsPanel", () => {
         const error = await screen.findByTestId("rls-error");
 
         expect(error.textContent).toContain("admin gate closed");
+    });
+});
+
+/**
+ * The proposal path, and its boundary.
+ *
+ * RLS here is TypeScript, not DDL: there is no statement to run and no admin op
+ * that could apply a policy — only the loopback dev host's scaffolder writes one.
+ * So the assistant is opened on what this panel is SHOWING and answers with
+ * source; nothing on this page applies it.
+ */
+describe("rlsPanel — asking the assistant", () => {
+    it("seeds the coverage on screen rather than making the model re-derive it", async () => {
+        expect.hasAssertions();
+
+        render(renderWithAssistant());
+
+        fireEvent.click(await screen.findByTestId("rls-ask-assistant"));
+
+        const seeded = screen.getByTestId("seeded-ask").textContent ?? "";
+
+        // What the operator is looking at travels verbatim — the same reason an
+        // advisor finding does — so the turn does not spend a round of its tool
+        // budget reading back what the panel already has.
+        expect(seeded).toContain("documents: read/update");
+        expect(seeded).toContain("posts: delete");
+    });
+
+    it("asks about the gap rather than the coverage when nothing is declared", async () => {
+        expect.hasAssertions();
+
+        render(renderWithAssistant({ policies: [], roles: [] }));
+
+        fireEvent.click(await screen.findByTestId("rls-ask-assistant"));
+
+        // The most important case is the one with no row to click: a deployment
+        // with no policies at all still gets a way in.
+        expect(screen.getByTestId("seeded-ask").textContent).toContain("no row-level-security policies at all");
+    });
+
+    it("offers nothing when no assistant is mounted above it", async () => {
+        expect.hasAssertions();
+
+        // `useAssistant` answers `undefined` outside a provider, and the contract is
+        // to render no control rather than a dead one — a bare-composed Studio panel
+        // must not grow a button that silently does nothing.
+        render(renderPanel(createRlsClient()));
+
+        await screen.findByTestId("rls-policies-table");
+
+        expect(screen.queryByTestId("rls-ask-assistant")).toBeNull();
     });
 });

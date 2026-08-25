@@ -1,5 +1,7 @@
 import { isLunoraError, toErrorBody } from "@lunora/errors";
 
+import type { AiOptInLevel, AiRunBinding } from "../../../shared/ai-chat";
+import { asOptInLevel } from "../../../shared/ai-chat";
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
@@ -18,6 +20,8 @@ import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import type { AiChatRpcDeps } from "./ai-chat-rpc";
+import { AI_AVAILABLE_OP, AI_CHAT_OP, buildAiAvailable, buildAiChat } from "./ai-chat-rpc";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
@@ -713,6 +717,38 @@ interface WorkerOptions {
      * per-shard admin gate uses.
      */
     adminToken?: string;
+
+    /**
+     * The Workers `AI` binding backing the studio's chat assistant (the
+     * `__lunora_admin__:aiChat` admin RPC). Served HERE at the worker rather than
+     * on a shard because the DO's admin dispatch is single-threaded and a
+     * conversation would hold it open — see `ai-chat-rpc.ts`. Pass `env.AI`. Omit
+     * it and the RPC responds `AI_CHAT_NOT_CONFIGURED`; a caller without a valid
+     * admin bearer always gets `ADMIN_FORBIDDEN` first (default-closed).
+     *
+     * The three one-shot assistant RPCs are unaffected — they stay on the shard,
+     * reading the same binding through `ctx.ai`.
+     */
+    aiChatBinding?: AiRunBinding;
+
+    /**
+     * How much of this deployment the studio's chat assistant may read.
+     *
+     * `"schema"` (the default) lets it read table and column NAMES; `"schema_and_log"`
+     * adds recent log lines; `"schema_and_log_and_data"` adds reading rows with
+     * `runSql`; `"disabled"` turns the assistant off entirely. Codegen passes
+     * `env.LUNORA_AI_OPT_IN`, so this is a wrangler var rather than a code change.
+     *
+     * Deliberately server-side: a level the browser could pick would not be a gate,
+     * so nothing about it is read off the request. `DEFAULT_AI_OPT_IN_LEVEL` in
+     * `shared/ai-chat.ts` states why the default is the conservative one.
+     *
+     * Typed as the closed union so a hand-written typo is a compile error. The
+     * runtime still validates: codegen passes `env.LUNORA_AI_OPT_IN`, which is
+     * genuinely `unknown`, and anything unrecognised falls back to the default
+     * rather than the top tier — so a typo in the var fails closed too.
+     */
+    aiOptInLevel?: AiOptInLevel;
 
     /**
      * Opt into an authorization-open posture for sharded and fan-out access.
@@ -1536,6 +1572,9 @@ const MIGRATE_PATH = "/_lunora/migrate";
 const STATUS_PATH = "/_lunora/status";
 
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
+/** The reserved prefix every worker- and shard-served admin op shares. */
+const ADMIN_FUNCTION_PREFIX = "__lunora_admin__";
+
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 
 /**
@@ -2904,6 +2943,41 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         getReader: () => options.authAuditReader,
     });
 
+    // The `__lunora_admin__:aiChat` handler. Worker-served for a different reason
+    // than its auth-audit sibling: not because its data lives elsewhere, but
+    // because a multi-turn exchange must not occupy the DO's single-threaded
+    // admin dispatch. See `ai-chat-rpc.ts`.
+    const aiRpcDeps: AiChatRpcDeps = {
+        assertAdmin: assertAdminAuthorized,
+        defaultShardKey: () => defaultShard,
+
+        /*
+         * `resolveAdminForwardContext`, not the raw `authorization` header: an
+         * Access-authorized admin presents `Cf-Access-Jwt-Assertion` and never a
+         * bearer, and the DO's own gate trusts only the static bearer — so that
+         * deployment class had every tool call answered 403 by the shard.
+         */
+        forwardToShard: async (request) => {
+            const context = await resolveAdminForwardContext(request, {});
+
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- defined further down this closure and only ever read per request; the same exception this file already takes for `resolvedSecurity`
+            return { forward: forwardRpcToShard, headers: context.headers };
+        },
+        getBinding: () => options.aiChatBinding,
+        optInLevel: () => asOptInLevel(options.aiOptInLevel),
+    };
+
+    const aiChat = buildAiChat(aiRpcDeps);
+
+    /*
+     * `__lunora_admin__:aiAvailable`, built from the SAME deps object as the chat
+     * op above — which is the whole point of it being worker-served. It used to be
+     * a shard handler narrowing `env.LUNORA_AI_OPT_IN` for itself, so the level the
+     * Studio displayed was a second answer rather than a report of the one the
+     * chat gate enforces.
+     */
+    const aiAvailable = buildAiAvailable(aiRpcDeps);
+
     /**
      * Serve the gated `__lunora_admin__:listPushSubscriptions` admin RPC — the
      * Studio Notifications page's read of registered `@lunora/notify` devices.
@@ -2972,8 +3046,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     /**
      * Handle the reserved single-shard RPCs the worker serves itself rather than
-     * forwarding to a shard: the D1-backed auth-audit read and the notify
-     * device-list read (both admin-gated, default-closed). Returns a `Response`
+     * forwarding to a shard: the D1-backed auth-audit read, the notify
+     * device-list read, and the two assistant ops (`aiChat` and the `aiAvailable`
+     * probe that reports the level `aiChat` gates on) — all admin-gated and
+     * default-closed. Returns a `Response`
      * to short-circuit `handleRpc`, or `undefined` to let normal shard dispatch
      * proceed. A fan-out envelope is never worker-served. The fan-out-only
      * relation-prefix guard lives in `assertDispatchableEnvelope`, which runs first.
@@ -2983,12 +3059,37 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return undefined;
         }
 
+        /*
+         * Give an Access-authorized admin a grant for THIS request before any
+         * worker-served admin op checks for one.
+         *
+         * `applyAdminGate` deliberately skips `/_lunora/rpc` so the gate never runs
+         * on the data hot path — but every op below is admin-gated and reached over
+         * exactly that path, so no grant was ever recorded for them. An operator
+         * whose only credential is Access (no static bearer) got `ADMIN_FORBIDDEN`
+         * from all three, however well their gate was configured.
+         *
+         * Keyed on the ENVELOPE, not the path: the hot path is ordinary function
+         * calls, and they do not start with the admin prefix, so they still never
+         * pay for the gate.
+         */
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `applyAdminGate` is defined further down this closure and only ever called per request; the same exception this file already takes for `forwardRpcToShard`
+        await (envelope.functionPath.startsWith(ADMIN_FUNCTION_PREFIX) ? applyAdminGate(request, ADMIN_PATH_PREFIX) : Promise.resolve());
+
         if (envelope.functionPath === GET_AUTH_AUDIT_LOG_OP) {
             return getAuthAuditLog(request, envelope.args ?? {});
         }
 
         if (envelope.functionPath === LIST_PUSH_SUBSCRIPTIONS_OP) {
             return listPushSubscriptions(request, envelope.args);
+        }
+
+        if (envelope.functionPath === AI_CHAT_OP) {
+            return aiChat(request, envelope.args ?? {});
+        }
+
+        if (envelope.functionPath === AI_AVAILABLE_OP) {
+            return aiAvailable(request, envelope.args ?? {});
         }
 
         return undefined;
@@ -5007,6 +5108,7 @@ const createLunoraHandler =
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 
 export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, probeRelayCount, resolveLunoraOptions, withFrameworkWorker };
+export { type AiRunBinding } from "../../../shared/ai-chat";
 export { type AccessContextLike, type AccessIdentityLike, type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 export type {
     AuthAdmin,
@@ -5019,18 +5121,12 @@ export type {
     AuthUserFieldSpec,
     ListAuthUsersOptions,
 } from "./auth-admin-routes";
+// `AiRunBinding` names `WorkerOptions.aiChatBinding`. Re-exported LOCALLY rather
+// than with `export … from`, which packem inlines into an unexported interface —
+// leaving a consumer unable to write the type of the value they must pass.
+
 export type { AuthAuditEntry, AuthAuditLogResult, AuthAuditOutcome, AuthAuditReader, ReadAuthAuditQuery } from "./auth-audit-rpc";
 export { GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
-// Identity-resolver layer lives in its own module; re-export the public names
-// here so `@lunora/runtime`'s import surface is unchanged.
-export type {
-    ComposeIdentityResolversErrorMode,
-    ComposeIdentityResolversOptions,
-    IdentityContractLike,
-    IdentityResolver,
-    IdentityValidation,
-    ResolvedIdentity,
-} from "./identity-resolvers";
 export type {
     AdminTableResolver,
     BackupStore,
@@ -5075,6 +5171,16 @@ export type {
     WorkerOptions,
 };
 
+// Identity-resolver layer lives in its own module; re-export the public names
+// here so `@lunora/runtime`'s import surface is unchanged.
+export type {
+    ComposeIdentityResolversErrorMode,
+    ComposeIdentityResolversOptions,
+    IdentityContractLike,
+    IdentityResolver,
+    IdentityValidation,
+    ResolvedIdentity,
+} from "./identity-resolvers";
 export { composeIdentityResolvers, routeIdentityResolvers } from "./identity-resolvers";
 export type { KvIntrospector, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult } from "./kv-admin-routes";
 export type { BackupManifest } from "./scheduled-backup";

@@ -1,13 +1,15 @@
 import type { CSSProperties, ReactElement, RefObject } from "react";
 
+import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
 import { EDITOR_TEXT_CLASS } from "./editor-spans";
-import type { SqlAssistant } from "./hooks/use-sql-assistant";
+import type { InlineEditTarget } from "./hooks/use-sql-editor-surface";
 import SqlAssistantBar from "./sql-assistant-bar";
 import type { SqlAutocomplete } from "./sql-autocomplete-ui";
 import { AutocompletePopover } from "./sql-autocomplete-ui";
 import type { SqlDiagnostic } from "./sql-diagnostics";
 import { DiagnosticsOverlay, DiagnosticsRow } from "./sql-diagnostics-ui";
+import SqlInlineEdit from "./sql-inline-edit";
 
 /** Line-number gutter sizing, aligned to the editor textarea's padding + line height. */
 const GUTTER_STYLE: CSSProperties = { minWidth: "2.75rem", paddingInline: "0.5rem" };
@@ -22,7 +24,7 @@ const GUTTER_STYLE: CSSProperties = { minWidth: "2.75rem", paddingInline: "0.5re
  * for the reason noted on the props below.
  */
 const SqlEditorPane = ({
-    assistant,
+    rpc,
     autocomplete,
     diagnostics,
     draft,
@@ -30,17 +32,18 @@ const SqlEditorPane = ({
     handlers,
     editorRef,
     gutterRef,
+    inlineEdit,
     listboxId,
+    onAcceptInlineEdit,
+    onCancelInlineEdit,
     onGenerated,
     onPickSuggestion,
     onRevealDiagnostic,
     overlayRef,
 }: {
-    readonly assistant: SqlAssistant;
     /** The completion popover's state, or `null` when closed. */
     readonly autocomplete: SqlAutocomplete["state"];
     readonly diagnostics: ReadonlyArray<SqlDiagnostic>;
-
     readonly draft: string;
 
     /**
@@ -48,6 +51,7 @@ const SqlEditorPane = ({
      * bails out of the whole component when a ref reaches the JSX through a member access.
      */
     readonly editorRef: RefObject<HTMLTextAreaElement | null>;
+
     /** The active tab's last failed statement, which arms the assistant's "Fix this". */
     readonly failed?: { error: string; sql: string };
     readonly gutterRef: RefObject<HTMLDivElement | null>;
@@ -59,18 +63,38 @@ const SqlEditorPane = ({
         onScroll: (event: React.UIEvent<HTMLTextAreaElement>) => void;
         onSelect: (event: React.SyntheticEvent<HTMLTextAreaElement>) => void;
     };
+    /** The span ⌘/Ctrl+I armed for an AI rewrite, or `null` when that panel is closed. */
+    readonly inlineEdit: InlineEditTarget | null;
     readonly listboxId: string;
+    /** Take the rewrite into the draft, replacing the armed span. */
+    readonly onAcceptInlineEdit: (sql: string) => void;
+    /** Dismiss the rewrite panel; the draft was never touched, so this restores it by construction. */
+    readonly onCancelInlineEdit: () => void;
     readonly onGenerated: (sql: string) => void;
     readonly onPickSuggestion: (index: number) => void;
     readonly onRevealDiagnostic: (diagnostic: SqlDiagnostic) => void;
     readonly overlayRef: RefObject<HTMLDivElement | null>;
+    readonly rpc: AssistantRpc;
 }): ReactElement => {
     const t = useT();
     const lineCount = draft.split("\n").length;
 
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <SqlAssistantBar assistant={assistant} failed={failed} onGenerated={onGenerated} />
+            <SqlAssistantBar failed={failed} onGenerated={onGenerated} rpc={rpc} />
+            {/* Armed by ⌘/Ctrl+I in the textarea below, and keyed on the span so
+                re-arming over a different selection starts a fresh instruction
+                rather than showing the previous target's diff. */}
+            {inlineEdit !== null && (
+                <SqlInlineEdit
+                    key={`${inlineEdit.start.toString()}-${inlineEdit.end.toString()}`}
+                    onAccept={onAcceptInlineEdit}
+                    onCancel={onCancelInlineEdit}
+                    rpc={rpc}
+                    source={draft.slice(inlineEdit.start, inlineEdit.end)}
+                    whole={inlineEdit.start === 0 && inlineEdit.end === draft.length}
+                />
+            )}
             <div className="flex min-h-0 min-w-0 flex-1">
                 <div
                     aria-hidden="true"

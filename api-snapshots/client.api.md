@@ -772,6 +772,11 @@ class LunoraClient {
         maxBuffer?: number;
         signal?: AbortSignal;
     }): StreamIterable<HttpStreamChunkOf<Ref>>;
+    streamRpc(function_: FunctionReference, args?: Record<string, unknown>, options?: {
+        onFrame?: (frame: unknown) => void;
+        shardKey?: string;
+        signal?: AbortSignal;
+    }): Promise<unknown>;
     close(): void;
 }
 ```

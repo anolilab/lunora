@@ -17,7 +17,7 @@ export { lunoraTest } from "./harness";
 export type { RetrievalScorerOptions } from "./retrieval-scorer";
 export { groundednessScorer, mrrScorer, ndcgAtK, precisionAtK, recallAtK } from "./retrieval-scorer";
 export type { EvalCase, EvalItemResult, EvalResult, ProducedOutput, Scorer, ScoreResult, ScorerSample } from "./scorer";
-export { containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, regexScorer, scoreSample } from "./scorer";
+export { absentScorer, containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, regexScorer, scoreSample } from "./scorer";
 
 /**
  * `@lunora/testing` — the user-facing toolkit for end-to-end testing a Lunora app.

@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 import { useState } from "react";
 
+import { useAssistant } from "../../components/assistant-provider";
 import ErrorAlert from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -124,6 +125,10 @@ const tallyByLevel = (rows: AdvisorRow[] | null): Record<AdvisorLevel, number> =
  */
 export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }: AdvisorViewProps): ReactElement => {
     const t = useT();
+    // `undefined` when no assistant is mounted above this tree — then no button,
+    // rather than one that cannot work. Same contract as `useOperationConsole`.
+    const assistant = useAssistant();
+    const canAsk = assistant !== undefined && !assistant.unavailable;
     const [active, setActive] = useState<AdvisorLevel>("error");
 
     const counts = tallyByLevel(rows);
@@ -189,7 +194,39 @@ export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }
                                         <TableCell className="font-mono text-xs text-muted-foreground">{row.entity ?? "—"}</TableCell>
                                         <TableCell className="text-muted-foreground">
                                             <span>{row.description}</span>
-                                            {row.action !== undefined && <span className="mt-1.5 flex flex-wrap items-center gap-1.5">{row.action}</span>}
+                                            {(row.action !== undefined || canAsk) && (
+                                                <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                                    {row.action}
+                                                    {canAsk && (
+                                                        <button
+                                                            className="text-xs underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                            data-testid="advisor-ask-assistant"
+                                                            onClick={() => {
+                                                                /*
+                                                                 * The finding travels VERBATIM — headline, entity and
+                                                                 * description — because that is exactly what the operator
+                                                                 * is looking at. A lint id alone would make the model
+                                                                 * guess at what the studio already knows.
+                                                                 */
+                                                                assistant.openAssistant({
+                                                                    ask: t(
+                                                                        "The Lunora advisor reported: {finding}.\n\n{description}\n\nWhat does this mean for my app, and how should I fix it?",
+                                                                        {
+                                                                            description: row.description,
+                                                                            finding: `${row.issueType}${row.entity === undefined ? "" : ` on ${row.entity}`}`,
+                                                                        },
+                                                                    ),
+                                                                    suggestions: [t("How do I verify this is fixed?")],
+                                                                    title: row.issueType,
+                                                                });
+                                                            }}
+                                                            type="button"
+                                                        >
+                                                            {t("Ask the assistant")}
+                                                        </button>
+                                                    )}
+                                                </span>
+                                            )}
                                         </TableCell>
                                     </TableRow>
                                 ))
