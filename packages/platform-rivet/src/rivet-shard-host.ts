@@ -24,7 +24,7 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import type { ShardAlarms, ShardAsyncSqlExec, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "@lunora/platform";
+import type { ShardAlarms, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "@lunora/platform";
 
 import type { RivetActorLike } from "./rivet-context";
 import type { RivetShardState } from "./rivet-shard-state";
@@ -113,32 +113,6 @@ const createSql = (state: RivetShardState): ShardSqlExec => {
     };
 };
 
-/**
- * The async executor the engine's higher-level paths use.
- *
- * Backed by the same working copy rather than by Rivet's `c.db`, and
- * deliberately so: the two must observe the same rows. Routing this half at
- * Rivet's database would give one shard two stores that agree only at flush
- * time, and a read here would miss a write made through `sql` in the same
- * transaction.
- */
-const createAsyncSql = (state: RivetShardState): ShardAsyncSqlExec => {
-    const { database } = state;
-
-    return {
-        // eslint-disable-next-line @typescript-eslint/require-await -- the contract's async surface over a synchronous working copy; the Promise is the contract, not the implementation
-        all: async (query, parameters) => database.prepare(query).all(...parameters.map((value) => normalizeBinding(value))) as SqlRow[],
-        // eslint-disable-next-line @typescript-eslint/require-await -- see `all`
-        run: async (query, parameters) => {
-            const result = database.prepare(query).run(...parameters.map((value) => normalizeBinding(value)));
-
-            state.markDirty();
-
-            return { rowsAffected: result.changes };
-        },
-    };
-};
-
 /** Options for {@link createRivetShardHost}. */
 interface RivetShardHostOptions {
     /**
@@ -196,7 +170,6 @@ const createRivetShardHost = (
     options: RivetShardHostOptions = {},
 ): RivetShardHost => {
     const sql = createSql(state);
-    const asyncSql = createAsyncSql(state);
 
     /** The pending alarm, mirrored in memory so `get()` can answer synchronously. */
     let pendingAlarm: { id: string; timestamp: number } | undefined;
@@ -313,7 +286,6 @@ const createRivetShardHost = (
 
     const host: ShardHost = {
         alarms,
-        asyncSql,
         runSerialized,
         // Rivet keys are arrays (`["tenant", "42"]`); the contract wants one
         // human-readable name for telemetry attribution, never for routing.
