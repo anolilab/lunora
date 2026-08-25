@@ -25,8 +25,14 @@ class GlobalPollTick {
      */
     private readonly changedTables: Set<string> | undefined;
 
-    /** Membership reads keyed by predicate AND identity, so N sockets on one shape drain the backend once. */
-    private readonly reads = new Map<string, ShapeRow[]>();
+    /**
+     * Membership reads keyed by predicate AND identity, so N sockets on one shape
+     * drain the backend once. Holds the in-flight PROMISE, not the settled rows:
+     * storing only the result left a window between `load()` starting and its
+     * entry landing in which every concurrent caller started its own read, which
+     * is exactly the fan-out this cache exists to collapse.
+     */
+    private readonly reads = new Map<string, Promise<ShapeRow[]>>();
 
     private resync = false;
 
@@ -68,21 +74,31 @@ class GlobalPollTick {
 
     /** Read `key`'s membership through this tick's cache, loading it at most once. */
     public async rows(key: string | undefined, load: () => Promise<ShapeRow[]>): Promise<ShapeRow[]> {
-        if (key !== undefined) {
-            const cached = this.reads.get(key);
-
-            if (cached !== undefined) {
-                return cached;
-            }
+        if (key === undefined) {
+            return load();
         }
 
-        const rows = await load();
+        const cached = this.reads.get(key);
 
-        if (key !== undefined) {
-            this.reads.set(key, rows);
+        if (cached !== undefined) {
+            return cached;
         }
 
-        return rows;
+        const pending = load();
+
+        // Published BEFORE the await, so a caller arriving mid-flight joins this
+        // read instead of starting a second one.
+        this.reads.set(key, pending);
+
+        try {
+            return await pending;
+        } catch (error) {
+            // Drop the failed read so the next poll retries rather than
+            // re-throwing this tick's error for the rest of the object's life.
+            this.reads.delete(key);
+
+            throw error;
+        }
     }
 
     /** Whether `table` needs reading this tick; counts the skip when it does not. */

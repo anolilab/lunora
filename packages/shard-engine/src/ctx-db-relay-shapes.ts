@@ -113,10 +113,15 @@ interface StoredRelayShape {
  * Every registered relayed shape, for an owner rehydrating its registry after
  * an eviction.
  *
- * `args` round-trip through the wire codec, not bare JSON: a shape argument can
- * be a `bigint`/`Date`/`Uint8Array`, and `JSON.stringify` of a `bigint` throws
- * outright — the same reason the args are wire-encoded before they cross the
- * owner↔relay hop.
+ * `args` AND `identity` round-trip through the wire codec, not bare JSON: either
+ * can hold a `bigint`/`Date`/`Uint8Array`, and `JSON.stringify` of a `bigint`
+ * throws outright — the same reason the args are wire-encoded before they cross
+ * the owner↔relay hop.
+ *
+ * `identity` matters for a second reason: it is the claim set RLS resolves
+ * against. Bare JSON turns a `Date` claim into a string, so a rehydrated shape
+ * would resolve under a claim of a different type than the live registry used —
+ * a silent authorization divergence rather than a loud failure.
  */
 const readRelayShapes = (sql: SqlExec): RelayShapeRow[] => {
     const rows = runDrizzle<StoredRelayShape>(
@@ -129,7 +134,7 @@ const readRelayShapes = (sql: SqlExec): RelayShapeRow[] => {
             args: decodeWire(JSON.parse(row.args)) as Record<string, unknown>,
             connectionId: row.connection_id ?? undefined,
             cursor: Number(row.cursor),
-            identity: JSON.parse(row.identity) as SubscriptionIdentity,
+            identity: decodeWire(JSON.parse(row.identity)) as SubscriptionIdentity,
             key: row.key,
             name: row.name,
             relayIndex: row.relay_idx === null ? undefined : Number(row.relay_idx),
@@ -142,7 +147,7 @@ const writeRelayShape = (sql: SqlExec, row: RelayShapeRow): void => {
     runDrizzle(
         sql,
         dsql`INSERT INTO ${dsql.identifier(RELAY_SHAPES_TABLE)} (key, relay_idx, connection_id, name, args, identity, cursor)
-             VALUES (${row.key}, ${row.relayIndex ?? SQL_NULL}, ${row.connectionId ?? SQL_NULL}, ${row.name}, ${JSON.stringify(encodeWire(row.args))}, ${JSON.stringify(row.identity ?? {})}, ${row.cursor})
+             VALUES (${row.key}, ${row.relayIndex ?? SQL_NULL}, ${row.connectionId ?? SQL_NULL}, ${row.name}, ${JSON.stringify(encodeWire(row.args))}, ${JSON.stringify(encodeWire(row.identity ?? {}))}, ${row.cursor})
              ON CONFLICT(key) DO UPDATE SET
                 relay_idx = excluded.relay_idx,
                 connection_id = excluded.connection_id,

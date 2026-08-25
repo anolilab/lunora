@@ -2571,7 +2571,10 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated schema
     protected runShardSearchBackfill(_options: { maxPages?: number }): SearchBackfillProgress {
-        throw new LunoraError("INTERNAL", "search backfill is unavailable: this shard was built without a generated schema", { status: 501 });
+        // `NOT_IMPLEMENTED`, not `INTERNAL`: the latter is catalogued `internal`, so
+        // `errorToResponse` would replace this message with "internal error" and the
+        // caller would get a bare 501 with nothing actionable in it.
+        throw new LunoraError("NOT_IMPLEMENTED", "search backfill is unavailable: this shard was built without a generated schema", { status: 501 });
     }
 
     /**
