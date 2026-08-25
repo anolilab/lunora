@@ -2173,6 +2173,63 @@ export const raw = internalQuery
             expect(result.generated.api).toContain('raw: FunctionReference<"query", { id: string }, string>');
         });
 
+        it("keeps a stream on its handler's yield type — `.output()` is inert on that terminal", () => {
+            expect.assertions(3);
+
+            // `.output()` is not applied to a stream: `makeStreamHandler` is never
+            // given `state.output`, and the terminal is generic over its own yield
+            // type, so the builder does not type-check the declaration either.
+            // Preferring it would describe chunks the handler never yields — and
+            // preferring it in BOTH surfaces would only make the two agree on
+            // something untrue.
+            writeFileSync(
+                join(workdir, "lunora", "ticker.ts"),
+                `import { query, v } from "./_generated/server.js";
+
+export const tick = query
+    .input({ id: v.string() })
+    .output(v.object({ n: v.string() }))
+    .stream(async function* () {
+        yield { n: 1 };
+    });
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.functions).toContain("tick: (args: { id: string }) => Promise<AsyncIterable<{ n: number; }>>;");
+            expect(result.generated.api).toContain("{ n: number; }");
+            expect(result.generated.api).not.toContain("{ n: string }");
+        });
+
+        it("types the CALLER from .output() too, not just the api reference", () => {
+            expect.assertions(3);
+
+            // `_generated/server.ts`'s `Caller` read the handler's inferred type
+            // directly while `api.ts` one function away read `.output()`, so the
+            // two descriptions of the same procedure disagreed: a field declared
+            // `v.optional(...)` typed as required through `ctx.run*`, and a
+            // `v.string()` narrowed to a branded `Id<...>`.
+            writeFileSync(
+                join(workdir, "lunora", "audit.ts"),
+                `import { internalQuery, v } from "./_generated/server.js";
+
+export const page = internalQuery
+    .input({ limit: v.number() })
+    .output(v.object({ cursor: v.optional(v.string()), id: v.string() }))
+    .query(async () => ({ cursor: "c", id: "abc" }));
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.functions).toContain("page: (args: { limit: number }) => Promise<{ cursor?: string; id: string }>;");
+            // The declared `v.string()` stays opaque — it is not re-branded as an
+            // `Id<...>` by whatever the handler happened to return.
+            expect(result.generated.functions).not.toContain('Id<"audit">');
+            expect(result.generated.api).toContain("cursor?: string");
+        });
+
         it("registers a default-exported procedure as <module>.default", () => {
             expect.assertions(2);
 
