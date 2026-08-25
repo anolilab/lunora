@@ -213,6 +213,30 @@ interface AugmentPlan {
 }
 
 /**
+ * Render `value` for interpolation into a double-quoted `.dev.vars` entry.
+ *
+ * `parseDevVariableLine` runs dotenv's own parser, which EXPANDS `\n` and `\r`
+ * inside a double-quoted example value. Re-emitting that expansion verbatim
+ * would put a physical line break inside the entry, and every rewrite here is
+ * line-oriented (`env set` / `env unset` replace whole lines), so the tail would
+ * be left behind as an orphaned fragment. Re-escaping puts the value back in the
+ * form dotenv expands to exactly what it read.
+ *
+ * A literal `"` or `\` has no such form — dotenv does not unescape `\"`, so
+ * there is no way to spell one inside a double-quoted value. Rather than emit a
+ * line whose quote closes early and silently truncates the value, those render
+ * empty for the developer to fill in, which is what an example placeholder is
+ * for anyway.
+ */
+const renderExampleValue = (value: string): string => {
+    if (value.includes('"') || value.includes("\\")) {
+        return "";
+    }
+
+    return value.replaceAll("\r", String.raw`\r`).replaceAll("\n", String.raw`\n`);
+};
+
+/**
  * Plan how to top up an existing `.dev.vars` from the example: every example key
  * not already present becomes an appended line (secret placeholders filled with
  * fresh random hex, other values copied). Pure — no I/O. Empty `missingKeys`
@@ -243,7 +267,7 @@ const planDevVariablesAugment = (input: {
         missingKeys.push(parsed.key);
 
         if (secret === undefined) {
-            additions.push(`${parsed.key}="${parsed.value}"`);
+            additions.push(`${parsed.key}="${renderExampleValue(parsed.value)}"`);
         } else {
             generatedKeys.push(parsed.key);
             additions.push(`${parsed.key}="${secret}"`);
