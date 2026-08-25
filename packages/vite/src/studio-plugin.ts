@@ -14,7 +14,6 @@ import {
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
     handleSeedRequest,
-    headerValue,
     isStandaloneModulePath,
     loadStudioAssets,
     POLICY_SCAFFOLD_ENDPOINT,
