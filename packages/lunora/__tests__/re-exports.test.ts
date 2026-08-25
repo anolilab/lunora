@@ -103,6 +103,7 @@ const PACKAGE_OPT_OUT = new Map<string, string>([
     ["notify", "add-on — installed directly when used"],
     ["nuxt", "framework adapter — installed per framework, not part of the base surface"],
     ["payment", "optional add-on with heavy provider deps — installed directly"],
+    ["platform-celld", "host/engine layer — experimental celld host, never app code"],
     ["platform-cloudflare", "host/engine layer — consumed by @lunora/do, never app code"],
     ["platform-node", "host/engine layer — experimental Node host, never app code"],
     ["queue", "add-on — installed directly when used"],
