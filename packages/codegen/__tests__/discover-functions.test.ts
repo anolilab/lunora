@@ -284,6 +284,106 @@ describe("discoverFunctions", () => {
             expect(result[0]?.returnType).toBe("{ id: string }[]");
         });
 
+        it("expands an alias the checker reuses from a declaration's syntax, which the type graph reports as absent", () => {
+            expect.assertions(2);
+
+            // TypeScript's node builder reuses the syntax of a property's declared
+            // type annotation whenever that annotation is in scope where the type
+            // is printed, so `{ action: AuditAction }` renders the alias verbatim.
+            // The same property fetched through the checker comes back with no
+            // alias symbol at all, fully resolved to its union — so a type-graph
+            // walk reported "nothing unreachable here" about text naming an alias
+            // on its face, and the bare name reached `_generated/` as a TS2304.
+            // Reproduced with the alias behind a conditional type (`Infer<typeof
+            // schema>`), the shape every Standard Schema wrapper produces.
+            writeFunction(
+                "lib/audit.ts",
+                `
+            export interface StandardSchema<O> { "~standard": { types?: { output: O } } }
+            export type Infer<S> = S extends StandardSchema<infer O> ? O : never;
+            export declare const AuditActionSchema: StandardSchema<"user.create" | "user.delete">;
+            export type AuditAction = Infer<typeof AuditActionSchema>;
+        `,
+            );
+
+            // `imported` names the alias through an import; `local` re-derives it
+            // in the handler's own module. Both are in scope at the handler, so
+            // both print bare.
+            writeFunction(
+                "audit.ts",
+                `
+            import { query } from "@lunora/server";
+            import { AuditActionSchema, type AuditAction, type Infer } from "./lib/audit";
+
+            type LocalAction = Infer<typeof AuditActionSchema>;
+
+            declare const loadImported: () => Promise<{ action: AuditAction }[]>;
+            declare const loadLocal: () => Promise<{ action: LocalAction }[]>;
+
+            export const imported = query({ args: {}, handler: async () => ({ isDone: true, logs: await loadImported() }) });
+            export const local = query({ args: {}, handler: async () => await loadLocal() });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const byName = new Map(discoverFunctions(project, workdir).map((f) => [f.exportName, f]));
+
+            expect(byName.get("imported")?.returnType).toBe('{ isDone: boolean; logs: { action: "user.create" | "user.delete" }[] }');
+            expect(byName.get("local")?.returnType).toBe('{ action: "user.create" | "user.delete" }[]');
+        });
+
+        it("expands a type declared inside the handler body, not just at module top level", () => {
+            expect.assertions(1);
+
+            // The rule is "declared in the handler's own module", at ANY nesting
+            // depth — a body-local `interface` is as unreachable from
+            // `_generated/` as a top-level one, and prints just as bare.
+            writeFunction(
+                "rows.ts",
+                `
+            import { query } from "@lunora/server";
+
+            export const get = query({ args: {}, handler: async () => {
+                interface Row { a: string; b: number }
+                const row: Row = { a: "", b: 1 };
+                return row;
+            } });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe("{ a: string; b: number }");
+        });
+
+        it("expands a user's own `Doc` — the dataModel exemption is by declaration path, never by name", () => {
+            expect.assertions(1);
+
+            // `Doc`/`Id` print correctly bare only because emit imports THOSE from
+            // `./dataModel.js`. Exempting the NAME instead of the declaration path
+            // is worse than the leak it guards: `referencedDataModelImports`
+            // triggers on `\bDoc<`, so a user's own generic `Doc` would be emitted
+            // bare AND given the generated import — silently bound to a different
+            // type, with no compile error anywhere to show for it.
+            writeFunction("lib/mydoc.ts", `export type Doc<T extends string> = { table: T; body: string };`);
+
+            writeFunction(
+                "posts.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Doc } from "./lib/mydoc";
+
+            declare const load: () => Promise<Doc<"posts">>;
+
+            export const get = query({ args: {}, handler: async () => await load() });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('{ table: "posts"; body: string }');
+        });
+
         it("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {
             expect.hasAssertions();
 

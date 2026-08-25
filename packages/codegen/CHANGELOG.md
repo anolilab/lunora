@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.122...@lunora/codegen@1.0.0-alpha.123) (2026-08-25)
+
+### Bug Fixes
+
+* **codegen:** honour .output() in the caller and see the aliases the printer reuses ([#480](https://github.com/anolilab/lunora/issues/480)) ([a10012e](https://github.com/anolilab/lunora/commit/a10012e5b55a6d43d427286d95232a476e99f339)), closes [#479](https://github.com/anolilab/lunora/issues/479)
+
 ## @lunora/codegen [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.121...@lunora/codegen@1.0.0-alpha.122) (2026-08-25)
 
 ### ⚠ BREAKING CHANGES
