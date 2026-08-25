@@ -1187,8 +1187,10 @@ interface ServerPokeEndMessage {
 
 ```ts
 interface ServerPokePartMessage {
+    baseCheckpoint?: number;
     lastMutationId?: number;
     pokeId: string;
+    reset?: boolean;
     rowsPatch: RowOp[];
     shapeId: string;
     type: "pokePart";

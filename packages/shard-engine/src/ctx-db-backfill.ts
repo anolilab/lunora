@@ -289,6 +289,16 @@ const backfillSearchIndexPages = (sql: SqlExec, tableName: string, index: Search
     let pages = 0;
 
     for (;;) {
+        // Checked BEFORE the page, not after: a page writes 500 rows, so deciding
+        // afterwards let a call that arrived with nothing left (the previous index
+        // finished on its last allowed page) walk one more and exceed the cap the
+        // caller sized to its request budget. A finished index still costs
+        // nothing, so the "already complete" indexes ahead of the unfinished one
+        // do not spend the budget and a caller looping on `done` still converges.
+        if (pages >= budget) {
+            return { done: false, pages };
+        }
+
         const pass = backfillSearchIndexPage(sql, tableName, index);
 
         if (pass.rows > 0) {
@@ -298,12 +308,10 @@ const backfillSearchIndexPages = (sql: SqlExec, tableName: string, index: Search
         if (pass.done) {
             return { done: true, pages };
         }
-
-        if (pages >= budget) {
-            return { done: false, pages };
-        }
     }
 };
+
+/* eslint-disable no-secrets/no-secrets -- the JSDoc names the sql-store backfill entry point, not a credential */
 
 /**
  * Run every declared search index — including the `staged: true` ones the
@@ -311,6 +319,12 @@ const backfillSearchIndexPages = (sql: SqlExec, tableName: string, index: Search
  * entry point a host calls out-of-band (the `__lunora_admin__:backfillSearch`
  * RPC, a migration step) after deploying a search index over a table too large
  * to index a page at a time.
+ *
+ * SHARD-LOCAL tables only. A `.global()` table lives on the SQL backend and is
+ * skipped here; its twin is `backfillSqlSearchIndexes` in `@lunora/sql-store`
+ * (reached through the D1/Hyperdrive global writer). Someone who declared
+ * `staged: true` on a `.global()` table and ran only the RPC named above would
+ * otherwise watch it report zero pages and no error, forever.
  *
  * `maxPages` caps how many row-walking pages one call runs, which is what makes
  * it usable from inside a request: a DO has a wall-clock and CPU budget, and the
@@ -321,6 +335,7 @@ const backfillSearchIndexPages = (sql: SqlExec, tableName: string, index: Search
  * Idempotent and resumable: an index already recorded as complete is skipped,
  * and an interrupted run picks up from its recorded cursor.
  */
+/* eslint-enable no-secrets/no-secrets */
 const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxPages?: number } = {}): SearchBackfillProgress => {
     if (!isFtsAvailable(sql)) {
         // No FTS5 engine means no companions to fill; searches already fall back

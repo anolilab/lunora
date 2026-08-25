@@ -111,13 +111,19 @@ class ShapeDiffCache {
         return this.served;
     }
 
-    /** The changed-key scan for `rangeKey`, loading it once per flush. */
-    public changedKeys(rangeKey: string, load: () => CdcChangeKey[]): CdcChangeKey[] {
+    /**
+     * The changed-key scan for `rangeKey`, loading it once per flush.
+     *
+     * Read-only because every subscriber of the shape in one flush is handed the
+     * SAME array: sorting or splicing it in place would silently change what the
+     * others see.
+     */
+    public changedKeys(rangeKey: string, load: () => CdcChangeKey[]): ReadonlyArray<CdcChangeKey> {
         return this.getOrLoad(this.keyScans, rangeKey, load);
     }
 
-    /** The membership probe for `resolved` over the scan named by `rangeKey`, loading it once per flush. */
-    public members(resolved: ResolvedShape, rangeKey: string, load: () => Map<string, Record<string, unknown>>): Map<string, Record<string, unknown>> {
+    /** The membership probe for `resolved` over the scan named by `rangeKey`, loading it once per flush. Shared across the flush's subscribers, so read-only — see {@link ShapeDiffCache.changedKeys}. */
+    public members(resolved: ResolvedShape, rangeKey: string, load: () => Map<string, Record<string, unknown>>): ReadonlyMap<string, Record<string, unknown>> {
         return this.getOrLoad(this.memberProbes, shapeProbeKey(resolved, rangeKey), load);
     }
 

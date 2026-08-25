@@ -949,6 +949,14 @@ export interface ShapeProbeCounters {
  * (in-memory, reset on hibernation). Feeds the Studio fan-out observability panel.
  */
 export interface FanoutMetricsResult {
+    /**
+     * `.global()` poll tallies. Same two fields as {@link ShapeProbeCounters},
+     * DIFFERENT units: `run` counts membership drains issued to the global
+     * backend, `served` counts the `(socket, shape)` pairs a tick skipped because
+     * the global changelog proved their table had not moved. Both call sites in
+     * the panel pass their own labels for exactly this reason — don't render
+     * either counter under a shared caption.
+     */
     globalPoll: ShapeProbeCounters;
     maxRelays: number;
     peakSubscribers: number;

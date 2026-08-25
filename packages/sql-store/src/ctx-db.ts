@@ -929,7 +929,15 @@ const CDC_SWEEP_MAX_ROWS = 10_000;
  */
 const CDC_SWEEP_ATTEMPT_MS = 30_000;
 
-/** When this isolate last tried to claim the sweep lease. See {@link CDC_SWEEP_ATTEMPT_MS}. */
+/**
+ * When this isolate last tried to claim the sweep lease. See
+ * {@link CDC_SWEEP_ATTEMPT_MS}.
+ *
+ * One counter for the whole isolate, deliberately: an app has a single global
+ * changelog, so "this isolate" and "this log" are the same scope. A worker that
+ * ever bound two `.global()` backends would share the throttle between them and
+ * sweep at most one per window — key this by store at that point, not before.
+ */
 let lastSweepAttemptAt = 0;
 
 /** Create the `__cdc_log` table. Idempotent; only run when CDC is enabled. */
@@ -1125,6 +1133,14 @@ const readSqlCdcChanges = async (
     // warehouse table permanently missing the trimmed range, reported nowhere.
     // `+ 1` because a consumer sitting exactly at `floor - 1` has seen
     // everything below the floor.
+    //
+    // Unconditional, unlike `readSqlCdcChangedTables`, which reads the floor only
+    // when retention is configured. That reader runs on the 2s shape poll and its
+    // consumers self-heal by re-reading; this one serves opaque warehouse cursors
+    // that cannot. Skipping the probe when retention is currently off would
+    // disarm the guard for a deployment that swept and then turned retention
+    // back off — one round trip per export page is not worth trading a silent
+    // gap for.
     const floor = await readSqlCdcFloor(exec, dialect);
 
     if (floor !== undefined && floor > sinceSeq + 1) {

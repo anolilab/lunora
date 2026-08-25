@@ -1747,6 +1747,19 @@ abstract class ShardDO {
     private currentStmtSamples: Map<string, StmtSample> | undefined;
 
     /**
+     * The instrumented `sql` proxy built for {@link ShardDO.currentStmtSamples},
+     * and the samples map it was built for.
+     *
+     * `get sql()` is read on essentially every storage call, and a fresh `Proxy`
+     * per read is not only an allocation: the resume path memoizes this shard's
+     * table catalog in a `WeakMap` keyed by the handle, so a new object each read
+     * meant that memo never once hit during a dispatch — it re-scanned
+     * `sqlite_master` every time, which is the 18% of `evaluateResume` the memo
+     * exists to remove.
+     */
+    private instrumentedSql: undefined | { proxy: unknown; samples: Map<string, StmtSample> };
+
+    /**
      * Set when `currentStmtSamples` hit {@link MAX_STMT_SAMPLES_PER_DISPATCH}
      * distinct statements and a brand-new shape was dropped this dispatch.
      * Folded onto the dispatch's wide event as `db.stmt_samples_truncated`
@@ -2264,6 +2277,10 @@ abstract class ShardDO {
             return rawSql;
         }
 
+        if (this.instrumentedSql?.samples === samples) {
+            return this.instrumentedSql.proxy;
+        }
+
         const rawExec = (rawSql as { exec?: unknown }).exec;
 
         if (typeof rawExec !== "function") {
@@ -2349,9 +2366,11 @@ abstract class ShardDO {
             return cursor;
         };
 
-        // Return a structural proxy that looks like the real sql handle to the
-        // callers that cast it to `SqlExec`, with our instrumented `exec`.
-        return new Proxy(rawSql, {
+        // A structural proxy that looks like the real sql handle to the callers
+        // that cast it to `SqlExec`, with our instrumented `exec`. Cached against
+        // the samples map it folds into, so it is one object for the whole
+        // dispatch and identity-keyed memos downstream keep working.
+        const proxy = new Proxy(rawSql, {
             get(target, prop) {
                 if (prop === "exec") {
                     return instrumentedExec;
@@ -2361,6 +2380,10 @@ abstract class ShardDO {
                 return Reflect.get(target, prop, target);
             },
         });
+
+        this.instrumentedSql = { proxy, samples };
+
+        return proxy;
     }
 
     /**
@@ -5662,6 +5685,9 @@ abstract class ShardDO {
             this.currentRequestCacheHit = undefined;
             this.currentStmtSamples = undefined;
             this.currentStmtSamplesTruncated = undefined;
+            // Drop the cached proxy with the samples map it folds into, so the
+            // finished dispatch's map is not held alive by it.
+            this.instrumentedSql = undefined;
         }
     }
 

@@ -55,6 +55,20 @@ const stagedSchema: SchemaLike = {
     },
 };
 
+/** Two staged indexes over the same rows, so one call has to cross from a budget-exhausted index to a fresh one. */
+const twoStagedSchema: SchemaLike = {
+    tables: {
+        docs: {
+            indexes: [],
+            searchIndexes: [
+                { field: "body", name: "by_body", staged: true },
+                { field: "title", name: "by_title", staged: true },
+            ],
+            shape: { body: { kind: "string" }, title: { kind: "string" } },
+        },
+    },
+};
+
 let harness: ReturnType<typeof createSqliteExec>;
 
 /** A writer over `schema`, with a deterministic clock/ids so ordering is stable across runs. */
@@ -167,5 +181,27 @@ describe.runIf(FTS5_IN_BUILD)("staged search index backfill", () => {
 
         expect(second.done).toBe(true);
         await expect(searchTitles("needle")).resolves.toStrictEqual(["t610"]);
+    });
+
+    it("does not walk one more page for the next index once the budget is spent", async () => {
+        expect.assertions(1);
+
+        runShardMigrations(harness.sql, priorSchema);
+
+        const before = writerFor(priorSchema);
+
+        // More than one page, so neither index can finish inside the budget.
+        for (let index = 0; index < 620; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seeding; the writer is single-connection
+            await before.insert("docs", { body: "filler text", title: `t${String(index)}` });
+        }
+
+        runShardMigrations(harness.sql, twoStagedSchema);
+
+        // 620 rows is exactly two 500-row pages, so `by_body` FINISHES on the
+        // last page the budget allows and `by_title` is reached with nothing
+        // left. Deciding the budget after the page let it walk one anyway — 500
+        // more row writes than the caller sized its request for.
+        expect(backfillSearchIndexes(harness.sql, twoStagedSchema, { maxPages: 2 })).toStrictEqual({ done: false, pages: 2 });
     });
 });

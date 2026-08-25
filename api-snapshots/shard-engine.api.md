@@ -2426,8 +2426,8 @@ interface SettingsResult {
 class ShapeDiffCache {
     get probesRun(): number;
     get probesServed(): number;
-    changedKeys(rangeKey: string, load: () => CdcChangeKey[]): CdcChangeKey[];
-    members(resolved: ResolvedShape, rangeKey: string, load: () => Map<string, Record<string, unknown>>): Map<string, Record<string, unknown>>;
+    changedKeys(rangeKey: string, load: () => CdcChangeKey[]): ReadonlyArray<CdcChangeKey>;
+    members(resolved: ResolvedShape, rangeKey: string, load: () => Map<string, Record<string, unknown>>): ReadonlyMap<string, Record<string, unknown>>;
 }
 ```
 

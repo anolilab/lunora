@@ -102,6 +102,13 @@ const appendCdcChange = (sql: SqlExec, ts: number, table: string, id: string, op
     );
 };
 
+/**
+ * How many table names one `IN (…)` filter may bind. Workerd caps a statement at
+ * 100 bound parameters; the callers here spend one or two on the range bounds, so
+ * this leaves headroom rather than sitting on the limit.
+ */
+const CDC_TABLE_FILTER_CHUNK = 90;
+
 /** Bind a non-empty table set as an `AND "table" IN (?, …)` fragment, or nothing at all for the unfiltered read. */
 const tableInClause = (tables: ReadonlySet<string> | undefined): SQL => {
     if (!tables || tables.size === 0) {
@@ -164,18 +171,34 @@ const readCdcChanges = (
  * An empty `tables` returns `false`: the caller has no dependency to test, which
  * is never grounds for claiming a change touched it (the resume path treats an
  * unknown read-set as non-resumable before it ever gets here).
+ *
+ * The read-set is chunked because it is unbounded — it is however many tables one
+ * query happened to read — while workerd caps a statement at 100 bound
+ * parameters, and `sinceSeq` already spends one. A wide read-set would otherwise
+ * throw here rather than answer, turning a resumable subscription into an error
+ * on the seed path.
  */
 const cdcTouchesTables = (sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): boolean => {
     if (tables.size === 0) {
         return false;
     }
 
-    const rows = runDrizzle<{ hit: number }>(
-        sql,
-        dsql`SELECT 1 AS hit FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq}${tableInClause(tables)} LIMIT 1`,
-    ).toArray();
+    const names = [...tables];
 
-    return rows.length > 0;
+    for (let index = 0; index < names.length; index += CDC_TABLE_FILTER_CHUNK) {
+        const chunk = new Set(names.slice(index, index + CDC_TABLE_FILTER_CHUNK));
+
+        const rows = runDrizzle<{ hit: number }>(
+            sql,
+            dsql`SELECT 1 AS hit FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq}${tableInClause(chunk)} LIMIT 1`,
+        ).toArray();
+
+        if (rows.length > 0) {
+            return true;
+        }
+    }
+
+    return false;
 };
 
 /**
@@ -301,16 +324,19 @@ interface CdcChangeKey {
  * its loop, so its final page could pull rows past `upTo` into the diff.
  */
 const readCdcChangeKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[] => {
-    const rows = runDrizzle<{ id: string; op: string; seq: number }>(
+    // `maxSeq`, not a second `seq`: aliasing the aggregate to the name of the
+    // column it aggregates leaves `ORDER BY seq` resolvable two ways, and which
+    // one wins is an engine rule rather than something stated here.
+    const rows = runDrizzle<{ id: string; maxSeq: number; op: string }>(
         sql,
-        dsql`SELECT id, op, MAX(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)}
+        dsql`SELECT id, op, MAX(seq) AS maxSeq FROM ${dsql.identifier(CDC_LOG_TABLE)}
              WHERE ${dsql.identifier("table")} = ${table} AND seq > ${sinceSeq} AND seq <= ${upTo}
              GROUP BY id
-             ORDER BY seq ASC`,
+             ORDER BY maxSeq ASC`,
     ).toArray();
 
     return rows.map((row) => {
-        return { id: row.id, op: row.op as CdcChange["op"], seq: row.seq };
+        return { id: row.id, op: row.op as CdcChange["op"], seq: row.maxSeq };
     });
 };
 

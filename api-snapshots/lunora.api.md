@@ -2237,6 +2237,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `SearchBackfillProgress` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `SessionDO` (class)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2305,6 +2309,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `UNVOUCHABLE_DEP` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `ValidatorLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2334,6 +2342,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `assertShapeShardable` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `backfillSearchIndexes` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2394,6 +2406,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `isSourceDue` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `markUnvouchableReads` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 

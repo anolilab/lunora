@@ -34,10 +34,13 @@ interface RelayDouble {
 const ownerFor = (
     sql: SqlExec,
     relays: Map<number, RelayDouble>,
+    /** The op-log cursor the owner computes each seed at — mutable, so a test can move it between two subscribes the way an unrelated write does. */
+    seed?: { cursor: number },
 ): {
     owner: NonNullable<ReturnType<typeof createRelayLink>>;
     resolvedUnder: (undefined | SubscriptionIdentity)[];
 } => {
+    const seedCursor = seed ?? { cursor: 5 };
     const resolvedUnder: (undefined | SubscriptionIdentity)[] = [];
 
     const stubFor = (name: string) => {
@@ -62,7 +65,7 @@ const ownerFor = (
         // Non-empty for every range, so every flush of the shape's table produces a poke.
         buildShapeDiff: () => [{ key: "r1", op: "upsert", table: "messages", value: {} }],
         computeOpLogShapeSeed: () => {
-            return { baseCheckpoint: undefined, cursor: 5, epoch: "e1", rowsPatch: [] };
+            return { baseCheckpoint: undefined, cursor: seedCursor.cursor, epoch: "e1", rowsPatch: [] };
         },
         currentCdcEpoch: () => "e1",
         deliverWhisperLocal: () => 0,
@@ -102,17 +105,25 @@ const ownerFor = (
     return { owner, resolvedUnder };
 };
 
+/** The owner's seed reply: the memo cursor it hands the relay, plus the frames the subscriber is sent. */
+interface SeedReply {
+    cursor?: number;
+    error?: { code: string; message: string };
+    frames?: string[];
+}
+
 const subscribe = async (
     owner: NonNullable<ReturnType<typeof createRelayLink>>,
     shape: { args: Record<string, unknown>; name: string },
-    relayIndex: number,
-    connectionId = "c-alice",
-): Promise<void> => {
-    await owner.handleControl(
+    relayIndex: number | undefined,
+    /** `null` omits it from the frame the way a socket with no recorded connection id does. */
+    connectionId: null | string = "c-alice",
+): Promise<SeedReply> => {
+    const response = await owner.handleControl(
         new Request("https://owner.internal/_lunora/relay", {
             body: JSON.stringify({
                 ...shape,
-                connectionId,
+                connectionId: connectionId ?? undefined,
                 identity: { org: "acme" },
                 relayIndex,
                 subId: "s1",
@@ -123,6 +134,21 @@ const subscribe = async (
             method: "POST",
         }),
     );
+
+    return (await response.json()) as SeedReply;
+};
+
+/** The `pokeEnd` envelope inside a seed reply's frames — it carries the checkpoint the client records. */
+const seedPokeEnd = (reply: SeedReply): Record<string, unknown> => {
+    for (const frame of reply.frames ?? []) {
+        const parsed = JSON.parse(frame) as Record<string, unknown>;
+
+        if (parsed["type"] === "pokeEnd") {
+            return parsed;
+        }
+    }
+
+    throw new Error("seed reply carried no pokeEnd frame");
 };
 
 /** The double for relay `index`, or a hard failure — a missing one means the fixture and the assertion disagree about the topology. */
@@ -324,7 +350,7 @@ describe("relay-side delivery gate", () => {
         );
 
     it("delivers a poke whose range the socket has partly applied (the owner's rewind re-opened it)", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const { frames, relay, socket } = relayFor(10);
 
@@ -340,6 +366,19 @@ describe("relay-side delivery gate", () => {
         // `buildPokeFrames` may split one poke across several frames; what
         // matters is that the socket heard anything at all beyond its seed.
         expect(frames.length).toBeGreaterThan(1);
+
+        // ...and that the base it is stamped with is where this socket actually
+        // is (10), not where the poke's range opens (5). Stamping `fromCursor`
+        // on a socket the range admits but does not start at is a base the
+        // client is not at, which fails its divergence check and re-seeds it —
+        // undoing the delivery this same admission rule exists to allow.
+        const part = frames
+            // The seed frame is the owner's opaque string, not JSON this fixture built.
+            .filter((frame) => frame !== "seed")
+            .map((frame) => JSON.parse(frame) as Record<string, unknown>)
+            .find((frame) => frame["type"] === "pokePart");
+
+        expect(part?.["baseCheckpoint"]).toBe(10);
     });
 
     it("still refuses a poke the socket is genuinely behind, rather than skipping the gap", async () => {
@@ -353,5 +392,58 @@ describe("relay-side delivery gate", () => {
         // Applying `(5, 20]` to a socket at 3 would silently swallow everything
         // that changed in `(3, 5]`.
         expect(frames).toStrictEqual(["seed"]);
+    });
+});
+
+describe("owner seed reply", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    it("stamps the seed at the cohort frontier it memos, not at the cursor it read", async () => {
+        expect.assertions(2);
+
+        const relays = new Map<number, RelayDouble>([
+            [0, { down: false, posts: [] }],
+            [1, { down: false, posts: [] }],
+        ]);
+        const seed = { cursor: 5 };
+        const { owner } = ownerFor(database.sql, relays, seed);
+
+        await subscribe(owner, OPEN_SHAPE, 0);
+
+        // An unrelated table moves the op-log on. The cohort frontier does not
+        // follow it — it only advances on a multicast poke for THIS shape.
+        seed.cursor = 12;
+
+        const reply = await subscribe(owner, OPEN_SHAPE, 1, "c-bob");
+
+        // The relay memos `cursor`, and the next multicast stamps that memo as
+        // the poke's base. Telling the client 12 while memoing 5 made the
+        // joiner fail its own base check on the very first poke and re-seed.
+        expect(reply.cursor).toBe(5);
+        expect(seedPokeEnd(reply)["checkpoint"]).toBe(5);
+    });
+
+    it("refuses a per-socket shape it has no route for, rather than acking a subscription it can never poke", async () => {
+        expect.assertions(2);
+
+        const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+        const { owner } = ownerFor(database.sql, relays);
+
+        // `connectionId` is optional on the attachment. A non-uniform shape is
+        // routed per socket, so without it the owner can register nothing —
+        // returning frames anyway left the subscriber with one snapshot and
+        // silence for the life of the socket.
+        const reply = await subscribe(owner, SCOPED_SHAPE, 0, null);
+
+        expect(reply.error?.code).toBe("RELAY_SHAPE_UNROUTABLE");
+        expect(reply.frames).toBeUndefined();
     });
 });

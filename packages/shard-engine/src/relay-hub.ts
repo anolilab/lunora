@@ -845,15 +845,39 @@ class OwnerRelay extends RelayLink {
             // resolving it anonymously would be a cross-tenant leak rather than
             // a missing poke.
             writeRelayShape(this.host.sql(), proxy);
+        } else {
+            // A non-uniform shape is routed per socket, and BOTH halves of that
+            // route are needed: the relay slot to address, and the connection to
+            // target inside it. `connectionId` is optional on the attachment, so
+            // this is reachable. Falling through would register nothing while
+            // still returning seed frames — the subscriber would render an
+            // initial snapshot and then never be poked again, for the life of the
+            // socket, with nothing logged. Refuse the seed instead so the
+            // `shape_subscribe` reply carries the failure.
+            return {
+                error: {
+                    code: "RELAY_SHAPE_UNROUTABLE",
+                    message: `shape ${request.name} is per-socket on a relay, but the subscribe carries no ${request.relayIndex === undefined ? "relay index" : "connection id"}`,
+                },
+            };
         }
 
         // `reset` rides on the part, not the meta: this is the relay's copy of
         // the local op-log seed, and without the flag a re-seed that could not
         // resume would be spliced onto whatever rows the client still held —
         // a full seed emits only inserts, so nothing it kept would ever leave.
+        // Stamped at `cohortCursor`, NOT at the `cursor` the frames were computed
+        // at: the client records the seed's checkpoint as its base, the relay
+        // records `cohortCursor` as the socket's memo, and the next multicast
+        // poke stamps that memo as its `baseCheckpoint`. Reporting the two at
+        // different points made every joiner to an already-lagging cohort fail
+        // its own base check on the first poke and re-seed. Under-reporting is
+        // the safe direction: the first poke then re-sends the ops in
+        // `(cohortCursor, cursor]`, which the seed already carried, and row ops
+        // are idempotent by id.
         const frames = buildPokeFrames([{ reset, rowsPatch, shapeId: request.subId }], {
             baseCheckpoint,
-            checkpoint: cursor,
+            checkpoint: cohortCursor,
             epoch,
             lastMutationId: undefined,
             pokeId: this.host.nextPokeId(),
@@ -1371,18 +1395,23 @@ class RelayMember extends RelayLink {
             }
 
             for (const [subId, sub] of Object.entries(shapes)) {
-                if (shapeRoutingKey(sub.name, sub.args) !== routingKey || !pokeAppliesToMemo(memos.get(subId), poke)) {
+                const memo = memos.get(subId);
+
+                if (shapeRoutingKey(sub.name, sub.args) !== routingKey || !pokeAppliesToMemo(memo, poke)) {
                     continue;
                 }
 
                 const frames = buildPokeFrames(
-                    // The loop above admits this poke only when the socket's memo
-                    // sits inside `[fromCursor, checkpoint)`, and that memo IS the
-                    // previous poke's checkpoint — so `fromCursor` is the exact
-                    // base the client holds, with no false-divergence risk. Left
-                    // unstamped, the client's gap check stays disarmed on the one
-                    // path where a cross-DO POST can actually drop a poke.
-                    [{ baseCheckpoint: poke.fromCursor, rowsPatch: poke.rowsPatch, shapeId: subId }],
+                    // The socket's OWN memo is the base, not `poke.fromCursor`:
+                    // the memo is what this socket was last told its checkpoint
+                    // was (the seed's `cohortCursor`, or the previous poke's
+                    // checkpoint), and the admission rule is a RANGE — a memo
+                    // ahead of `fromCursor` is admitted and would then be handed
+                    // a base it is not at, failing the client's divergence check
+                    // and forcing a re-seed. Left unstamped, the client's gap
+                    // check stays disarmed on the one path where a cross-DO POST
+                    // can actually drop a poke.
+                    [{ baseCheckpoint: memo?.cursor, rowsPatch: poke.rowsPatch, shapeId: subId }],
                     {
                         baseCheckpoint: undefined,
                         checkpoint: poke.checkpoint,
