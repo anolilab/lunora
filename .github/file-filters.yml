@@ -79,6 +79,13 @@ generated_files:
     - "scripts/check-generated-files.mjs"
     - "packages/codegen/**"
     - "examples/**"
+    # Self-listed, per the rule at the top of this file: the job's own workflow now
+    # carries a `build:packages` step the codegen sweep cannot run without. A PR that
+    # edited only `lint.yml` to drop it would match `frontend_lintable` (so eslint
+    # still ran) but not this filter, so the generated-files job would be skipped and
+    # its required check would stay green while the guard it protects was removed.
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
 
 yaml_lintable:
     - "**/*.yml"
