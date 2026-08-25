@@ -1,3 +1,15 @@
+## @lunora/do [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.95...@lunora/do@1.0.0-alpha.96) (2026-08-25)
+
+### Bug Fixes
+
+* **shard-engine:** stamp stream generations ([#462](https://github.com/anolilab/lunora/issues/462)) ([b67de3c](https://github.com/anolilab/lunora/commit/b67de3c27d473aa7094bc4629b40db4af92070ad))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.36
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/do [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.94...@lunora/do@1.0.0-alpha.95) (2026-08-24)
 
 ### Bug Fixes
