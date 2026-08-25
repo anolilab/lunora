@@ -163,6 +163,22 @@ run_consumer() {
         # `lunora_sdk` below is the emitted manifest's name and not the output
         # directory's — the opposite of SwiftPM, and the reason this leg needs no
         # `basename` the way the swift one does.
+        #
+        # Analysed in BOTH directories, and the first is the one that matters.
+        # `dart analyze` only reports on the package it is run in: from the
+        # consumer it type-checks the smoke's use of the surface but stays silent
+        # about the surface itself, so a generated method the smoke does not call
+        # could reference an undefined type and still pass — measured, not
+        # assumed. Running it inside the generated package is the counterpart of
+        # `swift build`, and it covers quicktype's models too. A generated package
+        # carries no analysis_options.yaml, so this is the default error/warning
+        # set with no style lints, which is exactly right for output whose style
+        # this repo does not own.
+        #
+        # Keep this prose OUT of the `&&` chain below. A `\` continuation followed
+        # by a comment terminates the command, so a comment spliced mid-chain
+        # silently detaches everything after it — which is how the analysis ran
+        # unchained from its `cp` here, in the one leg this script exists to gate.
         dart)
             {
                 echo 'name: lunora_smoke'
@@ -175,17 +191,7 @@ run_consumer() {
             } >"$app/pubspec.yaml" \
                 && mkdir -p "$app/bin" \
                 && cp "$ROOT/sdks/smoke/dart/generated_smoke.dart" "$app/bin/" \
-            # Analysed in BOTH directories, and the first is the one that matters.
-            # `dart analyze` only reports on the package it is run in: from the
-            # consumer it type-checks the smoke's use of the surface but stays
-            # silent about the surface itself, so a generated method the smoke
-            # does not call could reference an undefined type and still pass —
-            # measured, not assumed. Running it inside the generated package is
-            # the counterpart of `swift build`, and it covers quicktype's models
-            # too. A generated package carries no analysis_options.yaml, so this
-            # is the default error/warning set with no style lints, which is
-            # exactly right for output whose style this repo does not own.
-            (cd "$out" && dart pub get --offline && dart analyze) \
+                && (cd "$out" && dart pub get --offline && dart analyze) \
                 && (cd "$app" && dart pub get --offline && dart analyze && dart run bin/generated_smoke.dart)
             ;;
         *)
