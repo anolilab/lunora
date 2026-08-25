@@ -75,28 +75,26 @@ const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[]
  * masks its drill-down chips too. This bar deliberately does not, and the
  * question has been raised twice, so here is the enumeration it rests on.
  *
- * A value can reach one of these rows in exactly five ways.
+ * Two of the ways a value reaches these rows are DATA-DERIVED — the operator did
+ * not type it — and those are the ones that could have leaked.
  *
- * 1. The operator TYPES it into the `db-filter-value` input. Masking an input
- * renders it uneditable, and hides a value from the one person who just wrote it.
+ * A FACET-VALUE CLICK (`facetFilter` in `use-data-browser`) is closed at the
+ * source: `DataFacets` withholds both the toggle and any open section for a
+ * mask-covered column while the preview is on, so this can only reach a covered
+ * column after the operator switched the preview OFF — a deliberate reveal of the
+ * same value, from the same screen.
  *
- * 2. `addFilter` seeds a new row with an EMPTY value. Nothing to hide.
+ * HYDRATION FROM THE URL or a saved query (`initialFilters` → `toEditableFilters`)
+ * is the shared-link case, and the one that looks like the `.global()` drill-down
+ * chips — but it is not, because of the invariant below.
  *
- * 3. A FACET-VALUE CLICK (`facetFilter` in `use-data-browser`). `DataFacets`
- * withholds both the toggle and any open section for a mask-covered column while
- * the preview is on, so this path can only reach a covered column after the
- * operator has switched the preview OFF — a deliberate reveal of the same value,
- * from the same screen.
+ * (The AI "describe a filter" affordance sends column names and the prompt, never
+ * a row, so it cannot lift a stored secret into a clause. That is enforced by
+ * `@lunora/do`'s `sql-assistant.test.ts` — "sends the caller's columns and prompt
+ * and nothing else" — rather than asserted here, because a claim about another
+ * package that nothing checks is how a comment goes stale.)
  *
- * 4. HYDRATION FROM THE URL or a saved query (`initialFilters` →
- * `toEditableFilters`). This is the shared-link case, and the one that looks like
- * the `.global()` drill-down chips — but it is not, because of the invariant below.
- *
- * 5. The AI "describe a filter" affordance. `aiTableFilter` is grounded in the
- * browsed table's COLUMN NAMES only (`shard-do.ts#handleAiTableFilter`); no row
- * values are ever sent to the model, so it cannot lift a stored secret into a clause.
- *
- * The invariant that makes 3 and 4 harmless: **a filter clause rendered here is
+ * The invariant that makes both harmless: **a filter clause rendered here is
  * always simultaneously rendered verbatim in the address bar.** `useDataBrowser`
  * mirrors the loaded view through `onViewChange`, and `table-editor.tsx` writes
  * it straight into `?filters=<json>` on every change. So masking a row would

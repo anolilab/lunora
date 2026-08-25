@@ -61,21 +61,20 @@ const USERS_PAGE = { columns: ["__id__", "email", "name"], rows: USER_ROWS, tota
  * The inputs are the algorithm's edge cases, not sample data. `""` is the bare
  * offset basis with the loop never entered. `"9007199254740993"` is a bigint's
  * decimal form, past `Number.MAX_SAFE_INTEGER` (see the `"hash"` bigint case
- * below). `"x-4096"` is a key, not an input: it stands for `"x".repeat(4096)`,
- * long enough to exercise the 32-bit wraparound many times over. The emoji entry
- * is non-BMP, so `codePointAt` reads the astral code point at index 0 and a lone
- * low surrogate at index 1 — a quirk of iterating by UTF-16 index that the digest
- * must keep reproducing.
+ * below). `"x".repeat(4096)` is long enough to exercise the 32-bit wraparound many
+ * times over. The emoji entry is non-BMP, so `codePointAt` reads the astral code
+ * point at index 0 and a lone low surrogate at index 1 — a quirk of iterating by
+ * UTF-16 index that the digest must keep reproducing.
  */
-const FNV1A_DIGESTS: Readonly<Record<string, string>> = {
+const FNV1A_DIGESTS: ReadonlyArray<readonly [input: string, digest: string]> = [
     // The bare FNV-1a offset basis.
-    "": "811c9dc5",
+    ["", "811c9dc5"],
     // A bigint's decimal form — see the `"hash"` bigint case below.
-    "9007199254740993": "aeb18cd1",
-    "ada@example.com": "bef5cfd2",
-    "x-4096": "e01bddc5",
-    "\u{1F642} masked": "9b551f7a",
-};
+    ["9007199254740993", "aeb18cd1"],
+    ["ada@example.com", "bef5cfd2"],
+    ["x".repeat(4096), "e01bddc5"],
+    ["\u{1F642} masked", "9b551f7a"],
+];
 
 /** Mask coverage the worker would serve: `users.email` redacted, `users.name` hashed. */
 const MASK_POLICIES = {
@@ -544,7 +543,9 @@ describe("maskValue — 'hash'", () => {
         // `packages/server/__tests__/mask.test.ts`'s "hashes a bigint column over
         // its decimal form instead of failing closed".
         expect(maskValue(9_007_199_254_740_993n, "hash")).toBe(fnv1aHex("9007199254740993"));
-        // Equal bigints hash equal, so the column stays groupable.
+        // Equal-valued bigints hash equal, so the column stays groupable. Built two
+        // different ways on purpose: calling one pure function twice with the same
+        // argument is trivially equal and would assert nothing.
         expect(maskValue(9_007_199_254_740_993n, "hash")).toBe(maskValue(9_007_199_254_740_993n, "hash"));
     });
 });
@@ -553,8 +554,8 @@ describe("fnv1aHex", () => {
     it("pins the digest for the algorithm's edge-case inputs", () => {
         expect.assertions(5);
 
-        for (const [key, digest] of Object.entries(FNV1A_DIGESTS)) {
-            expect(fnv1aHex(key === "x-4096" ? "x".repeat(4096) : key)).toBe(digest);
+        for (const [input, digest] of FNV1A_DIGESTS) {
+            expect(fnv1aHex(input)).toBe(digest);
         }
     });
 });

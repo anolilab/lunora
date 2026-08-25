@@ -153,6 +153,40 @@ describe("generateFilter", () => {
         expect(result.degraded ? undefined : result.clauses).toStrictEqual([{ column: "status", operator: "eq", value: "open" }]);
     });
 
+    it("sends the caller's columns and prompt and nothing else, so no stored value can reach the model", async () => {
+        expect.assertions(2);
+
+        // The studio's mask preview deliberately leaves the filter bar unmasked
+        // (see `data-filters.tsx`), and one leg of that reasoning is that this
+        // affordance cannot lift a stored secret into a clause. That was asserted
+        // in a comment citing this file, with nothing enforcing it.
+        //
+        // The check is subtractive rather than a `not.toContain` of some value the
+        // test never supplied — that would pass whatever the code did. Everything
+        // the caller provided is removed from the serialised payload; whatever is
+        // left must contain no user data at all, so a future revision that appended
+        // a sample row (or any other table content) fails here.
+        const ai = binding('[{"column":"status","operator":"eq","value":"open"}]');
+        const prompt = "rows for ada";
+
+        await generateFilter(ai, { prompt }, COLUMNS);
+
+        const sent = JSON.stringify(ai.run.mock.calls);
+
+        expect(COLUMNS.filter((column) => !sent.includes(column))).toStrictEqual([]);
+
+        let residue = sent;
+
+        for (const supplied of [prompt, ...COLUMNS]) {
+            residue = residue.replaceAll(supplied, "");
+        }
+
+        // The residue is the model id, the framing prompt and JSON punctuation.
+        // `generateFilter`'s signature takes no rows, so there is no legitimate way
+        // for a table value to appear here.
+        expect(residue).not.toMatch(/ada|open ones|hunter/i);
+    });
+
     it("drops a hallucinated column rather than passing it to the query builder", async () => {
         expect.assertions(1);
 
