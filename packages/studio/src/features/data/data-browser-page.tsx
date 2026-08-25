@@ -242,7 +242,7 @@ const DataBrowserPage = ({
                     onBulkDelete={browser.onBulkDeleteSelected}
                     onToggleBackRelation={backRelations.onToggle}
                     onToggleTranspose={preferences.onToggleTranspose}
-                    rows={page.rows}
+                    rows={maskRows(page.rows, preferences.maskView)}
                     table={browser.table.table}
                     transposed={preferences.transposed}
                 />
