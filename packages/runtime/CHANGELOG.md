@@ -1,3 +1,15 @@
+## @lunora/runtime [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.70...@lunora/runtime@1.0.0-alpha.71) (2026-08-25)
+
+### Bug Fixes
+
+* **runtime:** decode wire values for third parties ([#452](https://github.com/anolilab/lunora/issues/452)) ([2cb2678](https://github.com/anolilab/lunora/commit/2cb267886df50d2a79a5649dcd6784ee17ae8bd0))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.96
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/runtime [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.69...@lunora/runtime@1.0.0-alpha.70) (2026-08-24)
 
 
