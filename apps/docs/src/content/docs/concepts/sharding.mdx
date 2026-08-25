@@ -74,7 +74,7 @@ default `__root__`), or a fan-out, is rejected with `403`
 (`FORBIDDEN_SHARD` / `FORBIDDEN_FANOUT`) unless the worker opts in. A
 single-DO app never names a non-default shard, so it is unaffected.
 
-Configure `authorizeShard(identity, shardKey)` on `createWorker` to gate it:
+Configure `authorizeShard({ identity, shardKey })` on `createWorker` to gate it:
 return `true` to allow, `false` to reject. Derive the decision from the
 verified `identity`, so a caller can only reach shards it owns:
 
@@ -82,7 +82,7 @@ verified `identity`, so a caller can only reach shards it owns:
 createWorker({
     shardDO: env.SHARD,
     // Gate every non-default shard on the caller owning it.
-    authorizeShard: (identity, shardKey) => identity?.userId === shardKey,
+    authorizeShard: ({ identity, shardKey }) => identity?.userId === shardKey,
     // Fan-out is a separate, more privileged grant when `authorizeShard` is set.
     authorizeFanOut: (identity) => identity?.role === "admin",
 });

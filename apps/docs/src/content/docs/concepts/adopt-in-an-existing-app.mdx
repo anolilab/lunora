@@ -46,7 +46,7 @@ export default createWorker({
 
     // Which shard a given identity may reach. With `.shardBy("userId")` this is the
     // whole per-user isolation boundary.
-    authorizeShard: (identity, shardKey) => identity?.userId === shardKey,
+    authorizeShard: ({ identity, shardKey }) => identity?.userId === shardKey,
 });
 ```
 

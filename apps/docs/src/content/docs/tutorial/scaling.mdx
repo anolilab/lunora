@@ -159,7 +159,7 @@ identity rather than from anything the caller sent:
 ```ts
 createWorker({
     shardDO: env.SHARD,
-    authorizeShard: async (identity, shardKey) => {
+    authorizeShard: async ({ identity, shardKey }) => {
         if (!identity?.userId) {
             return false;
         }

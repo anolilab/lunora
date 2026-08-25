@@ -22,7 +22,7 @@ const app = defineApp<Env>()
     // Demo/local default: this app has no auth, so shard access is left OPEN
     // (any caller may target any shard) and data is protected by per-row RLS.
     // A PRODUCTION sharded app must gate this instead — e.g.
-    // `.extend(() => ({ authorizeShard: (identity, shardKey) => identity?.userId === ownerOf(shardKey) }))`.
+    // `.extend(() => ({ authorizeShard: ({ identity, shardKey }) => identity?.userId === ownerOf(shardKey) }))`.
     .extend(() => ({ allowUnauthenticatedShardAccess: true }))
     .build();
 

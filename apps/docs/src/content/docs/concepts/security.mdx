@@ -171,14 +171,14 @@ client-supplied address, so cross-shard reads must be authorized. Lunora
 (`FORBIDDEN_SHARD` / `FORBIDDEN_FANOUT`). A single-DO app never names a
 non-default shard and is unaffected.
 
-A sharded app must either configure `authorizeShard(identity, shardKey)` (return
+A sharded app must either configure `authorizeShard({ identity, shardKey })` (return
 `true` to allow), plus `authorizeFanOut` for cross-shard reads, or set
 `allowUnauthenticatedShardAccess: true` to opt into open access:
 
 ```ts
 createWorker({
     shardDO: env.SHARD,
-    authorizeShard: (identity, shardKey) => identity?.userId === shardKey,
+    authorizeShard: ({ identity, shardKey }) => identity?.userId === shardKey,
 });
 ```
 
