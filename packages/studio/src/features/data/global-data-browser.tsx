@@ -8,11 +8,11 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
-import type { MaskView } from "../../lib/mask-preview";
 import DataFacets from "./data-facets";
 import GlobalDataPage from "./global-data-page";
 import GlobalTablesEmptyState from "./global-tables-empty-state";
 import { useFacets } from "./hooks/use-facets";
+import { useMaskView } from "./hooks/use-mask-view";
 import { TableListSidebar } from "./table-list-sidebar";
 
 interface GlobalDataBrowserProps {
@@ -48,17 +48,6 @@ const NO_TABLES: ReadonlyArray<GlobalTableInfo> = [];
 
 /** Hoisted empty column list — a stable `DataFacets` fallback before a page loads (avoids a fresh `[]` literal in JSX). */
 const NO_COLUMNS: ReadonlyArray<string> = [];
-
-/**
- * The global tier has no mask preview yet — unlike the shard browser, nothing
- * here reads `maskPolicies` or offers the toggle, so there is no covered column
- * for the facet sidebar to withhold. Passed explicitly rather than defaulted
- * inside `DataFacets`: the mask gate is what stops a facet dumping a secret
- * column's distinct values, and a guard with an implicit "off" is one a future
- * caller skips by accident. Wiring the preview into this browser (so `.global()`
- * tables with a `.use(mask(...))` policy are covered here too) replaces this.
- */
-const NO_MASK: MaskView = { columns: new Map(), enabled: false };
 
 /**
  * Read-only browser for `.global()` (D1-backed) tables. Twin of `DataBrowser`,
@@ -254,6 +243,12 @@ export const GlobalDataBrowser = ({
         setOffset(Math.max(0, nextOffset));
     };
 
+    // The "Mask sensitive columns" preview for the open table, same hook the shard
+    // browser uses: `maskPolicies` is deployment-wide `(table, column, strategy)`
+    // and a `.global()` table is browsed under its logical schema name, so a
+    // `.use(mask(...))` policy resolves here exactly as it does there.
+    const { maskColumns, maskOn, maskView, onToggleMask } = useMaskView({ columns: page?.columns ?? NO_COLUMNS, selectedTable });
+
     const total = page?.total ?? 0;
     const hasPrevious = offset > 0;
     const hasNext = page !== null && offset + page.rows.length < total;
@@ -332,11 +327,15 @@ export const GlobalDataBrowser = ({
                 {page !== null && (
                     <GlobalDataPage
                         filters={filters}
+                        hasMaskedColumns={maskColumns.size > 0}
+                        mask={maskView}
+                        maskOn={maskOn}
                         onChangePageSize={changePageSize}
                         onJumpToPage={jumpToPage}
                         onNext={goNext}
                         onPrevious={goPrevious}
                         onRemoveFilter={removeFilter}
+                        onToggleMask={onToggleMask}
                         page={page}
                         pageSize={pageSize}
                         pagination={{ hasNext, hasPrevious, rangeEnd, rangeStart, total }}
@@ -344,7 +343,7 @@ export const GlobalDataBrowser = ({
                 )}
             </div>
 
-            <DataFacets columns={page?.columns ?? NO_COLUMNS} facets={facets} mask={NO_MASK} onFacetFilter={onFacetFilter} onToggleFacet={onToggleFacet} />
+            <DataFacets columns={page?.columns ?? NO_COLUMNS} facets={facets} mask={maskView} onFacetFilter={onFacetFilter} onToggleFacet={onToggleFacet} />
         </div>
     );
 };
