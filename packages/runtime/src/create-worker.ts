@@ -3586,11 +3586,20 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // ownership). Same shape/authorization ordering as the RPC/WS paths.
         const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
 
+        // Deliberately NOT `assertShardAuthorized`, and the difference is the
+        // `else`: that helper default-denies only a NON-default shard, because its
+        // callers have a default shard a caller may legitimately land on. There is
+        // no default voice shard — every `threadKey` is client-supplied — so this
+        // path default-denies unconditionally. Routing it through the helper would
+        // admit a caller who names the default shard as their `threadKey`.
         if (options.authorizeShard) {
             const allowed = await options.authorizeShard({ identity, shardKey: threadKey });
 
             if (!allowed) {
-                return new Response("Forbidden", { status: 403 });
+                // The same typed error the helper throws, so a denied voice caller
+                // gets `FORBIDDEN_SHARD` like every other path rather than an
+                // untyped 403 a client cannot branch on.
+                throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
             }
         } else {
             // Every voice `threadKey` is client-supplied and there is no default
