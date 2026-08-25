@@ -135,6 +135,12 @@ export const DOC_TOPICS: ReadonlyArray<{
         title: "Caching",
     },
     {
+        headings: ["Declaring it", "What _commitSeq guarantees", "Refreshed on every write", "Three things it is not", "When to reach for it"],
+        id: "concepts/commit-ordering",
+        summary: "Declare .commitOrdered() so every row carries _commitSeq — a per-shard sequence that orders commits, and the cursor a changefeed can page on",
+        title: "Commit ordering",
+    },
+    {
         headings: ["Defining one", "Installing one", "What the namespace guarantees", "What a component does NOT get", "Migrations", "See also"],
         id: "concepts/components",
         summary: "Package backend features — tables, functions, and context — as an installable unit that cannot collide with the app that installs it.",
@@ -313,6 +319,18 @@ export const DOC_TOPICS: ReadonlyArray<{
         title: "Data masking",
     },
     {
+        headings: [
+            "The lifetime",
+            "Rebuilding: onShardInit",
+            "What .memory() buys, and what it does not",
+            "Restrictions",
+            "Choosing between .memory() and .ttl()",
+        ],
+        id: "concepts/memory-tables",
+        summary: "Declare .memory() for state the shard rebuilds rather than remembers — presence, cursors, live counters — and onShardInit to bring it back a",
+        title: "Memory tables",
+    },
+    {
         headings: ["Attaching middleware", "Augmenting ctx", "Composing concerns"],
         id: "concepts/middleware",
         summary: "Compose cross-cutting concerns — auth checks, rate limiting, logging — and augment ctx for downstream handlers.",
@@ -407,6 +425,19 @@ export const DOC_TOPICS: ReadonlyArray<{
         id: "concepts/queries-mutations",
         summary: "query / mutation / action — what each is for and how ctx is shaped.",
         title: "Queries & mutations",
+    },
+    {
+        headings: [
+            "How this differs from a trigger",
+            "The convergence contract",
+            "What the handler receives",
+            "Execution and identity",
+            "Reads that should not wake you",
+            "Watching them work",
+        ],
+        id: "concepts/reactors",
+        summary: "Declare onQueryChange to run server logic when a query's result changes — the actor pattern, with no client on the other end and nothing pol",
+        title: "Reactors (server-side reactivity)",
     },
     {
         headings: ["Where a shard is created", "Replica reads", "Sockets near the client"],
