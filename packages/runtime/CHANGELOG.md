@@ -1,3 +1,16 @@
+## @lunora/runtime [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.75...@lunora/runtime@1.0.0-alpha.76) (2026-08-26)
+
+### Performance Improvements
+
+* five profiled hot-path optimizations ([#487](https://github.com/anolilab/lunora/issues/487)) ([12e867c](https://github.com/anolilab/lunora/commit/12e867ceeeae59d364c4d7dc234febab187d0150))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.101
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.40
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/runtime [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.74...@lunora/runtime@1.0.0-alpha.75) (2026-08-26)
 
 
