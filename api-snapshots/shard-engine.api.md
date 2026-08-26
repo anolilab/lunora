@@ -4642,6 +4642,12 @@ const tableFromDepKey: (dep: string) => string;
 const throwingScheduler: SchedulerLike;
 ```
 
+### `tiebreakDirectionFor` (const)
+
+```ts
+const tiebreakDirectionFor: (keys: ReadonlyArray<OrderKey>) => SortDirection;
+```
+
 ### `trimCdcChanges` (const)
 
 ```ts

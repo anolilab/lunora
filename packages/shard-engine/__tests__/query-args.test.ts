@@ -89,15 +89,20 @@ describe("buildSeekWhere", () => {
         });
     });
 
-    it("descending key uses < for the strict comparison", () => {
+    it("descending key uses < for the strict comparison, tiebreak included", () => {
         expect.assertions(1);
 
         const where = buildSeekWhere([{ direction: "desc", field: "createdAt" }], [1700, "row_42"]);
         const compiled = compile(where);
 
+        // `id < ?`, not `id > ?`: the implicit tiebreak sorts the same way the
+        // key it breaks does, so the ORDER BY reads `createdAt DESC, id DESC` and
+        // the seek has to select rows below the cursor on BOTH terms. A seek that
+        // disagreed with its own ORDER BY here would skip or repeat rows at a page
+        // boundary that lands inside a group of equal `createdAt`.
         expect(compiled).toEqual({
             params: [1700, 1700, "row_42"],
-            sql: `(${json("createdAt")} < ?) OR ((${json("createdAt")} = ?) AND (id > ?))`,
+            sql: `(${json("createdAt")} < ?) OR ((${json("createdAt")} = ?) AND (id < ?))`,
         });
     });
 
@@ -115,7 +120,7 @@ describe("buildSeekWhere", () => {
 
         // Balanced grouping (see `joinClauses`); same terms, same param order.
         expect(compiled.sql).toBe(
-            `(${json("a")} > ?) OR (((${json("a")} = ?) AND (${json("b")} < ?)) OR ((${json("a")} = ?) AND ((${json("b")} = ?) AND (id > ?))))`,
+            `(${json("a")} > ?) OR (((${json("a")} = ?) AND (${json("b")} < ?)) OR ((${json("a")} = ?) AND ((${json("b")} = ?) AND (id < ?))))`,
         );
         expect(compiled.params).toEqual(["av", "av", "bv", "av", "bv", "row_1"]);
     });

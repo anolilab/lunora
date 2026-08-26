@@ -86,7 +86,16 @@ import {
 import { renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
-import { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
+import {
+    applySelect,
+    buildSeekBeforeWhere,
+    buildSeekWhere,
+    decodeCursor,
+    encodeCursor,
+    normalizeOrderKeys,
+    softDeleteScope,
+    tiebreakDirectionFor,
+} from "./query-args";
 import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
@@ -1187,7 +1196,7 @@ const compileOrderByText = (keys: OrderKey[]): string => {
     const parts = keys.map((key) => `${jsonPath(key.field)} ${key.direction === "desc" ? "DESC" : "ASC"}`);
 
     if (!keys.some((key) => key.field === "_id" || key.field === "id")) {
-        parts.push(`${jsonPath("id")} ASC`);
+        parts.push(`${jsonPath("id")} ${tiebreakDirectionFor(keys) === "desc" ? "DESC" : "ASC"}`);
     }
 
     return parts.join(", ");
@@ -1198,7 +1207,7 @@ const compileOrderBySql = (keys: OrderKey[]): SQL => {
     const parts = keys.map((key) => dsql`${jsonPathSql(key.field)} ${dsql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
 
     if (!keys.some((key) => key.field === "_id" || key.field === "id")) {
-        parts.push(dsql`${jsonPathSql("id")} ASC`);
+        parts.push(dsql`${jsonPathSql("id")} ${dsql.raw(tiebreakDirectionFor(keys) === "desc" ? "DESC" : "ASC")}`);
     }
 
     return dsql.join(parts, dsql`, `);
@@ -1508,7 +1517,8 @@ const buildReader = (
         }
 
         if (!orderFields.some((field) => field === "_id" || field === "id")) {
-            parts.push(dsql`${jsonPathSql("id")} ASC`);
+            // Same direction as everything above it — see `tiebreakDirectionFor`.
+            parts.push(dsql`${jsonPathSql("id")} ${dsql.raw(orderDirection)}`);
         }
 
         return dsql.join(parts, dsql`, `);
