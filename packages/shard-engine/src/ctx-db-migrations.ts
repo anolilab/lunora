@@ -36,21 +36,112 @@ import { migrateSearchState } from "./ctx-db-search-state";
 import { migrateShapePokeCursor } from "./ctx-db-shape-poke-cursor";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
+import { renderSql } from "./drizzle";
 import { migrateDurableStreams } from "./durable-stream";
 import { rankTableName, sortColumnName } from "./rank";
 import { migrateReactorState } from "./reactor-state";
 import { recordSchemaVersion } from "./schema-history";
 
-/** Create the secondary + `.unique()` expression indexes declared on a table. */
+/**
+ * Every filtered read this store emits ends `ORDER BY _creationTime ASC, id ASC`
+ * (the default total order; see `compileOrderBySql`). An index on the filter
+ * expressions ALONE cannot satisfy that ordering, so SQLite answers
+ * `WHERE f = ? ORDER BY _creationTime, id LIMIT n` by reading every matching row
+ * into a temp B-tree, sorting it, and returning n:
+ *
+ * `SEARCH messages USING INDEX messages_by_channel (<expr>=?)` followed by
+ * `USE TEMP B-TREE FOR ORDER BY` — sorting every match to return two rows.
+ *
+ * That makes the most common read in the framework — `.withIndex(f).first()`, a
+ * paginated feed — cost O(matching rows) instead of O(limit), and get worse as
+ * the table grows rather than staying flat. Measured on `node:sqlite`, a
+ * `LIMIT 2` over one key: 35.8us at 250 rows per key, 407.5us at 2500. With the
+ * sort keys in the index it is 3.0us and 3.1us — flat, and the temp B-tree is
+ * gone from the plan.
+ *
+ * DESC reads keep the index too (SQLite walks it backwards); only a MIXED
+ * direction (`_creationTime DESC, id ASC`) still needs a partial sort.
+ *
+ * The geo and rank companions (below) already index their sort keys. This brings
+ * the user-declared index in line with them.
+ */
+const INDEX_SORT_KEYS = dsql`_creationTime, id`;
+
+/**
+ * Drop `indexName` when the index SQLite already holds was built from a
+ * different column list than the one we are about to create.
+ *
+ * `CREATE INDEX IF NOT EXISTS` is a no-op against an index that exists with a
+ * DIFFERENT definition — it does not replace it, and it does not complain. So a
+ * shard migrated before {@link INDEX_SORT_KEYS} existed would keep its
+ * filter-only index forever and never see the improvement, with nothing in any
+ * log to say so.
+ *
+ * The comparison is on the column list SQLite echoes back in `sqlite_master.sql`
+ * (it stores the statement verbatim, minus `IF NOT EXISTS`), against the column
+ * list we would emit. Comparing the parenthesised tail rather than the whole
+ * statement keeps this insensitive to how the surrounding DDL is spelled.
+ *
+ * ## Cost
+ *
+ * The rebuild runs synchronously inside the migration, on whichever request
+ * happens to open the shard — the same hazard the `__cdc_log` seq index carries,
+ * and the reason that one is wrapped in its own try/catch. It is bounded: one
+ * rebuild per changed index per shard, once, and a shard's index set is fixed by
+ * its schema. A failure here leaves the OLD index in place (the DROP and CREATE
+ * are separate statements and the throw propagates), which is the safe
+ * direction — a slower index is a working one.
+ */
+const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean): void => {
+    const existing = runDrizzle<{ sql: null | string }>(
+        sql,
+        dsql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${indexName} AND tbl_name = ${tableName}`,
+    ).toArray();
+
+    const current = existing[0]?.sql;
+
+    // No row, or an implicit index SQLite created for a constraint (`sql` is
+    // NULL there) — nothing of ours to replace.
+    if (current === undefined || current === null) {
+        return;
+    }
+
+    const columnsOf = (statement: string): string | undefined => {
+        const open = statement.indexOf("(");
+
+        return open === -1 ? undefined : statement.slice(open, statement.lastIndexOf(")") + 1);
+    };
+
+    const wanted = columnsOf(renderSql("sqlite", createIndexSql(indexName, tableName, expressions, unique)).sql);
+    const held = columnsOf(current);
+
+    if (wanted === undefined || held === undefined || wanted === held) {
+        return;
+    }
+
+    runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(indexName)}`);
+};
+
+/**
+ * Create the secondary + `.unique()` expression indexes declared on a table.
+ *
+ * A UNIQUE index does NOT get the sort keys appended: they would become part of
+ * what is unique, and `(email, _creationTime, id)` is unique for every row, so
+ * the constraint would silently stop rejecting duplicates. That is data
+ * corruption rather than a slow query, so the two cases are split deliberately.
+ */
 const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
     for (const index of definition.indexes) {
         const indexName = `${tableName}_${index.name}`;
-        const expressions = dsql.join(
+        const unique = index.unique ?? false;
+        const fields = dsql.join(
             index.fields.map((field) => jsonPathSql(field)),
             dsql`, `,
         );
+        const expressions = unique ? fields : dsql`${fields}, ${INDEX_SORT_KEYS}`;
 
-        runDrizzle(sql, createIndexSql(indexName, tableName, expressions, index.unique ?? false));
+        dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique);
+        runDrizzle(sql, createIndexSql(indexName, tableName, expressions, unique));
     }
 
     // `.unique()` columns synthesize a UNIQUE expression index so SQLite
