@@ -63,6 +63,23 @@ Every factory returns a `Validator` with `parse(value)` (throws
 [`ValidationError`](#validationerror)) and `safeParse(value)` (returns
 `{ ok: true, value } | { ok: false, error }`).
 
+### `v.partial(shape)`
+
+Wraps every member of a shape in `v.optional(...)` — the "any subset of these
+columns" shape a patch-style procedure takes. It works on a shape _record_, so
+the same call serves an args map and a nested object:
+
+```ts
+mutation.input(v.partial(schema.tables.threads.shape)).mutation(…)
+
+v.object(v.partial({ done: v.boolean(), title: v.string() }));
+//        ^ { done?: boolean; title?: string }
+```
+
+Deriving it beats writing the optional copy by hand: when the two drift, a column
+added to the table is silently not accepted by the patch and nothing fails. A
+member that is already `v.optional(...)` is passed through, so it is idempotent.
+
 <Callout type="warn">
     `v.from(...)` validators are **args-only**: pass them to `query`/`mutation`/`action` args, never to a `defineTable` column. `defineTable` rejects them
     (anywhere in the column, including nested) because a Standard Schema value has no SQL column type. The wrapped `validate` must be synchronous; an async
