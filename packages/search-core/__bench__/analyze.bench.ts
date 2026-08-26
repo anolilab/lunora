@@ -1,7 +1,8 @@
 import { bench, describe } from "vitest";
 
 import { createSearchAnalyzer } from "../src/analyzer";
-import { analyzedSearchText, countSearchTokens } from "../src/text";
+import { scoreTokens } from "../src/query";
+import { analyzedSearchText, analyzedSearchTokens, countSearchTokens } from "../src/text";
 
 /**
  * Analysis is the one part of search that runs on the *write* path: every
@@ -77,4 +78,44 @@ describe("write-path entry points", () => {
     bench("countSearchTokens (inverted rows)", () => {
         countSearchTokens(asciiBody, english);
     });
+});
+
+/**
+ * The Durable Object's fallback search scan — the path taken where FTS5 is
+ * absent. It analyzes and scores EVERY candidate row (up to `MAX_SEARCH_SCAN`),
+ * so its per-row cost is multiplied by the scan window, not paid once.
+ *
+ * Benched at three query widths because scoring is O(query terms x document
+ * tokens): a one-term query is the common case, five terms is the cap most real
+ * queries stay under.
+ */
+describe("fallback search scan (no FTS5) — 200 candidate rows", () => {
+    const scanIndex = { field: "body", language: "en" };
+    const corpus = Array.from({ length: 200 }, (_v, index) => {
+        return {
+            body: `Message ${String(index)} about deployment pipelines and durable objects. The quick brown fox jumps over the lazy dog near the river bank. `.repeat(
+                4,
+            ),
+        };
+    });
+
+    const queries = {
+        "1 term": english.query("deployment"),
+        "3 terms": english.query("durable objects deploy"),
+        "5 terms": english.query("quick brown fox river deploy"),
+    };
+
+    for (const [label, queryTokens] of Object.entries(queries)) {
+        bench(`${label} over 200 rows`, () => {
+            let total = 0;
+
+            for (const record of corpus) {
+                total += scoreTokens(analyzedSearchTokens(record, scanIndex), queryTokens);
+            }
+
+            if (total < 0) {
+                throw new Error("unreachable");
+            }
+        });
+    }
 });
