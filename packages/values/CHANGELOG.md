@@ -1,3 +1,9 @@
+## @lunora/values [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.29...@lunora/values@1.0.0-alpha.30) (2026-08-26)
+
+### Features
+
+* **values:** add v.partial() for patch-style shapes ([#482](https://github.com/anolilab/lunora/issues/482)) ([9c1432d](https://github.com/anolilab/lunora/commit/9c1432d53e0cf904a54a46bd87110aff745bf890))
+
 ## @lunora/values [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.28...@lunora/values@1.0.0-alpha.29) (2026-08-26)
 
 
