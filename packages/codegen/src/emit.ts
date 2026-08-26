@@ -5227,26 +5227,21 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 //
                 // \`flushDeferredDeletes\` never rejects — the mutation has already
                 // succeeded, so a failed cleanup must not turn into a failed response.
-                // A leaked object is reported instead, with its key.
-                const dispatchCtx = ctx as { log?: { warn: (message: string, fields?: Record<string, unknown>) => void }; storage?: unknown };
-
-                await this.deferPastResponse(
-                    (async () => {
-                        const outcome = await flushDeferredDeletes(dispatchCtx.storage);
-
-                        for (const failure of outcome.failures) {
-                            dispatchCtx.log?.warn("ctx.storage.deleteAfterCommit: delete failed, object leaked", {
-                                error: String(failure.error),
-                                key: failure.key,
-                            });
-                        }
-                    })(),
-                );
+                // A leaked object is reported through \`ctx.log\` instead, with its key.
+                await this.deferPastResponse(flushDeferredDeletes(ctx));
 
                 return result;
             }
 
-            return registered.handler(ctx, args);
+            const result = await registered.handler(ctx, args);
+
+            // An action is not itself transactional, but \`ctx.runMutation\` runs its
+            // submutations on THIS ctx, so their queued deletes land here — this is
+            // the first point at which those writes are known to have committed. A
+            // dispatch with nothing queued no-ops.
+            await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+            return result;
         }
 
         // Only a \`mutation\` may enter the base class's single-writer gate for
@@ -5330,6 +5325,13 @@ ${shardInitOverride}
                 digest: string;
                 ran: boolean;
             };
+
+            // A reactor IS a mutation, so its ctx carries the deferred-delete queue
+            // and its transaction has just committed. Without this the queue would
+            // die with \`ctx\` and the objects would leak with nothing to find: no
+            // error, no warning, no failed request — a reactor that reaps orphaned
+            // rows is a textbook use of one.
+            await this.deferPastResponse(flushDeferredDeletes(ctx));
 
             return { digest: outcome.digest, ran: outcome.ran, tables: [...footprint.tables] };
         }
@@ -5642,16 +5644,24 @@ ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}
                 "getMetadata",
                 "list",
             ]);
-            // \`ctx.storage\` in a MUTATION additionally accepts \`deleteAfterCommit(key)\`.
-            // Only a mutation: it is the one dispatch with a transaction to commit,
-            // and the flush hangs off its dispatch. Wrapping a query or an action
-            // would put a method on \`ctx.storage\` that nothing ever drains — an
-            // action already has the real \`delete\`. Wrapped OUTSIDE the read-stamping
-            // facade so \`bucket(name)\` still resolves through it and stays stamped,
-            // and applied only to \`ctx.storage\` so \`ctx.db.system._storage\` (which
-            // shares the adapter above) is untouched.
-            const contextStorage =
-                LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind === "mutation" ? withDeferredDeletes(storage) : storage;
+            // \`ctx.storage.deleteAfterCommit(key)\`, on every dispatch that can host
+            // a MUTATION handler — which is not only a mutation dispatch:
+            // \`ctx.runMutation\` hands the CALLER's ctx to the callee, so a mutation
+            // reached from an action runs on the action's ctx. Wrapping mutations
+            // alone made that composition throw a bare TypeError on a method the
+            // handler's own type promises. Queries stay unwrapped: they cannot host
+            // one, and their ctx is built on the hot subscription path.
+            //
+            // Every dispatch wrapped here also flushes (see \`handleRpc\` and
+            // \`runReactor\`) — a queue nothing drains leaks silently, which is worse
+            // than not having the method at all.
+            //
+            // Wrapped OUTSIDE the read-stamping facade so \`bucket(name)\` still
+            // resolves through it and stays stamped, and applied only to
+            // \`ctx.storage\` so \`ctx.db.system._storage\` (which shares the adapter
+            // above) is untouched.
+            const contextKind = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind;
+            const contextStorage = contextKind === "mutation" || contextKind === "action" ? withDeferredDeletes(storage) : storage;
             // \`ctx.log\`: the DO base builds the attributed logger (structured
             // fields + \`.with(...)\` child + trace correlation) and routes each call
             // to the optional \`observability\` sink. It also buffers the line (studio

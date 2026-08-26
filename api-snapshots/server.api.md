@@ -2820,7 +2820,7 @@ const deny: () => WhereInput;
 ### `flushDeferredDeletes` (const)
 
 ```ts
-const flushDeferredDeletes: (storage: unknown) => Promise<DeferredDeleteFlushResult>;
+const flushDeferredDeletes: (context: unknown) => Promise<DeferredDeleteFlushResult>;
 ```
 
 ### `httpAction` (const)

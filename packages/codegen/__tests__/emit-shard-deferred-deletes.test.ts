@@ -4,55 +4,90 @@ import { emitShard } from "../src/emit";
 
 /**
  * `ctx.storage.deleteAfterCommit(key)` — the object half of a row deletion,
- * flushed only once the mutation's transaction has committed.
+ * flushed only once the write that removed the row has committed.
  *
  * The emitted shard is a STRING; nothing in this package compiles it (see
  * `emitted-shard-contract.ts`, which proves the same calls compile against the
- * real base class). So this suite pins the two placement facts that make the
- * feature correct and that an innocuous-looking edit would silently break: the
- * flush is OUTSIDE the transaction, and the queue is attached to a mutation's
- * context only.
+ * real base class). So this suite pins the placement facts that make the feature
+ * correct and that an innocuous-looking edit would silently break: the flush is
+ * OUTSIDE the transaction, and EVERY dispatch that installs the queue also
+ * drains it.
  */
 const shard = (): string => emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
+/**
+ * The body of one emitted method: from its signature to whichever member
+ * declaration comes next. Sliced on declarations rather than by brace-matching,
+ * so reformatting the emitted body cannot silently empty the slice and turn
+ * these assertions green for the wrong reason.
+ */
+const methodBody = (emitted: string, signature: string): string => {
+    const start = emitted.indexOf(signature);
+
+    // Throw rather than `expect`, so this helper never inflates a caller's
+    // `expect.assertions` count — a renamed method still fails loudly.
+    if (start === -1) {
+        throw new Error(`emitted shard has no ${signature}`);
+    }
+
+    const rest = emitted.slice(start + signature.length);
+    const next = [...rest.matchAll(/\n {8}(?:private|protected|public) /gu)][0]?.index;
+
+    return next === undefined ? rest : rest.slice(0, next);
+};
+
 describe("emitShard — deferred storage deletes", () => {
-    it("wraps ctx.storage for a mutation and leaves every other kind alone", () => {
+    it("installs the queue on every dispatch that can host a mutation handler", () => {
         expect.assertions(2);
 
         const emitted = shard();
 
-        // A query has no transaction to commit and an action has the real
-        // `delete`; wrapping either would put a method on `ctx.storage` that
-        // nothing ever drains.
-        expect(emitted).toContain('?.kind === "mutation" ? withDeferredDeletes(storage) : storage');
+        // Not mutations alone: `ctx.runMutation` hands the caller's ctx to the
+        // callee, so a mutation reached from an action runs on the action's ctx.
+        // Gating on `kind === "mutation"` made that composition throw a TypeError
+        // on a method the handler's own type promises.
+        expect(emitted).toContain('contextKind === "mutation" || contextKind === "action" ? withDeferredDeletes(storage) : storage');
         expect(emitted).toContain("storage: contextStorage,");
     });
 
-    it("shares the read-stamped adapter with ctx.db.system._storage rather than the wrapped one", () => {
+    it("leaves ctx.db.system._storage on the unwrapped adapter", () => {
         expect.assertions(1);
 
         const emitted = shard();
 
-        // `withDeferredDeletes` wraps the ALREADY-stamped facade into a separate
-        // binding. If the wrap replaced `storage` itself, the system reader would
-        // pick up a `deleteAfterCommit` it can never flush.
+        // `withDeferredDeletes` wraps the already-stamped facade into a SEPARATE
+        // binding. If it replaced `storage` itself, the system reader would pick
+        // up a `deleteAfterCommit` that no dispatch drains.
         expect(emitted).toContain("const contextStorage =");
     });
 
-    it("flushes after the transaction resolves, not inside it", () => {
+    it("flushes from every dispatch that installs the queue", () => {
         expect.assertions(3);
 
         const emitted = shard();
-        const branch = emitted.slice(emitted.indexOf('if (registered.kind === "mutation")'));
-        const flushAt = branch.indexOf("flushDeferredDeletes(dispatchCtx.storage)");
-        const transactionEndsAt = branch.indexOf("});");
+
+        // The coverage that matters: a wrap without a matching flush leaks
+        // silently — no error, no warning, nothing to find. Each of these three
+        // can run a mutation handler.
+        expect(methodBody(emitted, "public override async handleRpc(")).toContain("flushDeferredDeletes(ctx)");
+        expect(methodBody(emitted, "protected override async runReactor(")).toContain("flushDeferredDeletes(ctx)");
+        // Both branches of handleRpc — the mutation one and the action one.
+        expect(emitted.split("flushDeferredDeletes(ctx)")).toHaveLength(4);
+    });
+
+    it("flushes after the transaction resolves, never inside it", () => {
+        expect.assertions(2);
+
+        const emitted = shard();
+        const branch = methodBody(emitted, "public override async handleRpc(");
+        const transaction = branch.indexOf("await this.runInTransaction(");
+        const flush = branch.indexOf("flushDeferredDeletes(ctx)", transaction);
 
         // An R2 delete cannot roll back. Issued from inside the span, a delete
         // whose transaction later aborts destroys data the surviving row still
-        // points at — so ordering here IS the guarantee.
-        expect(flushAt).toBeGreaterThan(-1);
-        expect(transactionEndsAt).toBeGreaterThan(-1);
-        expect(flushAt).toBeGreaterThan(transactionEndsAt);
+        // points at — so this ordering IS the guarantee.
+        expect(transaction).toBeGreaterThan(-1);
+        expect(flush).toBeGreaterThan(transaction);
     });
 
     it("defers the flush past the response instead of awaiting it on the hot path", () => {
@@ -60,18 +95,6 @@ describe("emitShard — deferred storage deletes", () => {
 
         const emitted = shard();
 
-        expect(emitted).toContain("await this.deferPastResponse(");
-    });
-
-    it("reports a failed delete without failing the committed mutation", () => {
-        expect.assertions(2);
-
-        const emitted = shard();
-        const branch = emitted.slice(emitted.indexOf('if (registered.kind === "mutation")'));
-
-        // The write already succeeded; a cleanup failure must leak an object and
-        // say which one, never turn into a 500 for a mutation that committed.
-        expect(branch).toContain("outcome.failures");
-        expect(branch).toContain("object leaked");
+        expect(emitted).toContain("await this.deferPastResponse(flushDeferredDeletes(ctx));");
     });
 });

@@ -2478,14 +2478,13 @@ abstract class ShardDO {
     /**
      * Let `work` outlive this dispatch where the host supports it.
      *
-     * The generated mutation dispatch uses this to flush `ctx.storage`'s
-     * deferred object deletes after the transaction commits: they must not run
-     * inside the transaction (an R2 delete cannot roll back) and they must not
-     * hold up the response (the row is already durable — the bytes are cleanup).
+     * The generated dispatches use this to flush `ctx.storage`'s deferred object
+     * deletes once their writes have committed — cleanup that is already durable
+     * on the row side and so must not hold up the response.
      *
-     * Falls back to awaiting inline when the host cannot defer, so the work still
-     * happens — the unit harness has no `waitUntil`, and silently dropping the
-     * flush there would make a leaked object look like passing behaviour.
+     * Falls back to awaiting inline when the host has no `waitUntil`, so the work
+     * still happens — dropping it there would make a leaked object look like
+     * passing behaviour. On such a host the caller DOES wait for the work.
      * @param work already-started work; a rejection is the caller's to contain
      */
     protected async deferPastResponse(work: Promise<unknown>): Promise<void> {

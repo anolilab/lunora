@@ -47,7 +47,7 @@ describe("withDeferredDeletes", () => {
         // Nothing has been attempted — that is the whole point of the deferral.
         expect(deleted).toStrictEqual([]);
 
-        await flushDeferredDeletes(storage);
+        await flushDeferredDeletes({ storage });
 
         expect(deleted).toStrictEqual(["a.png", "b.png"]);
     });
@@ -71,7 +71,7 @@ describe("withDeferredDeletes", () => {
         storage.bucket("avatars").deleteAfterCommit("me.png");
         storage.deleteAfterCommit("top.png");
 
-        await flushDeferredDeletes(storage);
+        await flushDeferredDeletes({ storage });
 
         // The sub-facade shares the queue, but each key is deleted through the
         // bucket it was queued against — not all through the default one.
@@ -90,7 +90,7 @@ describe("withDeferredDeletes", () => {
 
         // The dispatch only ever holds `ctx.storage`; a delete queued on a bucket
         // it handed out must still be reachable from there.
-        await flushDeferredDeletes(storage);
+        await flushDeferredDeletes({ storage });
 
         expect(bucketDeleted).toStrictEqual(["one.png"]);
     });
@@ -105,8 +105,8 @@ describe("flushDeferredDeletes", () => {
 
         storage.deleteAfterCommit("a.png");
 
-        const first: DeferredDeleteFlushResult = await flushDeferredDeletes(storage);
-        const second = await flushDeferredDeletes(storage);
+        const first: DeferredDeleteFlushResult = await flushDeferredDeletes({ storage });
+        const second = await flushDeferredDeletes({ storage });
 
         expect(first.attempted).toBe(1);
         expect(second.attempted).toBe(0);
@@ -133,7 +133,7 @@ describe("flushDeferredDeletes", () => {
         storage.deleteAfterCommit("boom.png");
         storage.deleteAfterCommit("fine.png");
 
-        const outcome = await flushDeferredDeletes(storage);
+        const outcome = await flushDeferredDeletes({ storage });
 
         // A cleanup failure must never surface as a failed mutation — the write
         // already committed. It leaks an object, and says which one.
@@ -150,20 +150,55 @@ describe("flushDeferredDeletes", () => {
         // to call this unconditionally without probing first.
         const { root } = makeStorage();
 
-        await expect(flushDeferredDeletes(root)).resolves.toStrictEqual({ attempted: 0, failures: [] });
+        await expect(flushDeferredDeletes({ storage: root })).resolves.toStrictEqual({ attempted: 0, failures: [] });
     });
 
-    it("tolerates a facade with no delete at all", async () => {
-        expect.assertions(1);
+    it("reports, rather than silently succeeds, when no storage is configured", async () => {
+        expect.assertions(3);
 
-        // The "no storage configured" stub: `deleteAfterCommit` must not blow up
-        // the dispatch that follows a mutation on a project without a bucket.
+        // The "no storage configured" stub. Every other method on it throws that
+        // message loudly; this must not be the one storage call that answers a
+        // clean success while doing nothing.
         const stub = { bucketName: "default" };
         const storage = withDeferredDeletes(stub) as Facade;
 
         storage.deleteAfterCommit("a.png");
 
-        await expect(flushDeferredDeletes(storage)).resolves.toStrictEqual({ attempted: 1, failures: [] });
+        const outcome = await flushDeferredDeletes({ storage });
+
+        expect(outcome.attempted).toBe(1);
+        expect(outcome.failures).toHaveLength(1);
+        expect(String(outcome.failures[0]?.error)).toContain("no storage configured");
+    });
+
+    it("logs every failure through ctx.log with its key", async () => {
+        expect.assertions(2);
+
+        const { root } = makeStorage();
+        const failing = {
+            ...root,
+            delete: async (): Promise<void> => {
+                throw new Error("r2 down");
+            },
+        };
+        const storage = withDeferredDeletes(failing) as Facade;
+        const warnings: { fields?: Record<string, unknown>; message: string }[] = [];
+
+        storage.deleteAfterCommit("leaked.png");
+
+        await flushDeferredDeletes({ log: { warn: (message: string, fields?: Record<string, unknown>) => warnings.push({ fields, message }) }, storage });
+
+        // A leaked object with no log line is a leak nobody can find.
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]?.fields?.["key"]).toBe("leaked.png");
+    });
+
+    it("is a no-op on a context with no storage at all", async () => {
+        expect.assertions(1);
+
+        // Every dispatch calls this unconditionally, including ones on a project
+        // that configured no storage binding.
+        await expect(flushDeferredDeletes({})).resolves.toStrictEqual({ attempted: 0, failures: [] });
     });
 
     it("does not delete when the caller never flushes", () => {

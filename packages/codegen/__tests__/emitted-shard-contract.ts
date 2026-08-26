@@ -61,26 +61,12 @@ class EmittedShardContract extends ShardDO {
     }
 
     /**
-     * Mirrors the mutation branch of the generated `handleRpc`: the post-commit
-     * flush of `ctx.storage`'s deferred object deletes. It reaches one base
-     * member (`deferPastResponse`), which is `protected` for exactly this call —
-     * the host's `waitUntil` behind it is private.
+     * Mirrors the post-commit flush the generated dispatches perform. It reaches
+     * one base member (`deferPastResponse`), which is `protected` for exactly this
+     * call — the host's `waitUntil` behind it is private.
      */
     private async flushDeferredStorageDeletes(context: unknown): Promise<void> {
-        const dispatchContext = context as { log?: { warn: (message: string, fields?: Record<string, unknown>) => void }; storage?: unknown };
-
-        await this.deferPastResponse(
-            (async () => {
-                const outcome = await flushDeferredDeletes(dispatchContext.storage);
-
-                for (const failure of outcome.failures) {
-                    dispatchContext.log?.warn("ctx.storage.deleteAfterCommit: delete failed, object leaked", {
-                        error: String(failure.error),
-                        key: failure.key,
-                    });
-                }
-            })(),
-        );
+        await this.deferPastResponse(flushDeferredDeletes(context));
     }
 }
 export default EmittedShardContract;
