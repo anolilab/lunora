@@ -19,7 +19,7 @@ import { sql as dsql } from "drizzle-orm";
 
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { sqlComparableProjection } from "./sql-projection";
@@ -119,8 +119,13 @@ const encodeDocJson = (document: Record<string, unknown>): string => {
         projected[DOC_ORIGINALS_KEY] = originals;
     }
 
+    const source = projected ?? document;
+
     try {
-        return JSON.stringify(encodeWire(projected ?? document));
+        // `encodeWire` is identity for pure JSON, so for a document with no
+        // wire-typed leaf — the overwhelmingly common case — it rebuilds the whole
+        // tree only for `JSON.stringify` to discard it. Ask first and skip it.
+        return needsWireEncoding(source) ? JSON.stringify(encodeWire(source)) : JSON.stringify(source);
     } catch (error: unknown) {
         // `encodeWire` throws a bare `TypeError` for a non-plain object and a
         // `RangeError` past its depth cap. Unwrapped, both reach the caller as
@@ -144,15 +149,26 @@ const encodeDocJson = (document: Record<string, unknown>): string => {
 // eslint-disable-next-line unicorn/prevent-abbreviations -- see encodeDocJson above.
 const decodeDocJson = (raw: string): Record<string, unknown> => {
     const decoded = decodeWire(JSON.parse(raw)) as Record<string, unknown>;
-    const { [DOC_ORIGINALS_KEY]: originals, ...fields } = decoded;
+    const originals = decoded[DOC_ORIGINALS_KEY];
 
     // Claim the key only when it looks like ours. `encodeDocJson` always writes
     // a plain object here, so a scalar or array under this name predates the
     // write guard and belongs to the user — spreading a string would explode it
     // into `{"0":"h","1":"e",…}`, which is worse than leaving it alone.
+    //
+    // Read the key before destructuring, not as part of it: almost no document
+    // carries projected originals, and a rest-destructure copies every OTHER
+    // field into a fresh object to isolate one that is usually absent — a full
+    // per-document allocation, on every row of every read, discarded unused by
+    // the early return below.
     if (originals === null || typeof originals !== "object" || Array.isArray(originals)) {
         return decoded;
     }
+
+    const fields = { ...decoded };
+
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- DOC_ORIGINALS_KEY is a module constant, not caller input; the rule guards against attacker-chosen keys. The spread above is what creates own properties correctly, which a per-key assignment loop would not for a field literally named `__proto__`.
+    delete fields[DOC_ORIGINALS_KEY];
 
     return { ...fields, ...(originals as Record<string, unknown>) };
 };

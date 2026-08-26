@@ -1539,6 +1539,7 @@ interface QueryArgs {
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
+    omitContinueCursor?: boolean;
     orderBy?: OrderByInput[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;
     relationMask?: RelationMask;
@@ -2431,6 +2432,16 @@ class ShapeDiffCache {
     get probesServed(): number;
     changedKeys(rangeKey: string, load: () => CdcChangeKey[]): ReadonlyArray<CdcChangeKey>;
     members(resolved: ResolvedShape, rangeKey: string, load: () => Map<string, Record<string, unknown>>): ReadonlyMap<string, Record<string, unknown>>;
+}
+```
+
+### `ShapePokeCursorRow` (interface)
+
+```ts
+interface ShapePokeCursorRow {
+    connectionId: string;
+    cursor: number;
+    subId: string;
 }
 ```
 
@@ -4707,6 +4718,12 @@ const writeSearchBackfillState: (sql: SqlExec, companion: string, cursor: string
 
 ```ts
 const writeShapePokeCursor: (sql: SqlExec, connectionId: string, subId: string, cursor: number) => void;
+```
+
+### `writeShapePokeCursors` (const)
+
+```ts
+const writeShapePokeCursors: (sql: SqlExec, rows: ReadonlyArray<ShapePokeCursorRow>) => void;
 ```
 
 ### `writeTouchesMemo` (const)

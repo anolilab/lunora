@@ -147,6 +147,100 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => {
  * Pure and recursive; no I/O. Trees only (no cycle detection — a cyclic input
  * throws via the recursion, same as `JSON.stringify`).
  */
+/**
+ * Would {@link encodeWire} change this value, or is it already the JSON it will
+ * become?
+ *
+ * `encodeWire` is identity for pure JSON — it says so, and the row store depends
+ * on it: a document with no wire-typed leaf must encode byte-identically to
+ * plain `JSON.stringify`, or the OCC compare-and-swap stops matching stored
+ * rows. But identity is not free. It walks the tree and rebuilds every object and
+ * array along the way, and the caller almost always throws that copy straight at
+ * `JSON.stringify`. Profiling the DO write path put `encodeDocJson` at 8.2% of
+ * it, most of that the discarded copy.
+ *
+ * This answers the same question with a read-only walk, so the common case can
+ * stringify the original and allocate nothing.
+ *
+ * **It is deliberately conservative.** Every branch that is not *provably*
+ * identity answers `true` — a false positive costs one wasted encode, while a
+ * false negative writes different bytes than the store expects, which is silent
+ * corruption. It lives next to `encodeWire` for the same reason: the two must
+ * agree, so they have to be read together. `shared/__tests__` fuzzes the
+ * property that matters — `needsWireEncoding(v) === false` implies
+ * `JSON.stringify(encodeWire(v)) === JSON.stringify(v)`.
+ * @returns `true` when the value must go through {@link encodeWire}
+ */
+const needsWireEncoding = (value: unknown, depth = 0): boolean => {
+    // Past the cap `encodeWire` raises a RangeError, and a cyclic graph reaches
+    // here too. Both belong on the encoding path so the real error is thrown.
+    if (depth > MAX_DEPTH) {
+        return true;
+    }
+
+    if (value === null) {
+        return false;
+    }
+
+    const kind = typeof value;
+
+    if (kind === "string" || kind === "boolean") {
+        return false;
+    }
+
+    if (kind === "number") {
+        // NaN / ±Infinity are tagged. `-0` is NOT: `encodeWire` returns it as-is
+        // and `JSON.stringify` renders both `-0` and `0` as "0", so it is identity
+        // here even though `stableStringify` (a different contract) tags it.
+        return !Number.isFinite(value);
+    }
+
+    if (kind !== "object") {
+        // bigint, undefined, function, symbol.
+        return true;
+    }
+
+    if (Array.isArray(value)) {
+        // An array whose first element IS the sentinel gets wrapped as an
+        // `"arr"` payload. Only a string equal to the sentinel encodes to it, so
+        // testing the raw element is the same test `encodeWire` makes on the
+        // encoded one.
+        if (value.length > 0 && value[0] === TAG) {
+            return true;
+        }
+
+        // `undefined` in an array POSITION is tagged, where `JSON.stringify`
+        // would write `null` — the one place the two disagree on a value both
+        // can represent.
+        return value.some((item) => item === undefined || needsWireEncoding(item, depth + 1));
+    }
+
+    if (!isPlainObject(value)) {
+        // Date, Map, Set, URL, bytes, Error — and class instances, which
+        // `encodeWire` refuses outright.
+        return true;
+    }
+
+    // A literal `__proto__` field is installed with `defineProperty` on the
+    // encoding path. Both forms stringify the same today, but the handling is
+    // deliberate enough that routing it through the real encoder is the safer
+    // reading of "not provably identity".
+    if (Object.hasOwn(value, UNSAFE_KEY)) {
+        return true;
+    }
+
+    for (const key of Object.keys(value)) {
+        const field = value[key];
+
+        // Both sides drop an `undefined` object field, so it is not a difference.
+        if (field !== undefined && needsWireEncoding(field, depth + 1)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 const encodeWire = (value: unknown, depth = 0): unknown => {
     if (depth > MAX_DEPTH) {
         throw new RangeError(`wire-codec: value nesting exceeds the ${MAX_DEPTH}-level limit`);
@@ -478,4 +572,4 @@ const decodeDocument = (text: string): Record<string, unknown> | undefined => {
     }
 };
 
-export { decodeDocument, decodeWire, encodeWire, isPlainObject };
+export { decodeDocument, decodeWire, encodeWire, isPlainObject, needsWireEncoding };

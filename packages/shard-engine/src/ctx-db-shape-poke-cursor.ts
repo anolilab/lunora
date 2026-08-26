@@ -35,6 +35,7 @@ import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
+import { WORKERD_SQLITE_LIMITS } from "./drizzle";
 
 const SHAPE_POKE_CURSOR_TABLE = "__shape_poke_cursor";
 
@@ -84,6 +85,53 @@ const writeShapePokeCursor = (sql: SqlExec, connectionId: string, subId: string,
     );
 };
 
+/** One socket's poke baseline for one shape, as {@link writeShapePokeCursors} takes them. */
+interface ShapePokeCursorRow {
+    connectionId: string;
+    cursor: number;
+    subId: string;
+}
+
+/**
+ * Columns each row binds in the batched upsert — the divisor for the
+ * bound-parameter budget below.
+ */
+const SHAPE_POKE_CURSOR_COLUMNS = 3;
+
+/**
+ * Upsert many poke baselines in as few statements as the parameter budget allows.
+ *
+ * One write-flush pokes every subscribed socket, and each delivered poke recorded
+ * its baseline with its own statement — so a shape watched by 500 sockets issued
+ * 500 upserts for one write. Batching turns that into ceil(500 / 33) statements
+ * against the same rows.
+ *
+ * Chunked by the shared workerd bound-parameter cap rather than a hand-picked
+ * number, because exceeding it is a runtime failure on workerd (and `runSql`'s
+ * backstop refuses it) rather than something the type system catches.
+ *
+ * Rows are upserted in the order given; a duplicate `(connection_id, sub_id)`
+ * within one call would resolve last-write-wins, which is what the caller's own
+ * "cursor only advances" invariant already relies on.
+ */
+const writeShapePokeCursors = (sql: SqlExec, rows: ReadonlyArray<ShapePokeCursorRow>): void => {
+    const perStatement = Math.floor(WORKERD_SQLITE_LIMITS.boundParams / SHAPE_POKE_CURSOR_COLUMNS);
+
+    for (let start = 0; start < rows.length; start += perStatement) {
+        const chunk = rows.slice(start, start + perStatement);
+        const values = dsql.join(
+            chunk.map((row) => dsql`(${row.connectionId}, ${row.subId}, ${row.cursor})`),
+            dsql`, `,
+        );
+
+        runDrizzle(
+            sql,
+            dsql`INSERT INTO ${dsql.identifier(SHAPE_POKE_CURSOR_TABLE)} (connection_id, sub_id, cursor) VALUES ${values}
+             ON CONFLICT(connection_id, sub_id) DO UPDATE SET cursor = excluded.cursor`,
+        );
+    }
+};
+
 /**
  * The lowest cursor any stored shape subscription has been poked through, or
  * `undefined` when none is stored.
@@ -111,6 +159,7 @@ const deleteShapePokeCursorsForConnection = (sql: SqlExec, connectionId: string)
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(SHAPE_POKE_CURSOR_TABLE)} WHERE connection_id = ${connectionId}`);
 };
 
+export type { ShapePokeCursorRow };
 export {
     deleteShapePokeCursor,
     deleteShapePokeCursorsForConnection,
@@ -119,4 +168,5 @@ export {
     readShapePokeCursor,
     SHAPE_POKE_CURSOR_TABLE,
     writeShapePokeCursor,
+    writeShapePokeCursors,
 };

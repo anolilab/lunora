@@ -108,6 +108,7 @@ import type {
     RpcRequest,
     SearchBackfillProgress,
     ShapeDiffCache,
+    ShapePokeCursorRow,
     ShapePokePart,
     ShapeProbeCounters,
     ShapeRow,
@@ -239,6 +240,7 @@ import {
     writeIdempotent,
     writeReactorState,
     writeShapePokeCursor,
+    writeShapePokeCursors,
     writeTouchesMemo,
 } from "@lunora/shard-engine";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -9517,6 +9519,12 @@ abstract class ShardDO {
         // Pure measurement — it never alters which sockets are poked.
         let delivered = 0;
 
+        // Durable poke baselines for this whole fan-out, flushed in batches once
+        // every socket has been visited. The in-memory memo is still set per
+        // socket inside `recordShapeMemo`, so a read during this same flush sees
+        // the new value without touching SQLite.
+        const pendingCursors: ShapePokeCursorRow[] = [];
+
         const pokeOne = async (ws: ShardSocketLike): Promise<void> => {
             if (this.isSocketExpired(ws)) {
                 this.dropExpiredSocket(ws);
@@ -9549,7 +9557,7 @@ abstract class ShardDO {
                 // Empty-diff shapes advance regardless (nothing to deliver for them),
                 // so the next flush doesn't re-scan the same op range.
                 for (const subId of emptyAdvanced) {
-                    this.recordShapeMemo(ws, connectionId, subId, checkpoint, { carriedRows: false });
+                    this.recordShapeMemo(ws, connectionId, subId, checkpoint, { carriedRows: false, pending: pendingCursors });
                 }
 
                 // Await drain before the (potentially large) poke so a slow consumer
@@ -9564,7 +9572,7 @@ abstract class ShardDO {
                         delivered += 1;
 
                         for (const subId of partAdvanced) {
-                            this.recordShapeMemo(ws, connectionId, subId, checkpoint, { carriedRows: true });
+                            this.recordShapeMemo(ws, connectionId, subId, checkpoint, { carriedRows: true, pending: pendingCursors });
                         }
                     }
                 }
@@ -9588,6 +9596,20 @@ abstract class ShardDO {
         const startMs = Date.now();
 
         await runSocketPool(sockets, pokeOne);
+
+        // One batched upsert per ~33 baselines instead of one statement per
+        // delivered poke. Flushed after the pool rather than inside it so a socket
+        // that threw (caught above) does not take its siblings' baselines with it.
+        if (pendingCursors.length > 0) {
+            try {
+                writeShapePokeCursors(this.sql as SqlExec, pendingCursors);
+            } catch {
+                // Degrade to in-memory-only, exactly as the per-row write did: a
+                // stub sql handle or a missing table must not fail the poke. The
+                // baseline then falls back to the durable/sinceSeq chain, which
+                // only ever degrades DOWNWARD (a re-scan, never a skipped row).
+            }
+        }
 
         // Record the fan-out cost of this flush (plan 075 Phase 1). `startMs` wraps
         // the whole pool, so the elapsed time captures the awaited drain/send I/O
@@ -10637,7 +10659,13 @@ abstract class ShardDO {
      * attachment (`deserializeAttachment()` is a structured-clone read) —
      * every caller already holds it from resolving the socket's shapes.
      */
-    private recordShapeMemo(ws: ShardSocketLike, connectionId: string, subId: string, cursor: number, options: { carriedRows: boolean }): void {
+    private recordShapeMemo(
+        ws: ShardSocketLike,
+        connectionId: string,
+        subId: string,
+        cursor: number,
+        options: { carriedRows: boolean; pending?: ShapePokeCursorRow[] },
+    ): void {
         const { carriedRows } = options;
         const memos = socketMap(this.shapeMemos, ws);
         // `delivered` only moves when this poke actually put rows on the wire for
@@ -10646,7 +10674,16 @@ abstract class ShardDO {
         const delivered = carriedRows ? cursor : memos.get(subId)?.delivered;
 
         memos.set(subId, { cursor, ...(delivered === undefined ? {} : { delivered }) });
-        this.saveShapePokeCursor(connectionId, subId, cursor);
+        // A fan-out passes `pending` so one flush upserts every socket's baseline
+        // instead of each poke issuing its own statement. Everything else writes
+        // straight through: making buffering the default would mean every future
+        // caller has to remember to flush, and a forgotten flush loses the
+        // hibernation baseline silently.
+        if (options.pending === undefined) {
+            this.saveShapePokeCursor(connectionId, subId, cursor);
+        } else if (connectionId !== "") {
+            options.pending.push({ connectionId, cursor, subId });
+        }
     }
 
     /**

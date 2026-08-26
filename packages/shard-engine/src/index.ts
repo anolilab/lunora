@@ -102,6 +102,7 @@ export { clearMemoryTables, isMemoryTable, memoryTableNames } from "./ctx-db-mem
 export type { RankPageComputation, RankPageDeps } from "./ctx-db-rank-page";
 export { computeRankPage, hydrateDocsById } from "./ctx-db-rank-page";
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState } from "./ctx-db-search-state";
+export type { ShapePokeCursorRow } from "./ctx-db-shape-poke-cursor";
 export {
     deleteShapePokeCursor,
     deleteShapePokeCursorsForConnection,
@@ -110,6 +111,7 @@ export {
     readShapePokeCursor,
     SHAPE_POKE_CURSOR_TABLE,
     writeShapePokeCursor,
+    writeShapePokeCursors,
 } from "./ctx-db-shape-poke-cursor";
 export type { ShapeRow } from "./ctx-db-shapes";
 export { selectShapeMembers, selectShapeRows } from "./ctx-db-shapes";
