@@ -1,3 +1,10 @@
+## @lunora/server [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.86...@lunora/server@1.0.0-alpha.87) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.31
+
 ## @lunora/server [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.85...@lunora/server@1.0.0-alpha.86) (2026-08-26)
 
 ### Features
