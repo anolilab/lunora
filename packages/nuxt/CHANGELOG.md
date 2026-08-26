@@ -1,3 +1,10 @@
+## @lunora/nuxt [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.84...@lunora/nuxt@1.0.0-alpha.85) (2026-08-25)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.73
+
 ## @lunora/nuxt [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.83...@lunora/nuxt@1.0.0-alpha.84) (2026-08-25)
 
 
