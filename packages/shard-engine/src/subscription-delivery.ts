@@ -15,7 +15,7 @@
 
 import { ID_FIELD, insertionIndexFor, PAGE_DELTA_CAPABILITY, PAGE_FIELD } from "../../../shared/page-result";
 import { stableStringify } from "../../../shared/stable-key";
-import { encodeWire, isPlainObject } from "../../../shared/wire-codec";
+import { encodeWire, isPlainObject, needsWireEncoding } from "../../../shared/wire-codec";
 import type { MutationDelta } from "./types";
 
 /**
@@ -131,7 +131,11 @@ const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: str
         // the already-encoded baseline (see the `data`-frame `json`), so it is NOT
         // re-encoded. For a pure-JSON row `encodeWire` is structurally identical,
         // so the fingerprint compare and the frame stay byte-identical.
-        const nextFingerprint = JSON.stringify(encodeWire(nextRow));
+        // "For a pure-JSON row `encodeWire` is structurally identical" (above) is
+        // exactly what `needsWireEncoding` decides, so ask instead of rebuilding
+        // the row every time. This runs per row per refresh — a 200-row
+        // subscription re-encoded all 200 to find one changed row.
+        const nextFingerprint = JSON.stringify(needsWireEncoding(nextRow) ? encodeWire(nextRow) : nextRow);
         const previousFingerprint = previousRow === undefined ? undefined : JSON.stringify(previousRow);
 
         if (previousFingerprint === nextFingerprint) {
