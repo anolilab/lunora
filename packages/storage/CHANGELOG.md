@@ -1,3 +1,15 @@
+## @lunora/storage [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.37...@lunora/storage@1.0.0-alpha.38) (2026-08-26)
+
+### Features
+
+* **server:** add ctx.storage.deleteAfterCommit for mutations ([#484](https://github.com/anolilab/lunora/issues/484)) ([c759ddb](https://github.com/anolilab/lunora/commit/c759ddbc594e05749ecdb08e1f4d4c8472a11b28))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.24
+* **@lunora/platform:** upgraded to 1.0.0-alpha.18
+
 ## @lunora/storage [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.36...@lunora/storage@1.0.0-alpha.37) (2026-08-26)
 
 

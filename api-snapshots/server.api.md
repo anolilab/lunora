@@ -9,6 +9,18 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/server`
 
+### `ACTION_CACHE_DEFAULT_TTL_MS` (const)
+
+```ts
+const DEFAULT_ACTION_CACHE_TTL_MS: number;
+```
+
+### `ACTION_CACHE_TABLE` (const)
+
+```ts
+const ACTION_CACHE_TABLE: "actionCache_entries";
+```
+
 ### `ActionBuilder` (interface)
 
 ```ts
@@ -31,6 +43,53 @@ interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined>
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => ActionBuilder<Context, Args, Output>;
+}
+```
+
+### `ActionCacheComponent` (type)
+
+```ts
+type ActionCacheComponent = {
+    functions: ActionCacheFunctions;
+    invalidate: (context: ActionCacheContext, name: string, args: unknown) => Promise<void>;
+    invalidateAll: (context: ActionCacheContext, name: string) => Promise<{
+        complete: boolean;
+        deleted: number;
+    }>;
+    wrap: <T>(context: ActionCacheContext, name: string, args: unknown, compute: () => Promise<T>) => Promise<T>;
+} & Component<{
+    [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
+```
+
+### `ActionCacheContext` (interface)
+
+```ts
+interface ActionCacheContext {
+    db: ActionCacheDatabase;
+}
+```
+
+### `ActionCacheDatabase` (interface)
+
+```ts
+interface ActionCacheDatabase {
+    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
+    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    query: (table: string) => ActionCacheQuery;
+}
+```
+
+### `ActionCacheFunctions` (interface)
+
+```ts
+interface ActionCacheFunctions {
+    purgeExpired: RegisteredMutation<{
+        limit: ReturnType<typeof v.optional>;
+    }, {
+        deleted: number;
+    }>;
 }
 ```
 
@@ -172,6 +231,18 @@ const DEFAULT_LIMIT = 25;
 const DEFAULT_MAX_LIMIT = 100;
 ```
 
+### `DOCUMENT_HISTORY_REDACTED_FIELDS` (const)
+
+```ts
+const DEFAULT_REDACTED_FIELDS: ReadonlyArray<string>;
+```
+
+### `DOCUMENT_HISTORY_TABLE` (const)
+
+```ts
+const DOCUMENT_HISTORY_TABLE: "documentHistory_versions";
+```
+
 ### `DailySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -263,11 +334,30 @@ interface DeferredDeleteFlushResult {
 }
 ```
 
+### `DefineActionCacheOptions` (interface)
+
+```ts
+interface DefineActionCacheOptions {
+    maxValueBytes?: number;
+    ttlMs?: number;
+}
+```
+
 ### `DefineComponentOptions` (interface)
 
 ```ts
 interface DefineComponentOptions<TExtension extends Record<string, TableDefinition>, TContextIn, TContextOut, F extends ComponentFunctions> extends DefinePluginOptions<TExtension, TContextIn, TContextOut> {
     functions?: F;
+}
+```
+
+### `DefineDocumentHistoryOptions` (interface)
+
+```ts
+interface DefineDocumentHistoryOptions {
+    maxSnapshotBytes?: number;
+    redact?: ReadonlyArray<string>;
+    retentionMs?: number;
 }
 ```
 
@@ -329,6 +419,48 @@ interface DefineStorageRuleInput<Context = unknown> {
     on: StorageOperation;
     prefix?: string;
     when: (context: StorageRuleContext<Context>) => StorageRuleDecision;
+}
+```
+
+### `DocumentHistoryComponent` (type)
+
+```ts
+type DocumentHistoryComponent = {
+    functions: DocumentHistoryFunctions;
+    record: (t: TriggerBuilder) => Record<string, TriggerDefinition>;
+} & Component<{
+    [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
+```
+
+### `DocumentHistoryEntry` (interface)
+
+```ts
+interface DocumentHistoryEntry {
+    doc?: Record<string, unknown>;
+    documentId: string;
+    op: "delete" | "insert" | "update";
+    previous?: Record<string, unknown>;
+    recordedAt: number;
+    tableName: string;
+    truncated?: boolean;
+}
+```
+
+### `DocumentHistoryFunctions` (interface)
+
+```ts
+interface DocumentHistoryFunctions {
+    listForDocument: RegisteredQuery<{
+        before: ReturnType<typeof v.optional>;
+        documentId: ReturnType<typeof v.string>;
+        limit: ReturnType<typeof v.optional>;
+    }, DocumentHistoryEntry[]>;
+    vacuum: RegisteredMutation<{
+        limit: ReturnType<typeof v.optional>;
+    }, {
+        deleted: number;
+    }>;
 }
 ```
 
@@ -2602,6 +2734,14 @@ interface Workflows {
 }
 ```
 
+### `actionCacheExtension` (const)
+
+```ts
+const actionCacheExtension: SchemaExtension<{
+    [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
+```
+
 ### `allowAll` (const)
 
 ```ts
@@ -2644,6 +2784,12 @@ const buildMaskRegistry: (functions: Iterable<unknown>) => MaskRegistry;
 const buildRlsReadRegistry: (functions: Iterable<unknown>) => RlsReadRegistry;
 ```
 
+### `cacheKeyFor` (const)
+
+```ts
+const cacheKeyFor: (name: string, argumentsKey: string) => Promise<string>;
+```
+
 ### `clampLimit` (const)
 
 ```ts
@@ -2678,6 +2824,12 @@ const createSecrets: (env: Record<string, unknown>) => Secrets;
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
+### `defineActionCache` (const)
+
+```ts
+const defineActionCache: (options?: DefineActionCacheOptions) => ActionCacheComponent;
+```
+
 ### `defineAggregateIndex` (const)
 
 ```ts
@@ -2688,6 +2840,12 @@ const defineAggregateIndex: (name: string, options: AggregateIndexOptions) => Ag
 
 ```ts
 const defineComponent: <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn, F extends ComponentFunctions = ComponentFunctions>(key: string, options: DefineComponentOptions<TExtension, TContextIn, TContextOut, F>) => Component<TExtension, TContextIn, TContextOut, F>;
+```
+
+### `defineDocumentHistory` (const)
+
+```ts
+const defineDocumentHistory: (options?: DefineDocumentHistoryOptions) => DocumentHistoryComponent;
 ```
 
 ### `defineEnv` (const)
@@ -2815,6 +2973,14 @@ const defineVectorIndex: (options: VectorIndexOptions) => VectorIndexDefinition;
 
 ```ts
 const deny: () => WhereInput;
+```
+
+### `documentHistoryExtension` (const)
+
+```ts
+const documentHistoryExtension: SchemaExtension<{
+    [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
 ```
 
 ### `flushDeferredDeletes` (const)

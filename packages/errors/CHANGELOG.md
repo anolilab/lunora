@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.23...@lunora/errors@1.0.0-alpha.24) (2026-08-26)
+
+### Features
+
+* **errors:** add raise() for expression-position throws ([#481](https://github.com/anolilab/lunora/issues/481)) ([260c74a](https://github.com/anolilab/lunora/commit/260c74a67ee06841820f16c9bbc51fb364cedcd6))
+
 ## @lunora/errors [1.0.0-alpha.23](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.22...@lunora/errors@1.0.0-alpha.23) (2026-08-26)
 
 ### ⚠ BREAKING CHANGES
