@@ -398,27 +398,35 @@ export const embed = action
 ```
 
 `wrap(ctx, name, args, fn)` returns the stored value on a hit and runs `fn` on a
-miss. The key is a SHA-256 of `name` and `JSON.stringify(args)` — call sites pass
-whole model requests, which are far too large to index directly — so two calls
-agree only if their arguments serialize identically, key order included. Pass the
-handler's own `args` rather than rebuilding one.
+miss. The key is a SHA-256 of `name` and the args encoded through the wire codec
+with sorted keys — call sites pass whole model requests, which are far too large
+to index directly. Because the encoding is structural, `{ a, b }` and `{ b, a }`
+are one entry, and `bigint` / `Date` / bytes arguments key distinctly instead of
+collapsing together.
 
-`invalidate(ctx, name, args)` drops one entry; `invalidateAll(ctx, name)` drops
-every entry under a name.
+`invalidate(ctx, name, args)` drops one entry. `invalidateAll(ctx, name)` drops
+every entry under a name and returns `{ deleted, complete }` — call it again while
+`complete` is `false`.
 
 Expiry is lazy: a read past the TTL reports a miss and the row is overwritten by
 the same call. Each miss also reaps a few expired rows, so an app with steady
 traffic stays bounded on its own; `purgeExpired` is for reclaiming entries whose
 names went quiet.
 
-Two things it deliberately does not do. There is **no single-flight** — two
-callers that miss at the same instant both run `fn` — because preventing that
-needs a lock held across an arbitrarily long external call, whose own failure
-mode (a crashed holder wedging the key) is worse than a duplicate cold start.
-And the stored value is **JSON**, so a `Date` comes back as a string: cache what
-you would send over the wire. A result over `maxValueBytes` (512 KB by default)
-is returned to the caller but not stored, so a large answer costs a cache miss
-rather than a failed action.
+One thing it deliberately does not do: there is **no single-flight**. Two callers
+that miss at the same instant both run `fn`; the unique index on the key means one
+result is stored rather than two rows appearing. Preventing the duplicate work
+needs a lock held across an arbitrarily long external call, whose own failure mode
+— a crashed holder wedging the key — is worse than a cold start being paid twice.
+
+A result over `maxValueBytes` (512 KB by default) is returned to the caller but
+not stored, so a large answer costs a cache miss rather than a failed action.
+
+<Callout type="warn">
+    `wrap` reads and writes through the app's own `ctx.db`, so on an `.rls("required")` schema the merged `actionCache_entries` table needs a policy like any
+    other. Declare one that denies client access outright — entries are keyed by a digest and carry no ownership column, so there is nothing for a row policy to
+    scope to.
+</Callout>
 
 ## Subpaths
 

@@ -36,20 +36,25 @@
  *
  * # What it does not do
  *
- * **No single-flight.** Two callers that miss at the same instant both run `compute`,
- * and the second write wins. Preventing that needs a lock held across an
- * arbitrarily long external call, which is a different feature with a different
- * failure mode (a crashed holder wedges the key). For the case this targets —
- * repeated identical requests spread over time — the duplicate is a cold-start
- * cost, not a steady-state one.
+ * **No single-flight.** Two callers that miss at the same instant both run
+ * `compute`; the unique index on `key` means the loser's insert conflicts rather
+ * than leaving a second row, so one result is stored and the work was done twice.
+ * Preventing that needs a lock held across an arbitrarily long external call,
+ * which is a different feature with a worse failure mode (a crashed holder wedges
+ * the key). For the case this targets — repeated identical requests spread over
+ * time — the duplicate is a cold-start cost, not a steady-state one.
  *
- * **The stored value is JSON.** Whatever `compute` returns is round-tripped through
- * `JSON.stringify`/`JSON.parse`, so a `Date` comes back as a string and a `Map`
- * comes back as `{}`. Cache what you would send over the wire.
+ * **The stored value goes through the wire codec**, the same encoding an RPC
+ * response uses — so `bigint`, `Date`, `Map`, `Set` and bytes round-trip as
+ * themselves. A value the wire refuses (a class instance, a cyclic graph) throws.
+ * Cache what you would send over the wire, because that is exactly what this is.
  */
 
+import type { Id } from "@lunora/values";
 import { v } from "@lunora/values";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { stableWireKey } from "../../../shared/wire-key";
 import { initLunora } from "./builder/index";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";
@@ -69,14 +74,21 @@ const DEFAULT_ACTION_CACHE_TTL_MS: number = 60 * 60 * 1000;
 const DEFAULT_MAX_VALUE_BYTES = 512 * 1024;
 
 /**
- * Rows each miss inspects for reaping, and the page size `purgeExpired` deletes
- * in. Small on the write path on purpose: the reap rides a request that is
- * already paying for an external call, so it must stay O(1).
+ * Rows each miss inspects for reaping. Small on the write path on purpose: the
+ * reap rides a request that is already paying for an external call, so it must
+ * stay O(1).
  */
 const REAP_BATCH = 8;
 
-/** Pages `purgeExpired` will walk before yielding, so a stuck read cannot spin forever. */
-const MAX_PURGE_ROUNDS = 64;
+/** Rows `invalidate`/`invalidateAll` read per round. */
+const INVALIDATE_PAGE = 64;
+
+/** Rounds `invalidateAll` will walk, so a reader that stops advancing cannot spin forever. */
+const MAX_INVALIDATE_ROUNDS = 64;
+
+/** Default rows `purgeExpired` deletes in one call, and the ceiling on a caller-supplied `limit`. */
+const PURGE_DEFAULT_LIMIT = 256;
+const PURGE_MAX_LIMIT = 4096;
 
 /** The bare extension key and table name. Prefixing makes the merged table `actionCache_entries`. */
 const ACTION_CACHE_KEY = "actionCache";
@@ -117,9 +129,9 @@ interface ActionCacheQuery {
  * directly.
  */
 interface ActionCacheDatabase {
-    delete: (id: never) => Promise<void>;
+    delete: <T extends string>(id: Id<T>) => Promise<void>;
     insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
-    patch: (id: never, patch: Record<string, unknown>) => Promise<void>;
+    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
     query: (table: string) => ActionCacheQuery;
 }
 
@@ -153,10 +165,35 @@ interface ActionCacheFunctions {
      * this; schedule it on a cron to reclaim entries whose names went quiet.
      *
      * Returns `{ deleted }`; compare it against `limit` to decide whether to run
-     * again rather than assuming one pass drained the table.
+     * again rather than assuming one pass drained the table. A caller-supplied
+     * `limit` is clamped — `take()` has no ceiling of its own.
      */
     purgeExpired: RegisteredMutation<{ limit: ReturnType<typeof v.optional> }, { deleted: number }>;
 }
+
+/**
+ * Serialize the arguments for hashing.
+ *
+ * `stableWireKey` rather than `JSON.stringify`, for two reasons that are both
+ * correctness rather than taste.
+ *
+ * It **sorts keys**, so `{ a, b }` and `{ b, a }` are one cache entry. Raw
+ * `JSON.stringify` makes them two, and the extra miss is invisible — you just pay
+ * twice.
+ *
+ * It encodes through the **wire codec**, so a `bigint` / `Date` / bytes argument
+ * gets a distinct tagged token. `JSON.stringify` throws on `bigint` and renders
+ * an `ArrayBuffer` as `{}` — and `{}` for every distinct byte payload under one
+ * name is a key COLLISION, i.e. one caller served another caller's cached result.
+ * `v.bytes()` and `v.bigint()` are first-class argument types, so that is
+ * reachable from ordinary code.
+ *
+ * A value the wire itself refuses (a class instance, a cyclic graph) throws
+ * here, before `compute` runs — such a value can never be a stable key, and
+ * failing at the boundary beats hashing something that isn't one.
+ * @param args the handler's arguments
+ */
+const serializeArgs = (args: unknown): string => (args === undefined ? "" : stableWireKey(args));
 
 /**
  * SHA-256 of `name` and the serialized args, hex.
@@ -166,19 +203,10 @@ interface ActionCacheFunctions {
  * would run into column-size limits; a digest is fixed-width and indexes cleanly.
  * The NUL separator keeps `("ab", "c")` and `("a", "bc")` from colliding.
  * @param name the logical cache namespace (usually the action's name)
- * @param argumentsJson the arguments, already serialized
+ * @param argumentsKey the arguments, already serialized by {@link serializeArgs}
  */
-
-/**
- * Serialize the arguments for hashing. `undefined` becomes the empty string
- * rather than going through `JSON.stringify` (which returns `undefined`, not a
- * string), so a no-argument call still has a stable key.
- * @param args the handler's arguments
- */
-const serializeArgs = (args: unknown): string => (args === undefined ? "" : JSON.stringify(args));
-
-const cacheKeyFor = async (name: string, argumentsJson: string): Promise<string> => {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${name}\u0000${argumentsJson}`));
+const cacheKeyFor = async (name: string, argumentsKey: string): Promise<string> => {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${name}\u0000${argumentsKey}`));
 
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 };
@@ -193,15 +221,21 @@ type ActionCacheComponent = {
     /** Drop the entry for exactly this `name` + `args`. Resolves whether or not one existed. */
     invalidate: (context: ActionCacheContext, name: string, args: unknown) => Promise<void>;
 
-    /** Drop every entry under `name`, whatever its arguments. */
-    invalidateAll: (context: ActionCacheContext, name: string) => Promise<number>;
+    /**
+     * Drop every entry under `name`, whatever its arguments.
+     *
+     * `complete` is `false` when the paging bound was reached with rows still
+     * matching — call again. A plain count could not tell "dropped all of them"
+     * apart from "dropped the first few thousand".
+     */
+    invalidateAll: (context: ActionCacheContext, name: string) => Promise<{ complete: boolean; deleted: number }>;
 
     /**
      * Return the cached result for `name` + `args`, or run `compute` and cache it.
      *
-     * `args` is serialized with `JSON.stringify`, so two calls agree only if their
-     * arguments serialize identically — key order included. Pass the handler's
-     * own `args` object rather than rebuilding one.
+     * `args` is keyed through the wire codec with sorted keys, so two calls agree
+     * whenever their arguments are structurally equal — key order does not matter,
+     * and `bigint` / `Date` / bytes arguments key distinctly rather than colliding.
      */
     wrap: <T>(context: ActionCacheContext, name: string, args: unknown, compute: () => Promise<T>) => Promise<T>;
 } & Component<{ [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable> }>;
@@ -220,8 +254,11 @@ const actionCacheExtension = defineSchemaExtension(ACTION_CACHE_KEY, {
             name: v.string(),
             value: v.string(),
         })
-            // Drives the hit/miss lookup and the invalidate-by-args delete.
-            .index("byKey", ["key"])
+            // Drives the hit/miss lookup and the invalidate-by-args delete. UNIQUE
+            // because one key IS one entry: `wrap` inserts on a miss, so two
+            // concurrent misses would otherwise leave two rows under one key, and
+            // `.first()` would then serve one while `invalidate` deleted the other.
+            .index("byKey", ["key"], { unique: true })
             // Drives `invalidateAll`.
             .index("byName", ["name"])
             // Drives the opportunistic reap and `purgeExpired`, both oldest-first.
@@ -230,8 +267,11 @@ const actionCacheExtension = defineSchemaExtension(ACTION_CACHE_KEY, {
 }) as unknown as SchemaExtension<{ [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable> }>;
 
 // No generated server here, so bind the base context via the builder factory —
-// same as `definePresence`.
-const { mutation } = initLunora.dataModel().create();
+// same as `definePresence`. `internalMutation`, NOT `mutation`: `purgeExpired`
+// is a bulk delete, and a public one would let any anonymous caller empty the
+// cache table over `/rpc` — turning every subsequent request back into a paid
+// upstream call.
+const { internalMutation } = initLunora.dataModel().create();
 
 /**
  * Build an action-cache {@link Component} — schema extension, `purgeExpired`, and
@@ -253,7 +293,7 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
         const oldest = await context.db.query(ACTION_CACHE_TABLE).withIndex("byExpiresAt").order("asc").take(REAP_BATCH);
         const expired = oldest.filter((row) => (row["expiresAt"] as number) <= now);
 
-        await Promise.all(expired.map(async (row) => context.db.delete(row["_id"] as never)));
+        await Promise.all(expired.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
     };
 
     const rowFor = async (context: ActionCacheContext, key: string): Promise<Record<string, unknown> | null> =>
@@ -273,76 +313,98 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
         // into a delete. The row is overwritten by this same call anyway.
         if (existing && (existing["expiresAt"] as number) > now) {
             // `{ v: value }` rather than the bare value, so a cached `undefined`
-            // round-trips: `JSON.stringify(undefined)` is `undefined` (not a
-            // string) and could not be stored at all, while `{}` parses back to
-            // the same absent `v`.
-            return (JSON.parse(existing["value"] as string) as { v: T }).v;
+            // round-trips: a bare `undefined` does not serialize to a string at
+            // all and could not be stored, while `{}` decodes back to the same
+            // absent `v`.
+            return (decodeWire(JSON.parse(existing["value"] as string)) as { v: T }).v;
         }
 
         const value = await compute();
-        const serialized = JSON.stringify({ v: value });
-        const expiresAt = now + ttlMs;
+        // Through the wire codec, for the same reason the key is: `compute` can
+        // legitimately return a `bigint`, a `Date`, or bytes, and raw
+        // `JSON.stringify` would throw on the first and quietly flatten the rest —
+        // after the caller has already paid for the call.
+        const serialized = JSON.stringify(encodeWire({ v: value }));
+        // Re-read the clock AFTER `compute`: a 30-second model call would
+        // otherwise produce an entry that is already 30 seconds into its own TTL.
+        const storedAt = Date.now();
+        const expiresAt = storedAt + ttlMs;
 
         // Oversized results are returned, never stored — see `maxValueBytes`.
         if (new TextEncoder().encode(serialized).length <= maxValueBytes) {
             await (existing
-                ? context.db.patch(existing["_id"] as never, { expiresAt, value: serialized })
+                ? context.db.patch(existing["_id"] as Id<string>, { expiresAt, value: serialized })
                 : context.db.insert(ACTION_CACHE_TABLE, { expiresAt, key, name, value: serialized }));
         } else if (existing) {
             // A stale row for a key whose fresh answer is too big to keep would
             // otherwise stay readable until it expires, serving the old value
             // while the new one is silently uncached.
-            await context.db.delete(existing["_id"] as never);
+            await context.db.delete(existing["_id"] as Id<string>);
         }
 
-        await reap(context, now);
+        await reap(context, storedAt);
 
         return value;
     };
 
     const invalidate = async (context: ActionCacheContext, name: string, args: unknown): Promise<void> => {
         const key = await cacheKeyFor(name, serializeArgs(args));
-        const existing = await rowFor(context, key);
+        const rows = await context.db
+            .query(ACTION_CACHE_TABLE)
+            .withIndex("byKey", (q) => q.eq("key", key))
+            .take(INVALIDATE_PAGE);
 
-        if (existing) {
-            await context.db.delete(existing["_id"] as never);
-        }
+        // Every row under the key, not just `.first()`. The unique index makes a
+        // duplicate unreachable in a healthy table — but an invalidation is
+        // usually triggered by a permission change or a data correction, and
+        // leaving a sibling row behind serves the value the caller just purged.
+        await Promise.all(rows.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
     };
 
-    const invalidateAll = async (context: ActionCacheContext, name: string): Promise<number> => {
+    const invalidateAll = async (context: ActionCacheContext, name: string): Promise<{ complete: boolean; deleted: number }> => {
         let deleted = 0;
 
-        // Bounded rounds rather than one unbounded read: a name that accumulated
-        // many argument variants should not have to fit in a single page.
-        for (let round = 0; round < MAX_PURGE_ROUNDS; round += 1) {
+        // Page rather than one unbounded read: a name that accumulated many
+        // argument variants should not have to fit in a single read. Each round
+        // deletes what the previous read returned, so the loop makes progress and
+        // terminates; `MAX_INVALIDATE_ROUNDS` is a liveness bound against a reader
+        // that stops advancing, not a cap on how much may be deleted.
+        for (let round = 0; round < MAX_INVALIDATE_ROUNDS; round += 1) {
             // eslint-disable-next-line no-await-in-loop -- each round deletes the page the previous one read; the reads are inherently sequential
             const page = await context.db
                 .query(ACTION_CACHE_TABLE)
                 .withIndex("byName", (q) => q.eq("name", name))
-                .take(REAP_BATCH * 8);
+                .take(INVALIDATE_PAGE);
 
             if (page.length === 0) {
-                return deleted;
+                return { complete: true, deleted };
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
-            await Promise.all(page.map(async (row) => context.db.delete(row["_id"] as never)));
+            await Promise.all(page.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
             deleted += page.length;
         }
 
-        return deleted;
+        // Hit the liveness bound with rows still matching. Reported rather than
+        // returned as a plain count, because "dropped every entry" and "dropped
+        // 4096 of them" must not look the same to a caller that asked for the
+        // former.
+        return { complete: false, deleted };
     };
 
-    const purgeExpired = mutation.input({ limit: v.optional(v.number()) }).mutation(async ({ args, ctx: context }): Promise<{ deleted: number }> => {
+    const purgeExpired = internalMutation.input({ limit: v.optional(v.number()) }).mutation(async ({ args, ctx: context }): Promise<{ deleted: number }> => {
         const now = Date.now();
-        const limit = args.limit !== undefined && Number.isFinite(args.limit) ? Math.max(1, Math.floor(args.limit)) : REAP_BATCH * 32;
+        // Clamped, not just floored: `take()` has no ceiling of its own, so an
+        // unbounded `limit` is an unbounded index scan inside a mutation.
+        const limit =
+            args.limit !== undefined && Number.isFinite(args.limit) ? Math.min(PURGE_MAX_LIMIT, Math.max(1, Math.floor(args.limit))) : PURGE_DEFAULT_LIMIT;
 
         const oldest = await context.db.query(ACTION_CACHE_TABLE).withIndex("byExpiresAt").order("asc").take(limit);
         // The index is ordered by expiry, so the fresh rows are all at the
         // tail — filtering rather than breaking keeps this one pass.
         const expired = oldest.filter((row) => (row["expiresAt"] as number) <= now);
 
-        await Promise.all(expired.map(async (row) => context.db.delete(row["_id"] as never)));
+        await Promise.all(expired.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
 
         return { deleted: expired.length };
     });

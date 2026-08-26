@@ -299,9 +299,9 @@ describe("defineActionCache — invalidation", () => {
         await cache.wrap(contextFor(db), "embed", { text: "b" }, async () => 2);
         await cache.wrap(contextFor(db), "other", {}, async () => 3);
 
-        const deleted = await cache.invalidateAll(contextFor(db), "embed");
+        const outcome = await cache.invalidateAll(contextFor(db), "embed");
 
-        expect(deleted).toBe(2);
+        expect(outcome).toStrictEqual({ complete: true, deleted: 2 });
         expect(entries(db)).toHaveLength(1);
         expect(entries(db)[0]?.["name"]).toBe("other");
     });
@@ -335,5 +335,129 @@ describe("defineActionCache — purgeExpired", () => {
         expect(result.deleted).toBe(1);
         expect(entries(db)).toHaveLength(1);
         expect(entries(db)[0]?.["name"]).toBe("fresh");
+    });
+});
+
+describe("defineActionCache — key derivation", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("keys structurally, so argument order is not a cache miss", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const cache = defineActionCache({ ttlMs: 10_000 });
+        const fn = vi.fn<() => Promise<number>>(async () => 1);
+
+        vi.setSystemTime(1000);
+        await cache.wrap(contextFor(db), "embed", { a: 1, b: 2 }, fn);
+        await cache.wrap(contextFor(db), "embed", { b: 2, a: 1 }, fn);
+
+        // Under raw JSON.stringify these are two entries and the caller pays
+        // twice, with nothing to indicate why.
+        expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it("keys distinct byte payloads distinctly", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const cache = defineActionCache({ ttlMs: 10_000 });
+        const fn = vi.fn<() => Promise<number>>(async () => 1);
+
+        vi.setSystemTime(1000);
+        await cache.wrap(contextFor(db), "embed", { blob: new Uint8Array([1, 2, 3]).buffer }, fn);
+        await cache.wrap(contextFor(db), "embed", { blob: new Uint8Array([9, 9, 9]).buffer }, fn);
+
+        // `JSON.stringify` renders every ArrayBuffer as `{}` — which is not a miss,
+        // it is a COLLISION: the second caller would be served the first's result.
+        expect(fn).toHaveBeenCalledTimes(2);
+        expect(entries(db)).toHaveLength(2);
+    });
+
+    it("round-trips a bigint result instead of throwing after the work is done", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const cache = defineActionCache({ ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+
+        // Raw JSON.stringify throws on a bigint — after `compute` has already run
+        // and been paid for.
+        await expect(cache.wrap(contextFor(db), "count", {}, async () => 9_007_199_254_740_993n)).resolves.toBe(9_007_199_254_740_993n);
+        await expect(cache.wrap(contextFor(db), "count", {}, async () => 0n)).resolves.toBe(9_007_199_254_740_993n);
+    });
+});
+
+describe("defineActionCache — ttl", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("measures the TTL from after compute, not before it", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const cache = defineActionCache({ ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+        await cache.wrap(contextFor(db), "slow", {}, async () => {
+            // A slow upstream call: the clock moves while it runs.
+            vi.setSystemTime(6000);
+
+            return 1;
+        });
+
+        // Measured from the start, the entry would already be half-expired.
+        expect(entries(db)[0]?.["expiresAt"]).toBe(16_000);
+    });
+});
+
+describe("defineActionCache — purgeExpired limits", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("clamps a caller-supplied limit", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const cache = defineActionCache({ ttlMs: 1000 });
+        const reads: number[] = [];
+        const inner = db.query;
+
+        db.query = (table: string) => {
+            const reader = inner(table);
+            const take = reader.take.bind(reader);
+
+            reader.take = async (limit: number) => {
+                reads.push(limit);
+
+                return take(limit);
+            };
+
+            return reader;
+        };
+
+        vi.setSystemTime(1000);
+        await cache.functions.purgeExpired.handler({ db }, { limit: 1e9 });
+
+        // `take()` has no ceiling of its own, so an unbounded limit is an
+        // unbounded index scan inside a mutation.
+        expect(Math.max(...reads)).toBeLessThanOrEqual(4096);
     });
 });
