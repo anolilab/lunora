@@ -1,3 +1,9 @@
+## @lunora/client [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.59...@lunora/client@1.0.0-alpha.60) (2026-08-26)
+
+### Performance Improvements
+
+* **client:** encode stable cache keys without the throwaway arrays ([#494](https://github.com/anolilab/lunora/issues/494)) ([8c8b343](https://github.com/anolilab/lunora/commit/8c8b3438671886dd5bfb4de5dc6508f651530831))
+
 ## @lunora/client [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.58...@lunora/client@1.0.0-alpha.59) (2026-08-26)
 
 
