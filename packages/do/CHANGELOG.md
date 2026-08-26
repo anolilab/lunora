@@ -1,3 +1,16 @@
+## @lunora/do [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.101...@lunora/do@1.0.0-alpha.102) (2026-08-26)
+
+### Performance Improvements
+
+* **do:** index sort keys, wire-encode skip, batched poke writes, flat select ([#489](https://github.com/anolilab/lunora/issues/489)) ([910d218](https://github.com/anolilab/lunora/commit/910d218b6aa550ac96bc54b2acfe31922f5b29f6))
+* **do:** render write statements once per table ([#488](https://github.com/anolilab/lunora/issues/488)) ([0cd7267](https://github.com/anolilab/lunora/commit/0cd72670f6d07b721e0c1c8ddfa1c5785a860df9))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.42
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.41
+
 ## @lunora/do [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.100...@lunora/do@1.0.0-alpha.101) (2026-08-26)
 
 
