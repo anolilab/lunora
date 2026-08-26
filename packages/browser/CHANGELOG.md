@@ -1,3 +1,18 @@
+## @lunora/browser [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.29...@lunora/browser@1.0.0-alpha.30) (2026-08-26)
+
+### Tests
+
+* **browser:** move src suite to __tests__ ([#458](https://github.com/anolilab/lunora/issues/458)) ([09bd61d](https://github.com/anolilab/lunora/commit/09bd61d88733c25a239f9ec81f48dd28a2ec9d6c))
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.23
+
 ## @lunora/browser [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/%40lunora%2Fbrowser%401.0.0-alpha.28...%40lunora%2Fbrowser%401.0.0-alpha.29) (2026-08-14)
 
 
