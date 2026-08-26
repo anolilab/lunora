@@ -822,3 +822,52 @@ describe("isOrWrapsFromValidator", () => {
         expect(isOrWrapsFromValidator(metaless)).toBe(false);
     });
 });
+
+describe("v.partial", () => {
+    it("makes every member optional", () => {
+        expect.assertions(3);
+
+        const shape = v.partial({ done: v.boolean(), title: v.string() });
+        const object = v.object(shape);
+
+        expect(object.parse({})).toStrictEqual({});
+        expect(object.parse({ title: "a" })).toStrictEqual({ title: "a" });
+        expect(object.parse({ done: true, title: "a" })).toStrictEqual({ done: true, title: "a" });
+    });
+
+    it("still rejects a present member of the wrong type", () => {
+        expect.assertions(1);
+
+        const object = v.object(v.partial({ title: v.string() }));
+
+        expect(() => object.parse({ title: 1 })).toThrow(ValidationError);
+    });
+
+    it("passes an already-optional member through instead of double-wrapping", () => {
+        expect.assertions(2);
+
+        const inner = v.optional(v.string());
+        const shape = v.partial({ title: inner });
+
+        expect(shape.title).toBe(inner);
+        expect(v.object(shape).parse({})).toStrictEqual({});
+    });
+
+    it("infers every key as optional", () => {
+        expect.assertions(3);
+
+        const object = v.object(v.partial({ done: v.boolean(), title: v.string() }));
+
+        type Inferred = Infer<typeof object>;
+
+        // Compile-time: each member keeps its type, widened by `undefined`…
+        const doneCheck: Assert<Equal<Inferred["done"], boolean | undefined>> = true;
+        // …and every KEY is optional, or neither literal below would assign.
+        const empty: Inferred = {};
+        const some: Inferred = { title: "a" };
+
+        expect(doneCheck).toBe(true);
+        expect(empty).toStrictEqual({});
+        expect(some).toStrictEqual({ title: "a" });
+    });
+});

@@ -1059,6 +1059,47 @@ const optional = <V extends Validator>(inner: V): ColumnValidator<Infer<V> | und
     );
 };
 
+/** Every member of a shape made optional — the result of {@link partial}. */
+type PartialShape<S extends ObjectShape> = { [K in keyof S]: ColumnValidator<Infer<S[K]> | undefined, Infer<S[K]> | undefined> };
+
+/**
+ * Wrap every member of a shape in {@link optional}.
+ *
+ * A patch-style procedure takes "any subset of these columns" — the same shape
+ * the table declares, with nothing required. Spelling that out by hand means a
+ * second copy of the shape that has to be kept in step with the first, and the
+ * failure when it drifts is quiet: a column added to the table is simply not
+ * accepted by the patch, and nothing typechecks it against the table.
+ *
+ * Takes and returns a *shape record* rather than a `v.object(...)`, so the one
+ * function serves both positions — a procedure's args map (`.input(...)`) and a
+ * nested object (`v.object(v.partial(shape))`).
+ *
+ * A member that is already `v.optional(...)` is passed through rather than
+ * double-wrapped, so this is idempotent.
+ *
+ * **Pass the fields a caller may patch, not a whole table's shape.** Handing this
+ * `schema.tables.x.shape` makes every present and *future* column client-writable:
+ * add `ownerId`, `role`, or `isVerified` to the table later and it silently joins
+ * the patch, with no diff on the procedure to review. Row-level policies do not
+ * close that — they decide which ROW you may write, not which fields — so the
+ * allow-list has to be here.
+ * @example
+ * ```ts
+ * const editable = { body: v.string(), title: v.string() };
+ *
+ * mutation.input({ id: v.id("threads"), ...v.partial(editable) }).mutation(…)
+ * ```
+ */
+const partial = <S extends ObjectShape>(shape: S): PartialShape<S> =>
+    // `Object.fromEntries` defines data properties (CreateDataPropertyOrThrow),
+    // so a `__proto__` member round-trips as a plain key instead of hitting the
+    // Object.prototype setter the way `out[key] = …` would. `v.object` rejects
+    // that field name anyway, but this helper also feeds args maps, which do not.
+    Object.fromEntries(
+        Object.entries(shape).map(([key, member]) => [key, toInternal(member).kind === "optional" ? member : optional(member)]),
+    ) as PartialShape<S>;
+
 const any = (): ColumnValidator<unknown, unknown> => asColumn(createValidator<unknown>("any", (value) => value));
 
 /**
@@ -1294,6 +1335,7 @@ const v: {
     number: typeof number;
     object: typeof objectValidator;
     optional: typeof optional;
+    partial: typeof partial;
     record: typeof record;
     storage: typeof storage;
     string: typeof string;
@@ -1314,6 +1356,7 @@ const v: {
     number,
     object: objectValidator,
     optional,
+    partial,
     record,
     storage,
     string,
@@ -1339,6 +1382,7 @@ export type {
     MetaOptions,
     NumberColumnValidator,
     OptionalizeShape,
+    PartialShape,
     SelectShape,
     ServerDefaultContext,
     StringColumnValidator,
