@@ -326,6 +326,8 @@ them somewhere to go:
 
 ```ts
 // lunora/history.ts
+import { defineDocumentHistory } from "@lunora/server";
+
 export const history = defineDocumentHistory({ retentionMs: 90 * 24 * 60 * 60 * 1000 });
 
 // lunora/schema.ts — attach to each table you want versioned
