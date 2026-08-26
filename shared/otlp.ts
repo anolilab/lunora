@@ -65,23 +65,72 @@ type OtlpResourceAttributes = Record<string, OtlpAttributeValue>;
  */
 const otlpUnixNano = (ms: number): string => `${String(Math.round(ms))}000000`;
 
+/** Every byte value as its two-hex-digit string, so the id loop never formats. */
+const HEX_BYTE: ReadonlyArray<string> = Array.from({ length: 256 }, (_value, index) => index.toString(16).padStart(2, "0"));
+
+/**
+ * Bytes drawn from `crypto.getRandomValues` per refill.
+ *
+ * The draw itself, not the hex formatting, is what an id costs: it dominated
+ * `otlpRandomHex` and made minting one request's trace+span id ~9% of the whole
+ * worker RPC dispatch path. 512 bytes serves 21 request-pairs (16+8) per call.
+ * Small enough to stay a trivial allocation in a Workers isolate, large enough
+ * that the draw stops showing up in a profile.
+ */
+const POOL_BYTES = 512;
+
+const randomPool = new Uint8Array(POOL_BYTES);
+
+/** Next unconsumed byte in {@link randomPool}; starts spent so the first id refills. */
+let poolOffset = POOL_BYTES;
+
+/** `bytes` bytes of `buffer` from `start`, as lowercase hex. */
+const hexSlice = (buffer: Uint8Array, start: number, bytes: number): string => {
+    let hex = "";
+
+    for (let index = 0; index < bytes; index += 1) {
+        hex += HEX_BYTE[buffer[start + index] as number];
+    }
+
+    return hex;
+};
+
 /**
  * A random lowercase-hex id of `bytes` length. OTLP/JSON is explicit that
  * `trace_id`/`span_id` are hex strings (the one documented exception to proto3
  * JSON's base64 `bytes` encoding), so this is the correct on-wire form. Uses the
  * Web Crypto global (present in workerd, Node ≥ 19, Bun, Deno) — no Node built-in
  * import; the engines field guarantees Node ≥ 22.15, so it is always present.
+ *
+ * Ids come out of a buffer refilled from `crypto.getRandomValues` rather than a
+ * per-call draw. This is the SAME CSPRNG byte stream — every byte is handed out
+ * exactly once and the offset only advances — so the distribution is unchanged,
+ * which matters beyond aesthetics: `resolveTraceSampling` derives the head
+ * sampling verdict from the span id, so a biased id would bias what gets traced.
+ * The pool is filled lazily (never at module scope) so importing this file does
+ * no work, and it is per-isolate like every other module-level value here.
  */
 const otlpRandomHex = (bytes: number): string => {
-    const buffer = new Uint8Array(bytes);
+    // An id larger than the pool can never be served from it — refilling would
+    // still leave the read running off the end and splice "undefined" into the
+    // hex. No caller asks for more than 16, but that failure would be silent and
+    // on the wire, so draw an oversized id directly instead of trusting callers.
+    if (bytes > POOL_BYTES) {
+        const buffer = new Uint8Array(bytes);
 
-    crypto.getRandomValues(buffer);
+        crypto.getRandomValues(buffer);
 
-    let hex = "";
-
-    for (const byte of buffer) {
-        hex += byte.toString(16).padStart(2, "0");
+        return hexSlice(buffer, 0, bytes);
     }
+
+    if (poolOffset + bytes > POOL_BYTES) {
+        crypto.getRandomValues(randomPool);
+        poolOffset = 0;
+    }
+
+    const hex = hexSlice(randomPool, poolOffset, bytes);
+
+    poolOffset += bytes;
 
     return hex;
 };
