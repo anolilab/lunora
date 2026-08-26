@@ -97,6 +97,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DeferredDeleteFlushResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DefineComponentOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -450,6 +454,10 @@ Re-exported from `@lunora/scheduler` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `MutationCtx` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MutationStorage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1101,6 +1109,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `flushDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `httpAction` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1188,6 +1200,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 ### `v` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `withDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
 
 ## `lunorash/client`
 
@@ -4691,6 +4707,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DeferredDeleteFlushResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DefineComponentOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5044,6 +5064,10 @@ Re-exported from `@lunora/scheduler` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `MutationCtx` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MutationStorage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5695,6 +5719,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `flushDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `httpAction` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5782,6 +5810,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 ### `v` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `withDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
 
 ## `lunorash/server/data-model`
 
@@ -6918,6 +6950,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `MutationCtx` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MutationStorage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

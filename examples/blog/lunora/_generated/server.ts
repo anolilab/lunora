@@ -14,6 +14,7 @@ import type {
     InternalQueryBuilder,
     MutationBuilder,
     MutationCtx as MutationCtxBase,
+    MutationStorage,
     MutatorDefinition,
     QueryBuilder,
     QueryCtx as QueryCtxBase,
@@ -209,7 +210,7 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage" | "vectors
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage" | "vectors"> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;
+    readonly storage: MutationStorage<StorageBucketName>;
     readonly vectors: VectorSearch<VectorIndexName>;
 }
 

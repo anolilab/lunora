@@ -3,7 +3,7 @@
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, RunShardApplyCdcArgs, RunShardExportArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike, TelemetrySink } from "lunorash/do";
 import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
-import { asBucketStorage, createSecrets, LunoraError } from "lunorash/server";
+import { asBucketStorage, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
 
 import schema from "../schema.js";
@@ -1188,16 +1188,38 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // watermark are atomic — a crash can't leave the writes durable without
             // the replay guard.
             if (registered.kind === "mutation") {
-                return this.runInTransaction(async () => {
-                    const result = await registered.handler(ctx, args);
+                const result = await this.runInTransaction(async () => {
+                    const value = await registered.handler(ctx, args);
 
-                    this.commitMutationBookkeeping(result);
+                    this.commitMutationBookkeeping(value);
 
-                    return result;
+                    return value;
                 });
+
+                // The transaction committed, so the rows are durable and the objects
+                // their deletion orphaned can go. Deliberately AFTER the span, never
+                // inside it: an R2 delete cannot roll back, so a delete issued from
+                // within a transaction that later aborts destroys data the surviving
+                // row still points at. A throw above skips this entirely and the
+                // queue dies with `ctx`.
+                //
+                // `flushDeferredDeletes` never rejects — the mutation has already
+                // succeeded, so a failed cleanup must not turn into a failed response.
+                // A leaked object is reported through `ctx.log` instead, with its key.
+                await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+                return result;
             }
 
-            return registered.handler(ctx, args);
+            const result = await registered.handler(ctx, args);
+
+            // An action is not itself transactional, but `ctx.runMutation` runs its
+            // submutations on THIS ctx, so their queued deletes land here — this is
+            // the first point at which those writes are known to have committed. A
+            // dispatch with nothing queued no-ops.
+            await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+            return result;
         }
 
         // Only a `mutation` may enter the base class's single-writer gate for
@@ -1287,6 +1309,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 digest: string;
                 ran: boolean;
             };
+
+            // A reactor IS a mutation, so its ctx carries the deferred-delete queue
+            // and its transaction has just committed. Without this the queue would
+            // die with `ctx` and the objects would leak with nothing to find: no
+            // error, no warning, no failed request — a reactor that reaps orphaned
+            // rows is a textbook use of one.
+            await this.deferPastResponse(flushDeferredDeletes(ctx));
 
             return { digest: outcome.digest, ran: outcome.ran, tables: [...footprint.tables] };
         }
@@ -1672,6 +1701,24 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 "getMetadata",
                 "list",
             ]);
+            // `ctx.storage.deleteAfterCommit(key)`, on every dispatch that can host
+            // a MUTATION handler — which is not only a mutation dispatch:
+            // `ctx.runMutation` hands the CALLER's ctx to the callee, so a mutation
+            // reached from an action runs on the action's ctx. Wrapping mutations
+            // alone made that composition throw a bare TypeError on a method the
+            // handler's own type promises. Queries stay unwrapped: they cannot host
+            // one, and their ctx is built on the hot subscription path.
+            //
+            // Every dispatch wrapped here also flushes (see `handleRpc` and
+            // `runReactor`) — a queue nothing drains leaks silently, which is worse
+            // than not having the method at all.
+            //
+            // Wrapped OUTSIDE the read-stamping facade so `bucket(name)` still
+            // resolves through it and stays stamped, and applied only to
+            // `ctx.storage` so `ctx.db.system._storage` (which shares the adapter
+            // above) is untouched.
+            const contextKind = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind;
+            const contextStorage = contextKind === "mutation" || contextKind === "action" ? withDeferredDeletes(storage) : storage;
             // `ctx.log`: the DO base builds the attributed logger (structured
             // fields + `.with(...)` child + trace correlation) and routes each call
             // to the optional `observability` sink. It also buffers the line (studio
@@ -1767,7 +1814,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 orm: bindOrm(facade),
                 scheduler,
                 span,
-                storage,
+                storage: contextStorage,
                 trace,
                 secrets,
             };

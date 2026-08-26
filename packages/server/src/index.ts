@@ -16,6 +16,8 @@ export type {
 } from "./builder/index";
 export { initLunora } from "./builder/index";
 export { createSecrets } from "./create-secrets";
+export type { DeferredDeleteFlushResult } from "./deferred-deletes";
+export { flushDeferredDeletes, withDeferredDeletes } from "./deferred-deletes";
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
 export { defineEnv, LunoraEnvError, redactSecrets } from "./env";
 export type { LunoraErrorCode } from "./error";
@@ -135,6 +137,7 @@ export type {
     LunoraTracer,
     LunoraWideEvent,
     MutationCtx,
+    MutationStorage,
     OnDeleteAction,
     PaginationOptions,
     PaginationResult,

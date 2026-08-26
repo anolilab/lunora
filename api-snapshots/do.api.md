@@ -303,6 +303,7 @@ abstract class ShardDO {
     protected get sql(): unknown;
     protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>>;
     protected isInTransaction(): boolean;
+    protected deferPastResponse(work: Promise<unknown>): Promise<void>;
     protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
     protected getInboundBookmark(): string | undefined;
     protected setOutboundBookmark(bookmark: string | undefined): void;
