@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.39...@lunora/shard-engine@1.0.0-alpha.40) (2026-08-26)
+
+### Performance Improvements
+
+* five profiled hot-path optimizations ([#487](https://github.com/anolilab/lunora/issues/487)) ([12e867c](https://github.com/anolilab/lunora/commit/12e867ceeeae59d364c4d7dc234febab187d0150))
+
 ## @lunora/shard-engine [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.38...@lunora/shard-engine@1.0.0-alpha.39) (2026-08-26)
 
 
