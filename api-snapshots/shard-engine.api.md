@@ -2434,6 +2434,16 @@ class ShapeDiffCache {
 }
 ```
 
+### `ShapePokeCursorRow` (interface)
+
+```ts
+interface ShapePokeCursorRow {
+    connectionId: string;
+    cursor: number;
+    subId: string;
+}
+```
+
 ### `ShapePokePart` (interface)
 
 ```ts
@@ -4707,6 +4717,12 @@ const writeSearchBackfillState: (sql: SqlExec, companion: string, cursor: string
 
 ```ts
 const writeShapePokeCursor: (sql: SqlExec, connectionId: string, subId: string, cursor: number) => void;
+```
+
+### `writeShapePokeCursors` (const)
+
+```ts
+const writeShapePokeCursors: (sql: SqlExec, rows: ReadonlyArray<ShapePokeCursorRow>) => void;
 ```
 
 ### `writeTouchesMemo` (const)
