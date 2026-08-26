@@ -1,3 +1,11 @@
+## @lunora/workflow [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.33...@lunora/workflow@1.0.0-alpha.34) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.30
+* **@lunora/server:** upgraded to 1.0.0-alpha.86
+
 ## @lunora/workflow [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.32...@lunora/workflow@1.0.0-alpha.33) (2026-08-26)
 
 
