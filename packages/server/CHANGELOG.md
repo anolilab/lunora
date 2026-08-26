@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.84...@lunora/server@1.0.0-alpha.85) (2026-08-26)
+
+### Features
+
+* **server:** add defineDocumentHistory for row-version history ([#486](https://github.com/anolilab/lunora/issues/486)) ([eb71cd0](https://github.com/anolilab/lunora/commit/eb71cd0a6846b4f72ed14f1e66bae4767001bdbc))
+
 ## @lunora/server [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.83...@lunora/server@1.0.0-alpha.84) (2026-08-26)
 
 ### Features
