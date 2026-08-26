@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, beforeAll, bench, describe } from "vitest";
+import { bench, describe } from "vitest";
 
 import { runCodegen } from "../src/index";
 
@@ -22,26 +22,51 @@ import { runCodegen } from "../src/index";
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "__tests__", "fixtures", "simple");
 
-describe("runCodegen end-to-end (simple fixture)", () => {
-    // The cold run is self-contained (fresh workdir per call), so it survives
-    // CodSpeed's repeated invocation. The warm run needs a primed workdir set up
-    // once — that lives in beforeAll/afterAll rather than the tinybench
-    // `setup`/`teardown` options, which CodSpeed's instrumented runner ignores
-    // (it would otherwise run against a stale, already-removed workdir).
-    let warmWorkdir: string;
+let warmWorkdir: string | undefined;
 
-    beforeAll(() => {
-        warmWorkdir = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-warm-"));
-        cpSync(join(fixtureRoot, "lunora"), join(warmWorkdir, "lunora"), { recursive: true });
+/**
+ * A workdir with `_generated/*` already written, created on first use.
+ *
+ * Neither of the two obvious places for this works under the instrumented
+ * runner. tinybench's `setup`/`teardown` options are ignored by it outright;
+ * `beforeAll` runs in a DIFFERENT context from the bench bodies, so the variable
+ * it assigns reads back `undefined` inside them.
+ *
+ * That second failure is why this bench measured nothing at all. The warm body
+ * threw `The "path" argument must be of type string` on every iteration — and a
+ * bench that throws takes the whole FILE's samples with it, silently and with a
+ * zero exit, so the cold run reported nothing either and the summary printed
+ * `NaNx faster than`. CodSpeed was tracking a number that was never measured.
+ *
+ * Lazily initialising on first call sidesteps both: it runs in whichever context
+ * the bench body runs in, and it primes exactly once per context.
+ * @returns the primed workdir path
+ */
+const primedWorkdir = (): string => {
+    warmWorkdir ??= (() => {
+        const created = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-warm-"));
+
+        cpSync(join(fixtureRoot, "lunora"), join(created, "lunora"), { recursive: true });
         // Prime the on-disk output so the bench exercises the `writeIfChanged`
-        // no-op path.
-        runCodegen({ projectRoot: warmWorkdir });
-    });
+        // no-op path rather than a first write.
+        runCodegen({ projectRoot: created });
 
-    afterAll(() => {
+        return created;
+    })();
+
+    return warmWorkdir;
+};
+
+// Cleaned on process exit rather than in `afterAll`, which cannot see the value
+// for the same context reason. The directory is small and lives in the OS temp
+// dir, so a missed cleanup after a hard kill is harmless.
+process.on("exit", () => {
+    if (warmWorkdir !== undefined) {
         rmSync(warmWorkdir, { force: true, recursive: true });
-    });
+    }
+});
 
+describe("runCodegen end-to-end (simple fixture)", () => {
     bench(
         "cold run — fresh workdir, full project setup",
         () => {
@@ -61,7 +86,7 @@ describe("runCodegen end-to-end (simple fixture)", () => {
     bench(
         "warm run — same workdir, only emit phase changes",
         () => {
-            runCodegen({ projectRoot: warmWorkdir });
+            runCodegen({ projectRoot: primedWorkdir() });
         },
         { iterations: 20 },
     );

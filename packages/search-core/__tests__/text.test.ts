@@ -101,6 +101,16 @@ describe(stringifySearchText, () => {
         expect(stringifySearchText({ a: 1 })).toBe('{"a":1}');
         expect(stringifySearchText([1, 2, 3])).toBe("[1,2,3]");
     });
+
+    it("yields empty text for values JSON cannot represent", () => {
+        expect.assertions(2);
+
+        // `JSON.stringify` is typed `=> string` but returns undefined for a bare
+        // function or symbol. A document can carry either, and letting that
+        // undefined through would put the string "undefined" into the index.
+        expect(stringifySearchText(() => "ignored")).toBe("");
+        expect(stringifySearchText(Symbol("ignored"))).toBe("");
+    });
 });
 
 describe(searchTextUnchanged, () => {

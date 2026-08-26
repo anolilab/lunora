@@ -36,30 +36,6 @@ interface SearchPage {
     page: Record<string, unknown>[];
 }
 
-/** Base64 for cursor text. Kept local so this package stays free of engine imports. */
-/** Any code point outside ASCII — the test gating {@link toBase64}'s fast path. */
-const NON_ASCII = /[\u0080-\u{10FFFF}]/u;
-
-const toBase64 = (text: string): string => {
-    // `btoa` already takes a latin-1 string, and an all-ASCII string IS its own
-    // UTF-8 byte sequence — so for one the encode and the byte-by-byte rebuild
-    // below are both the identity. Cursors are `JSON.stringify` of a creation
-    // time and an id, so that is nearly always the case, and skipping the two
-    // passes measured ~7x on the encode. A non-ASCII id pays one extra scan.
-    if (!NON_ASCII.test(text)) {
-        return btoa(text);
-    }
-
-    const bytes = new TextEncoder().encode(text);
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
-
-    return btoa(binary);
-};
-
 const fromBase64 = (encoded: string): string => {
     const binary = atob(encoded);
     const bytes = Uint8Array.from(binary, (character) => character.codePointAt(0) ?? 0);
@@ -319,7 +295,7 @@ export const searchPageScan = (plan: SearchPagePlan): number => Math.min(plan.of
  * it opaque, matching the keyset cursors elsewhere so callers never learn to
  * parse one.
  */
-export const encodeSearchCursor = (offset: number): string => toBase64(`search:${String(offset)}`);
+export const encodeSearchCursor = (offset: number): string => btoa(`search:${String(offset)}`);
 
 /**
  * Decode a search page cursor back to its offset. Returns `undefined` for
