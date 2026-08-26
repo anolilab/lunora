@@ -95,19 +95,25 @@ const DEFAULT_VACUUM_LIMIT = 512;
 const MAX_REDACT_DEPTH = 16;
 
 /**
- * Tie-breaker for entries written in the same millisecond.
+ * Ordering, in two parts, because no single value gives both halves.
  *
- * Workers do not advance the clock between I/O operations, so EVERY entry
- * written by one mutation shares a `recordedAt` — two updates to a row, or an
- * update plus a cascade, are the common case rather than a race. Without a
- * second sort key `.order("desc")` returns them in an arbitrary order, and a
- * point-in-time read picks arbitrarily among them.
+ * `_commitSeq` (from `.commitOrdered()` on the table) is a per-shard integer
+ * allocated ONCE PER MUTATION and strictly increasing in commit order. It is
+ * durable, so it keeps ordering across a Durable Object restart — which
+ * `recordedAt` cannot, being wall-clock, and which an in-process counter cannot,
+ * being reset by the restart.
  *
- * Module-scoped, so it is monotonic for the life of an isolate. A cold start
- * resets it, which is harmless: the clock will have moved on, and `recordedAt`
- * orders across isolates.
+ * What `_commitSeq` does NOT do is separate entries written by the SAME mutation,
+ * and that is the common case rather than a race: Workers do not advance the
+ * clock between I/O operations, so two updates to a row, or an update plus a
+ * cascade, share both a `recordedAt` and a `_commitSeq`. The per-component `seq`
+ * counter supplies that inner order.
+ *
+ * So the sort key is `[_commitSeq, seq]`: durable across mutations, defined
+ * within one. `seq` is per-component rather than module-scoped so its lifetime is
+ * visible and a test can simulate a restart by building a second component.
  */
-let sequence = 0;
+const ORDER_KEYS = ["_commitSeq", "seq"] as const;
 
 /**
  * Fields never written into a snapshot, whatever table they appear on.
@@ -239,6 +245,8 @@ const documentHistoryExtension = defineSchemaExtension(DOCUMENT_HISTORY_KEY, {
             tableName: v.string(),
             truncated: v.optional(v.boolean()),
         })
+            // Stamps `_commitSeq` on every row: the durable half of the sort key.
+            .commitOrdered()
             // Drives `listForDocument`, newest-first and optionally bounded by
             // `before`. `seq` is part of the key so entries sharing a millisecond
             // still have one defined order.
@@ -268,6 +276,16 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
             ? Math.max(1, Math.floor(options.maxSnapshotBytes))
             : DEFAULT_MAX_SNAPSHOT_BYTES;
     const redacted = new Set([...DEFAULT_REDACTED_FIELDS, ...(options.redact ?? [])]);
+
+    // Separates entries sharing one mutation's `_commitSeq`. Only ever compared
+    // WITHIN a `_commitSeq`, so a reset on restart cannot reorder anything: a
+    // later mutation always carries a higher `_commitSeq` than an earlier one.
+    let sequence = 0;
+    const nextSequence = (): number => {
+        sequence += 1;
+
+        return sequence;
+    };
 
     /**
      * Strip the secret-shaped fields, at every depth.
@@ -336,13 +354,11 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
         const previousJson = snapshot(entry.previous);
         const truncated = (entry.doc !== undefined && documentJson === undefined) || (entry.previous !== undefined && previousJson === undefined);
 
-        sequence += 1;
-
         await context.db.insert(DOCUMENT_HISTORY_TABLE, {
             documentId: entry.documentId,
             op: entry.op,
             recordedAt: Date.now(),
-            seq: sequence,
+            seq: nextSequence(),
             tableName: entry.tableName,
             // Past the cap the entry keeps its metadata and loses that payload:
             // "this row changed at this time" survives, which is the part a trail
@@ -382,6 +398,28 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
                 )
                 .order("desc")
                 .take(limit);
+
+            // Re-sorted on the durable key. The index reads by `recordedAt`, which
+            // is what `before` bounds against and what a caller asks in — but wall
+            // clock is not commit order, and a restart can hand two mutations the
+            // same millisecond. `_commitSeq` is the shard's own commit counter, so
+            // it separates them; `seq` separates entries inside one mutation, which
+            // share a `_commitSeq`.
+            //
+            // Sorting the page rather than the table is exact for everything the
+            // page contains. A tie group straddling `limit` can still be cut
+            // mid-group — raise `limit` if you are reconstructing across one.
+            rows.sort((a, b) => {
+                for (const key of ORDER_KEYS) {
+                    const delta = ((b[key] as number | undefined) ?? 0) - ((a[key] as number | undefined) ?? 0);
+
+                    if (delta !== 0) {
+                        return delta;
+                    }
+                }
+
+                return 0;
+            });
 
             return rows.map((row) => {
                 return {

@@ -12,9 +12,9 @@ import type { TriggerBuilder, TriggerCtx, TriggerDefinition } from "../src/index
 type Predicate = (row: Record<string, unknown>) => boolean;
 
 const byRecordedAt = (rows: Record<string, unknown>[], direction: "asc" | "desc"): Record<string, unknown>[] =>
-    // Both index keys, in order — `[..., recordedAt, seq]`. Sorting on
-    // `recordedAt` alone would leave the double unable to express the ordering
-    // the real index gives, and the tie-break test would fail against correct code.
+    // The index keys, in order — `[..., recordedAt, seq]`. Sorting on `recordedAt`
+    // alone would leave the double unable to express the ordering the real index
+    // gives, and the tie-break tests would fail against correct code.
     rows.toSorted((a, b) => {
         const byTime = (a["recordedAt"] as number) - (b["recordedAt"] as number);
         const delta = byTime === 0 ? (a["seq"] as number) - (b["seq"] as number) : byTime;
@@ -67,6 +67,11 @@ const createRangeBuilder = (predicates: Predicate[]) => {
 const createMemoryDb = () => {
     const rows = new Map<string, Record<string, unknown>>();
     let nextId = 1;
+    // Stands in for `.commitOrdered()`: a per-shard integer allocated ONCE per
+    // mutation and strictly increasing in commit order. `commit()` opens the next
+    // one, so a test can express "these writes shared a mutation" and "this write
+    // came from a later one" — including across a simulated restart.
+    let commitSeq = 1;
 
     const makeReader = (table: string) => {
         const predicates: Predicate[] = [];
@@ -104,9 +109,13 @@ const createMemoryDb = () => {
             const id = `${table}|${String(nextId)}`;
 
             nextId += 1;
-            rows.set(id, { ...document, __table: table, _creationTime: Date.now(), _id: id });
+            rows.set(id, { ...document, __table: table, _commitSeq: commitSeq, _creationTime: Date.now(), _id: id });
 
             return id;
+        },
+        /** Open the next mutation, the way a fresh dispatch does. */
+        commit: () => {
+            commitSeq += 1;
         },
         query: (table: string) => makeReader(table),
         rows,
@@ -539,5 +548,52 @@ describe("defineDocumentHistory — snapshot fidelity", () => {
         const result = await history.functions.listForDocument.handler({ db }, { documentId: "thread_1" });
 
         expect(result[0]?.doc).toStrictEqual({ title: "c" });
+    });
+});
+
+describe("defineDocumentHistory — ordering across a restart", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("keeps commit order when the in-process counter has been reset", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+
+        // Two components over one table: the second stands in for the shard
+        // restarting, which resets the in-process `seq` to zero. The clock is
+        // pinned to the same instant throughout, so `recordedAt` cannot break the
+        // tie either — only the durable `_commitSeq` can.
+        const before = defineDocumentHistory();
+        const after = defineDocumentHistory();
+
+        vi.setSystemTime(1000);
+        await capture(before.record).handlers["update"]?.(triggerContextFor(db), {
+            doc: { title: "first" },
+            id: "thread_1",
+            op: "update",
+            previous: { title: "zero" },
+            table: "threads",
+        } as never);
+
+        db.commit();
+
+        await capture(after.record).handlers["update"]?.(triggerContextFor(db), {
+            doc: { title: "second" },
+            id: "thread_1",
+            op: "update",
+            previous: { title: "first" },
+            table: "threads",
+        } as never);
+
+        const result = await after.functions.listForDocument.handler({ db }, { documentId: "thread_1" });
+
+        expect(result[0]?.doc).toStrictEqual({ title: "second" });
+        expect(result[1]?.doc).toStrictEqual({ title: "first" });
     });
 });
