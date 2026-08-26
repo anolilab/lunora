@@ -19,6 +19,7 @@ export default createConfig(
             "**/coverage/**",
             "**/*.md/**",
             "**/vitest.config.ts",
+            "**/vitest.bench.config.ts",
             "**/packem.config.ts",
             "**/package.json",
             "**/tsconfig*.json",
@@ -30,7 +31,7 @@ export default createConfig(
     // Test files: relax rules that are noisy or inappropriate in test code. Source
     // files still enforce all of these.
     {
-        files: ["**/__tests__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
+        files: ["**/__tests__/**/*.{ts,tsx}", "**/__bench__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
         rules: {
             "@typescript-eslint/naming-convention": "off",
             "@typescript-eslint/no-explicit-any": "off",

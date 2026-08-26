@@ -235,3 +235,59 @@ describe(planSearchBackfillPass, () => {
         });
     });
 });
+
+/**
+ * `foldText` skips NFD / the diacritic strip / NFC when its input is all-ASCII,
+ * on the grounds that each is provably the identity there. That reasoning is
+ * only as good as this suite: analysis is stored, so a fast path that folded ANY
+ * input differently from the full path would be a silent recall bug across every
+ * index built after it — never an error anyone would see.
+ */
+describe("search analyzer — ascii fast path", () => {
+    /** The pre-fast-path fold, verbatim. */
+    const reference = (text: string): string =>
+        text
+            .normalize("NFD")
+            .replaceAll(/[\u0300-\u036F]/gu, "")
+            .normalize("NFC")
+            .toLowerCase();
+
+    it.each([
+        ["empty", ""],
+        ["plain ascii", "Hello World 123"],
+        ["ascii punctuation", "a\tb\nc!?_-=+[]{}|;:'\",.<>/?`~"],
+        ["every ascii code point", Array.from({ length: 128 }, (_v, index) => String.fromCodePoint(index)).join("")],
+        ["precomposed accent", "café"],
+        ["decomposed accent", "cafe\u0301"],
+        ["german sharp s", "Straße GROSSE ẞ"],
+        ["kana with voiced marks", "が パ か ハ"],
+        ["decomposed kana", "か\u3099 ハ\u309A"],
+        ["hangul syllables", "한국어 안녕하세요"],
+        ["greek and cyrillic", "Ώ ω Привет ЁЖ"],
+        ["fullwidth latin", "ｆｕｌｌｗｉｄｔｈ ＡＢＣ"],
+        ["astral plane", "emoji 🎉 tail 𝔘𝔫𝔦"],
+        ["turkish dotted i", "İstanbul ırmak"],
+        ["mixed ascii and non-ascii", "plain ascii then café then plain"],
+        ["combining mark on ascii", "a\u0300e\u0301i\u0302"],
+    ])("folds %s identically to the full normalization path", (_label, input) => {
+        expect.assertions(1);
+
+        // Folding is only observable through `document`, so compare there.
+        expect(createSearchAnalyzer(undefined).document(input)).toStrictEqual(
+            (reference(input).match(/[\p{L}\p{N}]+/gu) ?? []).filter((token) => token.length <= MAX_TOKEN_LENGTH),
+        );
+    });
+
+    it("tokenizes the same text identically on repeat calls", () => {
+        expect.assertions(2);
+
+        // The token regex is module-level and `g`-flagged now. `match` zeroes
+        // `lastIndex`, but a future switch to `exec`/`test` would not — and the
+        // symptom would be every second call returning different tokens.
+        const analyzer = createSearchAnalyzer("en");
+        const first = analyzer.document("the quick brown fox jumps");
+
+        expect(analyzer.document("the quick brown fox jumps")).toStrictEqual(first);
+        expect(first.length).toBeGreaterThan(0);
+    });
+});
