@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.129...@lunora/codegen@1.0.0-alpha.130) (2026-08-26)
+
+### Bug Fixes
+
+* three breaks live on alpha ([#493](https://github.com/anolilab/lunora/issues/493)) ([bdb9336](https://github.com/anolilab/lunora/commit/bdb9336d8f487b87d8cbfa31b8006e7af20f87f0))
+
 ## @lunora/codegen [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.128...@lunora/codegen@1.0.0-alpha.129) (2026-08-26)
 
 
