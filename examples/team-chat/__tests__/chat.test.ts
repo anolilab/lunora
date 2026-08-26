@@ -49,8 +49,27 @@ it("posts messages into a channel and reads them back", async () => {
 
     const messages = await ada.query(listMessages, { channelId: "general" });
 
-    expect(messages.map((message) => message.content)).toStrictEqual(["hello", "hi back"]);
-    expect(messages.map((message) => message.authorId)).toStrictEqual(["u-ada", "u-grace"]);
+    // Asserted as a set, not a sequence. `messages` is not `.commitOrdered()`,
+    // and `list` reads it `.withIndex("by_channel").order("asc")` — so rows
+    // sharing a channel are ordered by `_creationTime`, which has millisecond
+    // resolution. Two sends inside one tick have no discriminator left, and the
+    // relative order of these two is genuinely undefined.
+    //
+    // It used to look stable only because the index could not satisfy the
+    // ORDER BY and SQLite sorted into a temp B-tree that happened to preserve
+    // insertion order. Indexing the sort keys made that an index walk, and the
+    // accident went away.
+    //
+    // `_creationTime` is deliberately NOT the fix: it records when a row was
+    // MADE, and the docs are explicit that stamp order and commit order can
+    // disagree. A table that needs write order declares `.commitOrdered()` and
+    // reads `orderBy: [{ _commitSeq: "asc" }]`; two chat messages a millisecond
+    // apart do not need it.
+    expect(messages).toHaveLength(2);
+    expect(messages.map((message) => `${message.authorId}:${message.content}`).toSorted((left, right) => left.localeCompare(right))).toStrictEqual([
+        "u-ada:hello",
+        "u-grace:hi back",
+    ]);
 });
 
 it("keeps channels apart", async () => {
