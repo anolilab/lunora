@@ -372,6 +372,54 @@ pre-write row does not discard a small post-write one.
     needs a policy — deny client access outright, since `listForDocument` is internal and meant to be wrapped by a procedure of your own.
 </Callout>
 
+## `defineActionCache(options)` — memoising an action
+
+The section above caches a _response_ at the HTTP edge. This caches the _result_
+of an action inside the app — the model call, the third-party fetch, the
+embedding — keyed by its arguments, with a TTL:
+
+```ts
+// lunora/cache.ts
+import { defineActionCache } from "@lunora/server";
+
+export const cache = defineActionCache({ ttlMs: 60 * 60 * 1000 });
+
+// lunora/schema.ts — merges in as `actionCache_entries`
+export const schema = defineSchema({ ... }).extend(cache.extension);
+
+// Re-export so codegen registers it; schedule it from a cron for bulk cleanup.
+export const { purgeExpired } = cache.functions;
+```
+
+```ts
+export const embed = action
+    .input({ text: v.string() })
+    .action(async ({ args, ctx }) => cache.wrap(ctx, "embed", args, async () => callEmbeddingModel(args.text)));
+```
+
+`wrap(ctx, name, args, fn)` returns the stored value on a hit and runs `fn` on a
+miss. The key is a SHA-256 of `name` and `JSON.stringify(args)` — call sites pass
+whole model requests, which are far too large to index directly — so two calls
+agree only if their arguments serialize identically, key order included. Pass the
+handler's own `args` rather than rebuilding one.
+
+`invalidate(ctx, name, args)` drops one entry; `invalidateAll(ctx, name)` drops
+every entry under a name.
+
+Expiry is lazy: a read past the TTL reports a miss and the row is overwritten by
+the same call. Each miss also reaps a few expired rows, so an app with steady
+traffic stays bounded on its own; `purgeExpired` is for reclaiming entries whose
+names went quiet.
+
+Two things it deliberately does not do. There is **no single-flight** — two
+callers that miss at the same instant both run `fn` — because preventing that
+needs a lock held across an arbitrarily long external call, whose own failure
+mode (a crashed holder wedging the key) is worse than a duplicate cold start.
+And the stored value is **JSON**, so a `Date` comes back as a string: cache what
+you would send over the wire. A result over `maxValueBytes` (512 KB by default)
+is returned to the caller but not stored, so a large answer costs a cache miss
+rather than a failed action.
+
 ## Subpaths
 
 - `@lunora/server/rls/testing`: `expectPolicy(policies)`, an in-process RLS

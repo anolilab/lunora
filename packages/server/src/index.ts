@@ -1,3 +1,5 @@
+export type { ActionCacheComponent, ActionCacheContext, ActionCacheDatabase, ActionCacheFunctions, DefineActionCacheOptions } from "./action-cache";
+export { ACTION_CACHE_DEFAULT_TTL_MS, ACTION_CACHE_TABLE, actionCacheExtension, cacheKeyFor, defineActionCache } from "./action-cache";
 export { default as asBucketStorage } from "./as-bucket-storage";
 export type {
     ActionBuilder,
