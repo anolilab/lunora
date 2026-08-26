@@ -308,6 +308,13 @@ interface ParseContext {
      * {@link ValidationError} retains a stable copy.
      */
     path: (number | string)[];
+
+    /**
+     * Set by `v.union` for the duration of a branch trial. While it is `true`,
+     * {@link fail} throws the shared {@link PROBE_MISS} instead of building a
+     * real {@link ValidationError} — see that constant for why.
+     */
+    probe?: boolean;
 }
 
 interface InternalValidator<T> extends Validator<T> {
@@ -394,12 +401,33 @@ const isValidUrl = (value: string): boolean => {
     return protocol === "http:" || protocol === "https:";
 };
 
+/**
+ * Pre-built miss signal thrown by {@link fail} while a `v.union` branch trial is
+ * in flight (`context.probe`). Constructing a real {@link ValidationError} costs
+ * ~2.4µs, ~90% of it V8's stack capture — and a union pays that for every branch
+ * it tries before the matching one, so a *successful* parse of a 3-member union's
+ * last branch cost ~400x a first-branch match. Nothing reads the diagnostics of a
+ * branch that merely missed, so the trial throws this shared, stackless instance
+ * instead and the union re-runs the loop without `probe` only when *every* branch
+ * missed — i.e. on the error path, where building the real diagnostic is fine.
+ *
+ * It is a `ValidationError` so the existing `instanceof` catch sites keep
+ * working, and it can never escape to a caller: `probe` is set only inside
+ * `union`'s trial (restored in a `finally`), and the only rethrow is into an
+ * enclosing union that is itself probing.
+ */
+const PROBE_MISS = new ValidationError("union branch probe miss (internal)", { expected: "", path: [], received: "" });
+
 // Declared as a function (not an arrow expression) so TypeScript treats its
 // `: never` return as a control-flow assertion — callers rely on this to narrow
 // `value` after `if (!check) fail(...)`. `func-style` is disabled here because
 // an arrow const loses that narrowing and surfaces no-unsafe-call downstream.
 // eslint-disable-next-line func-style
 function fail(context: ParseContext, expected: string, received: unknown, options?: { redactValue?: boolean }): never {
+    if (context.probe === true) {
+        throw PROBE_MISS;
+    }
+
     // Snapshot the live mutable path stack — composite parsers push/pop into it,
     // so the ValidationError must own its own copy.
     const path = [...context.path];
@@ -988,6 +1016,48 @@ const record = <K extends Validator<string>, V extends Validator>(
     );
 };
 
+/**
+ * The cold half of `v.union`'s parser: every branch already missed under the
+ * trial pass, so re-run them WITHOUT `context.probe` to build the real
+ * diagnostic. Paying per-branch {@link ValidationError} construction is fine
+ * here — this only runs on the error path, and the re-run is what keeps the
+ * message byte-identical to the pre-trial implementation.
+ *
+ * Split out of the parser rather than inlined so the hot path stays a single
+ * loop. Always throws; the return type only documents that.
+ */
+const failUnion = (memberInternals: ReadonlyArray<InternalValidator<unknown>>, value: unknown, context: ParseContext, baseDepth: number): never => {
+    const { path } = context;
+    // Keep the deepest (longest-path) branch failure — the most specific detail.
+    let deepestError: ValidationError | undefined;
+
+    for (const member of memberInternals) {
+        try {
+            member._parse(value, context);
+        } catch (error: unknown) {
+            if (!(error instanceof ValidationError)) {
+                throw error;
+            }
+
+            path.length = baseDepth;
+
+            if (deepestError === undefined || error.path.length > deepestError.path.length) {
+                deepestError = error;
+            }
+        }
+    }
+
+    // With exactly one member, surface its own (more specific) error; otherwise
+    // report the union miss at the union's own path, citing the closest branch.
+    if (memberInternals.length === 1 && deepestError !== undefined) {
+        throw deepestError;
+    }
+
+    const detail = deepestError === undefined ? "" : ` (closest: expected ${deepestError.expected} at ${formatPath(deepestError.path)})`;
+
+    return fail(context, `union of ${String(memberInternals.length)} member(s)${detail}`, value);
+};
+
 const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValidator<Infer<Vs[number]>, Infer<Vs[number]>> => {
     if (members.length === 0) {
         throw new LunoraError("INTERNAL", "v.union requires at least one member");
@@ -999,48 +1069,47 @@ const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValid
         createValidator<Infer<Vs[number]>>(
             "union",
             (value, context): Infer<Vs[number]> => {
-                // Parse each member against the live context so the real path is
-                // threaded into any per-branch ValidationError. We keep the
-                // deepest (longest-path) branch failure to surface the most
-                // specific diagnostic. A non-ValidationError from a member's
-                // refinement is a programmer error, not a branch miss, so it
-                // propagates instead of being swallowed.
-                let deepestError: ValidationError | undefined;
                 const { path } = context;
                 const baseDepth = path.length;
+                // Trial pass. `probe` makes `fail` throw the shared PROBE_MISS
+                // rather than build a per-branch ValidationError nobody reads once
+                // a later branch matches — that construction was the entire cost of
+                // a union whose match is not its first member. A non-ValidationError
+                // from a member's refinement is a programmer error, not a branch
+                // miss, so it propagates instead of being swallowed.
+                const outerProbe = context.probe === true;
 
-                for (const member of memberInternals) {
-                    try {
-                        return member._parse(value, context) as Infer<Vs[number]>;
-                    } catch (error: unknown) {
-                        if (!(error instanceof ValidationError)) {
-                            throw error;
-                        }
+                context.probe = true;
 
-                        // A composite member that threw mid-descent left its own
-                        // segments on the shared path stack (the pop after the
-                        // throwing child never ran); unwind to our entry depth
-                        // before trying the next branch.
-                        path.length = baseDepth;
+                try {
+                    for (const member of memberInternals) {
+                        try {
+                            return member._parse(value, context) as Infer<Vs[number]>;
+                        } catch (error: unknown) {
+                            if (!(error instanceof ValidationError)) {
+                                throw error;
+                            }
 
-                        if (deepestError === undefined || error.path.length > deepestError.path.length) {
-                            deepestError = error;
+                            // A composite member that threw mid-descent left its own
+                            // segments on the shared path stack (the pop after the
+                            // throwing child never ran); unwind to our entry depth
+                            // before trying the next branch.
+                            path.length = baseDepth;
                         }
                     }
+                } finally {
+                    context.probe = outerProbe;
                 }
 
-                // All branches failed. If exactly one member exists, surface its
-                // own (more specific) error; otherwise report the union miss at
-                // the union's own path while citing the closest branch detail.
-                if (memberInternals.length === 1 && deepestError !== undefined) {
-                    throw deepestError;
+                // Every branch missed. Under an enclosing union's own trial the
+                // diagnostic is that union's to build, so signal the miss and stop.
+                if (outerProbe) {
+                    throw PROBE_MISS;
                 }
 
-                const detail = deepestError === undefined ? "" : ` (closest: expected ${deepestError.expected} at ${formatPath(deepestError.path)})`;
-
-                // `fail` is `: never`; returning it makes every path of this arrow
-                // explicitly terminal (consistent-return doesn't track never-returns).
-                return fail(context, `union of ${String(members.length)} member(s)${detail}`, value);
+                // `failUnion` is `: never`; returning it makes every path of this
+                // arrow explicitly terminal (consistent-return doesn't track those).
+                return failUnion(memberInternals, value, context, baseDepth);
             },
             { members },
         ),

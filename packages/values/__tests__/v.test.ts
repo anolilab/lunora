@@ -736,6 +736,36 @@ describe("v.union() edge cases", () => {
 
         expect(v.union(v.string()).parse("ok")).toBe("ok");
     });
+
+    it("a nested union that misses every branch reports a real diagnostic, not the internal probe signal", () => {
+        expect.hasAssertions();
+
+        // `union` runs its branch trial with `context.probe` set, which makes
+        // `fail` throw the shared, stackless PROBE_MISS instead of building a
+        // per-branch ValidationError. The inner union here misses under the
+        // outer union's trial, so PROBE_MISS travels one level up — it must
+        // never reach the caller, and the outer union must still build the
+        // full "union of N member(s) (closest: …)" diagnostic.
+        const schema = v.object({ value: v.union(v.union(v.number(), v.boolean()), v.string()) });
+        const result = schema.safeParse({ value: { nope: true } });
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        expect(result.error.message).not.toMatch(/probe/iu);
+        expect(result.error.expected).toMatch(/^union of 2 member\(s\)/u);
+        expect(result.error.path).toStrictEqual(["value"]);
+    });
+
+    it("a nested union still matches on a branch reached only after a miss", () => {
+        expect.assertions(2);
+
+        // The trial pass must leave the shared path stack unwound so a later
+        // branch parses at the right depth, and the matched value passes through.
+        const schema = v.object({ value: v.union(v.union(v.number(), v.boolean()), v.array(v.string())) });
+
+        expect(schema.parse({ value: ["a", "b"] })).toStrictEqual({ value: ["a", "b"] });
+        expect(schema.parse({ value: true })).toStrictEqual({ value: true });
+    });
 });
 
 describe(".meta() without a description", () => {
