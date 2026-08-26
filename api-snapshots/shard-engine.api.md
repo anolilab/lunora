@@ -4613,10 +4613,10 @@ const summarizeSubscriptions: (attachments: SocketAttachmentLike[]) => Subscript
 ### `tableColumns` (const)
 
 ```ts
-const tableColumns: (definition: TableDefinitionLike) => [
+const tableColumns: (definition: TableDefinitionLike) => ReadonlyArray<readonly [
     string,
     ColumnMetaLike
-][];
+]>;
 ```
 
 ### `tableFromDepKey` (const)

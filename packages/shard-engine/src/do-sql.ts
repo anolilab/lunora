@@ -237,7 +237,7 @@ const aggUpsertSql = (aggTable: string, key: unknown, value: unknown, count: unk
  * live one — so the derived column list is a per-definition constant. Keyed
  * weakly so a definition dropped by a schema swap takes its entry with it.
  */
-const TABLE_COLUMNS_CACHE = new WeakMap<TableDefinitionLike, [string, ColumnMetaLike][]>();
+const TABLE_COLUMNS_CACHE = new WeakMap<TableDefinitionLike, ReadonlyArray<readonly [string, ColumnMetaLike]>>();
 
 /**
  * The schema-declared columns of a table, as `[field, columnMeta]` pairs (skips
@@ -249,27 +249,28 @@ const TABLE_COLUMNS_CACHE = new WeakMap<TableDefinitionLike, [string, ColumnMeta
  * array of fresh pairs — allocation proportional to the table's width, per row
  * written, to rebuild a value that cannot have changed.
  *
- * The returned array is shared and frozen. This function is exported from the
- * package root, so "shared" cannot be left to a doc comment: a caller that
- * pushed to it would poison the memo for every later write on that table, and
- * the symptom — `.default()` values silently no longer applying — is data loss
- * that no test would attribute back here. Freezing costs one call per table and
- * turns it into an immediate throw instead.
+ * The returned array is shared and frozen, and so is every pair in it. This
+ * function is exported from the package root, so "shared" cannot be left to a
+ * doc comment: a caller that pushed to the array — or reassigned a pair's column
+ * meta — would poison the memo for every later write on that table, and the
+ * symptom, `.default()` values silently no longer applying, is data loss that no
+ * test would attribute back here. Freezing costs one call per column per table,
+ * once, and turns the mutation into an immediate throw instead.
  */
-const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
+const tableColumns = (definition: TableDefinitionLike): ReadonlyArray<readonly [string, ColumnMetaLike]> => {
     const cached = TABLE_COLUMNS_CACHE.get(definition);
 
     if (cached !== undefined) {
         return cached;
     }
 
-    const columns: [string, ColumnMetaLike][] = [];
+    const columns: (readonly [string, ColumnMetaLike])[] = [];
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         const column = validator._meta?.column;
 
         if (column) {
-            columns.push([field, column]);
+            columns.push(Object.freeze<readonly [string, ColumnMetaLike]>([field, column]));
         }
     }
 
