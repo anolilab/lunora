@@ -35,7 +35,11 @@ export const unreachable: (message: string) => never = (message) => {
  * arm — the two places a missing value is most naturally rejected. Unlike
  * {@link invariant} and {@link unreachable}, which are pinned to `INTERNAL`, this
  * takes the code, which is what a client-actionable failure needs.
- * @param code machine-readable reason, keyed into `ERROR_CATALOG`
+ *
+ * Any string is a valid `code`. A well-known `ERROR_CATALOG` key fills in the
+ * status, title and hint; a package-specific code with no catalog entry defaults
+ * to status 500 and no hint, so pass those in `options` instead.
+ * @param code machine-readable reason
  * @param message human-readable detail; defaults to `code`
  * @param options status/title/hint/data overrides
  * @example
