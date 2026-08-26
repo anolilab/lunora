@@ -81,6 +81,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DOCUMENT_HISTORY_REDACTED_FIELDS` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DOCUMENT_HISTORY_TABLE` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DailySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -105,6 +113,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DefineDocumentHistoryOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DefineIdentityOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -126,6 +138,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `DefineStorageRuleInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryComponent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryEntry` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryFunctions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1029,6 +1053,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `defineDocumentHistory` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineEnv` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1106,6 +1134,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `deny` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `documentHistoryExtension` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -4695,6 +4727,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DOCUMENT_HISTORY_REDACTED_FIELDS` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DOCUMENT_HISTORY_TABLE` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DailySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -4719,6 +4759,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DefineDocumentHistoryOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DefineIdentityOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -4740,6 +4784,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `DefineStorageRuleInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryComponent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryEntry` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryFunctions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5643,6 +5699,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `defineDocumentHistory` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineEnv` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5720,6 +5780,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `deny` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `documentHistoryExtension` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

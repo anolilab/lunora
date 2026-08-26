@@ -172,6 +172,18 @@ const DEFAULT_LIMIT = 25;
 const DEFAULT_MAX_LIMIT = 100;
 ```
 
+### `DOCUMENT_HISTORY_REDACTED_FIELDS` (const)
+
+```ts
+const DEFAULT_REDACTED_FIELDS: ReadonlyArray<string>;
+```
+
+### `DOCUMENT_HISTORY_TABLE` (const)
+
+```ts
+const DOCUMENT_HISTORY_TABLE: "documentHistory_versions";
+```
+
 ### `DailySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -271,6 +283,16 @@ interface DefineComponentOptions<TExtension extends Record<string, TableDefiniti
 }
 ```
 
+### `DefineDocumentHistoryOptions` (interface)
+
+```ts
+interface DefineDocumentHistoryOptions {
+    maxSnapshotBytes?: number;
+    redact?: ReadonlyArray<string>;
+    retentionMs?: number;
+}
+```
+
 ### `DefineIdentityOptions` (interface)
 
 ```ts
@@ -329,6 +351,48 @@ interface DefineStorageRuleInput<Context = unknown> {
     on: StorageOperation;
     prefix?: string;
     when: (context: StorageRuleContext<Context>) => StorageRuleDecision;
+}
+```
+
+### `DocumentHistoryComponent` (type)
+
+```ts
+type DocumentHistoryComponent = {
+    functions: DocumentHistoryFunctions;
+    record: (t: TriggerBuilder) => Record<string, TriggerDefinition>;
+} & Component<{
+    [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
+```
+
+### `DocumentHistoryEntry` (interface)
+
+```ts
+interface DocumentHistoryEntry {
+    doc?: Record<string, unknown>;
+    documentId: string;
+    op: "delete" | "insert" | "update";
+    previous?: Record<string, unknown>;
+    recordedAt: number;
+    tableName: string;
+    truncated?: boolean;
+}
+```
+
+### `DocumentHistoryFunctions` (interface)
+
+```ts
+interface DocumentHistoryFunctions {
+    listForDocument: RegisteredQuery<{
+        before: ReturnType<typeof v.optional>;
+        documentId: ReturnType<typeof v.string>;
+        limit: ReturnType<typeof v.optional>;
+    }, DocumentHistoryEntry[]>;
+    vacuum: RegisteredMutation<{
+        limit: ReturnType<typeof v.optional>;
+    }, {
+        deleted: number;
+    }>;
 }
 ```
 
@@ -2690,6 +2754,12 @@ const defineAggregateIndex: (name: string, options: AggregateIndexOptions) => Ag
 const defineComponent: <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn, F extends ComponentFunctions = ComponentFunctions>(key: string, options: DefineComponentOptions<TExtension, TContextIn, TContextOut, F>) => Component<TExtension, TContextIn, TContextOut, F>;
 ```
 
+### `defineDocumentHistory` (const)
+
+```ts
+const defineDocumentHistory: (options?: DefineDocumentHistoryOptions) => DocumentHistoryComponent;
+```
+
 ### `defineEnv` (const)
 
 ```ts
@@ -2815,6 +2885,14 @@ const defineVectorIndex: (options: VectorIndexOptions) => VectorIndexDefinition;
 
 ```ts
 const deny: () => WhereInput;
+```
+
+### `documentHistoryExtension` (const)
+
+```ts
+const documentHistoryExtension: SchemaExtension<{
+    [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
 ```
 
 ### `flushDeferredDeletes` (const)

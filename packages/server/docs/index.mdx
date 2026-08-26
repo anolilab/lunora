@@ -318,6 +318,60 @@ response is never cached. `tag` is purgeable through the same
 `ctx.cache.purge({ tags: [...] })` surface `httpRoute(...).cacheTag()` uses, and
 the emitted OpenAPI documents the headers a caller will observe.
 
+## `defineDocumentHistory(options)` — row-version history
+
+`.triggers()` already fires on every write with the merged row and the pre-write
+row in hand, which is exactly the pair a version history needs. This preset gives
+them somewhere to go:
+
+```ts
+// lunora/history.ts
+import { defineDocumentHistory } from "@lunora/server";
+
+export const history = defineDocumentHistory({ retentionMs: 90 * 24 * 60 * 60 * 1000 });
+
+// lunora/schema.ts — attach to each table you want versioned
+const threads = defineTable({ ... }).triggers(history.record);
+
+export const schema = defineSchema({ threads }).extend(history.extension);
+export const { listForDocument, vacuum } = history.functions;
+```
+
+`listForDocument({ documentId, before?, limit? })` returns that row's versions
+newest first. With `before`, the first entry back is the last version at or
+before that instant — a point-in-time reconstruction in one read. `vacuum` drops
+entries past `retentionMs` and reports how many, so a cron can decide whether to
+run again.
+
+Three things worth knowing before you rely on it:
+
+**It records what changed, not who.** A trigger's context carries `db` and
+`scheduler` and no identity, so there is no actor to record and the field does
+not exist. An unattributed trail that called itself an audit log would be worse
+than none.
+
+**Snapshots are redacted, at every depth.** Secret-shaped fields
+(`hashedPassword`, `apiKey`, `refreshToken`, …) are dropped before the entry is
+written — a stored credential outlives the rotation meant to retire it — and the
+filter recurses, so a credential inside a `v.object(...)` column goes too.
+Matching is by exact field name, which is the only signal a trigger has, so use
+`redact` for anything spelled differently (`api_key`, `sessionToken`).
+
+**Reads are internal.** An entry is a full row snapshot, including columns the
+table's own RLS hides, so `listForDocument` is an internal query. Wrap it in a
+procedure of your own with whatever authorization the surface needs.
+
+A snapshot over `maxSnapshotBytes` (64 KB default) is dropped and the entry is
+marked `truncated` — that a row changed, and when, is the part a trail cannot
+afford to lose. `doc` and `previous` are capped independently, so a large
+pre-write row does not discard a small post-write one.
+
+<Callout type="warn">
+    One blind spot: `insertManyUnsafe` skips triggers by design, so seed, migration, and admin-import writes leave no entry. Fine for an undo stack; if you are
+    using this for compliance, that gap has to be closed elsewhere. Note too that on an `.rls("required")` schema the merged `documentHistory_versions` table
+    needs a policy — deny client access outright, since `listForDocument` is internal and meant to be wrapped by a procedure of your own.
+</Callout>
+
 ## Subpaths
 
 - `@lunora/server/rls/testing`: `expectPolicy(policies)`, an in-process RLS
