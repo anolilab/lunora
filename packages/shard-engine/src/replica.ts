@@ -45,7 +45,8 @@ import { parseMinSeq, parseReplicaName } from "../../../shared/replica-name";
 import type { ExportRow } from "./admin-export-import";
 import type { SqlExec } from "./ctx-db";
 import type { CdcChange } from "./ctx-db-cdc";
-import envPositiveInt from "./env-int";
+import { cursorBelowRetainedFloor } from "./ctx-db-cdc";
+import { envPositiveInt } from "./env-int";
 import { RELAY_SIGNATURE_HEADER, siblingSecretOf, siblingStub, signSiblingBody, verifySiblingBody } from "./sibling-channel";
 
 /** How stale a replica read may be when the caller names no cursor (per-deployment via `LUNORA_REPLICA_MAX_STALENESS_MS`). */
@@ -158,7 +159,16 @@ interface ReplicaOwnerHost extends ShardSiblingHost {
     ownerCursor: () => number | undefined;
     /** This shard's CDC epoch, or `undefined` when this shard has no changelog. */
     ownerEpoch: () => string | undefined;
-    /** The oldest retained `seq`, `undefined` when the log is empty or absent. */
+
+    /**
+     * The oldest `seq` a follower can still be REPLAYED from, `undefined` when the
+     * log is empty or absent.
+     *
+     * A replica applies post-images, so the floor it needs is the payload floor,
+     * not the key floor: payload compaction leaves the keys in place, so the
+     * oldest retained `seq` would report a position from which replay is
+     * impossible. See `minCdcReplayableSeq`.
+     */
     ownerFloor: () => number | undefined;
     /** One page of the changelog past `sinceSeq`. */
     readChanges: (sinceSeq: number, limit: number) => { changes: CdcChange[]; cursor: number };
@@ -288,6 +298,50 @@ const replicaControlRefusal = (host: ReplicaOwnerHost): Response | undefined => 
  * per-replica bookkeeping, because a replica's position lives with the replica
  * and the changelog it reads is the one the shard already keeps.
  */
+/** Serve a `replica_bootstrap`: the whole shard, or a `truncated` refusal when it is too large for one response. */
+const serveBootstrap = async (host: ReplicaOwnerHost, epoch: string): Promise<Response> => {
+    // Refuse BEFORE building the snapshot: the cap is the owner's memory budget,
+    // and a shard past it would exhaust that budget producing rows nobody is
+    // allowed to receive.
+    if (host.rowCount() > maxBootstrapRows(host.env())) {
+        return Response.json({ cursor: 0, epoch, rows: [], truncated: true } satisfies ReplicaBootstrapResult);
+    }
+
+    // Read the cursor BEFORE the snapshot: a write that lands mid-export may or
+    // may not be in `rows`, and replaying it again from `cursor` is harmless
+    // (both the upsert and the delete replay are idempotent). Reading it after
+    // would skip anything committed during the export.
+    const cursor = host.ownerCursor() ?? 0;
+    const rows = await host.exportRows();
+
+    return Response.json({ cursor, epoch, rows } satisfies ReplicaBootstrapResult);
+};
+
+/**
+ * Serve a `replica_pull`: one page of the changelog past `sinceSeq`, or the
+ * floor alone when the follower has fallen below what can still be replayed.
+ *
+ * The floor is checked BEFORE the page is read, because a follower below it
+ * cannot be served one: `readChanges` refuses a compacted page outright
+ * (`CDC_PAYLOAD_COMPACTED`), and a thrown response reaches the follower as a
+ * bare non-2xx, which its pull path reads as "owner unreachable" — so it would
+ * retry the identical doomed round trip forever instead of bootstrapping, and
+ * never latch divergent, because the floor it needed to see was in the response
+ * that failed to be built. Answering with the floor and an empty page routes it
+ * through `hasDiverged` → `bootstrap`, which is the recovery that exists.
+ */
+const servePull = (host: ReplicaOwnerHost, epoch: string, sinceSeq: number): Response => {
+    const floor = host.ownerFloor();
+
+    if (cursorBelowRetainedFloor(floor, sinceSeq)) {
+        return Response.json({ changes: [], cursor: host.ownerCursor() ?? sinceSeq, epoch, floor } satisfies ReplicaPullResult);
+    }
+
+    const { changes, cursor } = host.readChanges(sinceSeq, PULL_PAGE_SIZE);
+
+    return Response.json({ changes, cursor, epoch, ...(floor === undefined ? {} : { floor }) } satisfies ReplicaPullResult);
+};
+
 const handleReplicaControl = async (host: ReplicaOwnerHost, request: Request): Promise<Response> => {
     const refusal = replicaControlRefusal(host);
 
@@ -321,29 +375,13 @@ const handleReplicaControl = async (host: ReplicaOwnerHost, request: Request): P
     }
 
     if (frame.type === "replica_bootstrap") {
-        // Refuse BEFORE building the snapshot: the cap is the owner's memory
-        // budget, and a shard past it would exhaust that budget producing rows
-        // nobody is allowed to receive.
-        if (host.rowCount() > maxBootstrapRows(host.env())) {
-            return Response.json({ cursor: 0, epoch, rows: [], truncated: true } satisfies ReplicaBootstrapResult);
-        }
-
-        // Read the cursor BEFORE the snapshot: a write that lands mid-export may
-        // or may not be in `rows`, and replaying it again from `cursor` is
-        // harmless (both the upsert and the delete replay are idempotent).
-        // Reading it after would skip anything committed during the export.
-        const cursor = host.ownerCursor() ?? 0;
-        const rows = await host.exportRows();
-
-        return Response.json({ cursor, epoch, rows } satisfies ReplicaBootstrapResult);
+        return serveBootstrap(host, epoch);
     }
 
     if (frame.type === "replica_pull") {
         const sinceSeq = typeof frame.sinceSeq === "number" && Number.isInteger(frame.sinceSeq) && frame.sinceSeq >= 0 ? frame.sinceSeq : 0;
-        const { changes, cursor } = host.readChanges(sinceSeq, PULL_PAGE_SIZE);
-        const floor = host.ownerFloor();
 
-        return Response.json({ changes, cursor, epoch, ...(floor === undefined ? {} : { floor }) } satisfies ReplicaPullResult);
+        return servePull(host, epoch, sinceSeq);
     }
 
     return new Response("unknown replica frame", { status: 400 });

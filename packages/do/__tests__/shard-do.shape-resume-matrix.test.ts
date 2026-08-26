@@ -13,8 +13,8 @@
  * 5b. `floor !== undefined && floor <= shape.sinceSeq + 1` — the oldest retained op still covers the client's gap
  *
  * **Observable distinction (wire protocol):**
- * - **Resume** — `pokeStart.baseCheckpoint` is a number (`=== shape.sinceSeq`); `rowsPatch` holds only the diff ops for `(sinceSeq, cursor]`.
- * - **Reseed** — `pokeStart.baseCheckpoint` is `undefined`; `rowsPatch` holds the full current membership as inserts.
+ * - **Resume** — `pokeStart.baseCheckpoint` is a number (`=== shape.sinceSeq`); `rowsPatch` holds only the diff ops for `(sinceSeq, cursor]`; the `pokePart` carries no `reset`.
+ * - **Reseed** — `pokeStart.baseCheckpoint` is `undefined`; `rowsPatch` holds the full current membership as inserts, and the `pokePart` is flagged `reset: true`.
  *
  * Each `it.each` row covers one cell of the matrix. This file pins CURRENT behaviour so plan-072's
  * `buildShapeDiff` optimisation has a safety-net before and after.
@@ -35,6 +35,7 @@ import createSqliteExec from "./_helpers/node-sqlite";
 
 interface ParsedFrame {
     baseCheckpoint?: number;
+    reset?: boolean;
     rowsPatch?: { key: string; op: string; value?: Record<string, unknown> }[];
     type: string;
 }
@@ -46,6 +47,19 @@ const firstPokeStartBase = (sent: string[]): number | undefined => {
 
         if (frame.type === "pokeStart") {
             return frame.baseCheckpoint;
+        }
+    }
+
+    return undefined;
+};
+
+/** Extract `reset` from the first `pokePart` frame a socket received. */
+const firstPokePartReset = (sent: string[]): boolean | undefined => {
+    for (const raw of sent) {
+        const frame = JSON.parse(raw) as ParsedFrame;
+
+        if (frame.type === "pokePart") {
+            return frame.reset;
         }
     }
 
@@ -218,7 +232,7 @@ const matrix: MatrixRow[] = [
             await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
             await writer.insert("messages", { _id: "m2", authorId: "u1", channelId: "c1", text: "beta" }, { allowExplicitId: true });
             // Delete CDC rows ≤ 1; cursor stays at 2 (AUTOINCREMENT); floor becomes 2.
-            trimCdcChanges(harness.sql, 1);
+            trimCdcChanges(harness.sql, 1, 100);
         },
         sinceSeq: 0, // floor(2) > sinceSeq+1(1) → gap
         sinceEpochFn: (sql) => readCdcEpoch(sql),
@@ -233,7 +247,7 @@ const matrix: MatrixRow[] = [
 
             // seq=1 (m1). Trim all CDC rows; floor becomes undefined; cursor stays at 1.
             await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
-            trimCdcChanges(harness.sql, 1);
+            trimCdcChanges(harness.sql, 1, 100);
         },
         sinceSeq: 1, // === cursor=1 → sinceSeq === cursor branch fires
         sinceEpochFn: (sql) => readCdcEpoch(sql),
@@ -249,30 +263,12 @@ const matrix: MatrixRow[] = [
             // seq=1 (m1), seq=2 (m2). Trim all; floor=undefined; cursor=2.
             await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
             await writer.insert("messages", { _id: "m2", authorId: "u1", channelId: "c1", text: "beta" }, { allowExplicitId: true });
-            trimCdcChanges(harness.sql, 2);
+            trimCdcChanges(harness.sql, 2, 100);
         },
         sinceSeq: 1, // < cursor=2; floor=undefined → can't prove (1, 2] was gap-free
         sinceEpochFn: (sql) => readCdcEpoch(sql),
         expectResume: false,
         expectedOpsLen: 2, // full seed: m1 + m2
-    },
-    {
-        label: "6 — CDC disabled: cdcEnabled()=false → full reseed regardless of hint",
-        cdcMigrate: false, // no __cdc_log table → cdcEnabled() returns false
-        setup: async (harness) => {
-            // No CDC-enabled writer available; insert the row directly so the
-            // shape seed (which reads the main table, not the log) still finds it.
-            harness.raw(
-                "INSERT INTO messages (id, _creationTime, __doc__) VALUES (?, ?, ?)",
-                "m1",
-                1_700_000_000_000,
-                JSON.stringify({ authorId: "u1", channelId: "c1", text: "alpha" }),
-            );
-        },
-        sinceSeq: 0,
-        sinceEpochFn: () => "any-epoch",
-        expectResume: false,
-        expectedOpsLen: 1, // full seed: m1 (read from main table via buildShapeSeed)
     },
     {
         label: "7 — fresh sub: no sinceSeq supplied → full reseed (first-time subscribe)",
@@ -295,7 +291,7 @@ const matrix: MatrixRow[] = [
 
 describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
     it.each(matrix)("$label", async ({ cdcMigrate, expectedOpsLen, expectResume, setup, sinceEpochFn, sinceSeq }) => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         // Each case gets its own in-memory SQLite database so there is no state bleed.
         const testHarness = createSqliteExec();
@@ -343,10 +339,144 @@ describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
 
             // Primary: resume path stamps baseCheckpoint; reseed leaves it undefined.
             expect(baseCheckpoint !== undefined).toBe(expectResume);
+            // The reseed branch ships the full membership as inserts, which can only
+            // ever ADD rows — so it MUST be flagged `reset` on the wire or a client
+            // splices it onto a stale view and keeps every row that left the shape
+            // while it was disconnected. A resume diff must never carry the flag.
+            expect(firstPokePartReset(ws.sent) === true).toBe(!expectResume);
             // Secondary: diff length (resume) or full-membership count (reseed).
             expect(ops).toHaveLength(expectedOpsLen);
             // Sanity: subscription completed successfully (no error frame, got ack).
             expect(acked).toBe(true);
+        } finally {
+            testHarness.close();
+        }
+    });
+
+    it("seals the timeline for later shape clients once one proves the log rolled back", async () => {
+        expect.assertions(3);
+
+        const testHarness = createSqliteExec();
+
+        try {
+            runShardMigrations(testHarness.sql, messagesSchema, { cdc: true });
+
+            const writer = makeWriter(testHarness.sql);
+
+            await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m2", authorId: "u1", channelId: "c1", text: "beta" }, { allowExplicitId: true });
+
+            const sockets: FakeSocket[] = [];
+            const state: ShardDOState = {
+                acceptWebSocket(ws: WebSocket) {
+                    sockets.push(ws as unknown as FakeSocket);
+                },
+                getWebSockets(): WebSocket[] {
+                    return sockets as unknown as WebSocket[];
+                },
+                storage: { sql: testHarness.sql as unknown as ShardDOState["storage"]["sql"] },
+            };
+            const shard = new MatrixShapeShard(state, {});
+            const beforeFork = readCdcEpoch(testHarness.sql);
+
+            const subscribe = async (socket: FakeSocket, sinceCheckpoint: number, sinceEpoch: string): Promise<void> => {
+                sockets.push(socket);
+
+                await shard.webSocketMessage(
+                    socket as unknown as WebSocket,
+                    JSON.stringify({
+                        id: "shape-1",
+                        shape: { args: { channelId: "c1" }, name: "messagesByChannel" },
+                        sinceCheckpoint,
+                        sinceEpoch,
+                        type: "shape_subscribe",
+                    }),
+                );
+            };
+
+            // Case 3 of the matrix above establishes that a client AHEAD of the
+            // cursor re-seeds. The fork it names is a property of the SHARD, not
+            // of that one client: a PITR restore reverts `__cdc_meta` along with
+            // the log, so the epoch cannot report it and this checkpoint is the
+            // only surviving evidence. Acting on it has to seal the timeline for
+            // everyone, not just refuse the messenger.
+            const ahead = createFakeSocket();
+
+            await subscribe(ahead, 99, beforeFork);
+
+            expect(firstPokeStartBase(ahead.sent)).toBeUndefined();
+            expect(readCdcEpoch(testHarness.sql)).not.toBe(beforeFork);
+
+            // The client the per-client guard cannot save: its checkpoint sits
+            // BELOW the rewound cursor and inside the retained window, so every
+            // other clause of `canResume` holds. Only the sealed epoch stops it
+            // resuming onto a diff computed over a forked log.
+            const behind = createFakeSocket();
+
+            await subscribe(behind, 1, beforeFork);
+
+            expect(firstPokeStartBase(behind.sent)).toBeUndefined();
+        } finally {
+            testHarness.close();
+        }
+    });
+});
+
+/**
+ * Case 6 of the matrix, which is not a resume-vs-reseed cell at all.
+ *
+ * A shard-local shape replicates OUT OF the changelog — `pokeShapeSubscribers`
+ * diffs it from `__cdc_log` on every flush — so with CDC off there is nothing to
+ * replicate from. The seed itself would succeed (it reads the table, not the
+ * log) and every later diff throws `no such table` into a per-shape catch, which
+ * is how this configuration used to render one snapshot and then go silent for
+ * the life of the socket, reported only on a counter.
+ */
+describe("shape_subscribe with CDC disabled", () => {
+    it("refuses the subscribe naming .cdc(), instead of seeding a shape that can never update", async () => {
+        expect.assertions(3);
+
+        const testHarness = createSqliteExec();
+
+        try {
+            runShardMigrations(testHarness.sql, messagesSchema, { cdc: false });
+
+            // Inserted raw: there is no CDC-enabled writer, and the point is that
+            // the row IS present — a seed would have found it and succeeded.
+            testHarness.raw(
+                "INSERT INTO messages (id, _creationTime, __doc__) VALUES (?, ?, ?)",
+                "m1",
+                1_700_000_000_000,
+                JSON.stringify({ authorId: "u1", channelId: "c1", text: "alpha" }),
+            );
+
+            const sockets: FakeSocket[] = [];
+            const state: ShardDOState = {
+                acceptWebSocket(ws: WebSocket) {
+                    sockets.push(ws as unknown as FakeSocket);
+                },
+                getWebSockets(): WebSocket[] {
+                    return sockets as unknown as WebSocket[];
+                },
+                storage: { sql: testHarness.sql as unknown as ShardDOState["storage"]["sql"] },
+            };
+            const shard = new MatrixShapeShard(state, {});
+            const ws = createFakeSocket();
+
+            sockets.push(ws);
+
+            await shard.webSocketMessage(
+                ws as unknown as WebSocket,
+                JSON.stringify({ id: "shape-1", shape: { args: { channelId: "c1" }, name: "messagesByChannel" }, type: "shape_subscribe" }),
+            );
+
+            const frames = ws.sent.map((raw) => JSON.parse(raw) as { code?: string; message?: string; type: string });
+            const failure = frames.find((frame) => frame.type === "error");
+
+            expect(failure?.code).toBe("SHAPE_REQUIRES_CDC");
+            // Not acked, and no seed on the wire — the client is told, not left holding a frozen view.
+            expect(gotAck(ws.sent)).toBe(false);
+            expect(frames.some((frame) => frame.type === "pokeStart")).toBe(false);
         } finally {
             testHarness.close();
         }

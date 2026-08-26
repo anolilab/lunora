@@ -158,7 +158,13 @@ interface SearchIndexDefinition {
      * added to a populated table works immediately. On a very large table that
      * scan is expensive to run inside a deploy: `staged: true` maintains the
      * index on write only and leaves the initial population to an out-of-band
-     * `backfillSearchIndexes`.
+     * run.
+     *
+     * That run is mandatory, not optional — until it happens, every row written
+     * BEFORE the deploy is unsearchable. Drive it against a deployment with
+     * `lunora run '__lunora_admin__:backfillSearch' --args '{"maxPages":20}'`,
+     * repeating until the response reports `done: true`; progress is durable, so
+     * each call resumes where the last stopped.
      */
     staged?: boolean;
 

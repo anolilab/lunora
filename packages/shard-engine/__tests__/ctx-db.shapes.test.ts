@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations, selectShapeMemberIds, selectShapeRows } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations, selectShapeMembers, selectShapeRows } from "../src/ctx-db";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -79,15 +79,33 @@ describe("ctx-db shape membership", () => {
         await writer.insert("messages", { _id: "m3", authorId: "u1", channelId: "c1", text: "c" }, { allowExplicitId: true });
 
         // Of the three changed ids, only those in channel c1 are members.
-        const members = selectShapeMemberIds(harness.sql, "messages", { channelId: "c1" }, ["m1", "m2", "m3"]);
+        const members = selectShapeMembers(harness.sql, "messages", { channelId: "c1" }, ["m1", "m2", "m3"]);
 
-        expect([...members].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["m1", "m3"]);
+        expect([...members.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["m1", "m3"]);
 
         // A row that moved out of the set (patched to c2) is no longer a member.
         await writer.patch("m1", { channelId: "c2" });
-        const after = selectShapeMemberIds(harness.sql, "messages", { channelId: "c1" }, ["m1", "m3"]);
+        const after = selectShapeMembers(harness.sql, "messages", { channelId: "c1" }, ["m1", "m3"]);
 
-        expect([...after]).toStrictEqual(["m3"]);
+        expect([...after.keys()]).toStrictEqual(["m3"]);
+    });
+
+    it("returns each member's current document alongside its key", async () => {
+        expect.assertions(2);
+
+        const writer = setupWriter();
+
+        await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "a" }, { allowExplicitId: true });
+
+        // The membership probe IS the diff's enrichment read: a member comes back
+        // with the value the predicate admits, so the poke never has to source it
+        // from the op-log's post-image.
+        expect(selectShapeMembers(harness.sql, "messages", { channelId: "c1" }, ["m1"]).get("m1")).toMatchObject({ _id: "m1", text: "a" });
+
+        // And it is the CURRENT value, not the one the op that changed it carried.
+        await writer.patch("m1", { text: "b" });
+
+        expect(selectShapeMembers(harness.sql, "messages", { channelId: "c1" }, ["m1"]).get("m1")).toMatchObject({ text: "b" });
     });
 
     it("short-circuits an empty id set to an empty membership", () => {
@@ -95,6 +113,6 @@ describe("ctx-db shape membership", () => {
 
         setupWriter();
 
-        expect(selectShapeMemberIds(harness.sql, "messages", { channelId: "c1" }, []).size).toBe(0);
+        expect(selectShapeMembers(harness.sql, "messages", { channelId: "c1" }, []).size).toBe(0);
     });
 });

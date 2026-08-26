@@ -331,24 +331,24 @@ Run `pageDeltaFrames` only once you announce the token.
 
 ### 5.2 Server → client frames
 
-| `type`     | Shape                                                          | Effect                                                                     |
-| ---------- | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `ack`      | `{ type, id }`                                                 | subscription acknowledged                                                  |
-| `data`     | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }` | deliver `decodeWire(data)` as the new value                                |
-| `delta`    | `{ type, id, delta: <wire>, cursor?, epoch? }`                 | merge delta into server base (falls back to replace)                       |
-| `resume`   | `{ type, id, cursor?, epoch?, lastMutationId? }`               | nothing changed; keep value, advance cursor                                |
-| `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`               | write touched tables, byte-identical result; advance only                  |
-| `error`    | `{ type, id?, error: { code?, message? }, message? }`          | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)  |
-| `complete` | `{ type, id }`                                                 | subscription/stream closed server-side                                     |
-| `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
-| `whisper`  | `{ type, topic, data: <wire>, from? }`                         | ephemeral relay                                                            |
+| `type`     | Shape                                                           | Effect                                                                     |
+| ---------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `ack`      | `{ type, id }`                                                  | subscription acknowledged                                                  |
+| `data`     | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`  | deliver `decodeWire(data)` as the new value                                |
+| `delta`    | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId? }` | merge delta into server base; the LAST frame of a run carries the cursor   |
+| `resume`   | `{ type, id, cursor?, epoch?, lastMutationId? }`                | nothing changed; keep value, advance cursor                                |
+| `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`                | write touched tables, byte-identical result; advance only                  |
+| `error`    | `{ type, id?, error: { code?, message? }, message? }`           | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)  |
+| `complete` | `{ type, id }`                                                  | subscription/stream closed server-side                                     |
+| `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                 | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
+| `whisper`  | `{ type, topic, data: <wire>, from? }`                          | ephemeral relay                                                            |
 
 ### 5.3 Shape poke protocol (partial replication)
 
 A poke is an atomically-applied batch of shape diffs:
 
 1. `{ type: "pokeStart", pokeId, baseCheckpoint?, epoch? }`
-2. zero+ `{ type: "pokePart", pokeId, shapeId, rowsPatch: RowOp[], lastMutationId? }`
+2. zero+ `{ type: "pokePart", pokeId, shapeId, rowsPatch: RowOp[], lastMutationId?, baseCheckpoint?, reset? }`
 3. `{ type: "pokeEnd", pokeId, checkpoint?, epoch? }`
 
 A `RowOp` is `{ op: "insert"|"update"|"delete", key, table, value? }`. The client
@@ -358,6 +358,64 @@ view; `delete` removes `key` (a value-less upsert is a membership-only no-op).
 The view's checkpoint advances to `pokeEnd.checkpoint`. A socket that drops
 mid-poke discards the buffer and re-seeds on reconnect (no torn view). An
 `epoch` mismatch or a `baseCheckpoint` gap forces a full re-seed.
+
+A buffer is released at `pokeEnd`, and a poke abandoned mid-flight never sends
+one — so a client MUST bound its pending buffers and evict oldest-first, rather
+than let them accumulate for its lifetime. This is not only a leak: `pokeId`
+resets when the DO is evicted, so a stale buffer can be reached by a LATER
+poke's `pokeEnd` and apply rows the client should never have seen.
+
+**`pokeId` is unique per shard socket, not per client.** It comes from a per-DO
+counter that also resets when the DO is evicted, so a client holding one socket
+per shard MUST key its poke buffers by `(connection, pokeId)`. Keying by `pokeId`
+alone merges two shards' concurrent `poke-1` frames into one buffer: one shape
+applies the other's epoch and the other's parts find no buffer at all.
+
+A client that holds a SINGLE socket satisfies this by construction — its buffer
+map is already per-connection, and the frames carry no shard identity for it to
+key on anyway. The requirement binds only a client that multiplexes several
+shard sockets, and such a client must model the connection throughout (its
+subscription registry and resend path too), not just in the buffer map. All
+eight non-JS SDKs are single-socket today; see `sdks/README.md`.
+
+**`pokePart.reset: true`** means `rowsPatch` is the shape's COMPLETE membership,
+not a diff. The client MUST drop its current view for that `shapeId` before
+applying the ops. A seed is inserts-only, so merging it leaves any row that left
+the shape while the client was disconnected on screen permanently. `reset` is
+never inferred from a missing `baseCheckpoint` — the live poke paths legitimately
+carry no base. It is set on the full-membership branch of an op-log shape seed
+(the client's `sinceSeq` fell outside CDC retention, or it sent none) and on every
+`.global()` shape seed, which always re-seeds in full.
+
+**`pokePart.baseCheckpoint`** is the checkpoint THAT SHAPE's view must be at for
+the part to splice on cleanly, and takes precedence over `pokeStart.baseCheckpoint`
+(a single-part fallback). It is per shape because each shape on a socket has its
+own delivered-through cursor. Absent means the sender cannot name a base and the
+gap check is disarmed for that part.
+
+> **Outstanding in the non-JS ports.** Only `@lunora/client` acts on this field:
+> on a mismatch it drops the shape's view, clears its cursor, skips the ops and
+> re-subscribes. None of the eight SDKs implements the comparison — one stores
+> the value and never reads it, the rest only mention it in a comment about
+> `reset`. A poke can genuinely be dropped on the cross-DO owner→relay POST, so
+> until a port adds the check its shape views can diverge where the JS client
+> recovers. A port adding it needs no wire change; the field is already sent.
+
+### 5.4 Delta runs and the resume cursor
+
+One value change can go out as a RUN of `delta` frames (one per changed row).
+Unlike a poke the run has no start/end envelope — the client applies each frame
+as it arrives — so `cursor`/`epoch` ride only the **last** frame of the run, and a
+client MUST NOT advance its resume position on a frame that omits them.
+`lastMutationId` is the opposite and rides every frame (it is idempotent and
+monotonic on the read side).
+
+Without that split, a socket dying mid-run left the client having ACKed a
+checkpoint whose remaining rows it never received: its next `sinceSeq` resolved
+as "already current" and the half-applied list was never re-snapshotted.
+
+A single-frame run is its own last frame and carries the cursor as before; so
+does the `data` snapshot.
 
 Golden cases: [`fixtures/ws-frames.json`](./fixtures/ws-frames.json).
 

@@ -142,6 +142,7 @@ change that adds or removes a capability.
 | Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
+| Several sockets per client    | ❌³    | ❌³ | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
 
 ¹ Each in the language's own PULL type, not one shape forced onto eight — an
 async generator in Python, a receive channel in Go, an `Enumerator` in Ruby, an
@@ -151,6 +152,21 @@ order are the same everywhere, which is what
 `subscription_stream_yields_frame_values_in_order` asserts.
 
 ² Through an injected adapter, like HTTP and the socket — see below.
+
+³ **One client holds one socket, and this is load-bearing.** Every port has a
+single sender field (`attach_socket`/`AttachSocket`/`attachSocket` replaces it
+rather than adding one), and every inbound frame arrives through a
+`handleFrame(raw)` that carries no connection identity — there is none on the
+wire either, since a poke frame names only its `pokeId`. An app spanning several
+shards builds one client per shard, which is also what keeps
+`protocol/README.md` §5.3's `(connection, pokeId)` rule satisfied here: each
+client owns its own poke buffers, so two shards' concurrent `poke-1` frames can
+never meet. Routing two sockets into one client is not merely unscoped for
+pokes — the second `attachSocket` orphans the first socket, and
+`resendSubscriptions` then blasts every shard's subscriptions down whichever one
+attached last. Do not add a connection key to the buffer map without first
+giving these clients a real multi-socket model; a key alone would quiet one
+symptom of a configuration that is broken in several other places.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the

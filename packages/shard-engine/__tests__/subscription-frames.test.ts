@@ -47,18 +47,36 @@ describe("subscriptionFrames — frame layout", () => {
         expect(frames[0]).toBe(`{"type":"delta","id":"sub-1","delta":{"key":"new","op":"insert","row":{"_creationTime":1,"_id":"new"},"table":"messages"}}`);
     });
 
-    it("stamps the watermark and cursor suffix on every frame of a multi-delta batch", () => {
-        expect.assertions(2);
+    it("stamps the watermark on every frame of a multi-delta batch but the cursor only on the last", () => {
+        expect.assertions(4);
 
         // A client's checkpoint gate reads whichever frame it happens to observe,
         // so a batch whose later frames lack the watermark starves it (plan 266
         // finding d). Every frame carries it, not just the last.
+        //
+        // The resume cursor is the opposite (defect #2). A delta run has no
+        // `pokeStart`/`pokeEnd` envelope, so the client applies it frame by frame:
+        // a cursor on every frame let a socket that died after frame 1 leave the
+        // client ACKing the whole checkpoint. Its next `sinceSeq` then resolved as
+        // "already current" and the half-applied list was never re-snapshotted.
         const previous = Array.from({ length: 20 }, (_, index) => row(`r${String(index)}`));
         const next = previous.map((existing, index) => (index < 3 ? row(`r${String(index)}`, { edited: true }) : existing));
         const frames = framesFor(previous, next, { cursorSuffix: `,"cursor":42,"epoch":"e1"`, lastMutationId: 7 });
 
         expect(frames).toHaveLength(3);
-        expect(frames.every((frame) => frame.endsWith(`,"lastMutationId":7,"cursor":42,"epoch":"e1"}`))).toBe(true);
+        expect(frames.every((frame) => frame.includes(`,"lastMutationId":7`))).toBe(true);
+        expect(frames.slice(0, -1).some((frame) => frame.includes(`"cursor"`))).toBe(false);
+        expect(frames.at(-1)?.endsWith(`,"lastMutationId":7,"cursor":42,"epoch":"e1"}`)).toBe(true);
+    });
+
+    it("keeps the cursor on a single-delta run (that frame IS the last)", () => {
+        expect.assertions(1);
+
+        const previous = Array.from({ length: 50 }, (_, index) => row(`r${String(index)}`));
+        const next = previous.map((existing, index) => (index === 0 ? row("r0", { edited: true }) : existing));
+        const frames = framesFor(previous, next, { cursorSuffix: `,"cursor":42,"epoch":"e1"` });
+
+        expect(frames).toStrictEqual([expect.stringContaining(`"cursor":42`)]);
     });
 });
 

@@ -6,6 +6,7 @@ package lunora
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -598,5 +599,134 @@ func TestPokePartsDoNotApplyBeforePokeEnd(t *testing.T) {
 
 	if fired != 0 {
 		t.Errorf("onRows fired %d times before pokeEnd, want 0 — the view would be torn", fired)
+	}
+}
+
+// TestResetPokeReplacesTheView drives ws-frames.json shape.resetPokeSequence on
+// top of the cold-subscribe view: a part flagged `reset: true` carries the
+// shape's whole membership, so m1 — present in expectedRows, absent from the
+// re-seed, and never deleted by an op — must be gone. Merging the seed instead
+// keeps it forever, which is what every disconnect of a `.global()` shape (they
+// full-reseed on every reconnect) used to leave behind.
+//
+// Not a manifest case: protocol/conformance-cases.json is required of every
+// port, and adding a name there reds the ports that have not landed this yet.
+func TestResetPokeReplacesTheView(t *testing.T) {
+	covers("shape_reset_poke_replaces_membership")
+
+	fixture := loadFixture(t, "ws-frames.json")
+
+	shape, ok := fixture["shape"].(map[string]any)
+	if !ok {
+		t.Fatal("fixture has no shape group")
+	}
+
+	sequence, ok := shape["pokeSequence"].([]any)
+	if !ok || len(sequence) == 0 {
+		t.Fatal("fixture has no pokeSequence")
+	}
+
+	resetSequence, ok := shape["resetPokeSequence"].([]any)
+	if !ok || len(resetSequence) == 0 {
+		t.Fatal("fixture has no resetPokeSequence")
+	}
+
+	client := NewClient("https://app.example", nil)
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	var delivered [][]any
+
+	client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func(rows []any) {
+		delivered = append(delivered, rows)
+	}, nil)
+
+	for _, entry := range append(append([]any{}, sequence...), resetSequence...) {
+		raw, marshalErr := json.Marshal(entry)
+		if marshalErr != nil {
+			t.Fatalf("marshal: %v", marshalErr)
+		}
+
+		if _, err := client.HandleFrame(raw); err != nil {
+			t.Fatalf("handle: %v", err)
+		}
+	}
+
+	if len(delivered) != 2 {
+		t.Fatalf("onRows fired %d times, want 2 — one per poke", len(delivered))
+	}
+
+	// The seed applies to the view the first poke left behind, so this only
+	// passes if the reset CLEARED it rather than merging onto it.
+	if got, want := canonical(t, delivered[0]), canonical(t, shape["expectedRows"]); got != want {
+		t.Errorf("rows after the cold poke mismatch\n got: %s\nwant: %s", got, want)
+	}
+
+	if got, want := canonical(t, delivered[1]), canonical(t, shape["resetExpectedRows"]); got != want {
+		t.Errorf("rows after the reset poke mismatch\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// TestPendingPokeBuffersAreBounded: a buffer is only released at its pokeEnd. A
+// socket that drops mid-poke never sends one, so its buffer would be retained
+// for the life of the client — one leak per reconnect, and unbounded against a
+// peer that opens pokes it never closes.
+func TestPendingPokeBuffersAreBounded(t *testing.T) {
+	covers("pending_poke_buffers_are_bounded")
+
+	client := NewClient("https://app.example", nil)
+
+	var delivered [][]any
+
+	client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func(rows []any) {
+		delivered = append(delivered, rows)
+	}, nil)
+
+	handle := func(raw string) {
+		t.Helper()
+
+		if _, err := client.HandleFrame([]byte(raw)); err != nil {
+			t.Fatalf("handle: %v", err)
+		}
+	}
+
+	// A poke opened, part-filled, then abandoned when the socket dropped.
+	handle(`{"type":"pokeStart","pokeId":"stale"}`)
+	handle(`{"type":"pokePart","pokeId":"stale","shapeId":"shape_1","rowsPatch":[{"op":"insert","key":"ghost","value":"ghost-row"}]}`)
+
+	for index := 0; index < MaxPendingPokes; index++ {
+		handle(fmt.Sprintf(`{"type":"pokeStart","pokeId":"filler-%d"}`, index))
+	}
+
+	// The abandoned buffer is gone, so its late pokeEnd is a no-op: an evicted
+	// poke behaves exactly like one that was never opened.
+	handle(`{"type":"pokeEnd","pokeId":"stale"}`)
+
+	if len(delivered) != 0 {
+		t.Fatalf("onRows fired %d times for an evicted poke — the ghost row reached the view", len(delivered))
+	}
+
+	// ...and eviction is oldest-first, not a blanket drop: a live poke still applies.
+	newest := fmt.Sprintf("filler-%d", MaxPendingPokes-1)
+	handle(fmt.Sprintf(`{"type":"pokePart","pokeId":"%s","shapeId":"shape_1","rowsPatch":[{"op":"insert","key":"m1","value":"kept"}]}`, newest))
+	handle(fmt.Sprintf(`{"type":"pokeEnd","pokeId":"%s"}`, newest))
+
+	if len(delivered) != 1 {
+		t.Fatalf("onRows fired %d times for the newest poke, want 1 — it must survive", len(delivered))
+	}
+
+	if got, want := canonical(t, delivered[0]), canonical(t, []any{"kept"}); got != want {
+		t.Errorf("rows mismatch\n got: %s\nwant: %s", got, want)
+	}
+
+	// A completed poke must leave the order list too, or it grows a stale entry
+	// per poke and the cap stops tracking the map.
+	if _, present := client.pokes[newest]; present {
+		t.Error("the applied buffer was not released")
+	}
+
+	for _, candidate := range client.pokeOrder {
+		if candidate == newest {
+			t.Error("the eviction order kept a stale id for an applied poke")
+		}
 	}
 }

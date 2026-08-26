@@ -792,7 +792,11 @@ export interface RowOp {
  * socket that drops mid-poke simply re-seeds on reconnect (no torn view).
  */
 export interface ServerPokeStartMessage {
-    /** The checkpoint the client's view is expected to be at before this poke applies (for ordering/gap detection). */
+    /**
+     * Poke-level fallback base, stamped by single-part senders. Per-shape
+     * {@link ServerPokePartMessage.baseCheckpoint} takes precedence; this is what
+     * a part without its own base falls back to.
+     */
     baseCheckpoint?: number;
     /** CDC epoch this poke belongs to; a mismatch forces the client to re-seed rather than apply. */
     epoch?: string;
@@ -803,9 +807,27 @@ export interface ServerPokeStartMessage {
 
 /** One shape's slice of an in-flight poke: the row-ops to apply for `shapeId`. */
 export interface ServerPokePartMessage {
+    /**
+     * The checkpoint this shape's view must be at for `rowsPatch` to splice on
+     * cleanly. Per shape, because every shape on a socket has its own
+     * delivered-through cursor. Absent when the server cannot name a base — the
+     * gap check is then disarmed for this part, never guessed at.
+     */
+    baseCheckpoint?: number;
     /** Per-client custom-mutator watermark carried with this slice (see {@link ServerSettledMessage.lastMutationId}). */
     lastMutationId?: number;
     pokeId: string;
+
+    /**
+     * `true` when `rowsPatch` is the shape's COMPLETE membership, not a diff (a
+     * full seed or re-seed). The client MUST drop its current view for this shape
+     * before applying: a seed is inserts-only, so merging it leaves any row that
+     * left the shape while the client was disconnected on screen forever.
+     *
+     * Never inferred from an absent {@link ServerPokePartMessage.baseCheckpoint} —
+     * most live poke paths legitimately carry no base.
+     */
+    reset?: boolean;
     /** Ordered row-level changes for this shape, applied in sequence at `pokeEnd`. */
     rowsPatch: RowOp[];
     /** The {@link ClientShapeSubscribeMessage.id} these row-ops belong to. */

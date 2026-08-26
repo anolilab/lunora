@@ -434,6 +434,10 @@ interface SubscriptionFrameInput {
  * after its first snapshot goes out as deltas — would never see a frame-carried
  * watermark again (plan 266 finding d).
  *
+ * The `cursor`/`epoch` suffix is the opposite: it rides ONLY the final frame of
+ * a delta run, so a client cannot ACK a checkpoint it has only half received.
+ * See the loop below.
+ *
  * A `{ page, … }` result is only ever diffed for a socket that announced
  * {@link PAGE_DELTA_CAPABILITY} — see {@link SubscriptionFrameInput.pageDeltas}
  * for why that gate is a correctness requirement and not a tuning knob.
@@ -442,7 +446,8 @@ interface SubscriptionFrameInput {
 const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
     const { cursorSuffix, lastMutationId, nextResult, pageDeltas, previousJson, snapshotJson, subId, table } = input;
     const idJson = JSON.stringify(subId);
-    const suffix = (lastMutationId === undefined ? "" : `,"lastMutationId":${String(lastMutationId)}`) + cursorSuffix;
+    const watermarkSuffix = lastMutationId === undefined ? "" : `,"lastMutationId":${String(lastMutationId)}`;
+    const suffix = watermarkSuffix + cursorSuffix;
     const snapshot = `{"type":"data","id":${idJson},"data":${snapshotJson}${suffix}}`;
     // No baseline (first send, or the last send never left the socket) — there is
     // nothing to diff against, so the snapshot is the only option. A paginated
@@ -468,8 +473,17 @@ const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
     const deltas: string[] = [];
     let total = 0;
 
-    for (const { frame } of framed) {
-        const delta = `{"type":"delta","id":${idJson},"delta":${frame}${suffix}}`;
+    for (const [index, { frame }] of framed.entries()) {
+        // The resume cursor rides ONLY the last frame of the run. A run is applied
+        // by the client one frame at a time with no atomic envelope (unlike the
+        // poke path's `pokeStart`/`pokeEnd`), so stamping it on every frame let a
+        // socket that died mid-run leave the client ACKing a checkpoint whose
+        // remaining rows it never received: its next `sinceSeq` then resolved as
+        // "already current" and the wrong list was never re-snapshotted. The
+        // watermark stays on every frame — it is idempotent and monotonic on the
+        // read side, and a checkpoint gate reads whichever frame it observes.
+        const isLast = index === framed.length - 1;
+        const delta = `{"type":"delta","id":${idJson},"delta":${frame}${isLast ? suffix : watermarkSuffix}}`;
 
         total += delta.length;
 

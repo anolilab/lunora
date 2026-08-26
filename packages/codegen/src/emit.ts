@@ -3030,6 +3030,7 @@ const EMPTY_HELPER_FRAGMENTS: HelperFragments = { build: "", configField: "", co
  * override, else the conventional `env.KV`; absent both, every method throws a
  * directed error via `kvStub`.
  */
+/* eslint-disable no-secrets/no-secrets -- the flagged high-entropy strings are emitted identifiers (`markUnvouchableReads(kvBinding`), not credentials. */
 const emitKvFragments = (hasKv: boolean): HelperFragments => {
     if (!hasKv) {
         return EMPTY_HELPER_FRAGMENTS;
@@ -3040,7 +3041,16 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
     return {
         build: `
             const kvBinding = config.kv?.(env) ?? (env as Record<string, unknown>).KV;
-            const kv: Kv = kvBinding ? createKv({ namespace: kvBinding as KVNamespaceLike }) : kvStub;
+            // KV is not this shard's SQLite, so nothing appends a \`__cdc_log\` entry
+            // when a value changes — a subscription that read one can never be proven
+            // current on reconnect and must re-snapshot. Reads only; \`put\`/\`delete\`
+            // are writes and stay unstamped.
+            const kv: Kv = markUnvouchableReads(kvBinding ? createKv({ namespace: kvBinding as KVNamespaceLike }) : kvStub, options.onRead, [
+                "get",
+                "getRaw",
+                "getWithMetadata",
+                "list",
+            ]);
 `,
         configField: `\n    kv?: (env: Record<string, unknown>) => KVNamespaceLike;`,
         contextField: `\n                kv,`,
@@ -3048,6 +3058,10 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
         stub: renderThrowingStub("kvStub: Kv", kvMissing, ["delete", "get", "getRaw", "getWithMetadata", "list", "put"]),
     };
 };
+
+/* eslint-enable no-secrets/no-secrets */
+
+/* eslint-disable no-secrets/no-secrets -- the flagged string is the `flag_read_in_subscription` advisory's rule id, quoted in the docblock below, not a credential. */
 
 /**
  * `ctx.flags` (OpenFeature feature flags) fragments. A flag read is an external
@@ -3058,12 +3072,27 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
  * it. The default `targetingKey` is derived from `flagsConfig.identify(auth)`
  * over the request's verified identity. `createFlags` never throws, so there is
  * no stub fallback — provider/init errors resolve as the supplied default value.
+ *
+ * **`flags` is deliberately NOT stamped unvouchable**, unlike the other external
+ * reads on this ctx (`ctx.kv`, `ctx.storage`, `ctx.vectors`, `ctx.db.system`).
+ * Flags are an input the invalidation system does not model at all: a flip
+ * appends nothing to `__cdc_log`, so it re-runs no live subscription either.
+ * Refusing the resume would converge the ONE moment a client reconnects while
+ * leaving it stale for the whole time it stays connected — a permanent cost for
+ * half the property, and an inconsistency between the two states harder to
+ * explain than either extreme.
+ *
+ * The reactive path already exists and is correct: a `useFlag` subscription is
+ * served through `FLAGS_FUNCTION_PREFIX`, tagged `ADMIN_WILDCARD`, and
+ * re-evaluated on every write-flush. Branching on a flag INSIDE a cached query
+ * is a point-in-time evaluation, and the `flag_read_in_subscription` advisory
+ * says so — the same answer the repo gives for `Date.now()` in a query, which is
+ * the identical class of unmodellable input.
  */
 const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFragments => {
     if (!hasFlags) {
         return EMPTY_HELPER_FRAGMENTS;
     }
-
     return {
         build: `
             const flags: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
@@ -3077,6 +3106,8 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
         stub: "",
     };
 };
+
+/* eslint-enable no-secrets/no-secrets */
 
 /**
  * `ctx.notify` / `ctx.push` (`@lunora/notify`) fragments. Mirrors
@@ -4017,11 +4048,13 @@ const emitX402Fragments = (hasX402: boolean): { build: string; configField: stri
 /**
  * The `@lunora/do` type names the generated shard imports. The base set is always
  * present; `WorkflowsResult` / `QueuesResult` are added only when the project
- * declares workflows / queues (their `*Metadata()` overrides reference them) and
- * `WriteHook` only when it has vector indexes (the auto-sync write hook), so a
- * workflow-/queue-/vector-free app's import line stays minimal.
+ * declares workflows / queues (their `*Metadata()` overrides reference them),
+ * `SearchBackfillProgress` only when it has shard-local search indexes (the
+ * `backfillSearch` override's return type) and `WriteHook` only when it has
+ * vector indexes (the auto-sync write hook), so a workflow-/queue-/search-/
+ * vector-free app's import line stays minimal.
  */
-const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean, hasFlags: boolean): string[] => [
+const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean, hasFlags: boolean, hasShardSearchIndexes: boolean): string[] => [
     "AdvisorProcedure",
     "AdvisoryFinding",
     "DatabaseWriterLike",
@@ -4043,6 +4076,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "RunShardWriteArgs",
     "RunShardWriteResult",
     "SchedulerLike",
+    ...(hasShardSearchIndexes ? ["SearchBackfillProgress"] : []),
     "TransactionHeadroomTracker",
     "SchemaLike",
     "ShardDOState",
@@ -4304,6 +4338,10 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // this, so a schema with no sourced table emits a byte-identical `shard.ts`.
     const hasSourcedTables = schema.tables.some((table) => table.externalSource !== undefined);
     const hasMemoryTables = schema.tables.some((table) => table.memory === true);
+    // Shard-local search indexes are what the `__lunora_admin__:backfillSearch`
+    // override serves; a schema with none leaves the base class's "unsupported"
+    // hook in place rather than emitting a call that can only report zero pages.
+    const hasShardSearchIndexes = schema.tables.some((table) => table.shardMode !== "global" && table.searchIndexes.length > 0);
 
     if (hasD1Global && hasHyperdriveGlobal) {
         // Mixing backends needs a per-table routing writer (id-addressed ops must
@@ -4324,7 +4362,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
     // (from `@lunora/server`) now owns the per-table accessor binding.
-    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0, hasFlags);
+    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0, hasFlags, hasShardSearchIndexes);
 
     // A shape's `resolveShape` override returns an `effectiveWhere: WhereInput`,
     // so the DO's `WhereInput` type is pulled in only when the project has shapes.
@@ -4424,7 +4462,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${hasShardSearchIndexes ? "backfillSearchIndexes, " : ""}buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}markUnvouchableReads, ${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         // `TraceRefLike` rides along with the source imports: the poll override
         // takes the alarm's trace so its contained failures are correlated, and
         // `@lunora/do` projects it structurally rather than re-exporting the
@@ -4497,14 +4535,14 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
     // field under `noImplicitAny`. The Hyperdrive thunk below stays narrow on
     // purpose — it is handed the same object and simply never reads the extras.
     const d1ConfigField = hasD1Global
-        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;`
         : "";
 
     // Hyperdrive-backed `.global()` tables receive their writer via an optional
     // `hyperdriveGlobal` thunk (mirrors `d1`); the host builds it with the global
     // writer factory from `@lunora/hyperdrive/global` over a Hyperdrive driver.
     const hyperdriveGlobalConfigField = hasHyperdriveGlobal
-        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
         : "";
 
     // External-source ingest (plan 077): the host supplies one resolver that turns a
@@ -4610,6 +4648,13 @@ ${vectorNamespaceField}
                 vectors = vectorsStub;
                 onWrite = undefined;
             }
+
+            // Vectorize lives outside this shard's SQLite, so a query whose result
+            // depends on a similarity search cannot be proven current on reconnect —
+            // an unrelated upsert (or a re-index) moves the matches without touching
+            // \`__cdc_log\`. Wrapped AFTER \`onWrite\` is built so the write-through
+            // vector-sync hook keeps calling the bare facade.
+            vectors = markUnvouchableReads(vectors, options.onRead, ["getByIds", "query"]);
 `
         : "";
 
@@ -4692,7 +4737,7 @@ ${vectorNamespaceField}
     // which does not declare these fields — doesn't trip an excess-property
     // error; the Hyperdrive factory simply never reads the extra properties.
     const globalDatabaseLine = hasGlobalTables
-        ? `            const globalRequest = { bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
+        ? `            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 
     // Local-first sync engine, global tier: when a project has shapes AND
@@ -4711,7 +4756,7 @@ ${vectorNamespaceField}
             // A shape read performs no writes, so the widened request only needs
             // the inbound bookmark (pin the membership drain to the caller's own
             // prior writes) — no \`onBookmark\` here.
-            const globalRequest = { ...identity, bookmark: this.getInboundBookmark() };
+            const globalRequest = { ...identity, ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() };
             const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
             const rows: Array<{ doc: Record<string, unknown>; id: string }> = [];
 
@@ -4738,6 +4783,17 @@ ${vectorNamespaceField}
             } while (cursor !== null);
 
             return rows;
+        }
+
+        protected override async readGlobalChangedTables(sinceSeq: number, cursorOnly?: boolean): Promise<{ cursor: number; floor?: number; tables: string[] } | undefined> {
+            const env = this.env as Record<string, unknown>;
+            // Metadata-only: this asks the global changelog which TABLES moved,
+            // never what changed in them, so it costs one small read per poll tick
+            // for the whole shard — and a tick whose answer omits a shape's table
+            // skips that shape's membership drain entirely.
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() }) ?? globalDbStub;
+
+            return globalDb.cdcChangedTables?.(sinceSeq, { cursorOnly });
         }
 `
             : "";
@@ -5511,7 +5567,20 @@ ${adminWriterPrelude}
             runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false${snapshotArgument} });
             this.migrated = true;
         }
+${
+    hasShardSearchIndexes
+        ? `
+        protected override runShardSearchBackfill(options: { maxPages?: number }): SearchBackfillProgress {
+            // Migrations create the fts5 companions; without them every backfill
+            // statement would raise "no such table" on a shard that has never
+            // served a request.
+            this.ensureMigrated();
 
+            return backfillSearchIndexes(this.sql as SqlExec, schema as unknown as SchemaLike, options);
+        }
+`
+        : ""
+}
         private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
@@ -5522,12 +5591,29 @@ ${adminWriterPrelude}
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
 ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}${agentsBuild}
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            // \`list\`/\`get\` are the two methods \`ctx.db.system.query("_scheduled_functions")\`
+            // reaches through, and pending jobs live in the SchedulerDO — nothing the
+            // CDC changelog records — so reading them must forfeit a delta resume.
+            // The scheduler's own \`runAfter\`/\`runAt\`/\`cancel\` are writes and stay unstamped.
+            const scheduler = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
             // \`storageStub\` fallback satisfies SystemReaderStorageLike structurally
             // (its \`list\`/\`getMetadata\` throw the "no storage configured" error).
-            const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
+            //
+            // Wrapped BEFORE the split so both consumers share one stamping facade.
+            // Only the methods that actually reach R2 are stamped: \`getUrl\` and
+            // \`getSignedUrl\` build a URL from the configured base (and an HMAC) and
+            // read nothing, and they are what handlers overwhelmingly call — stamping
+            // them would forfeit resumes for a dependency that cannot move the result.
+            // \`bucket\` IS stamped: it hands back a sub-facade this wrapper does not
+            // reach, so the selection is the last point at which the read can be seen.
+            const storage = markUnvouchableReads(asBucketStorage(config.storage?.(env) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
+                "bucket",
+                "download",
+                "getMetadata",
+                "list",
+            ]);
             // \`ctx.log\`: the DO base builds the attributed logger (structured
             // fields + \`.with(...)\` child + trace correlation) and routes each call
             // to the optional \`observability\` sink. It also buffers the line (studio

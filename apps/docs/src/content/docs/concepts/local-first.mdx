@@ -27,6 +27,25 @@ It is **opt-in and additive**. `client.subscribe`, `client.mutation`,
 adds new surfaces (`defineShape`, `defineMutator`, `subscribeShape`,
 `lunoraCollectionOptions`) on top.
 
+## Turn CDC on first
+
+Everything below reads the op-log, so the engine needs it to exist. Call `.cdc()`
+on your app:
+
+```ts title="src/server.ts"
+export default defineApp()
+    .shard((env) => env.SHARD)
+    .cdc()
+    .build();
+```
+
+It is off by default because it costs a changelog row per write. Without it a
+shard has no `__cdc_log`, so every reconnect re-seeds a shape's full membership
+instead of resuming with a delta — the engine still works, it just never does
+the "delta" half. With `.global()` tables the same switch turns on the global
+changelog the poll tick asks which tables moved, so a `.global()` shape has no
+fast path at all until you set it.
+
 ## Why the DO topology fits
 
 A per-shard Durable Object already _is_ a replication unit: it owns its SQLite,
@@ -59,6 +78,17 @@ export const messagesByChannel = defineShape({
     columns: ["text", "authorId", "channelId"], // optional projection
 });
 ```
+
+Shard-local shapes replicate out of the changelog, so the app has to turn it on:
+
+```ts title="src/server/index.ts"
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .cdc();
+```
+
+Without it a `shape_subscribe` is refused with `SHAPE_REQUIRES_CDC`. (`.global()`
+shapes are driven by the poll loop instead and need no such switch.)
 
 A shape is a **read-as-permission**: the client picks _which partition_ to
 replicate, the server decides _which rows it may see_. Because `where` runs with

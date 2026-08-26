@@ -21,6 +21,7 @@ const SEARCH_STATE_TABLE = "__lunora_search_state";
 interface SqlCtxDbOptions {
     auth?: ServerDefaultContextLike["auth"];
     cdc?: boolean;
+    cdcRetentionMs?: number;
     clock?: () => number;
     crossShardCounter?: DatabaseWriterLike["count"];
     crossShardReader?: (table: string, args: CrossShardReadArgs) => Promise<QueryPage>;
@@ -140,6 +141,19 @@ const effectiveColumnKind: (validator: ValidatorLike) => string | undefined;
 const migrateSearchState: (exec: SqlCtxExec, dialect: SqlDialect) => Promise<void>;
 ```
 
+### `readSqlCdcChangedTables` (const)
+
+```ts
+const readSqlCdcChangedTables: (exec: SqlCtxExec, sinceSeq: number, dialect: SqlDialect, options?: {
+    cursorOnly?: boolean;
+    retained?: boolean;
+}) => Promise<{
+    cursor: number;
+    floor?: number;
+    tables: string[];
+}>;
+```
+
 ### `readSqlCdcChanges` (const)
 
 ```ts
@@ -150,6 +164,12 @@ const readSqlCdcChanges: (exec: SqlCtxExec, options: {
     changes: CdcChange[];
     cursor: number;
 }>;
+```
+
+### `readSqlCdcFloor` (const)
+
+```ts
+const readSqlCdcFloor: (exec: SqlCtxExec, dialect: SqlDialect) => Promise<number | undefined>;
 ```
 
 ### `runSqlAggregateMigrations` (const)
@@ -194,10 +214,10 @@ const sqliteDecode: (raw: unknown, kind: string | undefined) => unknown;
 const sqliteEncode: (value: unknown) => unknown;
 ```
 
-### `trimSqlCdcChanges` (const)
+### `sweepSqlCdcRetention` (const)
 
 ```ts
-const trimSqlCdcChanges: (exec: SqlCtxExec, throughSeq: number, dialect: SqlDialect) => Promise<void>;
+const sweepSqlCdcRetention: (exec: SqlCtxExec, dialect: SqlDialect, retentionMs: number, now: number) => Promise<void>;
 ```
 
 ### `tryJsonParse` (const)

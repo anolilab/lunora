@@ -492,6 +492,14 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Unknown column";
     };
+    readonly CDC_LOG_TRIMMED: {
+        readonly status: 409;
+        readonly title: "CDC log trimmed";
+    };
+    readonly CDC_PAYLOAD_COMPACTED: {
+        readonly status: 409;
+        readonly title: "CDC payloads compacted";
+    };
     readonly EXPIRED: {
         readonly status: 404;
         readonly title: "Session expired";
@@ -512,6 +520,10 @@ const ERROR_CATALOG: {
     readonly SHAPE_NOT_FOUND: {
         readonly status: 404;
         readonly title: "Shape not found";
+    };
+    readonly SHAPE_REQUIRES_CDC: {
+        readonly status: 409;
+        readonly title: "Shape requires change-data-capture";
     };
     readonly SQL_UNAVAILABLE: {
         readonly internal: true;
@@ -553,6 +565,10 @@ const ERROR_CATALOG: {
     readonly RELAY_SEED_FAILED: {
         readonly status: 502;
         readonly title: "Relay seed failed";
+    };
+    readonly RELAY_SHAPE_UNROUTABLE: {
+        readonly status: 500;
+        readonly title: "Relay shape unroutable";
     };
     readonly MISCONFIGURED: {
         readonly internal: true;

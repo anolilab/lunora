@@ -21,14 +21,55 @@ interface ShapeRowOp {
     value?: Record<string, unknown>;
 }
 
-/** One shape's slice of a poke: the subscription id it belongs to plus its ordered row-ops. */
+/**
+ * One shape's slice of a poke: the subscription id it belongs to plus its
+ * ordered row-ops.
+ *
+ * `baseCheckpoint` and `reset` are PER SHAPE, not per poke, because a single
+ * poke can carry one part per shape and every shape on a socket has its own
+ * delivered-through cursor (`pokeShapeSubscribers` diffs each from its own
+ * memo). A poke-level base would be right for at most one of them.
+ */
 interface ShapePokePart {
+    /**
+     * The checkpoint the client's view of THIS shape must be at for the part's
+     * diff to splice on cleanly — the cursor of the last poke actually delivered
+     * for it. A mismatch means a poke went missing and the client must re-seed.
+     * `undefined` when the sender cannot name a base (see {@link PokeFrameMeta.baseCheckpoint}).
+     */
+    baseCheckpoint?: number;
+
+    /**
+     * `true` when `rowsPatch` is the shape's COMPLETE membership rather than a
+     * diff — the client must drop its current view before applying, or a row
+     * that left the shape while it was disconnected survives forever (a full
+     * seed is inserts-only and can never delete).
+     *
+     * This is explicit on the wire and never inferred: an absent
+     * `baseCheckpoint` does NOT imply a seed (most live poke paths have no base
+     * to name), so the two are independent flags.
+     */
+    reset?: boolean;
     rowsPatch: ShapeRowOp[];
     shapeId: string;
 }
 
 /** The checkpoint/epoch metadata stamped on a poke's `pokeStart`/`pokeEnd` frames. */
 interface PokeFrameMeta {
+    /**
+     * Poke-level fallback base for a SINGLE-part poke (the seed paths): stamped on
+     * `pokeStart` and folded into any part that names no base of its own. A
+     * multi-shape poke must set the base per part instead — see
+     * {@link ShapePokePart.baseCheckpoint}.
+     *
+     * The JS client is the only consumer. None of the eight non-JS SDKs implements
+     * a base-checkpoint gap check at all — the Python port stores the field and
+     * never reads it, the other seven only name it in a comment explaining that
+     * `reset` cannot be inferred from its absence. So this level exists for the
+     * seed callers that stamp the meta rather than the part, and nothing else; if
+     * those are ever changed to stamp the part, this field and the client's
+     * matching `PokeBuffer.baseCheckpoint` fallback both go with them.
+     */
     baseCheckpoint: number | undefined;
     checkpoint: number;
     epoch: string | undefined;
@@ -127,6 +168,11 @@ const encodeRowsPatch = (rowsPatch: ReadonlyArray<ShapeRowOp>): ShapeRowOp[] =>
  * Returned as serialized JSON strings ready to hand to `ws.send`, so the caller
  * owns only the send loop and its error containment.
  *
+ * Each `pokePart` carries its shape's own `baseCheckpoint` and `reset` flag —
+ * see {@link ShapePokePart}. A part flagged `reset` replaces the client's view
+ * instead of splicing onto it; without that flag on the wire a full re-seed is
+ * byte-indistinguishable from a delta and silently merges into a stale view.
+ *
  * `options.preEncoded` is set by callers whose `rowsPatch` values were ALREADY
  * wire-encoded upstream (the relay-deliver path — the owner encodes them before
  * forwarding the poke across the hub, since the structured poke crosses a
@@ -143,6 +189,9 @@ const buildPokeFrames = (parts: ReadonlyArray<ShapePokePart>, meta: PokeFrameMet
         // poke paths. The relay-deliver path already encoded upstream (see
         // `preEncoded`), so it skips the second pass.
         const rowsPatch = options.preEncoded ? part.rowsPatch : encodeRowsPatch(part.rowsPatch);
+        // The part's own base wins; `meta.baseCheckpoint` is the fallback for the
+        // single-part seed callers that still name it at the poke level.
+        const partBase = part.baseCheckpoint ?? baseCheckpoint;
 
         frames.push(
             JSON.stringify({
@@ -151,6 +200,8 @@ const buildPokeFrames = (parts: ReadonlyArray<ShapePokePart>, meta: PokeFrameMet
                 shapeId: part.shapeId,
                 type: "pokePart",
                 ...(lastMutationId === undefined ? {} : { lastMutationId }),
+                ...(partBase === undefined ? {} : { baseCheckpoint: partBase }),
+                ...(part.reset === true ? { reset: true } : {}),
             }),
         );
     }

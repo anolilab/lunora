@@ -240,6 +240,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `SearchBackfillProgress` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `SessionDO` (class)
 
 ```ts
@@ -271,6 +275,7 @@ abstract class ShardDO {
     protected static readonly MAX_REACTOR_RUNS_PER_DRAIN = 8;
     protected static readonly GLOBAL_SHAPE_POLL_INTERVAL_MS = 2e3;
     protected static readonly GLOBAL_SHAPE_MAX_ROWS = 5e4;
+    protected static readonly GLOBAL_SHAPE_RESYNC_MS = 3e4;
     protected static readonly MAX_WHISPER_TOPICS_PER_SOCKET = 64;
     protected static readonly MAX_WHISPER_BYTES = 4096;
     protected static readonly WHISPER_RATE_BURST = 50;
@@ -279,6 +284,8 @@ abstract class ShardDO {
     protected state: ShardDOState;
     protected env: unknown;
     protected readonly reactiveCache: ReactiveCache | undefined;
+    protected shapeProbe: ShapeProbeCounters;
+    protected globalPoll: GlobalPollCounters;
     constructor(state: ShardDOState, env: unknown, options?: ShardDOOptions);
     fetch(request: Request): Promise<Response>;
     webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void>;
@@ -309,6 +316,9 @@ abstract class ShardDO {
     protected getCurrentIdentity(): Record<string, unknown> | undefined;
     protected isSystemDispatch(): boolean;
     protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult>;
+    protected runShardSearchBackfill(_options: {
+        maxPages?: number;
+    }): SearchBackfillProgress;
     protected ensureMigrated(): void;
     protected tableRefs(_table: string): Record<string, string> | undefined;
     protected tableIndexes(_table: string): TableIndexInfo[];
@@ -341,6 +351,7 @@ abstract class ShardDO {
     };
     protected currentCdcCursor(): number | undefined;
     protected currentCdcEpoch(): string | undefined;
+    protected sealForkedTimeline(): string;
     protected evaluateResume(sinceSeq: number, readSet: Set<string>, sinceEpoch?: string): {
         cursor: number | undefined;
         epoch: string | undefined;
@@ -415,10 +426,16 @@ abstract class ShardDO {
     protected handleAlarmCloudflare(): Promise<void>;
     protected recordSpan(span: SpanEvent, sink?: TelemetrySink, sampledSnapshot?: boolean): void;
     protected isIdentityIndependent(functionPath: string): boolean;
-    protected readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): {
-        changes: CdcChange[];
-        cursor: number;
+    protected readShapeCdcKeys(sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[];
+    protected globalCdcOptions(cdc: boolean): {
+        cdc: boolean;
+        cdcRetentionMs?: number;
     };
+    protected readGlobalChangedTables(_sinceSeq: number, _cursorOnly?: boolean): Promise<{
+        cursor: number;
+        floor?: number;
+        tables: string[];
+    } | undefined>;
 }
 ```
 
@@ -535,6 +552,10 @@ interface TraceRefLike {
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `UNVOUCHABLE_DEP` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `ValidatorLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -564,6 +585,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `assertShapeShardable` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `backfillSearchIndexes` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -624,6 +649,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `isSourceDue` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `markUnvouchableReads` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 

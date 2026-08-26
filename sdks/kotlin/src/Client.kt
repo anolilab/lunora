@@ -18,6 +18,16 @@ const val RPC_BATCH_PATH: String = "/_lunora/rpc-batch"
 const val WS_PATH: String = "/_lunora/ws"
 
 /**
+ * How many un-applied poke buffers to retain before evicting the oldest. A
+ * buffer is only released at its `pokeEnd`; a socket that drops mid-poke never
+ * sends one, so without a bound the abandoned buffers accumulate for the life of
+ * the client — one per reconnect, and unbounded against a peer that opens pokes
+ * it never closes. Concurrent in-flight pokes number in the low single digits,
+ * so this is far above any legitimate working set.
+ */
+const val MAX_PENDING_POKES: Int = 64
+
+/**
  * Which RPC method a call dispatches to. Generated code emits these entries
  * rather than raw strings, so a typo in a target template is a compile error
  * instead of a read silently sent over the write path.
@@ -95,7 +105,7 @@ class Client(
     internal var send: ((Map<String, Any?>) -> Unit)? = null
     internal val subscriptions = LinkedHashMap<String, Subscription>()
     private val shapes = LinkedHashMap<String, Shape>()
-    private val pokes = LinkedHashMap<String, LinkedHashMap<String, MutableList<Map<String, Any?>>>>()
+    private val pokes = LinkedHashMap<String, PokeBuffer>()
     private var nextId = 0
     private var nextShapeId = 0
 
@@ -120,6 +130,25 @@ class Client(
         val state = Optimistic.State().also { state ->
             onData?.let { state.callbacks.add(it) }
         }
+    }
+
+    /**
+     * One in-flight poke: the row ops buffered per shape, plus the shapes whose
+     * part carried `reset: true`.
+     *
+     * The flag is tracked per SHAPE, not per poke: one poke can re-seed one shape
+     * while delivering an ordinary diff to another on the same socket.
+     */
+    private class PokeBuffer {
+        val parts = LinkedHashMap<String, MutableList<Map<String, Any?>>>()
+
+        /**
+         * Shapes whose `rowsPatch` is the shape's COMPLETE membership rather than a
+         * diff, so the view has to be dropped before it is applied. A seed carries
+         * inserts only, so merging one leaves every row that left the shape while
+         * the socket was down on screen for the life of the client.
+         */
+        val resets = mutableSetOf<String>()
     }
 
     private class Shape(val onRows: ((List<WireValue>) -> Unit)?, val onError: ((SubscriptionError) -> Unit)?) {
@@ -677,7 +706,19 @@ class Client(
                 for (handler in handlers) handler(error)
             }
             "complete" -> synchronized(lock) { subscriptions.remove(id) }
-            "pokeStart" -> synchronized(lock) { pokes[frame["pokeId"].toString()] = LinkedHashMap() }
+            "pokeStart" -> synchronized(lock) {
+                // Evict oldest-first at the cap. A LinkedHashMap iterates in
+                // insertion order, so the first key is the oldest buffer; one
+                // that old is no longer going to see its pokeEnd.
+                val oldest = pokes.keys.iterator()
+
+                while (pokes.size >= MAX_PENDING_POKES && oldest.hasNext()) {
+                    oldest.next()
+                    oldest.remove()
+                }
+
+                pokes[frame["pokeId"].toString()] = PokeBuffer()
+            }
             "pokePart" -> bufferPokePart(frame)
             "pokeEnd" -> applyPoke(frame)
         }
@@ -723,8 +764,15 @@ class Client(
             // A part for an unknown poke is dropped: without its pokeStart there
             // is no batch to join, and guessing would apply a fragment of one.
             val buffer = pokes[frame["pokeId"].toString()] ?: return
+            val shapeId = frame["shapeId"].toString()
 
-            buffer.getOrPut(frame["shapeId"].toString()) { mutableListOf() }.addAll(operations)
+            buffer.parts.getOrPut(shapeId) { mutableListOf() }.addAll(operations)
+
+            // Recorded sticky (never cleared) so a server that splits one seed across
+            // several parts still replaces rather than merges. `reset` is the ONLY
+            // signal: a missing `baseCheckpoint` does not imply a seed, and a
+            // retention re-seed arrives with the epoch unchanged.
+            if (frame["reset"] == true) buffer.resets.add(shapeId)
         }
     }
 
@@ -736,8 +784,18 @@ class Client(
             val buffer = pokes.remove(frame["pokeId"].toString()) ?: return
             val pending = mutableListOf<Pair<(List<WireValue>) -> Unit, List<WireValue>>>()
 
-            for ((shapeId, operations) in buffer) {
+            for ((shapeId, operations) in buffer.parts) {
                 val shape = shapes[shapeId] ?: continue
+
+                // A reset part is the shape's complete membership, so it is
+                // authoritative on its own: drop what we hold before applying it.
+                // `.global()` shapes re-seed in full on EVERY reconnect and an op-log
+                // shape past changelog retention does too, so without this a row
+                // deleted while the socket was down is never removed.
+                if (shapeId in buffer.resets) {
+                    shape.rows.clear()
+                    shape.order.clear()
+                }
 
                 for (operation in operations) {
                     val key = operation["key"]?.toString() ?: continue
