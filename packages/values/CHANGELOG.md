@@ -1,3 +1,9 @@
+## @lunora/values [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.30...@lunora/values@1.0.0-alpha.31) (2026-08-26)
+
+### Performance Improvements
+
+* five profiled hot-path optimizations ([#487](https://github.com/anolilab/lunora/issues/487)) ([12e867c](https://github.com/anolilab/lunora/commit/12e867ceeeae59d364c4d7dc234febab187d0150))
+
 ## @lunora/values [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.29...@lunora/values@1.0.0-alpha.30) (2026-08-26)
 
 ### Features
