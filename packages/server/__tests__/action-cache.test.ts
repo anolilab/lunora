@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ActionCacheContext } from "../src/action-cache";
 import { ACTION_CACHE_TABLE, cacheKeyFor, defineActionCache } from "../src/action-cache";
+import { LunoraError } from "../src/error";
 
 /**
  * Minimal in-memory `db` matching the slice the action cache uses:
@@ -459,5 +460,50 @@ describe("defineActionCache — purgeExpired limits", () => {
         // `take()` has no ceiling of its own, so an unbounded limit is an
         // unbounded index scan inside a mutation.
         expect(Math.max(...reads)).toBeLessThanOrEqual(4096);
+    });
+});
+
+describe("defineActionCache — concurrent writers", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("returns the computed value when another writer won the key", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const cache = defineActionCache({ ttlMs: 10_000 });
+
+        // The unique index doing its job: two callers missed at once, both ran
+        // compute, and this one lost the insert race. The work already succeeded
+        // and was paid for — losing the race must not turn into a failed action.
+        db.insert = async () => {
+            throw new LunoraError("CONFLICT", "unique index breach");
+        };
+
+        vi.setSystemTime(1000);
+
+        await expect(cache.wrap(contextFor(db), "embed", {}, async () => "computed")).resolves.toBe("computed");
+    });
+
+    it("still propagates an unexpected database error", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const cache = defineActionCache({ ttlMs: 10_000 });
+
+        // Degrading silently to "uncached forever" is how a schema or permission
+        // problem would stay hidden.
+        db.insert = async () => {
+            throw new LunoraError("FORBIDDEN", "denied by policy");
+        };
+
+        vi.setSystemTime(1000);
+
+        await expect(cache.wrap(contextFor(db), "embed", {}, async () => "computed")).rejects.toThrow("denied by policy");
     });
 });

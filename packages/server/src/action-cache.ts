@@ -50,6 +50,7 @@
  * Cache what you would send over the wire, because that is exactly what this is.
  */
 
+import { isLunoraError } from "@lunora/errors";
 import type { Id } from "@lunora/values";
 import { v } from "@lunora/values";
 
@@ -302,6 +303,40 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
             .withIndex("byKey", (q) => q.eq("key", key))
             .first();
 
+    /**
+     * Codes a concurrent writer can legitimately produce on the store step.
+     *
+     * `CONFLICT` is the unique index on `key` doing its job: two callers missed at
+     * the same instant, both ran `compute`, and the loser's insert lost the race.
+     * `NOT_FOUND` is the refresh equivalent — the row this call read was removed
+     * (an `invalidate`, a reap) before the patch landed.
+     */
+    const CONCURRENT_WRITE_CODES = new Set(["CONFLICT", "NOT_FOUND", "NOT_UNIQUE"]);
+
+    /**
+     * Store the entry, tolerating a concurrent writer.
+     *
+     * A cache write must never fail the call it is caching: `compute` has already
+     * run and been paid for, and the value in hand is correct whether or not this
+     * process is the one that got to store it. So an expected concurrent-write
+     * failure is swallowed — the winner's entry is equivalent — and anything else
+     * propagates, because a schema or permission error here is a real problem and
+     * silently degrading to "uncached forever" is how it would stay hidden.
+     */
+    const store = async (context: ActionCacheContext, existing: Record<string, unknown> | null, entry: Record<string, unknown>): Promise<void> => {
+        try {
+            await (existing
+                ? context.db.patch(existing["_id"] as Id<string>, { expiresAt: entry["expiresAt"], value: entry["value"] })
+                : context.db.insert(ACTION_CACHE_TABLE, entry));
+        } catch (error: unknown) {
+            if (isLunoraError(error) && CONCURRENT_WRITE_CODES.has(error.code)) {
+                return;
+            }
+
+            throw error;
+        }
+    };
+
     const wrap = async <T>(context: ActionCacheContext, name: string, args: unknown, compute: () => Promise<T>): Promise<T> => {
         const argumentsJson = serializeArgs(args);
         const key = await cacheKeyFor(name, argumentsJson);
@@ -332,9 +367,7 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
 
         // Oversized results are returned, never stored — see `maxValueBytes`.
         if (new TextEncoder().encode(serialized).length <= maxValueBytes) {
-            await (existing
-                ? context.db.patch(existing["_id"] as Id<string>, { expiresAt, value: serialized })
-                : context.db.insert(ACTION_CACHE_TABLE, { expiresAt, key, name, value: serialized }));
+            await store(context, existing, { expiresAt, key, name, value: serialized });
         } else if (existing) {
             // A stale row for a key whose fresh answer is too big to keep would
             // otherwise stay readable until it expires, serving the old value
@@ -361,36 +394,46 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
         await Promise.all(rows.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
     };
 
-    const invalidateAll = async (context: ActionCacheContext, name: string): Promise<{ complete: boolean; deleted: number }> => {
-        let deleted = 0;
-
-        // Page rather than one unbounded read: a name that accumulated many
-        // argument variants should not have to fit in a single read. Each round
-        // deletes what the previous read returned, so the loop makes progress and
-        // terminates; `MAX_INVALIDATE_ROUNDS` is a liveness bound against a reader
-        // that stops advancing, not a cap on how much may be deleted.
-        for (let round = 0; round < MAX_INVALIDATE_ROUNDS; round += 1) {
-            // eslint-disable-next-line no-await-in-loop -- each round deletes the page the previous one read; the reads are inherently sequential
-            const page = await context.db
-                .query(ACTION_CACHE_TABLE)
-                .withIndex("byName", (q) => q.eq("name", name))
-                .take(INVALIDATE_PAGE);
-
-            if (page.length === 0) {
-                return { complete: true, deleted };
-            }
-
-            // eslint-disable-next-line no-await-in-loop -- see above
-            await Promise.all(page.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
-            deleted += page.length;
+    /**
+     * Delete one page of `name`'s entries, then recur.
+     *
+     * Recursive rather than a `for` loop with an `await` in it: the rounds are
+     * inherently sequential (each deletes what the previous read returned), and
+     * expressing that as recursion says so without silencing `no-await-in-loop`.
+     * Depth is bounded by `MAX_INVALIDATE_ROUNDS`.
+     */
+    const deleteNamedPage = async (
+        context: ActionCacheContext,
+        name: string,
+        deleted: number,
+        round: number,
+    ): Promise<{ complete: boolean; deleted: number }> => {
+        if (round >= MAX_INVALIDATE_ROUNDS) {
+            // Hit the liveness bound with rows still matching. Reported rather
+            // than returned as a plain count, because "dropped every entry" and
+            // "dropped the first few thousand" must not look the same to a caller
+            // that asked for the former.
+            return { complete: false, deleted };
         }
 
-        // Hit the liveness bound with rows still matching. Reported rather than
-        // returned as a plain count, because "dropped every entry" and "dropped
-        // 4096 of them" must not look the same to a caller that asked for the
-        // former.
-        return { complete: false, deleted };
+        const page = await context.db
+            .query(ACTION_CACHE_TABLE)
+            .withIndex("byName", (q) => q.eq("name", name))
+            .take(INVALIDATE_PAGE);
+
+        if (page.length === 0) {
+            return { complete: true, deleted };
+        }
+
+        await Promise.all(page.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
+
+        return deleteNamedPage(context, name, deleted + page.length, round + 1);
     };
+
+    const invalidateAll = async (context: ActionCacheContext, name: string): Promise<{ complete: boolean; deleted: number }> =>
+        // Paged rather than one unbounded read: a name that accumulated many
+        // argument variants should not have to fit in a single read.
+        deleteNamedPage(context, name, 0, 0);
 
     const purgeExpired = internalMutation.input({ limit: v.optional(v.number()) }).mutation(async ({ args, ctx: context }): Promise<{ deleted: number }> => {
         const now = Date.now();
