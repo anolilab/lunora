@@ -1,3 +1,11 @@
+## @lunora/shard-engine [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.40...@lunora/shard-engine@1.0.0-alpha.41) (2026-08-26)
+
+### Performance Improvements
+
+* **do:** index sort keys, wire-encode skip, batched poke writes, flat select ([#489](https://github.com/anolilab/lunora/issues/489)) ([910d218](https://github.com/anolilab/lunora/commit/910d218b6aa550ac96bc54b2acfe31922f5b29f6))
+* **do:** render write statements once per table ([#488](https://github.com/anolilab/lunora/issues/488)) ([0cd7267](https://github.com/anolilab/lunora/commit/0cd72670f6d07b721e0c1c8ddfa1c5785a860df9))
+* **shard-engine:** compile the DO's where clauses to text ([#490](https://github.com/anolilab/lunora/issues/490)) ([c3a9b63](https://github.com/anolilab/lunora/commit/c3a9b63e4bd4cd647407437f2f63a58940b0afd4)), closes [#491](https://github.com/anolilab/lunora/issues/491)
+
 ## @lunora/shard-engine [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.39...@lunora/shard-engine@1.0.0-alpha.40) (2026-08-26)
 
 ### Performance Improvements
