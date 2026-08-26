@@ -1539,6 +1539,7 @@ interface QueryArgs {
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
+    omitContinueCursor?: boolean;
     orderBy?: OrderByInput[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;
     relationMask?: RelationMask;

@@ -225,6 +225,22 @@ export interface QueryArgs {
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
+
+    /**
+     * Return `continueCursor: null` without building one. **Engine-internal**, in
+     * the same sense as `baseWhere` / `relationBaseWhere` / `relationMask`: no
+     * user-facing query builder sets it.
+     *
+     * Set only by `findFirst`, which reads `page[0]` and discards the envelope —
+     * so the cursor it was handed cost an `encodeWire`, a `JSON.stringify` and a
+     * base64 for a value nobody reads, on a read that is one of the most common
+     * in the framework.
+     *
+     * A caller that sets this and then READS `continueCursor` gets `null` where a
+     * next page exists, and pages nowhere. `isDone` stays honest either way, so
+     * prefer it for "is there more". Nothing but `findFirst` should set this.
+     */
+    omitContinueCursor?: boolean;
     orderBy?: OrderByInput[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;
     relationMask?: RelationMask;

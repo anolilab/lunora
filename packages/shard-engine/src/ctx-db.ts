@@ -3152,7 +3152,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async findFirst(tableName, args = {}) {
-            const result = await writer.findMany(tableName, { ...args, limit: 1 });
+            // `page[0]` is the whole answer, so the envelope's cursor is built and
+            // thrown away — see `omitContinueCursor`.
+            const result = await writer.findMany(tableName, { ...args, limit: 1, omitContinueCursor: true });
 
             // eslint-disable-next-line unicorn/no-null -- findFirst is `Promise<Record | null>`: null is the documented "no match" result
             return result.page[0] ?? null;
@@ -3311,7 +3313,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // The cursor is encoded from `last` (the full, unprojected row) above,
                 // so `applySelect` only trims the returned payload — paging is intact.
                 // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
-                continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
+                continueCursor: hasMore && last && args.omitContinueCursor !== true ? encodeCursor(last, orderKeys) : null,
                 isDone: !hasMore,
                 page: applySelect(page, args.select, args.with),
             };
