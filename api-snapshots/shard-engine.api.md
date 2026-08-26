@@ -3103,11 +3103,11 @@ interface WhereInput {
 ### `WhereSqlStrategy` (interface)
 
 ```ts
-interface WhereSqlStrategy {
-    containsExpr?: (reference: SQL, term: SQL) => SQL;
-    fieldRef: FieldRefSql;
-    inList?: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => SQL;
-    relationExists?: (request: unknown) => SQL;
+interface WhereSqlStrategy<T = SQL> {
+    containsExpr?: (reference: T, term: T) => T;
+    fieldRef: FieldRefSql<T>;
+    inList?: (reference: T, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => T;
+    relationExists?: (request: unknown) => T;
     serialize: SerializeValue;
 }
 ```
@@ -3442,7 +3442,7 @@ const compactCdcDocs: (sql: SqlExec, throughSeq: number, maxRows: number) => voi
 ### `compileWhereSql` (const)
 
 ```ts
-const compileWhereSql: (where: WhereInput | undefined, strategy: WhereSqlStrategy) => SQL | undefined;
+const compileWhereSql: <T = SQL>(where: WhereInput | undefined, strategy: WhereSqlStrategy<T>, fragments?: WhereFragments<T>) => T | undefined;
 ```
 
 ### `computeRankPage` (const)
