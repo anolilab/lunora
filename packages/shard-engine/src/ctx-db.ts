@@ -73,7 +73,9 @@ import {
     encodeDocJson,
     geoTableName,
     isFtsAvailable,
+    jsonPath,
     jsonPathSql,
+    qualifiedJsonPath,
     qualifiedJsonPathSql,
     quoteIdentifier,
     rowToDocument,
@@ -123,6 +125,8 @@ import { ConflictError } from "./transaction";
 import type { TransactionHeadroomTracker } from "./transaction-headroom";
 import type { SchedulerLike, TriggerContextLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
 import { runTriggers } from "./triggers";
+import type { TextFragment } from "./where-fragments";
+import { identifierText, joinText, rawText, textFragments } from "./where-fragments";
 import type { WhereSqlStrategy } from "./where-sql";
 import { compileWhereSql } from "./where-sql";
 import type { WhereInput } from "./where-types";
@@ -917,34 +921,30 @@ const runGeoTerminalScored = (
 };
 
 /**
- * The row-page SELECT, assembled in ONE template per clause combination rather
- * than by re-wrapping.
+ * The row-page SELECT, assembled as text plus its bound values.
  *
- * The clause-at-a-time form — `query = sql\`${query} WHERE …\`` and again for
- * ORDER BY and LIMIT — nests the whole statement one level deeper per clause, and
- * drizzle's renderer walks that tree recursively with a type check at every node.
- * Flattening it renders the identical text and parameters 62% faster; this sits on
- * every `findMany`, which is every filtered read, every paginated page, and every
- * relation hop.
+ * Two things are happening here, both measured. The clause-at-a-time form this
+ * replaced — `query = sql\`${query} WHERE …\`` and again for ORDER BY and LIMIT —
+ * nested the statement one level deeper per clause, and drizzle's renderer walks
+ * that tree recursively with a type check at every node; flattening it rendered
+ * 62% faster. Emitting text rather than a drizzle `SQL` at all takes the rest:
+ * building and rendering this statement through drizzle measured 5.35us against
+ * 0.10us to assemble it directly, on a read that costs ~10.8us in total.
  *
- * The four branches are deliberate. Splicing optional clauses as fragments into a
- * single template is tidier and recovers only 15% of the 62%, because each
- * fragment is itself a nested node; and assembling them with `sql.join` is 19%
- * SLOWER than the nesting it replaces. Both were measured before this shape was
- * chosen. `__tests__/select-page-sql.test.ts` pins all four against the
- * composition they replaced.
- * @returns the rendered-equivalent statement for this clause combination
+ * The four branches are deliberate. Splicing optional clauses as fragments into
+ * one template recovers a quarter of the flattening; assembling them with
+ * `sql.join` is 19% SLOWER than the nesting it replaces. Both were measured
+ * before this shape was chosen.
+ *
+ * `__tests__/select-page-sql.test.ts` pins every branch against the drizzle
+ * composition it replaced, text and parameters alike.
+ * @returns the statement text and its bound values, in placeholder order
  */
-const selectPageSql = (tableName: string, where: SQL | undefined, order: SQL, limit: SQL | undefined): SQL => {
-    if (where === undefined) {
-        return limit === undefined
-            ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} ORDER BY ${order}`
-            : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} ORDER BY ${order} LIMIT ${limit}`;
-    }
+const selectPageSql = (tableName: string, where: TextFragment | undefined, order: string, limit: number | undefined): TextFragment => {
+    const head = `SELECT id, _creationTime, ${quoteIdentifier(DOC_COLUMN)} FROM ${quoteIdentifier(tableName)}`;
+    const tail = `ORDER BY ${order}${limit === undefined ? "" : ` LIMIT ${String(limit)}`}`;
 
-    return limit === undefined
-        ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE ${where} ORDER BY ${order}`
-        : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE ${where} ORDER BY ${order} LIMIT ${limit}`;
+    return where === undefined ? rawText(`${head} ${tail}`) : joinText(`${head} WHERE `, where, ` ${tail}`);
 };
 
 /** Bare-doc twin of {@link runGeoTerminalScored} — same candidate set, filter handling, and limit, with the scores mapped away. */
@@ -1130,6 +1130,69 @@ const makeRelationExistsSqlStrategy = (onRead: ReadHook): WhereSqlStrategy => {
     return strategy;
 };
 
+/**
+ * The flat `where` strategy in TEXT form — the twin of {@link doWhereSqlStrategy}.
+ *
+ * Reads compile through this instead of the drizzle one: same traversal, same
+ * SQL, assembled directly. See `where-fragments.ts` for why.
+ */
+const doWhereTextStrategy: WhereSqlStrategy<TextFragment> = {
+    fieldRef: (field) => rawText(jsonPath(field)),
+    serialize: serializeSqlValue,
+};
+
+/**
+ * The relation-EXISTS strategy in TEXT form — the twin of
+ * {@link makeRelationExistsSqlStrategy}, including its per-query alias counter
+ * and scope stack, which are what make nested markers correlate to the right
+ * parent.
+ */
+const makeRelationExistsTextStrategy = (onRead: ReadHook): WhereSqlStrategy<TextFragment> => {
+    let aliasCounter = 0;
+    const scopeStack: string[] = [];
+
+    const strategy: WhereSqlStrategy<TextFragment> = {
+        fieldRef: (field) => rawText(jsonPath(field)),
+        relationExists: (request) => {
+            const { childWhere, negated, parentTable, relation } = request as RelationExistsMarker;
+            const alias = `__rel_${String(aliasCounter)}`;
+            const parentRef = scopeStack.at(-1) ?? parentTable;
+
+            aliasCounter += 1;
+            onRead(relation.table, SCAN_DEP);
+
+            const parentColumn = relation.kind === "one" ? relation.field : relation.references;
+            const childColumn = relation.kind === "one" ? relation.references : relation.field;
+            const correlation = rawText(`${qualifiedJsonPath(alias, childColumn)} = ${qualifiedJsonPath(parentRef, parentColumn)}`);
+
+            scopeStack.push(alias);
+
+            const childSql = compileWhereSql(childWhere, strategy, textFragments);
+
+            scopeStack.pop();
+
+            const condition = childSql === undefined ? correlation : joinText(correlation, " AND ", childSql);
+            const body = joinText("EXISTS (SELECT 1 FROM ", identifierText(relation.table), " AS ", identifierText(alias), " WHERE ", condition, ")");
+
+            return negated ? joinText("NOT ", body) : body;
+        },
+        serialize: serializeSqlValue,
+    };
+
+    return strategy;
+};
+
+/** The text twin of {@link compileOrderBySql}: an ordering binds no values, so it is a bare string. */
+const compileOrderByText = (keys: OrderKey[]): string => {
+    const parts = keys.map((key) => `${jsonPath(key.field)} ${key.direction === "desc" ? "DESC" : "ASC"}`);
+
+    if (!keys.some((key) => key.field === "_id" || key.field === "id")) {
+        parts.push(`${jsonPath("id")} ASC`);
+    }
+
+    return parts.join(", ");
+};
+
 /** Drizzle ORDER BY for the DO: each key as `<jsonPath> ASC|DESC`, with an `id ASC` tiebreak unless an id field is already ordered (keeps paging deterministic). The drizzle twin of `compileOrderBy`. */
 const compileOrderBySql = (keys: OrderKey[]): SQL => {
     const parts = keys.map((key) => dsql`${jsonPathSql(key.field)} ${dsql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
@@ -1225,7 +1288,7 @@ const paginateStage = (
     tableName: string,
     stage: QueryStage,
     options: PaginationOptions,
-    scopeCondition?: SQL,
+    scopeCondition?: TextFragment,
     /** Reports the PRE-filter row count — an unbounded filtered page scans past what it returns. */
     onScanned: (count: number) => void = () => undefined,
 ): QueryPage => {
@@ -1234,19 +1297,19 @@ const paginateStage = (
     // A cursor is always a non-empty base64 string, so truthiness distinguishes
     // a bounded page (endCursor set) from the legacy open-ended one (null/omitted).
     const bounded = typeof options.endCursor === "string";
-    const pageWhere = compileWhereSql(paginateWhere(stage, orderKeys, options.cursor, options.endCursor), doWhereSqlStrategy);
+    const pageWhere = compileWhereSql(paginateWhere(stage, orderKeys, options.cursor, options.endCursor), doWhereTextStrategy, textFragments);
     // Soft delete: AND the scope onto the keyset predicate so a paginated fluent
     // read hides soft-deleted rows too.
-    const whereCondition = scopeCondition && pageWhere ? dsql`${pageWhere} AND ${scopeCondition}` : (scopeCondition ?? pageWhere);
+    const whereCondition = scopeCondition && pageWhere ? joinText(pageWhere, " AND ", scopeCondition) : (scopeCondition ?? pageWhere);
 
     const filtered = stage.inMemoryFilters.length > 0;
 
     // A bounded page returns its entire range, so never cap the SQL scan. An
     // unbounded, unfiltered page over-fetches one row to learn `isDone`.
-    const limitSql = filtered || bounded ? undefined : dsql.raw(String(numberItems + 1));
-    // Same SELECT shape as `findMany`, so it shares the flattened builder — see
-    // `selectPageSql` for why the clause-at-a-time form was costing a render.
-    const rows = runDrizzle(sql, selectPageSql(tableName, whereCondition, compileOrderBySql(orderKeys), limitSql)).toArray();
+    // Same SELECT shape as `findMany`, so it shares the builder — see
+    // `selectPageSql` for why this is assembled rather than rendered.
+    const statement = selectPageSql(tableName, whereCondition, compileOrderByText(orderKeys), filtered || bounded ? undefined : numberItems + 1);
+    const rows = runSql(sql, statement.text, ...statement.params).toArray();
 
     onScanned(rows.length);
 
@@ -1348,6 +1411,10 @@ const buildReader = (
     // the opt-in to see them. Compiled once and ANDed into every fetch/search/page.
     const scopeWhere = softDeleteScope(tableDefinition.softDeleteMode, undefined);
     const scopeCondition = scopeWhere ? compileWhereSql(scopeWhere, doWhereSqlStrategy) : undefined;
+    // The paginated read assembles text; the search and fetch terminals still
+    // build drizzle. Compiled once per query builder either way, so keeping both
+    // forms costs a compile per `.query()` rather than per read.
+    const scopeConditionText = scopeWhere ? compileWhereSql(scopeWhere, doWhereTextStrategy, textFragments) : undefined;
 
     const stage: QueryStage = {
         indexFields: [],
@@ -1640,7 +1707,7 @@ const buildReader = (
                 throw new LunoraError("INTERNAL", "pagination is not supported on geo queries; use .take(n) or .collect()");
             }
 
-            const page = paginateStage(sql, tableName, stage, options, scopeCondition, (count) => {
+            const page = paginateStage(sql, tableName, stage, options, scopeConditionText, (count) => {
                 scanned = count;
             });
 
@@ -3256,15 +3323,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // fast path (or with no relation predicates) the flat strategy is
             // equivalent and cheaper, so only build the per-query strategy when
             // the push-down is enabled.
-            const whereStrategy = relationExistsPushDownEnabled ? makeRelationExistsSqlStrategy(onRead) : doWhereSqlStrategy;
-            const whereCondition = compileWhereSql(predicate, whereStrategy);
+            const whereStrategy = relationExistsPushDownEnabled ? makeRelationExistsTextStrategy(onRead) : doWhereTextStrategy;
+            const whereCondition = compileWhereSql(predicate, whereStrategy, textFragments);
 
             const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
             // Over-fetch by one row to learn whether another page exists without
             // issuing a second query.
-            const limitSql = limit === undefined ? undefined : dsql.raw(String(limit + 1));
-            const orderSql = compileOrderBySql(orderKeys);
-            const rows = runDrizzle(sql, selectPageSql(tableName, whereCondition, orderSql, limitSql)).toArray();
+            const statement = selectPageSql(tableName, whereCondition, compileOrderByText(orderKeys), limit === undefined ? undefined : limit + 1);
+            const rows = runSql(sql, statement.text, ...statement.params).toArray();
 
             // A full scan stamps ONE `*scan` dep instead of a dep per row, so the
             // read meter — which counts concrete-id stamps — would never see the

@@ -194,4 +194,4 @@ export const sqliteInList = (reference: SQL, items: ReadonlyArray<unknown>, nega
     return sql`${reference}${keyword}(SELECT ${sql.identifier("value")} FROM json_each(${JSON.stringify(items)}))`;
 };
 
-export { WORKERD_SQLITE_LIMITS };
+export { isJsonSafe, WORKERD_SQLITE_LIMITS };
