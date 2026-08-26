@@ -130,7 +130,16 @@ export interface PlatformCapabilities {
          */
         memoryTables?: Capability;
 
-        /** Object storage (R2 / S3 / MinIO). */
+        /**
+         * Object storage (R2 / S3 / MinIO).
+         *
+         * `ctx.storage.deleteAfterCommit(key)` — the mutation-side deferred
+         * delete — rides on this rating and deliberately gets no key of its own:
+         * it needs no host primitive beyond the bucket. The post-commit flush
+         * goes through `ShardHost.waitUntil` where the host has one and is
+         * awaited inline where it does not, so a host that can serve
+         * `objectStorage` can serve the deferral at the same level.
+         */
         objectStorage?: Capability;
 
         /**

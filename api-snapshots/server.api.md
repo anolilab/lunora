@@ -251,6 +251,18 @@ interface DatabaseWriter extends DatabaseReader {
 }
 ```
 
+### `DeferredDeleteFlushResult` (interface)
+
+```ts
+interface DeferredDeleteFlushResult {
+    attempted: number;
+    failures: {
+        error: unknown;
+        key: string;
+    }[];
+}
+```
+
 ### `DefineComponentOptions` (interface)
 
 ```ts
@@ -1198,10 +1210,19 @@ interface MutationCtx {
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
-    readonly storage: ReadOnlyStorage;
+    readonly storage: MutationStorage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
     readonly workflows: Workflows;
+}
+```
+
+### `MutationStorage` (interface)
+
+```ts
+interface MutationStorage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
+    bucket: (name: Buckets) => MutationStorage<Buckets>;
+    deleteAfterCommit: (key: string) => void;
 }
 ```
 
@@ -2796,6 +2817,12 @@ const defineVectorIndex: (options: VectorIndexOptions) => VectorIndexDefinition;
 const deny: () => WhereInput;
 ```
 
+### `flushDeferredDeletes` (const)
+
+```ts
+const flushDeferredDeletes: (storage: unknown) => Promise<DeferredDeleteFlushResult>;
+```
+
 ### `httpAction` (const)
 
 ```ts
@@ -2931,6 +2958,12 @@ const toWhereInput: (decision: WhereInput | boolean | undefined) => WhereInput;
 ### `v` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `withDeferredDeletes` (const)
+
+```ts
+const withDeferredDeletes: (storage: unknown) => unknown;
+```
 
 ## `@lunora/server/data-model`
 
@@ -4431,6 +4464,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `MutationCtx` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `MutationStorage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 

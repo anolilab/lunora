@@ -1762,6 +1762,34 @@ interface ReadOnlyStorage<Buckets extends string = string> {
     head: (key: string) => Promise<StorageObjectHead | null>;
 }
 
+/**
+ * `ctx.storage` inside a **mutation**: the read surface, plus the one write a
+ * transactional context can safely express.
+ *
+ * A mutation runs inside the shard's storage transaction, which can roll back; an
+ * R2 delete cannot. So `delete` stays action-only, and a mutation that removes the
+ * row that referenced an object queues the object instead — the queue is flushed
+ * once the transaction has committed, and never if it rolled back.
+ */
+interface MutationStorage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
+    /** Select a named bucket; deletes queued on it are flushed against that bucket. */
+    bucket: (name: Buckets) => MutationStorage<Buckets>;
+
+    /**
+     * Queue `key` for deletion once this mutation commits.
+     *
+     * Returns `void`, not a promise: nothing has been attempted yet, so there is
+     * nothing to await, and the object is still there on the next line. A
+     * rolled-back mutation never flushes — the queue dies with the context — so
+     * the row deletion and the object cleanup cannot disagree.
+     *
+     * The flush runs after the response where the host can defer it, so a failed
+     * delete leaks the object rather than failing a mutation that already
+     * succeeded. Each failure is logged with its key.
+     */
+    deleteAfterCommit: (key: string) => void;
+}
+
 interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
     /** Select a named bucket; the returned accessor exposes the full read/write surface. */
     bucket: (name: Buckets) => Storage<Buckets>;
@@ -2323,7 +2351,7 @@ interface MutationCtx {
     readonly secrets: Secrets;
     /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
     readonly span: LunoraWideEvent;
-    readonly storage: ReadOnlyStorage;
+    readonly storage: MutationStorage;
     /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
@@ -2454,6 +2482,7 @@ export type {
     LunoraTracer,
     LunoraWideEvent,
     MutationCtx,
+    MutationStorage,
     OnDeleteAction,
     PaginationOptions,
     PaginationResult,

@@ -2475,6 +2475,27 @@ abstract class ShardDO {
         return this.transactionDepth > 0;
     }
 
+    /**
+     * Let `work` outlive this dispatch where the host supports it.
+     *
+     * The generated mutation dispatch uses this to flush `ctx.storage`'s
+     * deferred object deletes after the transaction commits: they must not run
+     * inside the transaction (an R2 delete cannot roll back) and they must not
+     * hold up the response (the row is already durable — the bytes are cleanup).
+     *
+     * Falls back to awaiting inline when the host cannot defer, so the work still
+     * happens — the unit harness has no `waitUntil`, and silently dropping the
+     * flush there would make a leaked object look like passing behaviour.
+     * @param work already-started work; a rejection is the caller's to contain
+     */
+    protected async deferPastResponse(work: Promise<unknown>): Promise<void> {
+        if (this.runner.background(work)) {
+            return;
+        }
+
+        await work;
+    }
+
     protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
         if (this.transactionDepth > 0) {
             throw new LunoraError("NESTED_TRANSACTION", "nested transactions are not supported in SQLite-in-DO", { status: 500 });

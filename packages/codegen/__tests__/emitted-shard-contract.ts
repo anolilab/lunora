@@ -27,11 +27,15 @@
  */
 import type { TraceRefLike } from "@lunora/do";
 import { ShardDO } from "@lunora/do";
+import { flushDeferredDeletes } from "@lunora/server";
 
 class EmittedShardContract extends ShardDO {
-    // eslint-disable-next-line class-methods-use-this -- required abstract override; this file exercises the base surface, it never dispatches
-    public override handleRpc(): Promise<unknown> {
-        return Promise.resolve(undefined);
+    public override async handleRpc(): Promise<unknown> {
+        // Mirrors the shape of the emitted mutation branch, so the flush below is
+        // reached from a real dispatch signature rather than sitting unreferenced.
+        await this.flushDeferredStorageDeletes({});
+
+        return undefined;
     }
 
     /**
@@ -54,6 +58,29 @@ class EmittedShardContract extends ShardDO {
         await this.scheduleSourcePoll();
 
         return undefined;
+    }
+
+    /**
+     * Mirrors the mutation branch of the generated `handleRpc`: the post-commit
+     * flush of `ctx.storage`'s deferred object deletes. It reaches one base
+     * member (`deferPastResponse`), which is `protected` for exactly this call —
+     * the host's `waitUntil` behind it is private.
+     */
+    private async flushDeferredStorageDeletes(context: unknown): Promise<void> {
+        const dispatchContext = context as { log?: { warn: (message: string, fields?: Record<string, unknown>) => void }; storage?: unknown };
+
+        await this.deferPastResponse(
+            (async () => {
+                const outcome = await flushDeferredDeletes(dispatchContext.storage);
+
+                for (const failure of outcome.failures) {
+                    dispatchContext.log?.warn("ctx.storage.deleteAfterCommit: delete failed, object leaked", {
+                        error: String(failure.error),
+                        key: failure.key,
+                    });
+                }
+            })(),
+        );
     }
 }
 export default EmittedShardContract;

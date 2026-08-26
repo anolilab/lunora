@@ -2124,6 +2124,7 @@ import type {
     InternalQueryBuilder,
     MutationBuilder,
     MutationCtx as MutationCtxBase,
+    MutationStorage,
     MutatorDefinition,
     QueryBuilder,
     QueryCtx as QueryCtxBase,
@@ -2299,7 +2300,7 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${vectorsOm
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: MutationStorage<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
@@ -4475,8 +4476,8 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         // read-registry builder + `composeShapeReadWhere` so `resolveShape` can
         // AND-merge a shape's predicate with the table's read base-where.
         hasShapes
-            ? `import { asBucketStorage, buildRlsReadRegistry, composeShapeReadWhere, createSecrets, LunoraError } from "${base.server}";`
-            : `import { asBucketStorage, createSecrets, LunoraError } from "${base.server}";`,
+            ? `import { asBucketStorage, buildRlsReadRegistry, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes } from "${base.server}";`
+            : `import { asBucketStorage, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes } from "${base.server}";`,
     ];
 
     // The per-table facade binding lives in `@lunora/server` so codegen and the
@@ -5209,13 +5210,40 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // watermark are atomic — a crash can't leave the writes durable without
             // the replay guard.
             if (registered.kind === "mutation") {
-                return this.runInTransaction(async () => {
-                    const result = await registered.handler(ctx, args);
+                const result = await this.runInTransaction(async () => {
+                    const value = await registered.handler(ctx, args);
 
-                    this.commitMutationBookkeeping(result);
+                    this.commitMutationBookkeeping(value);
 
-                    return result;
+                    return value;
                 });
+
+                // The transaction committed, so the rows are durable and the objects
+                // their deletion orphaned can go. Deliberately AFTER the span, never
+                // inside it: an R2 delete cannot roll back, so a delete issued from
+                // within a transaction that later aborts destroys data the surviving
+                // row still points at. A throw above skips this entirely and the
+                // queue dies with \`ctx\`.
+                //
+                // \`flushDeferredDeletes\` never rejects — the mutation has already
+                // succeeded, so a failed cleanup must not turn into a failed response.
+                // A leaked object is reported instead, with its key.
+                const dispatchCtx = ctx as { log?: { warn: (message: string, fields?: Record<string, unknown>) => void }; storage?: unknown };
+
+                await this.deferPastResponse(
+                    (async () => {
+                        const outcome = await flushDeferredDeletes(dispatchCtx.storage);
+
+                        for (const failure of outcome.failures) {
+                            dispatchCtx.log?.warn("ctx.storage.deleteAfterCommit: delete failed, object leaked", {
+                                error: String(failure.error),
+                                key: failure.key,
+                            });
+                        }
+                    })(),
+                );
+
+                return result;
             }
 
             return registered.handler(ctx, args);
@@ -5614,6 +5642,16 @@ ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}
                 "getMetadata",
                 "list",
             ]);
+            // \`ctx.storage\` in a MUTATION additionally accepts \`deleteAfterCommit(key)\`.
+            // Only a mutation: it is the one dispatch with a transaction to commit,
+            // and the flush hangs off its dispatch. Wrapping a query or an action
+            // would put a method on \`ctx.storage\` that nothing ever drains — an
+            // action already has the real \`delete\`. Wrapped OUTSIDE the read-stamping
+            // facade so \`bucket(name)\` still resolves through it and stays stamped,
+            // and applied only to \`ctx.storage\` so \`ctx.db.system._storage\` (which
+            // shares the adapter above) is untouched.
+            const contextStorage =
+                LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind === "mutation" ? withDeferredDeletes(storage) : storage;
             // \`ctx.log\`: the DO base builds the attributed logger (structured
             // fields + \`.with(...)\` child + trace correlation) and routes each call
             // to the optional \`observability\` sink. It also buffers the line (studio
@@ -5674,7 +5712,7 @@ ${notifyBuild}
                 now,${ormContextField}
                 scheduler,
                 span,
-                storage,
+                storage: contextStorage,
                 trace,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${agentsContextField}
             };
 ${isActionLine}${actionOnlyBlock}
