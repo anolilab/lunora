@@ -1077,9 +1077,18 @@ type PartialShape<S extends ObjectShape> = { [K in keyof S]: ColumnValidator<Inf
  *
  * A member that is already `v.optional(...)` is passed through rather than
  * double-wrapped, so this is idempotent.
+ *
+ * **Pass the fields a caller may patch, not a whole table's shape.** Handing this
+ * `schema.tables.x.shape` makes every present and *future* column client-writable:
+ * add `ownerId`, `role`, or `isVerified` to the table later and it silently joins
+ * the patch, with no diff on the procedure to review. Row-level policies do not
+ * close that — they decide which ROW you may write, not which fields — so the
+ * allow-list has to be here.
  * @example
  * ```ts
- * mutation.input(v.partial(schema.tables.threads.shape)).mutation(…)
+ * const editable = { body: v.string(), title: v.string() };
+ *
+ * mutation.input({ id: v.id("threads"), ...v.partial(editable) }).mutation(…)
  * ```
  */
 const partial = <S extends ObjectShape>(shape: S): PartialShape<S> =>
