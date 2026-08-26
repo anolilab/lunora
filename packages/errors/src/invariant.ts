@@ -5,12 +5,13 @@
  * invariant breach is a bug, not a client-actionable error) while staying rich in
  * server logs and the CLI.
  *
- * All three are declared as `const name: (…) => never = …` rather than
- * `const name = (…): never => …`. TypeScript only lets a call end a control-flow
- * path when the callee is a name whose *declaration* carries the annotation; an
- * inferred `const` does not qualify, the same restriction assertion functions
- * have. With the annotation on the arrow instead, `if (!row) { raise(…); }` would
- * leave `row` possibly-`null` on the next line.
+ * Each is annotated on the **declaration** rather than on the arrow —
+ * `const name: (…) => never = …`, and `invariant` the assertion-function
+ * equivalent `(…) => asserts condition`. TypeScript only lets a call narrow or
+ * end a control-flow path when the callee is a name whose declaration carries
+ * that annotation; an inferred `const` does not qualify. Written the other way
+ * round (`const raise = (…): never => …`), `if (!row) { raise(…); }` would leave
+ * `row` possibly-`null` on the next line, with nothing to warn you.
  */
 import type { LunoraErrorCodeInput, LunoraErrorOptions } from "./base";
 import { LunoraError } from "./base";
