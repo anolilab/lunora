@@ -5251,6 +5251,26 @@ abstract class ShardDO {
     }
 
     /**
+     * Stamp everything one RPC dispatch needs off its request, and reset every
+     * per-request capture the handler will fill.
+     *
+     * Split from {@link ShardDO.handleFetchCloudflare} together with
+     * {@link ShardDO.endDispatch}, and the pairing is the point: these two own
+     * the same set of fields, and the whole correctness story for them is that
+     * every field one sets, the other clears. Spread across a 479-line method
+     * the two ends were 350 lines apart, so a newly-added per-request field
+     * stamped here and forgotten there leaks into the NEXT request on the same
+     * DO instance — a cross-request identity bleed with no local symptom.
+     * `__tests__/dispatch-lifecycle.test.ts` asserts the symmetry directly.
+     *
+     * Returns the two values the caller must hold in locals rather than read
+     * back off `this`: an `await`-interleaved concurrent dispatch can re-set the
+     * shared fields, and the `finally` would then file this dispatch's telemetry
+     * under another request's trace (see the comments inside).
+     * @returns this dispatch's trace anchor and its transaction-headroom tracker
+     */
+
+    /**
      * Cloudflare-specific fetch implementation — WebSocket upgrades and the RPC
      * routes. Injected into {@link ShardRunner} as the host-specific handler while
      * the engine is progressively extracted.
@@ -5314,91 +5334,7 @@ abstract class ShardDO {
         // Stash the inbound D1 bookmark and identity headers for the
         // duration of the handler call so getters return the right
         // values. Cleared on exit so the next request starts fresh.
-        this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
-        this.currentResponseBookmark = undefined;
-        // `decodeUserIdHeader` inverts the runtime's `encodeUserIdHeader`: a
-        // Latin-1-safe id is forwarded unchanged, a non-Latin-1 one arrives
-        // base64url-encoded behind a leading `=` sentinel. See shared/identity-header.ts.
-        this.currentRequestUserId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
-        this.currentRequestMutationId = request.headers.get("x-lunora-mutation-id") ?? undefined;
-        // Custom-mutator push identity: a stable per-device client id plus a
-        // monotonic per-client sequence. Present only on custom-mutator pushes;
-        // the watermark dispatch below classifies the sequence against the
-        // shard's `__client_watermark`. A non-numeric/absent seq disables the
-        // watermark path (the call falls back to the legacy idempotency dedup).
-        this.currentRequestClientId = request.headers.get("x-lunora-client-id") ?? undefined;
-        this.currentRequestClientSeq = parseClientSeqHeader(request.headers.get("x-lunora-client-seq"));
-        // Reset the in-transaction bookkeeping handshake: `handleRpc` sets the
-        // classification + flag for a mutation push so the writes, dedup row, and
-        // watermark advance all commit atomically (see `commitMutationBookkeeping`).
-        this.currentMutatorClass = undefined;
-        this.mutationBookkeepingCommitted = false;
-        this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
-        // The caller's IP, forwarded server-side from Cloudflare's trusted
-        // `CF-Connecting-IP` (never copied from a client header). Surfaced as
-        // `ctx.ip` so handlers/middleware can key on it (e.g. rate-limit
-        // unauthenticated traffic by IP).
-        this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
-        this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
-        this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;
-        // Resolve the dispatch's trace anchor once, here, so `ctx.trace` spans and
-        // the synthetic root span recorded on the way out agree on the ids even
-        // when there is no inbound `traceparent` to derive them from.
-        this.currentRequestTrace = resolveTraceAnchor(this.currentRequestTraceparent);
-        // Captured into a local as well: the `finally` below runs after the
-        // handler's awaits, by which point an interleaved dispatch may have
-        // re-set the shared field — reading it there would file this dispatch's
-        // root span under another request's trace (and leave that one rootless).
-        const dispatchTrace = this.currentRequestTrace;
-        // Trace-sampling verdict propagated by the runtime: the `traceparent`
-        // sampled flag carries the head decision (absent → keep, so this path is
-        // unchanged for alarms / subscription re-runs / non-Lunora callers) and
-        // `x-lunora-sample-errors` carries the tail-bias toggle. Registered keyed by
-        // THIS dispatch's `traceId` (not a flat field) so a concurrent dispatch's
-        // `recordSpan` / `finally` reads its own verdict — see `traceSampling`.
-        this.traceSampling.set(dispatchTrace.traceId, {
-            keepErrors: request.headers.get("x-lunora-sample-errors") !== "0",
-            sampled: parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true,
-        });
-        // Reset the per-request read/cache capture (filled by `runCachedQuery`
-        // for cached query paths) so a previous dispatch can't leak into this
-        // entry's logged read set / cache-hit flag.
-        this.currentRequestReadTables = undefined;
-        this.currentRequestCacheHit = undefined;
-
-        this.metrics.requests += 1;
-        const dispatchStartedAt = Date.now();
-
-        // Collect the tables this dispatch full-scans (stamped by the
-        // ctx-db read hook) so `recordFunctionCall` can persist the causal
-        // attribution. Fresh per request; drained below.
-        this.currentScannedTables = new Set<string>();
-
-        // Captured in a LOCAL, not just the instance field: `handleRpc` below
-        // receives it BY VALUE (see its docstring), so this dispatch's ctx-build
-        // never depends on `this.currentTransactionHeadroom` still pointing at
-        // THIS tracker by the time an `await`-interleaved concurrent dispatch's
-        // `finally` clears it. Still assigned to the field too — the fallback
-        // `dispatchLifecycle`/`handleRunAs` (which mint no tracker of their own)
-        // and any other reader of `transactionHeadroom()` keep working exactly as
-        // before this parameter existed.
-        const dispatchHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
-
-        this.currentTransactionHeadroom = dispatchHeadroom;
-
-        // Collect the declared indexes this dispatch exercises (stamped by
-        // the ctx-db index-use hook) so `recordFunctionCall` can persist the
-        // per-index hit counter behind the dead-index lint. Fresh per
-        // request; drained below.
-        this.currentIndexHits = new Set<string>();
-
-        // Collect per-statement SQL samples from the instrumented `sql`
-        // getter so `flushStmtSamples` can persist them to the durable
-        // `__lunora_metrics_queries` table after the handler resolves.
-        // Allocating a fresh map here activates the instrumentation (the
-        // `sql` getter only wraps when this field is defined).
-        this.currentStmtSamples = new Map<string, StmtSample>();
-        this.currentStmtSamplesTruncated = undefined;
+        const { dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request);
 
         // Outcome of the dispatch, for the synthetic root span recorded in the
         // `finally` below. A sentinel rather than a boolean so the `catch` can
@@ -5701,39 +5637,7 @@ abstract class ShardDO {
             // spans already streamed live).
             this.flushSampledOutTrace(dispatchTrace, dispatchError !== undefined);
             this.traceSampling.delete(dispatchTrace.traceId);
-            this.currentRequestTrace = undefined;
-            this.currentRequestBookmark = undefined;
-            this.currentResponseBookmark = undefined;
-            this.currentRequestUserId = undefined;
-            this.currentRequestMutationId = undefined;
-            this.currentRequestClientId = undefined;
-            this.currentRequestClientSeq = undefined;
-            this.currentMutatorClass = undefined;
-            this.mutationBookkeepingCommitted = false;
-            this.currentRequestIdentity = undefined;
-            this.currentRequestIp = undefined;
-            this.currentRequestSystem = false;
-            this.currentRequestTraceparent = undefined;
-            this.currentScannedTables = undefined;
-            // Identity-guarded, not an unconditional clear: `handleRpc` above is
-            // already value-threaded with `dispatchHeadroom` for the ctx-build
-            // itself, but the field is still the fallback `dispatchLifecycle` /
-            // `handleRunAs` (and `transactionHeadroom()` readers generally) use.
-            // An unconditional clear here would let THIS dispatch's `finally` wipe
-            // a DIFFERENT, still-in-flight dispatch's tracker out from under it —
-            // the exact shared-field race this whole mechanism exists to avoid.
-            // Only clear it if it still points at the tracker THIS dispatch set.
-            if (this.currentTransactionHeadroom === dispatchHeadroom) {
-                this.currentTransactionHeadroom = undefined;
-            }
-            this.currentIndexHits = undefined;
-            this.currentRequestReadTables = undefined;
-            this.currentRequestCacheHit = undefined;
-            this.currentStmtSamples = undefined;
-            this.currentStmtSamplesTruncated = undefined;
-            // Drop the cached proxy with the samples map it folds into, so the
-            // finished dispatch's map is not held alive by it.
-            this.instrumentedSql = undefined;
+            this.endDispatch(dispatchHeadroom);
         }
     }
 
@@ -10318,6 +10222,143 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- base-class override hook (the codegen subclass overrides it and uses `this` to build the global writer), co-located with the poll tick it opens rather than hoisted away from its only caller
     protected readGlobalChangedTables(_sinceSeq: number, _cursorOnly?: boolean): Promise<{ cursor: number; floor?: number; tables: string[] } | undefined> {
         return Promise.resolve(undefined);
+    }
+
+    private beginDispatch(request: Request): {
+        dispatchHeadroom: TransactionHeadroomTracker;
+        dispatchStartedAt: number;
+        dispatchTrace: { rootSpanId: string; traceId: string };
+    } {
+        this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
+        this.currentResponseBookmark = undefined;
+        // `decodeUserIdHeader` inverts the runtime's `encodeUserIdHeader`: a
+        // Latin-1-safe id is forwarded unchanged, a non-Latin-1 one arrives
+        // base64url-encoded behind a leading `=` sentinel. See shared/identity-header.ts.
+        this.currentRequestUserId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
+        this.currentRequestMutationId = request.headers.get("x-lunora-mutation-id") ?? undefined;
+        // Custom-mutator push identity: a stable per-device client id plus a
+        // monotonic per-client sequence. Present only on custom-mutator pushes;
+        // the watermark dispatch below classifies the sequence against the
+        // shard's `__client_watermark`. A non-numeric/absent seq disables the
+        // watermark path (the call falls back to the legacy idempotency dedup).
+        this.currentRequestClientId = request.headers.get("x-lunora-client-id") ?? undefined;
+        this.currentRequestClientSeq = parseClientSeqHeader(request.headers.get("x-lunora-client-seq"));
+        // Reset the in-transaction bookkeeping handshake: `handleRpc` sets the
+        // classification + flag for a mutation push so the writes, dedup row, and
+        // watermark advance all commit atomically (see `commitMutationBookkeeping`).
+        this.currentMutatorClass = undefined;
+        this.mutationBookkeepingCommitted = false;
+        this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
+        // The caller's IP, forwarded server-side from Cloudflare's trusted
+        // `CF-Connecting-IP` (never copied from a client header). Surfaced as
+        // `ctx.ip` so handlers/middleware can key on it (e.g. rate-limit
+        // unauthenticated traffic by IP).
+        this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
+        this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
+        this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;
+        // Resolve the dispatch's trace anchor once, here, so `ctx.trace` spans and
+        // the synthetic root span recorded on the way out agree on the ids even
+        // when there is no inbound `traceparent` to derive them from.
+        this.currentRequestTrace = resolveTraceAnchor(this.currentRequestTraceparent);
+        // Captured into a local as well: the `finally` below runs after the
+        // handler's awaits, by which point an interleaved dispatch may have
+        // re-set the shared field — reading it there would file this dispatch's
+        // root span under another request's trace (and leave that one rootless).
+        const dispatchTrace = this.currentRequestTrace;
+        // Trace-sampling verdict propagated by the runtime: the `traceparent`
+        // sampled flag carries the head decision (absent → keep, so this path is
+        // unchanged for alarms / subscription re-runs / non-Lunora callers) and
+        // `x-lunora-sample-errors` carries the tail-bias toggle. Registered keyed by
+        // THIS dispatch's `traceId` (not a flat field) so a concurrent dispatch's
+        // `recordSpan` / `finally` reads its own verdict — see `traceSampling`.
+        this.traceSampling.set(dispatchTrace.traceId, {
+            keepErrors: request.headers.get("x-lunora-sample-errors") !== "0",
+            sampled: parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true,
+        });
+        // Reset the per-request read/cache capture (filled by `runCachedQuery`
+        // for cached query paths) so a previous dispatch can't leak into this
+        // entry's logged read set / cache-hit flag.
+        this.currentRequestReadTables = undefined;
+        this.currentRequestCacheHit = undefined;
+
+        this.metrics.requests += 1;
+        const dispatchStartedAt = Date.now();
+
+        // Collect the tables this dispatch full-scans (stamped by the
+        // ctx-db read hook) so `recordFunctionCall` can persist the causal
+        // attribution. Fresh per request; drained below.
+        this.currentScannedTables = new Set<string>();
+
+        // Captured in a LOCAL, not just the instance field: `handleRpc` below
+        // receives it BY VALUE (see its docstring), so this dispatch's ctx-build
+        // never depends on `this.currentTransactionHeadroom` still pointing at
+        // THIS tracker by the time an `await`-interleaved concurrent dispatch's
+        // `finally` clears it. Still assigned to the field too — the fallback
+        // `dispatchLifecycle`/`handleRunAs` (which mint no tracker of their own)
+        // and any other reader of `transactionHeadroom()` keep working exactly as
+        // before this parameter existed.
+        const dispatchHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
+
+        this.currentTransactionHeadroom = dispatchHeadroom;
+
+        // Collect the declared indexes this dispatch exercises (stamped by
+        // the ctx-db index-use hook) so `recordFunctionCall` can persist the
+        // per-index hit counter behind the dead-index lint. Fresh per
+        // request; drained below.
+        this.currentIndexHits = new Set<string>();
+
+        // Collect per-statement SQL samples from the instrumented `sql`
+        // getter so `flushStmtSamples` can persist them to the durable
+        // `__lunora_metrics_queries` table after the handler resolves.
+        // Allocating a fresh map here activates the instrumentation (the
+        // `sql` getter only wraps when this field is defined).
+        this.currentStmtSamples = new Map<string, StmtSample>();
+        this.currentStmtSamplesTruncated = undefined;
+
+        return { dispatchHeadroom, dispatchStartedAt, dispatchTrace };
+    }
+
+    /**
+     * Clear every per-request field {@link ShardDO.beginDispatch} stamped.
+     *
+     * `dispatchHeadroom` is passed rather than read off `this` so the headroom
+     * clear stays identity-guarded — see the comment on it.
+     */
+
+    private endDispatch(dispatchHeadroom: TransactionHeadroomTracker): void {
+        this.currentRequestTrace = undefined;
+        this.currentRequestBookmark = undefined;
+        this.currentResponseBookmark = undefined;
+        this.currentRequestUserId = undefined;
+        this.currentRequestMutationId = undefined;
+        this.currentRequestClientId = undefined;
+        this.currentRequestClientSeq = undefined;
+        this.currentMutatorClass = undefined;
+        this.mutationBookkeepingCommitted = false;
+        this.currentRequestIdentity = undefined;
+        this.currentRequestIp = undefined;
+        this.currentRequestSystem = false;
+        this.currentRequestTraceparent = undefined;
+        this.currentScannedTables = undefined;
+        // Identity-guarded, not an unconditional clear: `handleRpc` above is
+        // already value-threaded with `dispatchHeadroom` for the ctx-build
+        // itself, but the field is still the fallback `dispatchLifecycle` /
+        // `handleRunAs` (and `transactionHeadroom()` readers generally) use.
+        // An unconditional clear here would let THIS dispatch's `finally` wipe
+        // a DIFFERENT, still-in-flight dispatch's tracker out from under it —
+        // the exact shared-field race this whole mechanism exists to avoid.
+        // Only clear it if it still points at the tracker THIS dispatch set.
+        if (this.currentTransactionHeadroom === dispatchHeadroom) {
+            this.currentTransactionHeadroom = undefined;
+        }
+        this.currentIndexHits = undefined;
+        this.currentRequestReadTables = undefined;
+        this.currentRequestCacheHit = undefined;
+        this.currentStmtSamples = undefined;
+        this.currentStmtSamplesTruncated = undefined;
+        // Drop the cached proxy with the samples map it folds into, so the
+        // finished dispatch's map is not held alive by it.
+        this.instrumentedSql = undefined;
     }
 
     /**
