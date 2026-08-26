@@ -19,7 +19,7 @@ import { sql as dsql } from "drizzle-orm";
 
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { sqlComparableProjection } from "./sql-projection";
@@ -119,8 +119,13 @@ const encodeDocJson = (document: Record<string, unknown>): string => {
         projected[DOC_ORIGINALS_KEY] = originals;
     }
 
+    const source = projected ?? document;
+
     try {
-        return JSON.stringify(encodeWire(projected ?? document));
+        // `encodeWire` is identity for pure JSON, so for a document with no
+        // wire-typed leaf — the overwhelmingly common case — it rebuilds the whole
+        // tree only for `JSON.stringify` to discard it. Ask first and skip it.
+        return needsWireEncoding(source) ? JSON.stringify(encodeWire(source)) : JSON.stringify(source);
     } catch (error: unknown) {
         // `encodeWire` throws a bare `TypeError` for a non-plain object and a
         // `RangeError` past its depth cap. Unwrapped, both reach the caller as
