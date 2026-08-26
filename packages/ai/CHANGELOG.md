@@ -1,3 +1,14 @@
+## @lunora/ai [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.60...@lunora/ai@1.0.0-alpha.61) (2026-08-26)
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.23
+
 ## @lunora/ai [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/%40lunora%2Fai%401.0.0-alpha.59...%40lunora%2Fai%401.0.0-alpha.60) (2026-08-18)
 
 ## @lunora/ai [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/%40lunora%2Fai%401.0.0-alpha.58...%40lunora%2Fai%401.0.0-alpha.59) (2026-08-14)
