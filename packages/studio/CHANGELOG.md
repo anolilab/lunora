@@ -1,3 +1,9 @@
+## @lunora/studio [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.128...@lunora/studio@1.0.0-alpha.129) (2026-08-26)
+
+### Bug Fixes
+
+* **test:** budget vitest workers against vis's task concurrency ([#492](https://github.com/anolilab/lunora/issues/492)) ([fb0a676](https://github.com/anolilab/lunora/commit/fb0a676ccc8a5a58a4d87b0548aa2c5d93bdb0ab))
+
 ## @lunora/studio [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.127...@lunora/studio@1.0.0-alpha.128) (2026-08-26)
 
 
