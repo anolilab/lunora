@@ -1280,7 +1280,7 @@ const MESSAGE_IDS = [
     "Shared from cache",
     "Global shape polls",
     "Global reads",
-    "Ticks skipped",
+    "Pairs skipped",
     "Containers",
     "Container",
     "Instance",

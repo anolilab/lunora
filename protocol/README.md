@@ -393,6 +393,14 @@ the part to splice on cleanly, and takes precedence over `pokeStart.baseCheckpoi
 own delivered-through cursor. Absent means the sender cannot name a base and the
 gap check is disarmed for that part.
 
+> **Outstanding in the non-JS ports.** Only `@lunora/client` acts on this field:
+> on a mismatch it drops the shape's view, clears its cursor, skips the ops and
+> re-subscribes. None of the eight SDKs implements the comparison — one stores
+> the value and never reads it, the rest only mention it in a comment about
+> `reset`. A poke can genuinely be dropped on the cross-DO owner→relay POST, so
+> until a port adds the check its shape views can diverge where the JS client
+> recovers. A port adding it needs no wire change; the field is already sent.
+
 ### 5.4 Delta runs and the resume cursor
 
 One value change can go out as a RUN of `delta` frames (one per changed row).

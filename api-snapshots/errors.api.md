@@ -521,6 +521,10 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Shape not found";
     };
+    readonly SHAPE_REQUIRES_CDC: {
+        readonly status: 409;
+        readonly title: "Shape requires change-data-capture";
+    };
     readonly SQL_UNAVAILABLE: {
         readonly internal: true;
         readonly status: 500;
@@ -561,6 +565,10 @@ const ERROR_CATALOG: {
     readonly RELAY_SEED_FAILED: {
         readonly status: 502;
         readonly title: "Relay seed failed";
+    };
+    readonly RELAY_SHAPE_UNROUTABLE: {
+        readonly status: 500;
+        readonly title: "Relay shape unroutable";
     };
     readonly MISCONFIGURED: {
         readonly internal: true;

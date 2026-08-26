@@ -5343,11 +5343,11 @@ class LunoraClient {
 
         this.pokeBuffers.delete(key);
 
-        for (const [shapeId, ops] of buffer.parts) {
+        for (const shapeId of buffer.parts.keys()) {
             const state = this.shapeSubscriptions.get(shapeId);
 
             if (state) {
-                this.applyPokePart(state, buffer, ops, message);
+                this.applyPokePart(state, buffer, message);
             }
         }
     }
@@ -5359,7 +5359,11 @@ class LunoraClient {
      * — the reset flag, the base checkpoint, the watermark — while the poke
      * envelope around it is not.
      */
-    private applyPokePart(state: ShapeSubscriptionState, buffer: PokeBuffer, ops: RowOp[], message: ServerPokeEndMessage): void {
+    private applyPokePart(state: ShapeSubscriptionState, buffer: PokeBuffer, message: ServerPokeEndMessage): void {
+        // Read from the buffer rather than taken as a parameter: the caller could
+        // only ever pass `buffer.parts.get(state.id)`, and two ways to reach one
+        // value is one way for them to disagree.
+        const ops = buffer.parts.get(state.id) ?? [];
         /* eslint-disable no-param-reassign -- advance the shared shape-subscription state in place, as the rest of the poke path does */
         // A `reset` part carries the shape's COMPLETE membership, so it is
         // authoritative on its own: drop whatever we hold and apply it. Without

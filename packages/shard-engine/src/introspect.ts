@@ -1675,6 +1675,24 @@ interface ShapeProbeCounters {
 }
 
 /**
+ * How much `.global()` shape polling the changelog probe let a tick avoid.
+ *
+ * Deliberately NOT {@link ShapeProbeCounters}, though both are two numbers: that
+ * pair counts store reads against cache hits for ONE question, these count whole
+ * membership drains against the `(socket, shape)` pairs a tick never asked about.
+ * A shared shape would be structurally assignable in both directions, which is
+ * how a panel ends up rendering one under the other's caption; distinct field
+ * names make that a compile error rather than a caption to get right.
+ */
+interface GlobalPollCounters {
+    /** Membership drains actually issued to the global backend, summed across every tick. */
+    drains: number;
+
+    /** `(socket, shape)` pairs a tick skipped because the global changelog proved their table had not moved. */
+    pairsSkipped: number;
+}
+
+/**
  * Payload of a `__lunora_admin__:getFanoutMetrics` call: the current per-topic
  * subscriber counts plus the running fan-out counters for each delivery path.
  * The point-in-time `topics`/`peakSubscribers`/`totalConnections` are derived
@@ -1685,7 +1703,7 @@ interface ShapeProbeCounters {
  */
 interface FanoutMetricsResult {
     /** Running `.global()` poll tallies — membership drains issued vs (socket, shape) pairs the changelog let a tick skip. */
-    globalPoll: ShapeProbeCounters;
+    globalPoll: GlobalPollCounters;
     /** Cost ceiling — the hard cap on relays per shard (`LUNORA_MAX_RELAYS`); the relay tier never spawns more, even for a viral shard. */
     maxRelays: number;
     /** Highest current subscriber count across all topics/shapes — the widest single fan-out right now. */
@@ -1730,6 +1748,16 @@ const createFanoutCounters = (): FanoutPathCounters => {
 /** A freshly-zeroed {@link ShapeProbeCounters}, for a DO instance waking up. */
 const createShapeProbeCounters = (): ShapeProbeCounters => {
     return { run: 0, served: 0 };
+};
+
+/** A freshly-zeroed {@link GlobalPollCounters}, for a DO instance waking up. */
+const createGlobalPollCounters = (): GlobalPollCounters => {
+    return { drains: 0, pairsSkipped: 0 };
+};
+
+/** Fold one `.global()` poll tick's tallies into the running {@link GlobalPollCounters}. Pure, like {@link recordShapeProbePass}. */
+const recordGlobalPollPass = (counters: GlobalPollCounters, drains: number, pairsSkipped: number): GlobalPollCounters => {
+    return { drains: counters.drains + drains, pairsSkipped: counters.pairsSkipped + pairsSkipped };
 };
 
 /**
@@ -1810,6 +1838,7 @@ export {
     ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
     createFanoutCounters,
+    createGlobalPollCounters,
     createShapeProbeCounters,
     datePrefixRange,
     DEFAULT_FANOUT_TOPIC_LIMIT,
@@ -1820,6 +1849,7 @@ export {
     MAX_PAGE_SIZE,
     readTablePage,
     recordFanoutPass,
+    recordGlobalPollPass,
     recordShapeProbePass,
     RELATION_FUNCTION_PREFIX,
     selectMatchingIds,
@@ -1848,6 +1878,7 @@ export type {
     FunctionCallStat,
     FunctionScanAttribution,
     FunctionStatsResult,
+    GlobalPollCounters,
     MaskColumnMetadata,
     MaskPoliciesResult,
     OrderByClause,

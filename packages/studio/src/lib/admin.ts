@@ -943,21 +943,27 @@ export interface ShapeProbeCounters {
 }
 
 /**
+ * `.global()` poll tallies, mirroring `@lunora/do`'s `GlobalPollCounters`. Two
+ * numbers like {@link ShapeProbeCounters} and deliberately not the same type:
+ * these count whole membership drains against the `(socket, shape)` pairs a tick
+ * never asked about, so the panel cannot render one under the other's caption.
+ */
+export interface GlobalPollCounters {
+    /** Membership drains issued to the global backend. */
+    drains: number;
+
+    /** `(socket, shape)` pairs a tick skipped because the changelog proved their table had not moved. */
+    pairsSkipped: number;
+}
+
+/**
  * Payload of a `__lunora_admin__:getFanoutMetrics` call, mirroring `@lunora/do`'s
  * `FanoutMetricsResult`: the current per-topic subscriber counts (derived live
  * from the shard's sockets) plus the running per-path fan-out cost counters
  * (in-memory, reset on hibernation). Feeds the Studio fan-out observability panel.
  */
 export interface FanoutMetricsResult {
-    /**
-     * `.global()` poll tallies. Same two fields as {@link ShapeProbeCounters},
-     * DIFFERENT units: `run` counts membership drains issued to the global
-     * backend, `served` counts the `(socket, shape)` pairs a tick skipped because
-     * the global changelog proved their table had not moved. Both call sites in
-     * the panel pass their own labels for exactly this reason — don't render
-     * either counter under a shared caption.
-     */
-    globalPoll: ShapeProbeCounters;
+    globalPoll: GlobalPollCounters;
     maxRelays: number;
     peakSubscribers: number;
     promoted: boolean;

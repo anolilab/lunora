@@ -79,6 +79,17 @@ export const messagesByChannel = defineShape({
 });
 ```
 
+Shard-local shapes replicate out of the changelog, so the app has to turn it on:
+
+```ts title="src/server/index.ts"
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .cdc();
+```
+
+Without it a `shape_subscribe` is refused with `SHAPE_REQUIRES_CDC`. (`.global()`
+shapes are driven by the poll loop instead and need no such switch.)
+
 A shape is a **read-as-permission**: the client picks _which partition_ to
 replicate, the server decides _which rows it may see_. Because `where` runs with
 an unforgeable `ctx`, a client can't widen its own visibility, and when RLS is

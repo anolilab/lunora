@@ -57,10 +57,18 @@ interface ShapePokePart {
 /** The checkpoint/epoch metadata stamped on a poke's `pokeStart`/`pokeEnd` frames. */
 interface PokeFrameMeta {
     /**
-     * Poke-level fallback base for a SINGLE-part poke (the seed paths). Stamped
-     * on `pokeStart` for non-JS SDK clients, which read it there, and folded into
-     * any part that names no base of its own. A multi-shape poke must set the
-     * base per part instead — see {@link ShapePokePart.baseCheckpoint}.
+     * Poke-level fallback base for a SINGLE-part poke (the seed paths): stamped on
+     * `pokeStart` and folded into any part that names no base of its own. A
+     * multi-shape poke must set the base per part instead — see
+     * {@link ShapePokePart.baseCheckpoint}.
+     *
+     * The JS client is the only consumer. None of the eight non-JS SDKs implements
+     * a base-checkpoint gap check at all — the Python port stores the field and
+     * never reads it, the other seven only name it in a comment explaining that
+     * `reset` cannot be inferred from its absence. So this level exists for the
+     * seed callers that stamp the meta rather than the part, and nothing else; if
+     * those are ever changed to stamp the part, this field and the client's
+     * matching `PokeBuffer.baseCheckpoint` fallback both go with them.
      */
     baseCheckpoint: number | undefined;
     checkpoint: number;

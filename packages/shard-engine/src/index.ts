@@ -60,8 +60,10 @@ export {
     cdcCanVouchFor,
     cdcSeqLeavingRows,
     cdcTouchesTables,
+    cdcTrimmedError,
     compactCdcDocs,
     createShardCtxDb,
+    cursorBelowRetainedFloor,
     minCdcReplayableSeq,
     normalizeIdStructurally,
     NotUniqueError,
@@ -219,6 +221,7 @@ export type {
     FilterClause,
     FilterOperator,
     FunctionScanAttribution,
+    GlobalPollCounters,
     OrderByClause,
     ShapeProbeCounters,
     StorageReference,
@@ -241,11 +244,13 @@ export {
 } from "./introspect";
 export {
     createFanoutCounters,
+    createGlobalPollCounters,
     createShapeProbeCounters,
     DEFAULT_FANOUT_TOPIC_LIMIT,
     findStorageReferences,
     MAX_PAGE_SIZE,
     recordFanoutPass,
+    recordGlobalPollPass,
     recordShapeProbePass,
     summarizeFanoutTopics,
     summarizeSubscriptions,
@@ -370,7 +375,6 @@ export type {
 } from "./schema-types";
 export { serializeSqlValue } from "./serialize-sql";
 export { buildSettings, isDevEnvironment } from "./settings";
-export type { ReadShapeCdcKeys } from "./shape-diff";
 export { buildShapeDiff } from "./shape-diff";
 export { createShapeDiffCache, globalShapeReadKey, ShapeDiffCache } from "./shape-diff-cache";
 export type { PokeFrameMeta, ShapePokePart, ShapeRowOp } from "./shape-global-diff";

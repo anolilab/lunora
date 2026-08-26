@@ -12,6 +12,7 @@
 /* eslint-disable no-restricted-syntax -- every `dsql\`…\`` here is a drizzle tagged-template SQL builder binding a value, not a string conversion; the rule misfires on the inner TemplateLiteral (see where-sql.ts). */
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-cdc" mirrors its parent "ctx-db.ts" (the established public module name). */
 
+import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
@@ -461,6 +462,45 @@ const readCdcCursor = (sql: SqlExec): number => {
 };
 
 /**
+ * Is `sinceSeq` below the retained window a floor of `floor` describes?
+ *
+ * Six call sites across three packages ask this, and the `+ 1` is why it is
+ * stated once: a consumer sitting at `sinceSeq` has SEEN everything up to and
+ * including it and expects `sinceSeq + 1` next, so a floor of exactly
+ * `sinceSeq + 1` is the boundary case where nothing was missed. A `>` written as
+ * `>=` at any one site fails silently in one of the two directions the log has
+ * no way to report: a permanently re-seeding client, or a served gap.
+ *
+ * An `undefined` floor means an EMPTY log, and this returns `false` for it —
+ * "nothing retained" is not "your cursor is below what is retained". The callers
+ * that must also refuse an empty log say so themselves, at the call site, so the
+ * two questions stay visibly distinct rather than folded into one predicate that
+ * answers whichever the reader assumed.
+ *
+ * Deliberately not a `floor is number` type predicate, tempting as that is for
+ * the throwing callers: the FALSE branch would then narrow `floor` to
+ * `undefined`, and the predicate is false for a perfectly defined floor the
+ * cursor happens to sit inside. A caller that needs the value re-checks it, in
+ * one visible token.
+ */
+const cursorBelowRetainedFloor = (floor: number | undefined, sinceSeq: number): boolean => floor !== undefined && floor > sinceSeq + 1;
+
+/**
+ * The refusal a read path returns when {@link cursorBelowRetainedFloor} holds.
+ *
+ * One builder rather than the message written out per path: the remediation
+ * ("resume from a snapshot") is the same everywhere, and two copies drift the
+ * moment one is reworded. `scope` names which log — the shard's own, or the
+ * `.global()` one — since the answer for a consumer differs by which.
+ */
+const cdcTrimmedError = (floor: number, sinceSeq: number, scope: "global" | "shard"): LunoraError =>
+    new LunoraError(
+        "CDC_LOG_TRIMMED",
+        `${scope === "global" ? "global cdc" : "cdc"} entries at or below seq ${String(floor - 1)} have been trimmed; resume from a snapshot (sinceSeq ${String(sinceSeq)} is below the retained window)`,
+        { status: 409 },
+    );
+
+/**
  * Oldest `seq` still retained in the changelog, or `undefined` when the log is
  * empty. A reconnecting subscriber whose `sinceSeq` is below `floor - 1` has
  * missed changes that `trimCdcChanges` already compacted away, so it must take a
@@ -621,7 +661,9 @@ export {
     cdcCanVouchFor,
     cdcSeqLeavingRows,
     cdcTouchesTables,
+    cdcTrimmedError,
     compactCdcDocs,
+    cursorBelowRetainedFloor,
     migrateCdcLog,
     migrateCdcMeta,
     minCdcReplayableSeq,

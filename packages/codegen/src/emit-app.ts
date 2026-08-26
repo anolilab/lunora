@@ -363,7 +363,13 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
 
         return this;
     }`,
-    `    /** Opt into change-data-capture: every write records a post-image to \`__cdc_log\` — on this shard AND, when the app has \`.global()\` tables, on the global backend. Backs streaming export, replay-PITR, and the \`.global()\` half of \`defineShape\` replication (whose poll tick asks the global changelog which tables moved). Off by default: it costs a changelog row per write, which an app using none of the above should not pay. */
+    `    /**
+     * Opt into change-data-capture: every write records a post-image to \`__cdc_log\` — on this shard AND, when the app has \`.global()\` tables, on the global backend. Backs streaming export, replay-PITR, and the \`.global()\` half of \`defineShape\` replication (whose poll tick asks the global changelog which tables moved). Off by default: it costs a changelog row per write, which an app using none of the above should not pay.
+     *
+     * REQUIRED for a shard-local \`defineShape\`: those replicate out of \`__cdc_log\`, and a \`shape_subscribe\` is refused with \`SHAPE_REQUIRES_CDC\` without it.
+     *
+     * It also changes how fresh a \`.global()\` shape is against writes made OUTSIDE \`ctx.db\` — an admin import, a PITR replay, an external ETL job, or a predicate over wall clock. With CDC off the poll re-reads every shape every 2s. With it on the poll asks the global changelog which tables moved and skips the rest, so a change the changelog never saw waits for the 30s unconditional resync instead. Writes through \`ctx.db\` are unaffected: they append, so the poll sees them on the next tick either way.
+     */
     public cdc(enabled = true): this {
         this.cdcEnabled = enabled;
 
@@ -621,7 +627,7 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
                 // happened. Both are mechanical over the schema this file already
                 // imports, so there is nothing project-specific to configure.
                 options.resolveTableSharding = buildTableShardingResolver();
-                options.importGlobals = buildGlobalImporter(database);
+                options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -632,7 +638,7 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
                 // \`globalApplied: 0\`. Nothing here is project-specific either.
                 options.exportGlobals = buildGlobalExporter(database);
                 options.syncGlobals = buildGlobalCdcSync(database);
-                options.applyGlobals = buildGlobalCdcApplier(database);
+                options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);
             }
         }`,
           ]
@@ -1026,10 +1032,12 @@ const buildTableShardingResolver = (): AdminTableResolver => (table) => {
  * falls back to the position-derived count otherwise.
  */
 const buildGlobalImporter =
-    (database: D1DatabaseLike) =>
+    (database: D1DatabaseLike, cdc: boolean) =>
     (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
         const exec = buildExec(database);
-        const writer = createD1CtxDb({ exec, schema: schema as unknown as D1CtxDbOptions["schema"] });
+        // Same reason the PITR applier carries it: a bulk import that skips the
+        // changelog restores rows no downstream consumer is ever told about.
+        const writer = createD1CtxDb({ cdc, exec, schema: schema as unknown as D1CtxDbOptions["schema"] });
 
         return importGlobalRows(writer, schema as unknown as D1CtxDbOptions["schema"], {
             exec,
@@ -1091,11 +1099,18 @@ const buildGlobalCdcSync =
  * back to replace on conflict), so the batch is handed over untouched — the
  * caller already emits it in commit order. The changes arrive as plain parsed
  * JSON off the wire, hence the cast to the replayer's own change shape.
+ *
+ * The writer carries the app's own \`cdc\` setting, so a replay APPENDS to the
+ * global changelog like any other write. Built without it the restored rows
+ * reach the tables and nothing else: a warehouse connector's cursor walks past a
+ * range that has no entries and its mirror silently diverges from the database,
+ * with nothing on either side able to notice — and every live \`.global()\` shape
+ * misses the restore until the next unconditional resync.
  */
 const buildGlobalCdcApplier =
-    (database: D1DatabaseLike) =>
+    (database: D1DatabaseLike, cdc: boolean) =>
     async (request: { changes: ReadonlyArray<Record<string, unknown>> }): Promise<number> => {
-        const writer = createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] });
+        const writer = createD1CtxDb({ cdc, exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] });
 
         await applyCdcChanges(writer, request.changes as unknown as Parameters<typeof applyCdcChanges>[1]);
 

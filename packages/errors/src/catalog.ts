@@ -339,6 +339,7 @@ export const ERROR_CATALOG = {
     OUT_OF_ORDER: { status: 409, title: "Out-of-order mutation" },
     SHAPE_GLOBAL_TOO_LARGE: { status: 413, title: "Global shape too large" },
     SHAPE_NOT_FOUND: { status: 404, title: "Shape not found" },
+    SHAPE_REQUIRES_CDC: { status: 409, title: "Shape requires change-data-capture" },
     SQL_UNAVAILABLE: { internal: true, status: 500, title: "SQL storage unavailable" },
     STREAM_INTERRUPTED: { status: 503, title: "Durable stream interrupted" },
     STREAM_TOO_LONG: { status: 507, title: "Durable stream exceeded its chunk ceiling" },
@@ -363,6 +364,7 @@ export const ERROR_CATALOG = {
     RELAY_CANNOT_SEED: { status: 500, title: "Relay cannot seed" },
     RELAY_MISCONFIGURED: { status: 500, title: "Relay misconfigured" },
     RELAY_SEED_FAILED: { status: 502, title: "Relay seed failed" },
+    RELAY_SHAPE_UNROUTABLE: { status: 500, title: "Relay shape unroutable" },
 
     /**
      * A worker option required by the request path is absent (a deploy-config

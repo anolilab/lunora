@@ -62,10 +62,12 @@ import {
     buildSeekWhere,
     CDC_LOG_TABLE,
     CDC_LOG_TABLE_SEQ_INDEX,
+    cdcTrimmedError,
     coerceAggregateNumber,
     compileWhereSql,
     ConflictError,
     CountRlsUnsupportedError,
+    cursorBelowRetainedFloor,
     decodeCursor,
     encodeAggregateKey,
     encodeCursor,
@@ -915,8 +917,17 @@ const CDC_SWEEP_ROW = "global";
  */
 const CDC_SWEEP_LEASE_MS = 60_000;
 
-/** Rows one `.global()` sweep pass may delete. Same bound, same reason, as the shard-local twin. */
-const CDC_SWEEP_MAX_ROWS = 10_000;
+/**
+ * Rows one `.global()` sweep pass may delete.
+ *
+ * Same REASON as the shard-local `SHARD_CDC_SWEEP_MAX_ROWS` in `@lunora/do` — an
+ * unbounded first sweep over an accumulated backlog aborts and retries forever —
+ * but deliberately a fifth of its value, and named apart from it so neither
+ * reads as a re-export of the other. That sweep deletes from the shard's own
+ * workerd SQLite; this one goes over the network to D1 or PlanetScale, where the
+ * same row count is a much larger statement.
+ */
+const GLOBAL_CDC_SWEEP_MAX_ROWS = 10_000;
 
 /**
  * Minimum spacing between LEASE ATTEMPTS on one isolate.
@@ -1032,7 +1043,7 @@ const acquireSqlCdcSweepLease = async (exec: SqlCtxExec, dialect: SqlDialect, no
 
 /**
  * Delete `.global()` changelog entries older than `retentionMs`, at most
- * {@link CDC_SWEEP_MAX_ROWS} per pass, and only if this writer wins the lease.
+ * {@link GLOBAL_CDC_SWEEP_MAX_ROWS} per pass, and only if this writer wins the lease.
  *
  * **Time, not rows.** The shard-local twin bounds its log by row count because
  * one shard owns it and a row count is a memory bound on that one object. This
@@ -1080,7 +1091,7 @@ const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, reten
         sql`
             DELETE FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} IN (
                         SELECT ${sql.identifier("seq")} FROM (
-                            SELECT ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("ts")} <= ${cutoff} ORDER BY ${sql.identifier("seq")} ASC LIMIT ${sql.raw(String(CDC_SWEEP_MAX_ROWS))}
+                            SELECT ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("ts")} <= ${cutoff} ORDER BY ${sql.identifier("seq")} ASC LIMIT ${sql.raw(String(GLOBAL_CDC_SWEEP_MAX_ROWS))}
                         ) AS ${sql.identifier("expired")}
                     )
         `,
@@ -1143,12 +1154,8 @@ const readSqlCdcChanges = async (
     // gap for.
     const floor = await readSqlCdcFloor(exec, dialect);
 
-    if (floor !== undefined && floor > sinceSeq + 1) {
-        throw new LunoraError(
-            "CDC_LOG_TRIMMED",
-            `global cdc entries at or below seq ${String(floor - 1)} have been trimmed; resume from a snapshot (sinceSeq ${String(sinceSeq)} is below the retained window)`,
-            { status: 409 },
-        );
+    if (floor !== undefined && cursorBelowRetainedFloor(floor, sinceSeq)) {
+        throw cdcTrimmedError(floor, sinceSeq, "global");
     }
 
     const rows = await queryAll(

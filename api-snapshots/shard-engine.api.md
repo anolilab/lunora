@@ -858,7 +858,7 @@ interface FacetValue {
 
 ```ts
 interface FanoutMetricsResult {
-    globalPoll: ShapeProbeCounters;
+    globalPoll: GlobalPollCounters;
     maxRelays: number;
     peakSubscribers: number;
     promoted: boolean;
@@ -1054,6 +1054,15 @@ interface GeoScoredDocument {
     distanceMeters: null | number;
     document: Record<string, unknown>;
     score?: never;
+}
+```
+
+### `GlobalPollCounters` (interface)
+
+```ts
+interface GlobalPollCounters {
+    drains: number;
+    pairsSkipped: number;
 }
 ```
 
@@ -1864,12 +1873,6 @@ interface ReadFootprint {
 
 ```ts
 type ReadHook = (table: string, idOrScan?: string) => void;
-```
-
-### `ReadShapeCdcKeys` (type)
-
-```ts
-type ReadShapeCdcKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: number) => CdcChangeKey[];
 ```
 
 ### `ReadTablePageOptions` (interface)
@@ -3373,6 +3376,12 @@ const cdcSeqLeavingRows: (sql: SqlExec, keep: number) => number | undefined;
 const cdcTouchesTables: (sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>) => boolean;
 ```
 
+### `cdcTrimmedError` (const)
+
+```ts
+const cdcTrimmedError: (floor: number, sinceSeq: number, scope: "global" | "shard") => LunoraError;
+```
+
 ### `claimStreamRun` (const)
 
 ```ts
@@ -3467,6 +3476,12 @@ const createDependencyTracker: () => DependencyTracker;
 const createFanoutCounters: () => FanoutPathCounters;
 ```
 
+### `createGlobalPollCounters` (const)
+
+```ts
+const createGlobalPollCounters: () => GlobalPollCounters;
+```
+
 ### `createIndexSql` (const)
 
 ```ts
@@ -3513,6 +3528,12 @@ const createShardCtxDb: (options: CtxDbOptions) => DatabaseWriterLike;
 
 ```ts
 const createSystemReader: (options?: SystemReaderOptions) => SystemDatabaseReader;
+```
+
+### `cursorBelowRetainedFloor` (const)
+
+```ts
+const cursorBelowRetainedFloor: (floor: number | undefined, sinceSeq: number) => boolean;
 ```
 
 ### `decideDurableAttach` (const)
@@ -4303,6 +4324,12 @@ const recordChangedKeys: (pending: ChangedKeys | undefined, table: string, index
 
 ```ts
 const recordFanoutPass: (counters: FanoutPathCounters, iterated: number, delivered: number, ms: number) => FanoutPathCounters;
+```
+
+### `recordGlobalPollPass` (const)
+
+```ts
+const recordGlobalPollPass: (counters: GlobalPollCounters, drains: number, pairsSkipped: number) => GlobalPollCounters;
 ```
 
 ### `recordQueueMessages` (const)

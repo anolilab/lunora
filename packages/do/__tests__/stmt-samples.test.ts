@@ -53,6 +53,9 @@ class StmtSampleShard extends ShardDO {
 
     public distinctQueries = 0;
 
+    /** Every object `this.sql` returned during the dispatch, in read order. */
+    public handlesSeen: unknown[] = [];
+
     public repeatsOfFirst = 0;
 
     public override async handleRpc(): Promise<unknown> {
@@ -73,6 +76,8 @@ class StmtSampleShard extends ShardDO {
         for (let index = 0; index < this.repeatsOfFirst; index += 1) {
             sql.exec(`SELECT 0 AS x`).toArray();
         }
+
+        this.handlesSeen.push(sql, this.sql, this.sql);
 
         return { ok: true };
     }
@@ -172,6 +177,53 @@ describe("statement sample buffer (OBS-04)", () => {
             const root = body.result.traces[0]?.spans.find((entry) => entry.depth === 0);
 
             expect(root?.attributes?.["db.stmt_samples_truncated"]).toBeUndefined();
+        } finally {
+            database.close();
+        }
+    });
+});
+
+/**
+ * The instrumented `sql` getter must return ONE object per dispatch.
+ *
+ * This is not a micro-optimisation, and it is not local to this file:
+ * `@lunora/shard-engine`'s `cdcCanVouchFor` memoizes the shard's table catalog in
+ * a `WeakMap` keyed by the handle it is called with, because re-scanning
+ * `sqlite_master` on every resume evaluation measured ~18% of `evaluateResume`.
+ * A getter that builds a fresh `Proxy` per read makes that memo miss every single
+ * time — silently, with no test failing and no type breaking. Anyone adding
+ * another wrapper layer here (tracing, an RLS guard, a retry shim) has to keep
+ * the identity stable, so it is pinned rather than left to a comment.
+ */
+describe("instrumented sql handle identity", () => {
+    it("returns the same handle for every read within one dispatch, and a fresh one for the next", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            shard.attachSpan = false;
+            // At least one execution, so instrumentation is genuinely active
+            // (an uninstrumented dispatch returns the raw handle and would pass
+            // this assertion for the wrong reason).
+            shard.repeatsOfFirst = 1;
+
+            await shard.fetch(userRequest("probe:query"));
+
+            const first = [...shard.handlesSeen];
+
+            expect(first).toHaveLength(3);
+            expect(new Set(first).size).toBe(1);
+
+            shard.handlesSeen = [];
+            await shard.fetch(userRequest("probe:query"));
+
+            // A new dispatch folds into a new samples map, so it gets its own
+            // handle — the memo re-reads the catalog once per dispatch, not once
+            // per storage call.
+            expect(shard.handlesSeen[0]).not.toBe(first[0]);
         } finally {
             database.close();
         }

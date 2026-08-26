@@ -107,6 +107,11 @@ const authOptions = (env: Env): LunoraAuthOptions => {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    // Required by `lunora/shapes.ts`: a shard-local `defineShape` replicates out
+    // of `__cdc_log`, so without this the subscribe is refused. It used to be
+    // accepted and then never deliver another row, which is how this app shipped
+    // a shape that seeded once and silently froze.
+    .cdc()
     .storage({
         bucket: (env) => env.FILES,
         buckets: { avatars: (env) => env.AVATARS },

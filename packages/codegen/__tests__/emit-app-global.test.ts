@@ -42,7 +42,7 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain("options.resolveTableSharding = buildTableShardingResolver();");
-        expect(output).toContain("options.importGlobals = buildGlobalImporter(database);");
+        expect(output).toContain("options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);");
         expect(output).toContain("const buildTableShardingResolver = (): AdminTableResolver =>");
         expect(output).toContain("const buildGlobalImporter =");
     });
@@ -136,7 +136,7 @@ describe("emitApp — admin export/sync/apply wiring (.global())", () => {
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain("options.syncGlobals = buildGlobalCdcSync(database);");
-        expect(output).toContain("options.applyGlobals = buildGlobalCdcApplier(database);");
+        expect(output).toContain("options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);");
         expect(output).toContain("const buildGlobalCdcSync =");
         expect(output).toContain("const buildGlobalCdcApplier =");
     });

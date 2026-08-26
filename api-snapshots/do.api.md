@@ -285,7 +285,7 @@ abstract class ShardDO {
     protected env: unknown;
     protected readonly reactiveCache: ReactiveCache | undefined;
     protected shapeProbe: ShapeProbeCounters;
-    protected globalPoll: ShapeProbeCounters;
+    protected globalPoll: GlobalPollCounters;
     constructor(state: ShardDOState, env: unknown, options?: ShardDOOptions);
     fetch(request: Request): Promise<Response>;
     webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void>;

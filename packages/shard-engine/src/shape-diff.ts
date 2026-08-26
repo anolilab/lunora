@@ -21,6 +21,13 @@ import { projectColumns } from "./shape-global-diff";
 import type { ResolvedShape } from "./types";
 
 /** How a shape diff reads changed keys — injectable so a host can wrap the single changelog read (and a test can count it). */
+
+/**
+ * The changed-key read {@link buildShapeDiff} runs, injectable so a host can
+ * route it through its own seam. Exported for the two in-repo callers and
+ * deliberately NOT re-exported from the package barrel: it is a parameter type,
+ * not a surface anyone outside builds against.
+ */
 type ReadShapeCdcKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: number) => CdcChangeKey[];
 
 /**
@@ -100,5 +107,5 @@ const buildShapeDiff = (
     return ops;
 };
 
-export { buildShapeDiff };
 export type { ReadShapeCdcKeys };
+export { buildShapeDiff };

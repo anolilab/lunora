@@ -271,24 +271,6 @@ const matrix: MatrixRow[] = [
         expectedOpsLen: 2, // full seed: m1 + m2
     },
     {
-        label: "6 — CDC disabled: cdcEnabled()=false → full reseed regardless of hint",
-        cdcMigrate: false, // no __cdc_log table → cdcEnabled() returns false
-        setup: async (harness) => {
-            // No CDC-enabled writer available; insert the row directly so the
-            // shape seed (which reads the main table, not the log) still finds it.
-            harness.raw(
-                "INSERT INTO messages (id, _creationTime, __doc__) VALUES (?, ?, ?)",
-                "m1",
-                1_700_000_000_000,
-                JSON.stringify({ authorId: "u1", channelId: "c1", text: "alpha" }),
-            );
-        },
-        sinceSeq: 0,
-        sinceEpochFn: () => "any-epoch",
-        expectResume: false,
-        expectedOpsLen: 1, // full seed: m1 (read from main table via buildShapeSeed)
-    },
-    {
         label: "7 — fresh sub: no sinceSeq supplied → full reseed (first-time subscribe)",
         cdcMigrate: true,
         setup: async (harness) => {
@@ -434,6 +416,67 @@ describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
             await subscribe(behind, 1, beforeFork);
 
             expect(firstPokeStartBase(behind.sent)).toBeUndefined();
+        } finally {
+            testHarness.close();
+        }
+    });
+});
+
+/**
+ * Case 6 of the matrix, which is not a resume-vs-reseed cell at all.
+ *
+ * A shard-local shape replicates OUT OF the changelog — `pokeShapeSubscribers`
+ * diffs it from `__cdc_log` on every flush — so with CDC off there is nothing to
+ * replicate from. The seed itself would succeed (it reads the table, not the
+ * log) and every later diff throws `no such table` into a per-shape catch, which
+ * is how this configuration used to render one snapshot and then go silent for
+ * the life of the socket, reported only on a counter.
+ */
+describe("shape_subscribe with CDC disabled", () => {
+    it("refuses the subscribe naming .cdc(), instead of seeding a shape that can never update", async () => {
+        expect.assertions(3);
+
+        const testHarness = createSqliteExec();
+
+        try {
+            runShardMigrations(testHarness.sql, messagesSchema, { cdc: false });
+
+            // Inserted raw: there is no CDC-enabled writer, and the point is that
+            // the row IS present — a seed would have found it and succeeded.
+            testHarness.raw(
+                "INSERT INTO messages (id, _creationTime, __doc__) VALUES (?, ?, ?)",
+                "m1",
+                1_700_000_000_000,
+                JSON.stringify({ authorId: "u1", channelId: "c1", text: "alpha" }),
+            );
+
+            const sockets: FakeSocket[] = [];
+            const state: ShardDOState = {
+                acceptWebSocket(ws: WebSocket) {
+                    sockets.push(ws as unknown as FakeSocket);
+                },
+                getWebSockets(): WebSocket[] {
+                    return sockets as unknown as WebSocket[];
+                },
+                storage: { sql: testHarness.sql as unknown as ShardDOState["storage"]["sql"] },
+            };
+            const shard = new MatrixShapeShard(state, {});
+            const ws = createFakeSocket();
+
+            sockets.push(ws);
+
+            await shard.webSocketMessage(
+                ws as unknown as WebSocket,
+                JSON.stringify({ id: "shape-1", shape: { args: { channelId: "c1" }, name: "messagesByChannel" }, type: "shape_subscribe" }),
+            );
+
+            const frames = ws.sent.map((raw) => JSON.parse(raw) as { code?: string; message?: string; type: string });
+            const failure = frames.find((frame) => frame.type === "error");
+
+            expect(failure?.code).toBe("SHAPE_REQUIRES_CDC");
+            // Not acked, and no seed on the wire — the client is told, not left holding a frozen view.
+            expect(gotAck(ws.sent)).toBe(false);
+            expect(frames.some((frame) => frame.type === "pokeStart")).toBe(false);
         } finally {
             testHarness.close();
         }

@@ -45,6 +45,7 @@ import { parseMinSeq, parseReplicaName } from "../../../shared/replica-name";
 import type { ExportRow } from "./admin-export-import";
 import type { SqlExec } from "./ctx-db";
 import type { CdcChange } from "./ctx-db-cdc";
+import { cursorBelowRetainedFloor } from "./ctx-db-cdc";
 import { envPositiveInt } from "./env-int";
 import { RELAY_SIGNATURE_HEADER, siblingSecretOf, siblingStub, signSiblingBody, verifySiblingBody } from "./sibling-channel";
 
@@ -332,7 +333,7 @@ const serveBootstrap = async (host: ReplicaOwnerHost, epoch: string): Promise<Re
 const servePull = (host: ReplicaOwnerHost, epoch: string, sinceSeq: number): Response => {
     const floor = host.ownerFloor();
 
-    if (floor !== undefined && floor > sinceSeq + 1) {
+    if (cursorBelowRetainedFloor(floor, sinceSeq)) {
         return Response.json({ changes: [], cursor: host.ownerCursor() ?? sinceSeq, epoch, floor } satisfies ReplicaPullResult);
     }
 
