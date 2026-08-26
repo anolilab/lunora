@@ -15,11 +15,20 @@ import { configure } from "@testing-library/react";
 /* eslint-disable vitest/require-hook -- a setupFile installs global stubs at module scope before any test runs; there is no hook context */
 
 // Lazy-loaded Studio panels (advisors, migrations, …) can take longer than
-// Testing Library's 1s default to mount under CI's parallel-test contention
-// (and v8-coverage instrumentation), so give `findBy`/`waitFor` more headroom
-// there — mirroring the repo's CI vitest-timeout bump. Local runs keep the
-// snappy default for fast feedback.
-configure({ asyncUtilTimeout: process.env["CI"] === "true" ? 5000 : 1000 });
+// Testing Library's 1s default to mount under parallel-test contention (and
+// v8-coverage instrumentation), so `findBy`/`waitFor` get more headroom.
+//
+// Deliberately NOT keyed on CI. The previous version gave 5s under CI and kept
+// "the snappy default for fast feedback" locally, which has it backwards: CI is
+// a dedicated runner, while `pnpm run test` locally fans 108 tasks across a
+// machine that is also running an editor and a browser. Local is the more
+// contended environment and had the tighter budget — these `findByTestId` calls
+// were failing at 4.2s and 6.5s against a 1s limit, on a machine where they pass
+// instantly in isolation.
+//
+// The timeout only bounds how long a PASSING query waits, so the headroom costs
+// nothing when the suite is healthy.
+configure({ asyncUtilTimeout: 5000 });
 
 /* eslint-disable class-methods-use-this -- no-op DOM stub: ResizeObserver methods intentionally do nothing */
 class ResizeObserverStub {
