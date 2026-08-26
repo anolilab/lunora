@@ -16,13 +16,25 @@ import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { DatabaseWriterLike, SqlExec } from "./ctx-db";
-import { runDrizzle } from "./do-exec";
+import { runDrizzle, runSql } from "./do-exec";
 import { decodeDocJson, encodeDocJson } from "./do-sql";
 import { ConflictError } from "./transaction";
 
 /** Reserved append-only changelog table backing CDC streaming export and replay-PITR. */
 const CDC_LOG_TABLE = "__cdc_log";
+
+/**
+ * The changelog append, as text. Fully constant — one table, fixed columns, every
+ * value bound — and it runs once per committed mutation, so building it through
+ * a drizzle template per write was pure overhead (see `row-statements.ts`, which
+ * holds the per-table statements for the same reason; this one lives here
+ * because the table name is private to this module).
+ *
+ * `__tests__/row-statements.test.ts` pins this against what the template rendered.
+ */
+const CDC_APPEND_SQL = `INSERT INTO ${quoteIdentifier(CDC_LOG_TABLE)} (ts, ${quoteIdentifier("table")}, id, op, doc) VALUES (?, ?, ?, ?, ?)`;
 
 /** One change-data-capture entry: a committed mutation, in monotonic `seq` order. */
 interface CdcChange {
@@ -97,10 +109,7 @@ const appendCdcChange = (sql: SqlExec, ts: number, table: string, id: string, op
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct post-image for a delete; the `id` column identifies the removed row.
     const docValue = doc === undefined ? null : encodeDocJson(doc);
 
-    runDrizzle(
-        sql,
-        dsql`INSERT INTO ${dsql.identifier(CDC_LOG_TABLE)} (ts, ${dsql.identifier("table")}, id, op, doc) VALUES (${ts}, ${table}, ${id}, ${op}, ${docValue})`,
-    );
+    runSql(sql, CDC_APPEND_SQL, ts, table, id, op, docValue);
 };
 
 /**
@@ -675,3 +684,5 @@ export {
     trimCdcChanges,
 };
 export type { CdcChange, CdcChangeKey };
+
+export { CDC_APPEND_SQL };

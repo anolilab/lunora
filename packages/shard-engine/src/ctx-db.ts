@@ -64,7 +64,7 @@ import { isMemoryTable } from "./ctx-db-memory";
 import type { RankPageDeps } from "./ctx-db-rank-page";
 import { computeRankPage } from "./ctx-db-rank-page";
 import { SCAN_DEP } from "./dependency-tracker";
-import { runDrizzle } from "./do-exec";
+import { runDrizzle, runSql } from "./do-exec";
 import {
     AGG_COUNT,
     AGG_KEY,
@@ -81,7 +81,7 @@ import {
     tableColumns,
     tryRowToDocument,
 } from "./do-sql";
-import { sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
+import { renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
 import { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
@@ -93,6 +93,7 @@ import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import { applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
+import { CHANGES_PROBE_SQL, deleteRowSql, insertRowSql, patchRowSql, replaceRowSql, rowProbeParams, rowProbeSql } from "./row-statements";
 import type {
     BroadcastDelta,
     DatabaseWriterLike,
@@ -1795,9 +1796,19 @@ const UNIQUE_VIOLATION_RE = /unique constraint failed/i;
 const isUniqueViolation = (error: unknown): boolean => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message);
 
 /** Run a write, remapping a UNIQUE-index breach to a {@link ConflictError} (code `CONFLICT`, 409). */
-const runWrite = (sql: SqlExec, table: string, query: SQL): void => {
+
+/**
+ * Run a single-row write, mapping a UNIQUE violation onto {@link ConflictError}.
+ *
+ * Takes rendered text plus its bound values rather than a drizzle `SQL`, because
+ * every statement that reaches it has text that is a constant for its table —
+ * see `row-statements.ts` for the shapes and for why they are no longer built
+ * per write. The one caller with a genuinely variable statement (the batch
+ * INSERT's `VALUES` list) renders it itself and passes the result through.
+ */
+const runWrite = (sql: SqlExec, table: string, text: string, params: ReadonlyArray<unknown>): void => {
     try {
-        runDrizzle(sql, query);
+        runSql(sql, text, ...params);
     } catch (error) {
         if (isUniqueViolation(error)) {
             throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
@@ -1815,10 +1826,10 @@ const runWrite = (sql: SqlExec, table: string, query: SQL): void => {
  * the snapshot. `changes()` reports the row count of the most recent
  * INSERT/UPDATE/DELETE, available in both workerd SQLite and `node:sqlite`.
  */
-const runGuardedWrite = (sql: SqlExec, table: string, query: SQL): void => {
-    runWrite(sql, table, query);
+const runGuardedWrite = (sql: SqlExec, table: string, text: string, params: ReadonlyArray<unknown>): void => {
+    runWrite(sql, table, text, params);
 
-    const changedRow = runDrizzle<{ changed: number }>(sql, dsql`SELECT changes() AS changed`).one();
+    const changedRow = runSql<{ changed: number }>(sql, CHANGES_PROBE_SQL).one();
 
     if (changedRow.changed === 0) {
         throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`, "occ");
@@ -2558,13 +2569,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const nonGlobalTables = nonGlobalTableNames(expectedTable);
 
         for (let start = 0; start < nonGlobalTables.length; start += MAX_PROBE_BRANCHES) {
-            const branches = nonGlobalTables.slice(start, start + MAX_PROBE_BRANCHES).map(
-                (tableName) =>
-                    // The table-name discriminator stays an inline literal (escaped) rather than a bound param so it reads as `'<table>' AS __t__`.
-                    dsql`SELECT ${dsql.raw(`'${tableName.replaceAll("'", "''")}'`)} AS __t__, id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id = ${id}`,
-            );
-
-            const [firstRow] = runDrizzle(sql, dsql`${unionAll(branches)} LIMIT 1`).toArray();
+            const chunk = nonGlobalTables.slice(start, start + MAX_PROBE_BRANCHES);
+            // Text depends only on the chunk's table list, so it is rendered once
+            // per distinct list rather than per read — this probe runs on every
+            // get/patch/replace/delete. See `row-statements.ts`.
+            const [firstRow] = runSql(sql, rowProbeSql(chunk), ...rowProbeParams(id, chunk)).toArray();
 
             if (!firstRow) {
                 continue;
@@ -2959,11 +2968,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // tombstone and would keep serving a row its source considers gone.
                 const merged: Record<string, unknown> = { ...existing, ...commitSeqFields(tableName), [softField]: clock(), _id: id };
 
-                runGuardedWrite(
-                    sql,
-                    tableName,
-                    dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${encodeDocJson(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
-                );
+                runGuardedWrite(sql, tableName, patchRowSql(tableName), [encodeDocJson(merged), id, existingJson]);
 
                 // Search stays maintained (the marker filter hides it on read), but
                 // the rank companion and external stores (Vectorize) have NO read-time
@@ -3006,11 +3011,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // rows and raises ConflictError rather than clobbering that write —
             // and keeps `existing` (used for the aggregate/rank -prev steps) in
             // sync with what was actually on disk.
-            runGuardedWrite(
-                sql,
-                tableName,
-                dsql`DELETE FROM ${dsql.identifier(tableName)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
-            );
+            runGuardedWrite(sql, tableName, deleteRowSql(tableName), [id, existingJson]);
 
             syncSearch(tableName, id, undefined);
             syncGeo(tableName, id, undefined);
@@ -3586,11 +3587,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);
 
-            runWrite(
-                sql,
-                tableName,
-                dsql`INSERT INTO ${dsql.identifier(tableName)} (id, _creationTime, ${dsql.identifier(DOC_COLUMN)}) VALUES (${id}, ${creationTime}, ${encodeDocJson(documentWithMeta)})`,
-            );
+            runWrite(sql, tableName, insertRowSql(tableName), [id, creationTime, encodeDocJson(documentWithMeta)]);
 
             syncCompanionsForInsert(tableName, id, documentWithMeta);
 
@@ -3713,11 +3710,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     dsql`, `,
                 );
 
-                runWrite(
-                    sql,
-                    tableName,
+                // The only write whose text genuinely varies: the `VALUES` list grows
+                // with the chunk, so it is built and rendered per batch rather than
+                // cached per table like the single-row statements.
+                const batch = renderSql(
+                    "sqlite",
                     dsql`INSERT INTO ${dsql.identifier(tableName)} (id, _creationTime, ${dsql.identifier(DOC_COLUMN)}) VALUES ${valuesSql}`,
                 );
+
+                runWrite(sql, tableName, batch.sql, batch.params);
             }
 
             // Companions + notifications ARE still maintained per row (shared with
@@ -3863,11 +3864,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // and raise ConflictError instead of silently clobbering it (and
             // keeps `existing` — used for the aggregate/rank -prev steps — in
             // sync with what is actually on disk).
-            runGuardedWrite(
-                sql,
-                tableName,
-                dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${encodeDocJson(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
-            );
+            runGuardedWrite(sql, tableName, patchRowSql(tableName), [encodeDocJson(merged), id, existingJson]);
 
             syncSearch(tableName, id, merged, existing);
             syncGeo(tableName, id, merged);
@@ -4283,11 +4280,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // trigger `await` raises ConflictError instead of being silently
             // clobbered (and keeps `previous` — used for the aggregate/rank
             // -prev steps — in sync with disk).
-            runGuardedWrite(
-                sql,
-                tableName,
-                dsql`UPDATE ${dsql.identifier(tableName)} SET _creationTime = ${creationTime}, ${dsql.identifier(DOC_COLUMN)} = ${encodeDocJson(replaced)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
-            );
+            runGuardedWrite(sql, tableName, replaceRowSql(tableName), [creationTime, encodeDocJson(replaced), id, existingJson]);
 
             syncSearch(tableName, id, replaced, previous);
             syncGeo(tableName, id, replaced);
