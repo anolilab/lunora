@@ -1,3 +1,14 @@
+## @lunora/server [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.85...@lunora/server@1.0.0-alpha.86) (2026-08-26)
+
+### Features
+
+* **server:** add defineActionCache for memoising actions ([#485](https://github.com/anolilab/lunora/issues/485)) ([201f9e2](https://github.com/anolilab/lunora/commit/201f9e2b669ae59eb6aad8ec64944abe236d65db))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.30
+
 ## @lunora/server [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.84...@lunora/server@1.0.0-alpha.85) (2026-08-26)
 
 ### Features
