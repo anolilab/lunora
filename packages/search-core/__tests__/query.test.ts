@@ -15,10 +15,11 @@ import {
     parseSearchCursor,
     planSearchPage,
     resolveSearchScan,
-    scoreDocument,
+    scoreTokens,
     searchPageScan,
     searchTermRange,
 } from "../src/query";
+import { analyzedSearchText, analyzedSearchTokens, splitSearchTokens } from "../src/text";
 
 /**
  * The read side of `.searchIndex()`: caps, the builder's guards, ranking and the
@@ -348,43 +349,59 @@ describe(searchTermRange, () => {
     });
 });
 
-describe(scoreDocument, () => {
+describe(scoreTokens, () => {
     const analyzer = createSearchAnalyzer(undefined);
+
+    /** Analyze text the way the scan's caller (`analyzedSearchTokens`) would. */
+    const docTokens = (text: string): string[] => splitSearchTokens(text, analyzer);
 
     it("sums occurrences across every AND'ed term when all are present", () => {
         expect.assertions(1);
 
         // "quick" is required exact and appears twice; "fo" is the final term
         // and prefix-matches "fox" once.
-        const text = "quick fox jumps over the quick dog";
-
-        expect(scoreDocument(text, ["quick", "fo"], analyzer)).toBe(3);
+        expect(scoreTokens(docTokens("quick fox jumps over the quick dog"), ["quick", "fo"])).toBe(3);
     });
 
     it("prefix-matches only the final term, not earlier ones", () => {
         expect.assertions(2);
 
-        const text = "quick fox";
-
         // "qu" as a non-final term must match exactly, so it finds nothing.
-        expect(scoreDocument(text, ["qu", "fox"], analyzer)).toBe(0);
+        expect(scoreTokens(docTokens("quick fox"), ["qu", "fox"])).toBe(0);
         // The same "qu" as the final term prefix-matches "quick" (1) on top of
         // the exact match on "fox" (1).
-        expect(scoreDocument(text, ["fox", "qu"], analyzer)).toBe(2);
+        expect(scoreTokens(docTokens("quick fox"), ["fox", "qu"])).toBe(2);
     });
 
     it("returns 0 (AND semantics) when any required term is absent", () => {
         expect.assertions(1);
 
-        const text = "quick brown fox";
-
-        expect(scoreDocument(text, ["quick", "zzz"], analyzer)).toBe(0);
+        expect(scoreTokens(docTokens("quick brown fox"), ["quick", "zzz"])).toBe(0);
     });
 
     it("returns 0 for text that analyzes to no tokens", () => {
         expect.assertions(1);
 
-        expect(scoreDocument("   ", ["anything"], analyzer)).toBe(0);
+        expect(scoreTokens(docTokens("   "), ["anything"])).toBe(0);
+    });
+
+    it("scores a document's analyzed tokens the same as its space-joined analyzed text", () => {
+        expect.assertions(3);
+
+        // The scan used to join `analyzedSearchTokens` into `analyzedSearchText`
+        // and re-tokenize it. Dropping that round trip is only safe while the two
+        // agree, so pin it: re-analyzing the joined form must not change a score.
+        const document = { body: "Café QUICK fox jumps over the quick brown dog near the river" };
+        const index = { field: "body", language: "en" };
+        const tokens = analyzedSearchTokens(document, index);
+
+        expect(splitSearchTokens(analyzedSearchText(document, index), createSearchAnalyzer(index.language))).toStrictEqual(tokens);
+
+        for (const query of [["quick", "fo"], ["cafe"]]) {
+            expect(scoreTokens(tokens, query)).toBe(
+                scoreTokens(splitSearchTokens(analyzedSearchText(document, index), createSearchAnalyzer(index.language)), query),
+            );
+        }
     });
 });
 

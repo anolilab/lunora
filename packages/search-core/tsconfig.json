@@ -9,5 +9,5 @@
         // TS6059 for the inlined `../../../shared/document-path` import (a file
         // outside this package, bundled in at build time).
     },
-    "include": ["src/**/*", "__tests__/**/*"]
+    "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"]
 }

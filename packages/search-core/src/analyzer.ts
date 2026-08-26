@@ -75,6 +75,27 @@ const PT_STOPWORDS =
 const LATIN_DIACRITICS = /[\u0300-\u036F]/gu;
 
 /**
+ * Any code point outside ASCII — the test gating {@link foldText}'s fast path.
+ *
+ * Written as a positive match on U+0080 and up rather than a negated ASCII range:
+ * the negated form has to spell out the C0 controls, which `no-control-regex`
+ * (rightly) bans. The ceiling is the full code-point maximum, not U+FFFF — under
+ * `u` an astral character is a single code point and a BMP-only range would call
+ * it ASCII and take the fast path with it.
+ */
+const NON_ASCII = /[\u0080-\u{10FFFF}]/u;
+
+/**
+ * One run of token characters. Hoisted out of the analyzer closure: a regex
+ * literal allocates a fresh `RegExp` every time it is evaluated, and this one
+ * sits in a function called once per indexed write and once per query. Sharing
+ * it is safe because `String.prototype.match` on a `g`-flagged regex zeroes
+ * `lastIndex` before scanning and leaves it at 0 after — unlike `test`/`exec`,
+ * which resume from it and would make a shared instance order-dependent.
+ */
+const TOKEN_RUN = /[\p{L}\p{N}]+/gu;
+
+/**
  * Fold text to its comparison form: decompose, drop Latin diacritics,
  * recompose, lowercase.
  *
@@ -86,7 +107,23 @@ const LATIN_DIACRITICS = /[\u0300-\u036F]/gu;
  * decomposition and would need a case-folding table this deliberately doesn't
  * carry.
  */
-const foldText = (text: string): string => text.normalize("NFD").replaceAll(LATIN_DIACRITICS, "").normalize("NFC").toLowerCase();
+const foldText = (text: string): string => {
+    // ASCII is invariant under every normalization form and carries no combining
+    // mark, so for an all-ASCII string the NFD, the diacritic strip and the NFC
+    // are each provably the identity — only the lowercase does anything. Most
+    // indexed text and most queries are ASCII, and skipping the three no-op
+    // passes drops three full scans and three intermediate strings.
+    //
+    // This is an optimization ONLY: it must never fold anything differently,
+    // because analysis is frozen into stored indexes (see the module header) and
+    // a divergence here would be a silent recall bug rather than an error.
+    // `__tests__/analyzer.test.ts` pins the two paths together over a Unicode sweep.
+    if (!NON_ASCII.test(text)) {
+        return text.toLowerCase();
+    }
+
+    return text.normalize("NFD").replaceAll(LATIN_DIACRITICS, "").normalize("NFC").toLowerCase();
+};
 
 /**
  * Stopword lists are written in their natural spelling (`für`, `même`, `até`),
@@ -166,8 +203,14 @@ const createSearchAnalyzer = (language: string | undefined): SearchAnalyzer => {
 
     const stopwords = STOPWORDS[resolved];
 
+    // Left as two chained `filter`s deliberately. Fusing them into one manual
+    // push-loop reads like the obvious win — one pass, one array — and measured
+    // 31% SLOWER on the no-stopword path (`__bench__/analyze.bench.ts`): V8's
+    // `filter` presizes its result where a growing `push` loop cannot, and
+    // folding the two predicates together forces a `stopwords.has` per token
+    // even for the `none` analyzer, which the early return below skips entirely.
     const split = (text: string): string[] => {
-        const tokens = (foldText(text).match(/[\p{L}\p{N}]+/gu) ?? []).filter((token) => token.length <= MAX_TOKEN_LENGTH);
+        const tokens = (foldText(text).match(TOKEN_RUN) ?? []).filter((token) => token.length <= MAX_TOKEN_LENGTH);
 
         return stopwords.size === 0 ? tokens : tokens.filter((token) => !stopwords.has(token));
     };

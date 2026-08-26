@@ -112,6 +112,20 @@ export const searchTextUnchanged = (
 ): boolean => previous !== undefined && next !== undefined && resolveSearchField(previous, index.field) === resolveSearchField(next, index.field);
 
 /**
+ * A document's analyzed token stream, capped — what every companion layout
+ * stores, before whichever shape that layout wants it in.
+ *
+ * The scoring scan wants these tokens as they are; the FTS5 shadow row wants
+ * them space-joined ({@link analyzedSearchText}); the portable inverted table
+ * wants them tallied ({@link countSearchTokens}). Exposing the array is what
+ * lets the scan avoid joining a string only to tokenize it straight back — the
+ * round trip re-ran the whole fold + match + filter pipeline per candidate
+ * document and was about half the cost of a fallback search.
+ */
+export const analyzedSearchTokens = (document: Record<string, unknown>, index: { field: string; language?: string }): string[] =>
+    splitSearchTokens(stringifySearchText(resolveSearchField(document, index.field)), createSearchAnalyzer(index.language)).slice(0, MAX_INDEXED_TOKENS);
+
+/**
  * The text an FTS5 shadow row stores: the document's analyzed token stream,
  * space-joined.
  *
@@ -128,14 +142,12 @@ export const searchTextUnchanged = (
  * class of divergence this module exists to prevent.
  */
 export const analyzedSearchText = (document: Record<string, unknown>, index: { field: string; language?: string }): string =>
-    splitSearchTokens(stringifySearchText(resolveSearchField(document, index.field)), createSearchAnalyzer(index.language))
-        .slice(0, MAX_INDEXED_TOKENS)
-        .join(" ");
+    analyzedSearchTokens(document, index).join(" ");
 
 /**
  * Tally a document's indexed text into the `(token, occurrences)` rows the
  * portable inverted index stores — one row per distinct token, the count being
- * exactly what `scoreDocument` (see `search-query.ts`) would add for that token. Empty text
+ * exactly what `scoreTokens` (see `query.ts`) would add for that token. Empty text
  * yields an empty map (nothing to index, and nothing to delete beyond the
  * unconditional by-id purge the write path already issues).
  */

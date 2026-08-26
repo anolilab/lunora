@@ -32,7 +32,7 @@
 import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import {
-    analyzedSearchText,
+    analyzedSearchTokens,
     assertSearchWithinCap,
     createSearchAnalyzer,
     createSearchBuilder,
@@ -42,7 +42,7 @@ import {
     MAX_SEARCH_SCAN,
     planSearchPage,
     resolveSearchScan,
-    scoreDocument,
+    scoreTokens,
     searchPageScan,
     searchTermRange,
     tokenizeSearch,
@@ -649,12 +649,12 @@ const searchViaScan = (
             continue;
         }
 
-        // The *analyzed* text, not the raw field: every other layout stores and
+        // The *analyzed* tokens, not the raw field: every other layout stores and
         // scores a token stream capped at `MAX_INDEXED_TOKENS`, so scoring the
         // raw value here would make this path find matches past the cap that
         // the others cannot — a divergence in the one direction no parity gate
         // covers, since this path only runs where FTS5 is absent.
-        const score = scoreDocument(analyzedSearchText(record, search.definition), tokens, analyzer);
+        const score = scoreTokens(analyzedSearchTokens(record, search.definition), tokens);
 
         if (score > 0) {
             scored.push({

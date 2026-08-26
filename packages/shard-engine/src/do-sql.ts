@@ -229,17 +229,53 @@ const AGG_COUNT: Name = dsql.identifier("__count__");
 const aggUpsertSql = (aggTable: string, key: unknown, value: unknown, count: unknown, set: SQL): SQL =>
     dsql`INSERT INTO ${dsql.identifier(aggTable)} (${AGG_KEY}, ${AGG_VALUE}, ${AGG_COUNT}) VALUES (${key}, ${value}, ${count}) ON CONFLICT(${AGG_KEY}) DO UPDATE SET ${set}`;
 
-/** The schema-declared columns of a table, as `[field, columnMeta]` pairs (skips fields without a `.column()` validator meta). */
-const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
-    const columns: [string, ColumnMetaLike][] = [];
+/**
+ * Memo for {@link tableColumns}, keyed by the definition object itself.
+ *
+ * A table definition is built once from the schema and never mutated after
+ * construction — a migration produces a NEW definition rather than editing the
+ * live one — so the derived column list is a per-definition constant. Keyed
+ * weakly so a definition dropped by a schema swap takes its entry with it.
+ */
+const TABLE_COLUMNS_CACHE = new WeakMap<TableDefinitionLike, ReadonlyArray<readonly [string, ColumnMetaLike]>>();
+
+/**
+ * The schema-declared columns of a table, as `[field, columnMeta]` pairs (skips
+ * fields without a `.column()` validator meta).
+ *
+ * Memoized because it is on the write path, not merely because it repeats:
+ * `applyInsertDefaults` calls it on every insert and `applyOnUpdate` on every
+ * patch/replace, and each call walked `Object.entries(shape)` and built a fresh
+ * array of fresh pairs — allocation proportional to the table's width, per row
+ * written, to rebuild a value that cannot have changed.
+ *
+ * The returned array is shared and frozen, and so is every pair in it. This
+ * function is exported from the package root, so "shared" cannot be left to a
+ * doc comment: a caller that pushed to the array — or reassigned a pair's column
+ * meta — would poison the memo for every later write on that table, and the
+ * symptom, `.default()` values silently no longer applying, is data loss that no
+ * test would attribute back here. Freezing costs one call per column per table,
+ * once, and turns the mutation into an immediate throw instead.
+ */
+const tableColumns = (definition: TableDefinitionLike): ReadonlyArray<readonly [string, ColumnMetaLike]> => {
+    const cached = TABLE_COLUMNS_CACHE.get(definition);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const columns: (readonly [string, ColumnMetaLike])[] = [];
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         const column = validator._meta?.column;
 
         if (column) {
-            columns.push([field, column]);
+            columns.push(Object.freeze<readonly [string, ColumnMetaLike]>([field, column]));
         }
     }
+
+    Object.freeze(columns);
+    TABLE_COLUMNS_CACHE.set(definition, columns);
 
     return columns;
 };
