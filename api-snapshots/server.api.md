@@ -9,6 +9,18 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/server`
 
+### `ACTION_CACHE_DEFAULT_TTL_MS` (const)
+
+```ts
+const DEFAULT_ACTION_CACHE_TTL_MS: number;
+```
+
+### `ACTION_CACHE_TABLE` (const)
+
+```ts
+const ACTION_CACHE_TABLE: "actionCache_entries";
+```
+
 ### `ActionBuilder` (interface)
 
 ```ts
@@ -31,6 +43,53 @@ interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined>
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => ActionBuilder<Context, Args, Output>;
+}
+```
+
+### `ActionCacheComponent` (type)
+
+```ts
+type ActionCacheComponent = {
+    functions: ActionCacheFunctions;
+    invalidate: (context: ActionCacheContext, name: string, args: unknown) => Promise<void>;
+    invalidateAll: (context: ActionCacheContext, name: string) => Promise<{
+        complete: boolean;
+        deleted: number;
+    }>;
+    wrap: <T>(context: ActionCacheContext, name: string, args: unknown, compute: () => Promise<T>) => Promise<T>;
+} & Component<{
+    [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
+```
+
+### `ActionCacheContext` (interface)
+
+```ts
+interface ActionCacheContext {
+    db: ActionCacheDatabase;
+}
+```
+
+### `ActionCacheDatabase` (interface)
+
+```ts
+interface ActionCacheDatabase {
+    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
+    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    query: (table: string) => ActionCacheQuery;
+}
+```
+
+### `ActionCacheFunctions` (interface)
+
+```ts
+interface ActionCacheFunctions {
+    purgeExpired: RegisteredMutation<{
+        limit: ReturnType<typeof v.optional>;
+    }, {
+        deleted: number;
+    }>;
 }
 ```
 
@@ -272,6 +331,15 @@ interface DeferredDeleteFlushResult {
         error: unknown;
         key: string;
     }[];
+}
+```
+
+### `DefineActionCacheOptions` (interface)
+
+```ts
+interface DefineActionCacheOptions {
+    maxValueBytes?: number;
+    ttlMs?: number;
 }
 ```
 
@@ -2666,6 +2734,14 @@ interface Workflows {
 }
 ```
 
+### `actionCacheExtension` (const)
+
+```ts
+const actionCacheExtension: SchemaExtension<{
+    [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
+```
+
 ### `allowAll` (const)
 
 ```ts
@@ -2708,6 +2784,12 @@ const buildMaskRegistry: (functions: Iterable<unknown>) => MaskRegistry;
 const buildRlsReadRegistry: (functions: Iterable<unknown>) => RlsReadRegistry;
 ```
 
+### `cacheKeyFor` (const)
+
+```ts
+const cacheKeyFor: (name: string, argumentsKey: string) => Promise<string>;
+```
+
 ### `clampLimit` (const)
 
 ```ts
@@ -2741,6 +2823,12 @@ const createSecrets: (env: Record<string, unknown>) => Secrets;
 ### `cronJobs` (const)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
+
+### `defineActionCache` (const)
+
+```ts
+const defineActionCache: (options?: DefineActionCacheOptions) => ActionCacheComponent;
+```
 
 ### `defineAggregateIndex` (const)
 
