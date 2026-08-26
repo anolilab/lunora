@@ -2559,6 +2559,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
+### `raise` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
 ### `resolveHint` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
