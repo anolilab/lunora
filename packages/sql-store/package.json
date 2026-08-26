@@ -1,6 +1,6 @@
 {
     "name": "@lunora/sql-store",
-    "version": "1.0.0-alpha.92",
+    "version": "1.0.0-alpha.93",
     "description": "Internal dialect-parameterized SQL store core for Lunora .global() backends (D1, PlanetScale)",
     "keywords": [
         "cloudflare",
@@ -66,13 +66,13 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.24",
-        "@lunora/shard-engine": "1.0.0-alpha.40",
+        "@lunora/shard-engine": "1.0.0-alpha.41",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.101",
+        "@lunora/do": "1.0.0-alpha.102",
         "@lunora/search-core": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
