@@ -12,9 +12,15 @@ import type { TriggerBuilder, TriggerCtx, TriggerDefinition } from "../src/index
 type Predicate = (row: Record<string, unknown>) => boolean;
 
 const byRecordedAt = (rows: Record<string, unknown>[], direction: "asc" | "desc"): Record<string, unknown>[] =>
-    rows.toSorted((a, b) =>
-        direction === "asc" ? (a["recordedAt"] as number) - (b["recordedAt"] as number) : (b["recordedAt"] as number) - (a["recordedAt"] as number),
-    );
+    // Both index keys, in order — `[..., recordedAt, seq]`. Sorting on
+    // `recordedAt` alone would leave the double unable to express the ordering
+    // the real index gives, and the tie-break test would fail against correct code.
+    rows.toSorted((a, b) => {
+        const byTime = (a["recordedAt"] as number) - (b["recordedAt"] as number);
+        const delta = byTime === 0 ? (a["seq"] as number) - (b["seq"] as number) : byTime;
+
+        return direction === "asc" ? delta : -delta;
+    });
 
 /** Emulate one index read: the table filter plus the predicates the range built. */
 const matchRows = (rows: Map<string, Record<string, unknown>>, table: string, predicates: Predicate[]): Record<string, unknown>[] =>
@@ -154,7 +160,7 @@ describe("defineDocumentHistory — recording", () => {
         expect.assertions(2);
 
         const history = defineDocumentHistory();
-        const { definitions, handlers } = capture(history.record());
+        const { definitions, handlers } = capture(history.record);
 
         // A `before*` handler runs while the write can still be aborted, so an
         // entry written there could describe a write that never landed.
@@ -167,7 +173,7 @@ describe("defineDocumentHistory — recording", () => {
 
         const db = createMemoryDb();
         const history = defineDocumentHistory();
-        const { handlers } = capture(history.record());
+        const { handlers } = capture(history.record);
 
         vi.setSystemTime(1000);
         await handlers["insert"]?.(triggerContextFor(db), {
@@ -190,7 +196,7 @@ describe("defineDocumentHistory — recording", () => {
 
         const db = createMemoryDb();
         const history = defineDocumentHistory();
-        const { handlers } = capture(history.record());
+        const { handlers } = capture(history.record);
 
         vi.setSystemTime(1000);
         await handlers["update"]?.(triggerContextFor(db), {
@@ -212,7 +218,7 @@ describe("defineDocumentHistory — recording", () => {
 
         const db = createMemoryDb();
         const history = defineDocumentHistory();
-        const { handlers } = capture(history.record());
+        const { handlers } = capture(history.record);
 
         vi.setSystemTime(1000);
         await handlers["delete"]?.(triggerContextFor(db), {
@@ -233,7 +239,7 @@ describe("defineDocumentHistory — recording", () => {
 
         const db = createMemoryDb();
         const history = defineDocumentHistory();
-        const { handlers } = capture(history.record());
+        const { handlers } = capture(history.record);
 
         vi.setSystemTime(1000);
         await handlers["update"]?.(triggerContextFor(db), {
@@ -258,7 +264,7 @@ describe("defineDocumentHistory — recording", () => {
 
         const db = createMemoryDb();
         const history = defineDocumentHistory({ redact: ["inviteToken"] });
-        const { handlers } = capture(history.record());
+        const { handlers } = capture(history.record);
 
         vi.setSystemTime(1000);
         await handlers["insert"]?.(triggerContextFor(db), {
@@ -276,7 +282,7 @@ describe("defineDocumentHistory — recording", () => {
 
         const db = createMemoryDb();
         const history = defineDocumentHistory({ maxSnapshotBytes: 32 });
-        const { handlers } = capture(history.record());
+        const { handlers } = capture(history.record);
 
         vi.setSystemTime(1000);
         await handlers["insert"]?.(triggerContextFor(db), {
@@ -305,7 +311,7 @@ describe("defineDocumentHistory — listForDocument", () => {
     });
 
     const seed = async (db: MemoryDb, history: ReturnType<typeof defineDocumentHistory>): Promise<void> => {
-        const { handlers } = capture(history.record());
+        const { handlers } = capture(history.record);
 
         vi.setSystemTime(1000);
         await handlers["insert"]?.(triggerContextFor(db), { doc: { title: "a" }, id: "thread_1", op: "insert", table: "threads" } as never);
@@ -385,7 +391,7 @@ describe("defineDocumentHistory — vacuum", () => {
 
         const db = createMemoryDb();
         const history = defineDocumentHistory({ retentionMs: 10_000 });
-        const { handlers } = capture(history.record());
+        const { handlers } = capture(history.record);
 
         vi.setSystemTime(1000);
         await handlers["insert"]?.(triggerContextFor(db), { doc: {}, id: "old", op: "insert", table: "threads" } as never);
@@ -405,7 +411,7 @@ describe("defineDocumentHistory — vacuum", () => {
 
         const db = createMemoryDb();
         const history = defineDocumentHistory({ retentionMs: 1000 });
-        const { handlers } = capture(history.record());
+        const { handlers } = capture(history.record);
 
         vi.setSystemTime(1000);
         for (const id of ["a", "b", "c"]) {
@@ -418,5 +424,120 @@ describe("defineDocumentHistory — vacuum", () => {
 
         expect(result.deleted).toBe(2);
         expect(entries(db)).toHaveLength(1);
+    });
+});
+
+describe("defineDocumentHistory — snapshot fidelity", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("drops a nested credential, not only a top-level one", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const history = defineDocumentHistory();
+        const { handlers } = capture(history.record);
+
+        vi.setSystemTime(1000);
+        await handlers["insert"]?.(triggerContextFor(db), {
+            doc: { connections: [{ label: "gh", refreshToken: "nested-secret" }], oauth: { apiKey: "deep-secret" }, name: "n" },
+            id: "user_1",
+            op: "insert",
+            table: "users",
+        } as never);
+
+        const serialized = entries(db)[0]?.["doc"] as string;
+
+        // This table retains what it is given for months, so a credential one level
+        // down is the same problem as one at the root.
+        expect(serialized).not.toContain("deep-secret");
+        expect(serialized).not.toContain("nested-secret");
+    });
+
+    it("records a bigint column instead of aborting the write", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const history = defineDocumentHistory();
+        const { handlers } = capture(history.record);
+
+        vi.setSystemTime(1000);
+
+        // This runs in an AFTER-trigger: a throw here would roll back the write it
+        // is recording, so a `v.bigint()` column would break every insert, update
+        // and delete on any table with history attached.
+        await expect(
+            handlers["insert"]?.(triggerContextFor(db), {
+                doc: { total: 9_007_199_254_740_993n },
+                id: "invoice_1",
+                op: "insert",
+                table: "invoices",
+            } as never),
+        ).resolves.toBeUndefined();
+
+        const result = await history.functions.listForDocument.handler({ db }, { documentId: "invoice_1" });
+
+        expect(result[0]?.doc?.["total"]).toBe(9_007_199_254_740_993n);
+    });
+
+    it("caps doc and previous independently", async () => {
+        expect.assertions(3);
+
+        const db = createMemoryDb();
+        const history = defineDocumentHistory({ maxSnapshotBytes: 128 });
+        const { handlers } = capture(history.record);
+
+        vi.setSystemTime(1000);
+        await handlers["update"]?.(triggerContextFor(db), {
+            doc: { title: "small" },
+            id: "doc_1",
+            op: "update",
+            previous: { blob: "x".repeat(500) },
+            table: "documents",
+        } as never);
+
+        const [entry] = entries(db);
+
+        // A large `previous` must not discard a small `doc` — usually the more
+        // useful half of the pair.
+        expect(entry?.["doc"]).toBeDefined();
+        expect(entry?.["previous"]).toBeUndefined();
+        expect(entry?.["truncated"]).toBe(true);
+    });
+
+    it("orders entries written in the same millisecond", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const history = defineDocumentHistory();
+        const { handlers } = capture(history.record);
+
+        // Workers do not advance the clock between I/O operations, so every entry
+        // from one mutation shares a `recordedAt`. Without a tie-breaker these come
+        // back in an arbitrary order and a point-in-time read picks at random.
+        vi.setSystemTime(1000);
+        await handlers["update"]?.(triggerContextFor(db), {
+            doc: { title: "b" },
+            id: "thread_1",
+            op: "update",
+            previous: { title: "a" },
+            table: "threads",
+        } as never);
+        await handlers["update"]?.(triggerContextFor(db), {
+            doc: { title: "c" },
+            id: "thread_1",
+            op: "update",
+            previous: { title: "b" },
+            table: "threads",
+        } as never);
+
+        const result = await history.functions.listForDocument.handler({ db }, { documentId: "thread_1" });
+
+        expect(result[0]?.doc).toStrictEqual({ title: "c" });
     });
 });

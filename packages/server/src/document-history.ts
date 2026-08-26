@@ -21,7 +21,7 @@
  * export const history = defineDocumentHistory({ retentionMs: 90 * 24 * 60 * 60 * 1000 });
  *
  * // lunora/schema.ts — attach to each table you want versioned
- * const threads = defineTable({ ... }).triggers(history.record());
+ * const threads = defineTable({ ... }).triggers(history.record);
  *
  * export const schema = defineSchema({ threads }).extend(history.extension);
  *
@@ -38,11 +38,18 @@
  * unattributed trail and *calling* it an audit log would be worse than not having
  * one, so the field simply does not exist.
  *
- * **Redacted by default.** The point of keeping a snapshot is that it is readable
- * later, and a stored `hashedPassword` is a credential at rest — one that outlives
- * the rotation that was supposed to retire it. Secret-shaped fields are dropped
- * before the row is written; {@link DefineDocumentHistoryOptions.redact} extends
- * the list.
+ * **Redacted by default, at every depth.** The point of keeping a snapshot is that
+ * it is readable later, and a stored `hashedPassword` is a credential at rest —
+ * one that outlives the rotation that was supposed to retire it. Secret-shaped
+ * fields are dropped before the row is written, recursively, so a credential
+ * inside a `v.object(...)` column or an `oauth: { refreshToken }` blob goes too.
+ * Matching is by exact field NAME, which is all a trigger can see, so
+ * {@link DefineDocumentHistoryOptions.redact} is how you cover `api_key`,
+ * `sessionToken`, and anything else this list does not spell the same way.
+ *
+ * **It has one blind spot.** `insertManyUnsafe` skips triggers by design, so seed,
+ * migration, and admin-import writes leave no entry. If the trail is being used
+ * for compliance rather than for undo, that gap has to be closed elsewhere.
  *
  * **Reads are internal.** An entry is a full row snapshot, including columns the
  * table's own RLS would hide. `listForDocument` is registered as an internal
@@ -50,8 +57,10 @@
  * whatever authorization the surface needs.
  */
 
+import type { Id } from "@lunora/values";
 import { v } from "@lunora/values";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { initLunora } from "./builder/index";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";
@@ -75,6 +84,30 @@ const PAGE = 200;
 
 /** Pages `vacuum` will walk in one call, so a stuck read cannot spin forever. */
 const MAX_VACUUM_ROUNDS = 64;
+
+/**
+ * Default entries `vacuum` removes per call. One transaction's worth: a cron
+ * that finds more re-runs, which is cheaper than opening a very large write.
+ */
+const DEFAULT_VACUUM_LIMIT = 512;
+
+/** How deep the redaction filter walks before dropping a branch it cannot fully inspect. */
+const MAX_REDACT_DEPTH = 16;
+
+/**
+ * Tie-breaker for entries written in the same millisecond.
+ *
+ * Workers do not advance the clock between I/O operations, so EVERY entry
+ * written by one mutation shares a `recordedAt` — two updates to a row, or an
+ * update plus a cascade, are the common case rather than a race. Without a
+ * second sort key `.order("desc")` returns them in an arbitrary order, and a
+ * point-in-time read picks arbitrarily among them.
+ *
+ * Module-scoped, so it is monotonic for the life of an isolate. A cold start
+ * resets it, which is harmless: the clock will have moved on, and `recordedAt`
+ * orders across isolates.
+ */
+let sequence = 0;
 
 /**
  * Fields never written into a snapshot, whatever table they appear on.
@@ -171,18 +204,19 @@ interface DocumentHistoryFunctions {
 }
 
 /** The component shape {@link defineDocumentHistory} returns. */
-type DocumentHistoryComponent = Component<{ [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable> }> & {
+type DocumentHistoryComponent = {
     functions: DocumentHistoryFunctions;
 
     /**
-     * The `.triggers(...)` argument that records this table's versions.
+     * The `.triggers(...)` argument that records this table's versions —
+     * `.triggers(history.record)`.
      *
      * `after*` on all three ops: a `before*` handler runs while the write can
      * still be aborted, and a history entry for a write that never happened is a
      * lie the reader has no way to detect.
      */
-    record: () => (t: TriggerBuilder) => Record<string, TriggerDefinition>;
-};
+    record: (t: TriggerBuilder) => Record<string, TriggerDefinition>;
+} & Component<{ [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable> }>;
 
 /**
  * The document-history schema extension: one `versions` table, auto-namespaced
@@ -195,14 +229,20 @@ const documentHistoryExtension = defineSchemaExtension(DOCUMENT_HISTORY_KEY, {
         [DOCUMENT_HISTORY_BARE_TABLE]: defineTable({
             doc: v.optional(v.string()),
             documentId: v.string(),
-            op: v.string(),
+            // A union rather than a bare string: the invariant belongs on the
+            // column, and the read side then needs no cast back to it.
+            op: v.union(v.literal("delete"), v.literal("insert"), v.literal("update")),
             previous: v.optional(v.string()),
             recordedAt: v.number(),
+            /** Tie-breaker within one `recordedAt`; see the module-level `sequence`. */
+            seq: v.number(),
             tableName: v.string(),
             truncated: v.optional(v.boolean()),
         })
-            // Drives `listForDocument`, newest-first and optionally bounded by `before`.
-            .index("byDocumentRecordedAt", ["documentId", "recordedAt"])
+            // Drives `listForDocument`, newest-first and optionally bounded by
+            // `before`. `seq` is part of the key so entries sharing a millisecond
+            // still have one defined order.
+            .index("byDocumentRecordedAt", ["documentId", "recordedAt", "seq"])
             // Drives `vacuum`'s oldest-first scan.
             .index("byRecordedAt", ["recordedAt"]),
     },
@@ -229,36 +269,92 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
             : DEFAULT_MAX_SNAPSHOT_BYTES;
     const redacted = new Set([...DEFAULT_REDACTED_FIELDS, ...(options.redact ?? [])]);
 
-    /** A shallow copy with the secret-shaped fields removed. */
-    const redact = (row: Record<string, unknown> | undefined): Record<string, unknown> | undefined =>
-        row === undefined ? undefined : Object.fromEntries(Object.entries(row).filter(([key]) => !redacted.has(key)));
+    /**
+     * Strip the secret-shaped fields, at every depth.
+     *
+     * Recursive, not a top-level filter: a credential is at least as likely to sit
+     * inside a `v.object({ apiKey })` column or an `oauth: { refreshToken }` blob
+     * as at the root, and this table retains what it is given for months. Arrays
+     * are walked too, so a list of connection objects is covered.
+     *
+     * `MAX_REDACT_DEPTH` bounds a pathological or cyclic shape; past it the branch
+     * is dropped rather than copied, because a value this module cannot fully
+     * inspect is not one it should store.
+     */
+    const redact = (value: unknown, depth = 0): unknown => {
+        if (Array.isArray(value)) {
+            return depth >= MAX_REDACT_DEPTH ? undefined : value.map((item) => redact(item, depth + 1));
+        }
+
+        if (typeof value !== "object" || value === null) {
+            return value;
+        }
+
+        // Only plain objects are walked. A `Date`, a `Map`, bytes — anything the
+        // wire codec carries as a leaf — is passed through whole; recursing into
+        // one would corrupt it, and none of them holds a named field.
+        if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
+            return value;
+        }
+
+        if (depth >= MAX_REDACT_DEPTH) {
+            return undefined;
+        }
+
+        return Object.fromEntries(
+            Object.entries(value as Record<string, unknown>)
+                .filter(([key]) => !redacted.has(key))
+                .map(([key, member]) => [key, redact(member, depth + 1)]),
+        );
+    };
+
+    /**
+     * Serialize one snapshot, or `undefined` when it is absent or over the cap.
+     *
+     * Through the wire codec, because this runs inside an AFTER-trigger: raw
+     * `JSON.stringify` throws on a `bigint`, and a throw here aborts the write it
+     * is recording. A table with a `v.bigint()` column and history attached would
+     * have failed every insert, update and delete.
+     */
+    const snapshot = (row: Record<string, unknown> | undefined): string | undefined => {
+        if (row === undefined) {
+            return undefined;
+        }
+
+        const serialized = JSON.stringify(encodeWire(redact(row)));
+
+        // Each side is capped on its own: a large `previous` should not discard a
+        // small `doc`, which is usually the more useful half.
+        return new TextEncoder().encode(serialized).length > maxSnapshotBytes ? undefined : serialized;
+    };
 
     const write = async (
         context: TriggerContext,
-        entry: { doc?: Record<string, unknown>; documentId: string; op: string; previous?: Record<string, unknown>; tableName: string },
+        entry: { doc?: Record<string, unknown>; documentId: string; op: DocumentHistoryEntry["op"]; previous?: Record<string, unknown>; tableName: string },
     ): Promise<void> => {
-        const documentJson = entry.doc === undefined ? undefined : JSON.stringify(redact(entry.doc));
-        const previousJson = entry.previous === undefined ? undefined : JSON.stringify(redact(entry.previous));
-        const bytes = new TextEncoder().encode(`${documentJson ?? ""}${previousJson ?? ""}`).length;
-        const truncated = bytes > maxSnapshotBytes;
+        const documentJson = snapshot(entry.doc);
+        const previousJson = snapshot(entry.previous);
+        const truncated = (entry.doc !== undefined && documentJson === undefined) || (entry.previous !== undefined && previousJson === undefined);
+
+        sequence += 1;
 
         await context.db.insert(DOCUMENT_HISTORY_TABLE, {
             documentId: entry.documentId,
             op: entry.op,
             recordedAt: Date.now(),
+            seq: sequence,
             tableName: entry.tableName,
-            // Past the cap the entry keeps its metadata and loses its payload:
+            // Past the cap the entry keeps its metadata and loses that payload:
             // "this row changed at this time" survives, which is the part a trail
             // cannot afford to drop.
             ...(truncated ? { truncated: true } : {}),
-            ...(truncated || documentJson === undefined ? {} : { doc: documentJson }),
-            ...(truncated || previousJson === undefined ? {} : { previous: previousJson }),
+            ...(documentJson === undefined ? {} : { doc: documentJson }),
+            ...(previousJson === undefined ? {} : { previous: previousJson }),
         });
     };
 
-    const record =
-        () =>
-        (t: TriggerBuilder): Record<string, TriggerDefinition> => {return {
+    const record = (t: TriggerBuilder): Record<string, TriggerDefinition> => {
+        return {
             // `after*` on all three: a `before*` handler runs while the write can
             // still be aborted, and an entry for a write that never landed is a
             // lie the reader cannot detect.
@@ -271,7 +367,8 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
             documentHistoryUpdate: t.afterUpdate(async (context, event) =>
                 write(context, { doc: event.doc, documentId: event.id, op: "update", previous: event.previous, tableName: event.table }),
             ),
-        }};
+        };
+    };
 
     const listForDocument = internalQuery
         .input({ before: v.optional(v.number()), documentId: v.string(), limit: v.optional(v.number()) })
@@ -286,20 +383,24 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
                 .order("desc")
                 .take(limit);
 
-            return rows.map((row) => {return {
-                documentId: row["documentId"] as string,
-                op: row["op"] as DocumentHistoryEntry["op"],
-                recordedAt: row["recordedAt"] as number,
-                tableName: row["tableName"] as string,
-                ...(row["doc"] === undefined ? {} : { doc: JSON.parse(row["doc"] as string) as Record<string, unknown> }),
-                ...(row["previous"] === undefined ? {} : { previous: JSON.parse(row["previous"] as string) as Record<string, unknown> }),
-                ...(row["truncated"] === true ? { truncated: true } : {}),
-            }});
+            return rows.map((row) => {
+                return {
+                    documentId: row["documentId"] as string,
+                    op: row["op"] as DocumentHistoryEntry["op"],
+                    recordedAt: row["recordedAt"] as number,
+                    tableName: row["tableName"] as string,
+                    // Decoded through the same codec that wrote it, so a `bigint`
+                    // or `Date` column comes back as itself, not as a tagged form.
+                    ...(row["doc"] === undefined ? {} : { doc: decodeWire(JSON.parse(row["doc"] as string)) as Record<string, unknown> }),
+                    ...(row["previous"] === undefined ? {} : { previous: decodeWire(JSON.parse(row["previous"] as string)) as Record<string, unknown> }),
+                    ...(row["truncated"] === true ? { truncated: true } : {}),
+                };
+            });
         });
 
     const vacuum = internalMutation.input({ limit: v.optional(v.number()) }).mutation(async ({ args, ctx: context }): Promise<{ deleted: number }> => {
         const cutoff = Date.now() - retentionMs;
-        const limit = args.limit !== undefined && Number.isFinite(args.limit) ? Math.max(1, Math.floor(args.limit)) : PAGE * MAX_VACUUM_ROUNDS;
+        const limit = args.limit !== undefined && Number.isFinite(args.limit) ? Math.max(1, Math.floor(args.limit)) : DEFAULT_VACUUM_LIMIT;
 
         let deleted = 0;
 
@@ -316,7 +417,7 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
-            await Promise.all(page.map(async (row) => context.db.delete(row["_id"] as never)));
+            await Promise.all(page.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
             deleted += page.length;
         }
 

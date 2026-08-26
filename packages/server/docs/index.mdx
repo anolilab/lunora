@@ -329,7 +329,7 @@ them somewhere to go:
 export const history = defineDocumentHistory({ retentionMs: 90 * 24 * 60 * 60 * 1000 });
 
 // lunora/schema.ts — attach to each table you want versioned
-const threads = defineTable({ ... }).triggers(history.record());
+const threads = defineTable({ ... }).triggers(history.record);
 
 export const schema = defineSchema({ threads }).extend(history.extension);
 export const { listForDocument, vacuum } = history.functions;
@@ -348,10 +348,12 @@ Three things worth knowing before you rely on it:
 not exist. An unattributed trail that called itself an audit log would be worse
 than none.
 
-**Snapshots are redacted.** Secret-shaped fields (`hashedPassword`, `apiKey`,
-`refreshToken`, …) are dropped before the entry is written — a stored credential
-outlives the rotation meant to retire it. `redact` extends the list; it matches
-on field name, which is the only signal a trigger has.
+**Snapshots are redacted, at every depth.** Secret-shaped fields
+(`hashedPassword`, `apiKey`, `refreshToken`, …) are dropped before the entry is
+written — a stored credential outlives the rotation meant to retire it — and the
+filter recurses, so a credential inside a `v.object(...)` column goes too.
+Matching is by exact field name, which is the only signal a trigger has, so use
+`redact` for anything spelled differently (`api_key`, `sessionToken`).
 
 **Reads are internal.** An entry is a full row snapshot, including columns the
 table's own RLS hides, so `listForDocument` is an internal query. Wrap it in a
@@ -359,7 +361,14 @@ procedure of your own with whatever authorization the surface needs.
 
 A snapshot over `maxSnapshotBytes` (64 KB default) is dropped and the entry is
 marked `truncated` — that a row changed, and when, is the part a trail cannot
-afford to lose.
+afford to lose. `doc` and `previous` are capped independently, so a large
+pre-write row does not discard a small post-write one.
+
+<Callout type="warn">
+    One blind spot: `insertManyUnsafe` skips triggers by design, so seed, migration, and admin-import writes leave no entry. Fine for an undo stack; if you are
+    using this for compliance, that gap has to be closed elsewhere. Note too that on an `.rls("required")` schema the merged `documentHistory_versions` table
+    needs a policy — deny client access outright, since `listForDocument` is internal and meant to be wrapped by a procedure of your own.
+</Callout>
 
 ## Subpaths
 
