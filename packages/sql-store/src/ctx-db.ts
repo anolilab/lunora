@@ -151,7 +151,11 @@ const compileOrderBySql = (keys: ReadonlyArray<{ direction?: string; field: stri
     const parts = keys.map((key) => sql`${columnRefSql(key.field)} ${sql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
 
     if (!keys.some((key) => ID_ORDER_FIELDS.has(key.field))) {
-        const tiebreak = tiebreakDirectionFor(keys.map((key) => {return { direction: key.direction === "desc" ? "desc" : "asc", field: key.field }}));
+        const tiebreak = tiebreakDirectionFor(
+            keys.map((key) => {
+                return { direction: key.direction === "desc" ? "desc" : "asc", field: key.field };
+            }),
+        );
 
         parts.push(sql`${columnRefSql("id")} ${sql.raw(tiebreak === "desc" ? "DESC" : "ASC")}`);
     }
