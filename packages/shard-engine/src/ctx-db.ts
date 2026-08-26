@@ -1423,11 +1423,28 @@ const buildReader = (
     const buildOrderClause = (): SQL => {
         const orderFields = stage.indexFields.length > 0 ? stage.indexFields : ["_creationTime"];
         const orderDirection = stage.order === "desc" ? "DESC" : "ASC";
+        const parts = orderFields.map((field) => dsql`${jsonPathSql(field)} ${dsql.raw(orderDirection)}`);
 
-        return dsql.join(
-            orderFields.map((field) => dsql`${jsonPathSql(field)} ${dsql.raw(orderDirection)}`),
-            dsql`, `,
-        );
+        // Fall through to creation order, then id, for rows sharing every indexed
+        // value — the same total order `compileOrderBySql` gives the object-form
+        // read, and the same order the declared index is physically built in
+        // (`<fields>, _creationTime, id`), so it stays an index walk.
+        //
+        // Without it the order of tied rows is whatever the engine returns, which
+        // is not stable: two messages written in the same millisecond and read
+        // back with `.withIndex("by_channel").order("asc")` came out in the order
+        // of their RANDOM server-minted ids. It looked deterministic only while
+        // the index could not satisfy the ORDER BY and SQLite sorted into a temp
+        // B-tree whose input order it happened to preserve.
+        if (!orderFields.includes("_creationTime")) {
+            parts.push(dsql`${jsonPathSql("_creationTime")} ${dsql.raw(orderDirection)}`);
+        }
+
+        if (!orderFields.some((field) => field === "_id" || field === "id")) {
+            parts.push(dsql`${jsonPathSql("id")} ASC`);
+        }
+
+        return dsql.join(parts, dsql`, `);
     };
 
     /**
