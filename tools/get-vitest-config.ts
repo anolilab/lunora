@@ -1,5 +1,5 @@
 /// <reference types="vitest" />
-import { cpus } from "node:os";
+import { availableParallelism } from "node:os";
 
 import type { ViteUserConfig } from "vitest/config";
 import { configDefaults, coverageConfigDefaults, defineConfig } from "vitest/config";
@@ -28,9 +28,15 @@ const VITEST_SEQUENCE_SEED = Date.now();
  * (`pnpm --filter <pkg> run test`) sees no variable and keeps vitest's default —
  * which matters, because the cap makes a single-package run about twice as slow
  * and that is the inner dev loop.
+ *
+ * The divisor is `availableParallelism()`, not `cpus().length`: the two agree on
+ * a developer machine but not inside a CPU-limited container, which is what a CI
+ * runner is. `cpus()` reports the HOST's processors, so a 2-core executor on a
+ * 64-core host would compute a cap of 12 and rebuild the oversubscription this
+ * exists to prevent.
  */
 const visTaskSlots = Number.parseInt(process.env["VIS_TASK_SLOTS"] ?? "", 10);
-const MAX_WORKERS = Number.isFinite(visTaskSlots) && visTaskSlots > 1 ? Math.max(1, Math.floor((cpus().length || visTaskSlots) / visTaskSlots)) : undefined;
+const MAX_WORKERS = Number.isFinite(visTaskSlots) && visTaskSlots > 1 ? Math.max(1, Math.floor((availableParallelism() || visTaskSlots) / visTaskSlots)) : undefined;
 
 export interface CoverageThresholds {
     branches?: number;
