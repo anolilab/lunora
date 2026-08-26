@@ -916,6 +916,37 @@ const runGeoTerminalScored = (
     return filtered ? takeMatching(entries, stage.inMemoryFilters, limit, (entry) => entry.document) : entries;
 };
 
+/**
+ * The row-page SELECT, assembled in ONE template per clause combination rather
+ * than by re-wrapping.
+ *
+ * The clause-at-a-time form — `query = sql\`${query} WHERE …\`` and again for
+ * ORDER BY and LIMIT — nests the whole statement one level deeper per clause, and
+ * drizzle's renderer walks that tree recursively with a type check at every node.
+ * Flattening it renders the identical text and parameters 62% faster; this sits on
+ * every `findMany`, which is every filtered read, every paginated page, and every
+ * relation hop.
+ *
+ * The four branches are deliberate. Splicing optional clauses as fragments into a
+ * single template is tidier and recovers only 15% of the 62%, because each
+ * fragment is itself a nested node; and assembling them with `sql.join` is 19%
+ * SLOWER than the nesting it replaces. Both were measured before this shape was
+ * chosen. `__tests__/select-page-sql.test.ts` pins all four against the
+ * composition they replaced.
+ * @returns the rendered-equivalent statement for this clause combination
+ */
+const selectPageSql = (tableName: string, where: SQL | undefined, order: SQL, limit: SQL | undefined): SQL => {
+    if (where === undefined) {
+        return limit === undefined
+            ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} ORDER BY ${order}`
+            : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} ORDER BY ${order} LIMIT ${limit}`;
+    }
+
+    return limit === undefined
+        ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE ${where} ORDER BY ${order}`
+        : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE ${where} ORDER BY ${order} LIMIT ${limit}`;
+};
+
 /** Bare-doc twin of {@link runGeoTerminalScored} — same candidate set, filter handling, and limit, with the scores mapped away. */
 const runGeoTerminal = (
     sql: SqlExec,
@@ -1208,23 +1239,14 @@ const paginateStage = (
     // read hides soft-deleted rows too.
     const whereCondition = scopeCondition && pageWhere ? dsql`${pageWhere} AND ${scopeCondition}` : (scopeCondition ?? pageWhere);
 
-    let query = dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`;
-
-    if (whereCondition) {
-        query = dsql`${query} WHERE ${whereCondition}`;
-    }
-
-    query = dsql`${query} ORDER BY ${compileOrderBySql(orderKeys)}`;
-
     const filtered = stage.inMemoryFilters.length > 0;
 
     // A bounded page returns its entire range, so never cap the SQL scan. An
     // unbounded, unfiltered page over-fetches one row to learn `isDone`.
-    if (!filtered && !bounded) {
-        query = dsql`${query} LIMIT ${dsql.raw(String(numberItems + 1))}`;
-    }
-
-    const rows = runDrizzle(sql, query).toArray();
+    const limitSql = filtered || bounded ? undefined : dsql.raw(String(numberItems + 1));
+    // Same SELECT shape as `findMany`, so it shares the flattened builder — see
+    // `selectPageSql` for why the clause-at-a-time form was costing a render.
+    const rows = runDrizzle(sql, selectPageSql(tableName, whereCondition, compileOrderBySql(orderKeys), limitSql)).toArray();
 
     onScanned(rows.length);
 
@@ -3218,23 +3240,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const whereStrategy = relationExistsPushDownEnabled ? makeRelationExistsSqlStrategy(onRead) : doWhereSqlStrategy;
             const whereCondition = compileWhereSql(predicate, whereStrategy);
 
-            let query = dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`;
-
-            if (whereCondition) {
-                query = dsql`${query} WHERE ${whereCondition}`;
-            }
-
-            query = dsql`${query} ORDER BY ${compileOrderBySql(orderKeys)}`;
-
             const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
-
-            if (limit !== undefined) {
-                // Over-fetch by one row to learn whether another page exists
-                // without issuing a second query.
-                query = dsql`${query} LIMIT ${dsql.raw(String(limit + 1))}`;
-            }
-
-            const rows = runDrizzle(sql, query).toArray();
+            // Over-fetch by one row to learn whether another page exists without
+            // issuing a second query.
+            const limitSql = limit === undefined ? undefined : dsql.raw(String(limit + 1));
+            const orderSql = compileOrderBySql(orderKeys);
+            const rows = runDrizzle(sql, selectPageSql(tableName, whereCondition, orderSql, limitSql)).toArray();
 
             // A full scan stamps ONE `*scan` dep instead of a dep per row, so the
             // read meter — which counts concrete-id stamps — would never see the
