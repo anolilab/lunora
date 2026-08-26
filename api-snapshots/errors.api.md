@@ -817,6 +817,12 @@ const isInternalCode: (code: string) => boolean;
 const isLunoraError: (error: unknown) => error is LunoraErrorLike;
 ```
 
+### `raise` (const)
+
+```ts
+const raise: (code: LunoraErrorCodeInput, message?: string, options?: LunoraErrorOptions) => never;
+```
+
 ### `resolveHint` (const)
 
 ```ts
