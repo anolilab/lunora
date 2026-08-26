@@ -1,3 +1,25 @@
+## @lunora/codegen [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.125...@lunora/codegen@1.0.0-alpha.126) (2026-08-26)
+
+### Features
+
+* **server:** add ctx.storage.deleteAfterCommit for mutations ([#484](https://github.com/anolilab/lunora/issues/484)) ([c759ddb](https://github.com/anolilab/lunora/commit/c759ddbc594e05749ecdb08e1f4d4c8472a11b28))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.90
+* **@lunora/agent:** upgraded to 1.0.0-alpha.65
+* **@lunora/container:** upgraded to 1.0.0-alpha.35
+* **@lunora/errors:** upgraded to 1.0.0-alpha.24
+* **@lunora/platform:** upgraded to 1.0.0-alpha.18
+* **@lunora/queue:** upgraded to 1.0.0-alpha.35
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.39
+* **@lunora/values:** upgraded to 1.0.0-alpha.29
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.33
+* **@lunora/do:** upgraded to 1.0.0-alpha.100
+* **@lunora/server:** upgraded to 1.0.0-alpha.84
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.39
+
 ## @lunora/codegen [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.124...@lunora/codegen@1.0.0-alpha.125) (2026-08-26)
 
 ### ⚠ BREAKING CHANGES
