@@ -371,6 +371,45 @@ describe("emitApi", () => {
         expect(rendered).not.toContain('import("./dataModel")');
     });
 
+    // The qualifier as reported: a pnpm store path, hash and all, where a module
+    // specifier belongs.
+    const STORE_QUALIFIER = 'import(".pnpm/@lunora+server@1.0.0-alpha.87/node_modules/@lunora/server/data-model")';
+
+    it("recovers a module specifier from a qualifier the checker printed as a node_modules path", () => {
+        expect.assertions(4);
+
+        // The checker prints a type it resolved inside `node_modules` as the path it
+        // found on disk — under pnpm, a store path carrying a content hash. That is
+        // not a specifier and resolves from nowhere; everything after the final
+        // `node_modules/` is the one that was wanted.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "list",
+                filePath: "messages",
+                kind: "query",
+                returnType: `${STORE_QUALIFIER}.LoadWith<"messages">[]`,
+            },
+            {
+                args: {},
+                exportName: "one",
+                filePath: "nested/messages",
+                kind: "query",
+                returnType: 'import("../../node_modules/@lunora/server/data-model").LoadWith<"messages">',
+            },
+        ];
+
+        const umbrella = emitApi({ functions, useUmbrella: true });
+
+        expect(umbrella).toContain('import("lunorash/server/data-model").LoadWith<"messages">[]');
+        expect(umbrella).not.toContain("node_modules");
+
+        const scoped = emitApi({ functions });
+
+        expect(scoped).toContain('import("@lunora/server/data-model").LoadWith<"messages">');
+        expect(scoped).not.toContain(".pnpm");
+    });
+
     it("rewrites base-package qualifiers to the umbrella subpath (and only for base packages)", () => {
         expect.assertions(4);
 

@@ -568,6 +568,29 @@ const relocateGeneratedImports = (returnType: string): string =>
         return `import("${withExtension}")`;
     });
 
+/**
+ * An `import("…")` qualifier the checker resolved to a file INSIDE `node_modules`
+ * and then printed as a path rather than as a module specifier — e.g.
+ * `import(".pnpm/@lunora+server@1.0.0-alpha.87_…/node_modules/@lunora/server/data-model")`
+ * for a handler returning the ORM facade's `LoadWith<…>`.
+ *
+ * That string is not a specifier and resolves from nowhere: it is one installer's
+ * on-disk layout, complete with a content hash that changes on any `node_modules`
+ * rebuild, so it is a TS2307 in the generated file on the machine that produced it
+ * and a different one everywhere else.
+ *
+ * Everything after the FINAL `node_modules/` is the specifier that was wanted
+ * (`@lunora/server/data-model`), whatever nesting the store put in front of it —
+ * so that is what we keep. Runs before the relative rebasers, which would
+ * otherwise treat a `../../node_modules/…` form as one of the user's own modules
+ * and rebase + `.js`-suffix it into something even further from a specifier, and
+ * before {@link relocateBaseQualifiers}, which maps the recovered
+ * `@lunora/<base>` onto the umbrella the project actually depends on.
+ */
+const STORE_PATH_QUALIFIER_RE = /import\("[^"]*\bnode_modules\/(?<spec>[^"]+)"\)/gu;
+
+const unresolveStoreQualifiers = (rendered: string): string => rendered.replaceAll(STORE_PATH_QUALIFIER_RE, (_match, spec: string) => `import("${spec}")`);
+
 /** Any relative `import("…")` qualifier — the user's own modules as well as `_generated/*`. */
 const RELATIVE_IMPORT_RE = /import\("(?<spec>\.\.?\/[^"]+)"\)/gu;
 
@@ -648,7 +671,8 @@ const relocateUserRelativeImports = (returnType: string, filePath: string): stri
  * `lunora codegen` exits 0, so it surfaces only when a sibling package
  * typechecks the same file and has nowhere to filter the error away.
  */
-const rebaseRelativeQualifiers = (rendered: string, filePath: string): string => relocateGeneratedImports(relocateUserRelativeImports(rendered, filePath));
+const rebaseRelativeQualifiers = (rendered: string, filePath: string): string =>
+    relocateGeneratedImports(relocateUserRelativeImports(unresolveStoreQualifiers(rendered), filePath));
 
 /**
  * Every base package the `lunorash` umbrella re-exports (its top-level,
