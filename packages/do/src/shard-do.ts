@@ -145,12 +145,10 @@ import {
     bumpCdcEpoch,
     CDC_LOG_TABLE,
     cdcCanVouchFor,
-    cdcSeqLeavingRows,
     cdcTouchesTables,
     cdcTrimmedError,
     clearCapturedMail,
     clearQueueMessages,
-    compactCdcDocs,
     ConflictError,
     createDependencyTracker,
     createFanoutCounters,
@@ -232,7 +230,6 @@ import {
     summarizeFanoutTopics,
     summarizeSubscriptions,
     TransactionHeadroomTracker,
-    trimCdcChanges,
     trimIdempotent,
     trySendFrame,
     UNVOUCHABLE_DEP,
@@ -318,6 +315,7 @@ import {
     toWorkflowInstanceState,
 } from "./admin-rpc-args";
 import { buildBatchEntryRequest } from "./batch";
+import { CdcRetentionRunner } from "./cdc-retention";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
 import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 
@@ -829,33 +827,6 @@ const ROOT_DO_SIZE_WARN_BYTES = 1_073_741_824;
  * can only ever re-run a mutation the client long since saw acked.
  */
 const IDEMPOTENCY_RETENTION_MS = 86_400_000;
-
-/**
- * Minimum spacing between `__cdc_log` retention sweeps on one warm instance.
- * Retention is a size bound, not a deadline: sweeping once a minute keeps the
- * log within a rounding error of the configured window while keeping the cost
- * off all but one of a burst's flushes.
- */
-const CDC_SWEEP_INTERVAL_MS = 60_000;
-
-/**
- * Rows one SHARD-LOCAL retention sweep may delete or compact, per level.
- *
- * Named apart from `@lunora/sql-store`'s `GLOBAL_CDC_SWEEP_MAX_ROWS`, which is
- * the same concept for the `.global()` changelog at a fifth of the value: this
- * sweep runs against the shard's own workerd SQLite, that one against D1 or
- * PlanetScale over the network. They are not interchangeable and neither is a
- * re-export of the other.
- *
- * The steady state never reaches this: a shard writing under `SHARD_CDC_SWEEP_MAX_ROWS`
- * changes a minute stays exactly at its configured window. It bounds the OTHER
- * case — the first sweep after an operator enables retention on a log that has
- * been growing unbounded — where a single statement over the whole backlog risks
- * exceeding the DO's per-request limits, aborting with nothing changed, and being
- * retried identically forever. Bounded, that backlog drains over successive
- * sweeps instead of never draining at all.
- */
-const SHARD_CDC_SWEEP_MAX_ROWS = 50_000;
 
 /**
  * Minimum spacing between throttled, in-line GC sweeps of the dedup table —
@@ -1404,12 +1375,27 @@ abstract class ShardDO {
     private lastIdempotencyTrimAt = 0;
 
     /**
-     * Wall-clock millis of the last `__cdc_log` retention sweep on this warm
-     * instance, throttling {@link ShardDO.sweepCdcRetention} to at most once per
-     * {@link CDC_SWEEP_INTERVAL_MS}. In-memory like its `__idempotency` twin, so
-     * a fresh instance sweeps on its first coalesced flush.
+     * Changelog retention: the throttled sweep that bounds `__cdc_log` and the
+     * archive-backed read that serves a consumer once it can no longer be
+     * answered from the live log.
+     *
+     * Every input is a thunk, so this field initializer can run before the
+     * constructor has assigned `env` — and so `sql` and the retention floor are
+     * read at the moment the sweep uses them rather than the moment this was
+     * built, which is the property the deferred destructive step depends on.
      */
-    private lastCdcSweepAt = 0;
+    private readonly cdcRetention = new CdcRetentionRunner({
+        enabled: () => this.cdcEnabled(),
+        env: () => this.env,
+        epoch: () => this.currentCdcEpoch(),
+        recordError: (scope, error) => {
+            this.recordShapeError(scope, error);
+        },
+        retentionFloor: (sql) => this.retentionFloor(sql),
+        shardKey: () => this.currentShardKey(),
+        sql: () => this.sql as SqlExec,
+        waitUntil: (promise) => this.shardHost.waitUntil?.(promise),
+    });
 
     /**
      * Per-request identity envelope forwarded from the runtime via the
@@ -3086,6 +3072,28 @@ abstract class ShardDO {
         }
 
         return page;
+    }
+
+    /**
+     * Page the changelog the way {@link ShardDO.runShardCdcSync} does, with the
+     * R2 cold tier behind it — see {@link CdcRetentionRunner.syncPage}.
+     *
+     * Deliberately layered around the sync method rather than folded into it,
+     * and the reason is latency, not signatures. `runShardCdcSync` is also the
+     * replica link's `readChanges`; that path is sync only as far as
+     * `servePull`, whose own caller is already async, so threading a promise
+     * through it would cost one `await` in one function. What it would also cost
+     * is an R2 round trip on the replica pull path, which runs per follower per
+     * poll — and `servePull` gates on the floor before it reads, so it would
+     * have to be restructured to reach the fallback at all rather than merely
+     * awaited.
+     *
+     * The consequence is real and not merely theoretical: a follower below the
+     * floor still pays a full bootstrap where a connector no longer does. It is
+     * tracked as a follow-up, not absorbed silently here.
+     */
+    protected cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{ changes: CdcChange[]; cursor: number }> {
+        return this.cdcRetention.syncPage(() => this.runShardCdcSync(args), args);
     }
 
     /**
@@ -6724,7 +6732,7 @@ abstract class ShardDO {
                 // Read-only: page this shard's change-data-capture log past the
                 // caller's per-shard cursor. The coordinator collects each
                 // shard's `{ changes, cursor }` into one streaming-export batch.
-                const result = this.runShardCdcSync(parseCdcSyncArgs(args));
+                const result = await this.cdcSyncPage(parseCdcSyncArgs(args));
 
                 return adminResponse(result);
             }
@@ -8972,7 +8980,7 @@ abstract class ShardDO {
             // these writes has done so, so this is the point at which the
             // retention floor is highest and a sweep reclaims the most. Throttled
             // internally, and a no-op unless retention is configured.
-            this.sweepCdcRetention();
+            this.cdcRetention.sweep();
         } finally {
             this.refreshInFlight = false;
         }
@@ -9639,112 +9647,6 @@ abstract class ShardDO {
     }
 
     /**
-     * Enforce the configured `__cdc_log` retention, at most once per interval per
-     * warm instance. Two independent, independently-configured levels:
-     *
-     * **Payload compaction** (`LUNORA_CDC_PAYLOAD_RETENTION`, in rows) nulls the
-     * post-images of older entries while keeping their `(seq, table, id, op)`
-     * keys. Post-images are essentially all of the log's bytes, and since the
-     * shape diff reads its values from the table rather than the log
-     * (`selectShapeMembers`), dropping them costs a live subscriber
-     * nothing — a client past the payload floor still gets an exact key-level
-     * delta instead of a full re-seed.
-     *
-     * **Row deletion** (`LUNORA_CDC_LOG_RETENTION`, in rows) drops the entries
-     * outright. This is the level that ends resumability for anyone below it:
-     * `minCdcSeq` then reports a floor above their cursor and they re-seed.
-     *
-     * Both levels are enforced on the READ paths, not merely intended by the
-     * sweep — `evaluateResume` and `computeOpLogShapeSeed` gate on `minCdcSeq`,
-     * and {@link ShardDO.runShardCdcSync} refuses a page below either floor
-     * (`CDC_LOG_TRIMMED` / `CDC_PAYLOAD_COMPACTED`). That matters because the
-     * failure this sweep can cause is silent by nature: a consumer handed the
-     * surviving tail with an advanced cursor has no way to notice a range went
-     * missing, so every path that can serve one has to refuse instead.
-     *
-     * **Both are opt-in, and that is a deliberate answer rather than caution.**
-     * The log's in-shard consumers record durable cursors this sweep can read
-     * ({@link ShardDO.retentionFloor}), but its out-of-shard consumers do not: a
-     * warehouse connector holds an opaque cursor token issued by the Worker, and
-     * nothing in this shard knows where it is. Trimming to a floor computed only
-     * from what SQLite can see would silently drop rows a connector had not read
-     * — so a deployment that wants retention states the window it can afford, and
-     * gets a sweep that additionally never crosses the in-shard floor. A shard
-     * that configures neither behaves exactly as before.
-     *
-     * Best-effort throughout: a stub `sql` handle or a shard without CDC is a
-     * no-op, and a failure here must never surface on a write path whose data
-     * already committed.
-     */
-    private sweepCdcRetention(): void {
-        if (!this.cdcEnabled()) {
-            return;
-        }
-
-        const now = Date.now();
-
-        if (now - this.lastCdcSweepAt <= CDC_SWEEP_INTERVAL_MS) {
-            return;
-        }
-
-        this.lastCdcSweepAt = now;
-
-        // Strictly parsed. These knobs DELETE data, and the lenient
-        // `Number.parseInt` reading (which stops at the first character it cannot
-        // eslint-disable-next-line no-secrets/no-secrets -- an example env assignment, not a credential
-        // use) turns `LUNORA_CDC_LOG_RETENTION=10k` into "keep 10 rows" — an
-        // operator's typo silently destroying the changelog rather than being
-        // ignored. `envOptionalPositiveInt` requires the whole string to be an
-        // integer and treats anything else as unset, i.e. as off.
-        const environment = this.env;
-        const keepRows = envOptionalPositiveInt(environment, "LUNORA_CDC_LOG_RETENTION");
-        const keepPayloads = envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION");
-
-        if (keepRows === undefined && keepPayloads === undefined) {
-            return;
-        }
-
-        // Compacting a window WIDER than the one being deleted is a no-op with a
-        // misleading configuration: rows leave the log before they can reach the
-        // payload cutoff. Clamp rather than ignore, so the stated payload window
-        // is honoured as far as the row window allows, and say so once.
-        const payloadWindow = keepPayloads === undefined ? undefined : Math.min(keepPayloads, keepRows ?? Number.POSITIVE_INFINITY);
-
-        const sql = this.sql as SqlExec;
-
-        try {
-            const floor = this.retentionFloor(sql);
-
-            if (payloadWindow !== undefined) {
-                // `cdcSeqLeavingRows` IS the "is anything past the window?"
-                // probe — an indexed `LIMIT 1 OFFSET keep - 1` that returns
-                // `undefined` when the log is shorter than the window. The
-                // `COUNT(*)` pre-check this replaces was a full b-tree walk on
-                // the write path every 60s, on exactly the multi-million-row
-                // logs this sweep exists to bound.
-                const cutoff = cdcSeqLeavingRows(sql, payloadWindow);
-
-                if (cutoff !== undefined && cutoff > 0) {
-                    compactCdcDocs(sql, Math.min(cutoff, floor), SHARD_CDC_SWEEP_MAX_ROWS);
-                }
-            }
-
-            if (keepRows !== undefined) {
-                const cutoff = cdcSeqLeavingRows(sql, keepRows);
-
-                if (cutoff !== undefined && cutoff > 0) {
-                    trimCdcChanges(sql, Math.min(cutoff, floor), SHARD_CDC_SWEEP_MAX_ROWS);
-                }
-            }
-        } catch (error) {
-            // A missing table (pre-CDC shard), a stub handle, or a failed DELETE:
-            // retention is maintenance, and skipping a sweep only means the log
-            // stays larger until the next one.
-            this.recordShapeError("cdc:sweep", error);
-        }
-    }
-
-    /**
      * The highest `seq` this sweep may compact or delete through without stranding
      * an in-shard consumer: the lowest cursor any durable local consumer has
      * durably reached, or the log's head when there is none.
@@ -10237,7 +10139,7 @@ abstract class ShardDO {
      *
      * `cdcRetentionMs` is read here rather than in the generated factory so every
      * deployment knob goes through one strict parser (see
-     * {@link ShardDO.sweepCdcRetention} for why lenient parsing on a delete path
+     * {@link CdcRetentionRunner.sweep} for why lenient parsing on a delete path
      * is a footgun). Absent means the global log is never trimmed.
      */
     // eslint-disable-next-line @typescript-eslint/member-ordering -- co-located with `readGlobalChangedTables` and the poll tick they both serve, rather than hoisted to the protected block away from its only callers

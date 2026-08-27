@@ -877,9 +877,16 @@ interface WorkerOptions {
     backupPrefix?: string;
 
     /**
-     * Retention bound for scheduled backups: keep only the newest N snapshots
-     * under {@link WorkerOptions.backupPrefix}, pruning older NDJSON objects and
-     * their manifests after each run. Omit (or `0`) to keep every backup.
+     * Retention window for scheduled backups: the newest N snapshots under
+     * {@link WorkerOptions.backupPrefix} are the ones considered current. Omit
+     * (or `0`) to treat every backup as current.
+     *
+     * **Reporting only — this never deletes.** Each run logs how many snapshots
+     * sit past the window and points at `lunora backup prune`, which is the only
+     * thing that removes one (and which confirms first). A bucket therefore
+     * grows until someone prunes it. Said explicitly because the name reads like
+     * the opposite, and because a backup deleted by a cron nobody was watching
+     * is not a failure mode this should ever have.
      */
     backupRetain?: number;
 

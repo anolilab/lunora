@@ -330,7 +330,12 @@ export interface R2BucketLike {
      * need metadata fall back to a 0-length ranged `get()` when `head` is absent.
      */
     head?: (key: string) => Promise<R2ObjectLike | null>;
-    list: (options?: { cursor?: string; delimiter?: string; limit?: number; prefix?: string }) => Promise<{
+    // `startAfter` is in the real `R2Bucket.list` signature and was missing here
+    // — the same projection drift this file's `put` comments call out. It is what
+    // lets a caller resume a key-ordered scan from a known position instead of
+    // paging from the start and discarding the prefix, so its absence turns an
+    // indexed seek into a walk over every key ever written.
+    list: (options?: { cursor?: string; delimiter?: string; limit?: number; prefix?: string; startAfter?: string }) => Promise<{
         cursor?: string;
         objects: R2ObjectLike[];
         truncated?: boolean;

@@ -357,6 +357,15 @@ interface CapturedMailRow {
 }
 ```
 
+### `CdcArchiveScope` (interface)
+
+```ts
+interface CdcArchiveScope {
+    epoch: string;
+    shard: string;
+}
+```
+
 ### `CdcChange` (interface)
 
 ```ts
@@ -3249,6 +3258,12 @@ const applyOnDelete: (options: ApplyOnDeleteOptions) => Promise<void>;
 const applySelect: (page: Record<string, unknown>[], select: ReadonlyArray<string> | undefined, withInput?: Record<string, unknown>) => Record<string, unknown>[];
 ```
 
+### `archiveCdcSegment` (const)
+
+```ts
+const archiveCdcSegment: (bucket: R2BucketLike, scope: CdcArchiveScope, changes: CdcChange[]) => Promise<void>;
+```
+
 ### `armRestore` (const)
 
 ```ts
@@ -4169,6 +4184,15 @@ const readAggregateValue: (op: string, row: {
 } | undefined) => null | number;
 ```
 
+### `readArchivedCdcChanges` (const)
+
+```ts
+const readArchivedCdcChanges: (bucket: R2BucketLike, scope: CdcArchiveScope, sinceSeq: number, limit: number | undefined) => Promise<{
+    changes: CdcChange[];
+    cursor: number;
+} | undefined>;
+```
+
 ### `readAuditLog` (const)
 
 ```ts
@@ -4192,6 +4216,12 @@ const readCapturedMail: (sql: SqlExec, options?: {
 }) => {
     entries: CapturedMailRow[];
 };
+```
+
+### `readCdcArchivedThrough` (const)
+
+```ts
+const readCdcArchivedThrough: (sql: SqlExec) => number;
 ```
 
 ### `readCdcChangeKeys` (const)
@@ -4696,6 +4726,12 @@ const unionAll: (branches: ReadonlyArray<SQL>) => SQL;
 
 ```ts
 const validateImportRow: (schema: SchemaLike, table: string, record: Record<string, unknown>) => string | undefined;
+```
+
+### `writeCdcArchivedThrough` (const)
+
+```ts
+const writeCdcArchivedThrough: (sql: SqlExec, seq: number) => void;
 ```
 
 ### `writeGlobalShapeSnapshot` (const)

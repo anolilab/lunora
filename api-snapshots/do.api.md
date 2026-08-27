@@ -350,6 +350,10 @@ abstract class ShardDO {
         changes: CdcChange[];
         cursor: number;
     };
+    protected cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{
+        changes: CdcChange[];
+        cursor: number;
+    }>;
     protected currentCdcCursor(): number | undefined;
     protected currentCdcEpoch(): string | undefined;
     protected sealForkedTimeline(): string;

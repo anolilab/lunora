@@ -152,6 +152,24 @@ export interface PlatformCapabilities {
          */
         objectStorageBackups?: Capability;
 
+        /**
+         * The CDC changelog's cold tier: rows a retention sweep is about to
+         * destroy are written to an object-storage bucket first
+         * (`LUNORA_CDC_ARCHIVE`), and a consumer whose cursor has fallen below
+         * the retained window is served from there instead of being told to
+         * re-seed.
+         *
+         * Distinct from `objectStorage` because it needs the bucket to do one
+         * thing a plain byte store need not: resume a key-ordered listing from a
+         * position (`list({ startAfter })`). Without it the read-back re-lists
+         * the prefix from the front every time and stops finding the range it
+         * needs once enough segments precede the cursor — which fails as a
+         * refusal rather than a gap, but fails permanently and silently, so a
+         * host that cannot seek should say `unsupported` here rather than
+         * inherit `objectStorage`'s rating.
+         */
+        objectStorageCdcArchive?: Capability;
+
         /** Pipelines / streaming data. */
         pipelines?: Capability;
         /** Queue-backed workpools. */
@@ -245,8 +263,12 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         objectStorage: { level: "native", note: "R2" },
         objectStorageBackups: {
-            level: "native",
-            note: "`lunora backup create|list|restore --bucket` writes NDJSON snapshots + a manifest sidecar per snapshot through the admin storage routes (checksum-verified upload, admin-gated object read), and `backupCron`/`backupStore` runs the same layout unattended on a Cron Trigger. Both are bounded by what a single request body / a Worker isolate can hold, not by R2",
+            level: "emulated",
+            note: "`lunora backup create|list|restore --bucket` writes NDJSON snapshots + a manifest sidecar per snapshot through the admin storage routes (checksum-verified upload, admin-gated object read), and `backupCron`/`backupStore` runs the same layout unattended on a Cron Trigger. Both are bounded by what a single request body / a Worker isolate can hold, not by R2. `emulated` because every part of that is Lunora's — R2 supplies a bucket, and Cloudflare has no backup product being consumed here; the snapshot format, the manifest, the checksum gate and the retention report are all ours",
+        },
+        objectStorageCdcArchive: {
+            level: "emulated",
+            note: "R2 supplies the bucket and the `startAfter` listing the segment keys are indexed on; everything above that is Lunora's — the segment format, the archive-before-trim ordering the sweep defers behind `waitUntil`, and the de-overlapping read-back. The platform has no notion of a changelog to tier, so this is not a product being consumed",
         },
         keyValueStore: { level: "native", note: "Workers KV" },
         vectorStore: {
@@ -377,6 +399,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         objectStorageBackups: {
             level: "emulated",
             note: "The commands work unchanged, but the bucket underneath is createNodeR2Bucket — a directory on the same machine the CLI runs on, so a bucket-backed backup here is not the separate failure domain it is on Cloudflare. The scheduled half additionally needs this host's scheduler, which exists but is not a shipping target",
+        },
+        objectStorageCdcArchive: {
+            level: "emulated",
+            note: "createNodeR2Bucket implements the `startAfter` seek the segment index needs, so the read-back behaves as it does on R2. Same caveat as the backups above: the bucket is a directory on the machine running the host, so archiving the changelog here moves it off SQLite but not off the disk that would take the shard with it",
         },
         objectStorage: {
             level: "emulated",
