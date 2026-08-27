@@ -357,6 +357,15 @@ interface CapturedMailRow {
 }
 ```
 
+### `CdcArchiveScope` (interface)
+
+```ts
+interface CdcArchiveScope {
+    epoch: string;
+    shard: string;
+}
+```
+
 ### `CdcChange` (interface)
 
 ```ts
@@ -3249,6 +3258,12 @@ const applyOnDelete: (options: ApplyOnDeleteOptions) => Promise<void>;
 const applySelect: (page: Record<string, unknown>[], select: ReadonlyArray<string> | undefined, withInput?: Record<string, unknown>) => Record<string, unknown>[];
 ```
 
+### `archiveCdcSegment` (const)
+
+```ts
+const archiveCdcSegment: (bucket: R2BucketLike, scope: CdcArchiveScope, changes: CdcChange[]) => Promise<void>;
+```
+
 ### `armRestore` (const)
 
 ```ts
@@ -4167,6 +4182,15 @@ const readAggregateValue: (op: string, row: {
     count: number;
     value: null | number;
 } | undefined) => null | number;
+```
+
+### `readArchivedCdcChanges` (const)
+
+```ts
+const readArchivedCdcChanges: (bucket: R2BucketLike, scope: CdcArchiveScope, sinceSeq: number, limit: number | undefined) => Promise<{
+    changes: CdcChange[];
+    cursor: number;
+} | undefined>;
 ```
 
 ### `readAuditLog` (const)

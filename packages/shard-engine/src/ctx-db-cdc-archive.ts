@@ -14,16 +14,18 @@
  * turns the cliff into a tier — hot rows in SQLite where they must be fast, cold
  * rows in R2 where they are almost free.
  *
- * Opt-in by BINDING PRESENCE, not by a flag: a shard with no
- * `LUNORA_CDC_ARCHIVE` bucket behaves exactly as it did before this file
- * existed. There is no half-configured state to reason about.
+ * Sits beside {@link file://./ctx-db-cdc.ts}, which owns the live changelog and
+ * every other CDC concept — the floors, the epoch, the trim and compaction this
+ * file exists to survive. It takes a bucket rather than an environment, and so
+ * knows nothing about how a host decides archiving is on; `@lunora/do` makes
+ * that call from the binding and drives the ordering.
  */
 
-import type { R2BucketLike } from "@lunora/platform";
-import type { CdcChange } from "@lunora/shard-engine";
+/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-cdc-archive" mirrors "ctx-db-cdc.ts", the module it extends (which carries the same disable for the same reason). */
 
-/** R2 bucket binding that receives changelog segments. Absent ⇒ archiving is off. */
-const CDC_ARCHIVE_BINDING = "LUNORA_CDC_ARCHIVE";
+import type { R2BucketLike } from "@lunora/platform";
+
+import type { CdcChange } from "./ctx-db-cdc";
 
 /**
  * Zero-padding width for a `seq` in a segment key.
@@ -101,27 +103,6 @@ const scopePrefix = (scope: CdcArchiveScope): string => `cdc/${encodeURIComponen
  * right: the consumer has seen it.
  */
 const segmentKey = (scope: CdcArchiveScope, to: number): string => `${scopePrefix(scope)}${padSeq(to)}.json`;
-
-/** The configured archive bucket, or `undefined` when the shard has no `LUNORA_CDC_ARCHIVE` binding. */
-const cdcArchiveBucket = (environment: unknown): R2BucketLike | undefined => {
-    if (typeof environment !== "object" || environment === null) {
-        return undefined;
-    }
-
-    const binding = (environment as Record<string, unknown>)[CDC_ARCHIVE_BINDING];
-
-    // Structural check rather than `instanceof`: the binding is a host object in
-    // workerd and a plain double in tests, and only `get`/`list`/`put` are used.
-    if (typeof binding !== "object" || binding === null) {
-        return undefined;
-    }
-
-    const candidate = binding as Partial<R2BucketLike>;
-
-    return typeof candidate.get === "function" && typeof candidate.list === "function" && typeof candidate.put === "function"
-        ? (binding as R2BucketLike)
-        : undefined;
-};
 
 /**
  * Write `changes` as one segment. The caller must not destroy the rows until
@@ -313,5 +294,5 @@ const readArchivedCdcChanges = async (
     return { changes: served, cursor: served.at(-1)?.seq ?? sinceSeq };
 };
 
-export { archiveCdcSegment, cdcArchiveBucket, readArchivedCdcChanges };
+export { archiveCdcSegment, readArchivedCdcChanges };
 export type { CdcArchiveScope };

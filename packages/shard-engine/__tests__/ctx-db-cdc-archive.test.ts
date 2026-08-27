@@ -1,8 +1,8 @@
-import type { CdcChange } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
-import type { CdcArchiveScope } from "../src/cdc-archive";
-import { archiveCdcSegment, cdcArchiveBucket, readArchivedCdcChanges } from "../src/cdc-archive";
+import type { CdcChange } from "../src/ctx-db-cdc";
+import type { CdcArchiveScope } from "../src/ctx-db-cdc-archive";
+import { archiveCdcSegment, readArchivedCdcChanges } from "../src/ctx-db-cdc-archive";
 import { createFakeR2Bucket as fakeBucket } from "./_helpers/fake-r2";
 
 /**
@@ -202,16 +202,5 @@ describe("cdc archive", () => {
 
         expect(page?.changes.map((entry) => entry.seq)).toStrictEqual([1, 2]);
         expect(page?.cursor).toBe(2);
-    });
-
-    it("treats a missing or non-R2 binding as archiving off", () => {
-        expect.assertions(4);
-
-        expect(cdcArchiveBucket(undefined)).toBeUndefined();
-        expect(cdcArchiveBucket({})).toBeUndefined();
-        expect(cdcArchiveBucket({ LUNORA_CDC_ARCHIVE: "not-a-bucket" })).toBeUndefined();
-        // A binding shaped like R2 but missing one of the three methods used is
-        // still off — half a bucket would fail mid-sweep, after the trim decision.
-        expect(cdcArchiveBucket({ LUNORA_CDC_ARCHIVE: { get: () => undefined, put: () => undefined } })).toBeUndefined();
     });
 });

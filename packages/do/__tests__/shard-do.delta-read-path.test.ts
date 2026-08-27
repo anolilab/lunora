@@ -11,6 +11,7 @@ import {
 } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { cdcArchiveBucket } from "../src/cdc-retention";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import { createFakeR2Bucket } from "./_helpers/fake-r2";
@@ -544,6 +545,18 @@ describe("delta-sync read path", () => {
     });
 
     describe("changelog archive", () => {
+        it("treats a missing or non-R2 binding as archiving off", () => {
+            expect.assertions(4);
+
+            expect(cdcArchiveBucket(undefined)).toBeUndefined();
+            expect(cdcArchiveBucket({})).toBeUndefined();
+            expect(cdcArchiveBucket({ LUNORA_CDC_ARCHIVE: "not-a-bucket" })).toBeUndefined();
+            // A binding shaped like R2 but missing one of the three methods used
+            // is still off — half a bucket would fail mid-sweep, after the trim
+            // decision had already been made on the strength of it being there.
+            expect(cdcArchiveBucket({ LUNORA_CDC_ARCHIVE: { get: () => undefined, put: () => undefined } })).toBeUndefined();
+        });
+
         /**
          * The sweep with a cold tier attached. `waitUntil` is captured rather
          * than ignored because the archive-then-destroy step deliberately runs
