@@ -262,7 +262,16 @@ export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCap
 export { NotFoundError } from "./not-found-error";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
-export { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
+export {
+    applySelect,
+    buildSeekBeforeWhere,
+    buildSeekWhere,
+    decodeCursor,
+    encodeCursor,
+    normalizeOrderKeys,
+    softDeleteScope,
+    tiebreakDirectionFor,
+} from "./query-args";
 // Consumed by `@lunora/do` internals rather than by end users: these were
 // module-private inside `@lunora/do` before the relocation, and are published
 // here only because the import now crosses a package boundary. They are not

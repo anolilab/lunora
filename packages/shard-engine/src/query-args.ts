@@ -24,6 +24,25 @@ import type { WhereInput } from "./where-types";
 /** The implicit tiebreak appended to every sort so the order is total. */
 const TIEBREAK_FIELD = "id";
 
+/**
+ * Which way the implicit `id` tiebreak sorts: the same way the last real sort
+ * key does.
+ *
+ * It used to be pinned `asc`. That made a descending read emit
+ * `_creationTime DESC, id ASC` — two directions in one ORDER BY, which no
+ * single-direction index can satisfy. SQLite answered it with
+ * `USE TEMP B-TREE FOR LAST TERM OF ORDER BY`, sorting each tie group instead
+ * of walking the index backwards, and a descending page measured 1.4-2.0x
+ * slower than the aligned form. The DO builds every declared index as
+ * `(<fields>, _creationTime, id)`, so following the last key's direction is
+ * exactly what lets that index be read forwards OR backwards.
+ *
+ * {@link buildSeek} and every ORDER BY builder MUST use this one rule. A cursor
+ * seek that disagrees with its own ORDER BY about tie direction skips or repeats
+ * rows at a page boundary where the sort keys tie.
+ */
+const tiebreakDirectionFor = (keys: ReadonlyArray<OrderKey>): SortDirection => (keys.at(-1)?.direction === "desc" ? "desc" : "asc");
+
 const ID_FIELDS = new Set(["_id", "id"]);
 
 /**
@@ -130,7 +149,9 @@ const decodeCursor = (cursor: string): unknown[] => {
  * prefix equalities with the pivot comparison `operatorFor` chooses.
  */
 const buildSeek = (keys: OrderKey[], cursorValues: unknown[], operatorFor: (direction: SortDirection, isFinal: boolean) => string): WhereInput => {
-    const columns: OrderKey[] = keys.some((key) => ID_FIELDS.has(key.field)) ? keys : [...keys, { direction: "asc", field: TIEBREAK_FIELD }];
+    const columns: OrderKey[] = keys.some((key) => ID_FIELDS.has(key.field))
+        ? keys
+        : [...keys, { direction: tiebreakDirectionFor(keys), field: TIEBREAK_FIELD }];
 
     const branches: WhereInput[] = [];
 
@@ -266,6 +287,7 @@ export {
     isLiveForCompanion,
     normalizeOrderKeys,
     softDeleteScope,
+    tiebreakDirectionFor,
     toBase64,
 };
 

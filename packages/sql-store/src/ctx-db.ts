@@ -99,6 +99,7 @@ import {
     softDeleteScope,
     sortColumnName,
     throwingScheduler,
+    tiebreakDirectionFor,
 } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -113,7 +114,7 @@ import type { SqlCtxExec } from "./sql-exec";
 import { columnRefSql, createIndexIfNotExists, decodeRow, decodeRows, forEachRowPaged, queryAll, queryBatch, queryRun, serializeColumnValue } from "./sql-exec";
 import { effectiveColumnKind } from "./value-codec";
 
-/** Order fields that already provide a stable tiebreak (no extra `id ASC` needed). */
+/** Order fields that already provide a stable tiebreak (no extra `id` term needed). */
 const ID_ORDER_FIELDS = new Set(["_id", "id"]);
 
 /**
@@ -137,14 +138,26 @@ const nullSafeEqualsSql = (engine: SqlDialect["name"], reference: SQL, value: un
 
 /**
  * Drizzle `ORDER BY` list — the SQL-object twin of `@lunora/do`'s string
- * `compileOrderBy`: each key as `<col> ASC|DESC`, with an `id ASC` tiebreak
- * appended unless an id field is already ordered (keeps paging deterministic).
+ * `compileOrderBy`: each key as `<col> ASC|DESC`, with an `id` tiebreak appended
+ * unless an id field is already ordered (keeps paging deterministic).
+ *
+ * The tiebreak follows the last key's direction, via the shared
+ * `tiebreakDirectionFor`. This backend does not append sort keys to its declared
+ * indexes the way the DO does, so it gains nothing directly — but it shares
+ * `buildSeekWhere`, and a cursor seek that disagrees with its own ORDER BY about
+ * tie direction skips or repeats rows at a page boundary where the keys tie.
  */
 const compileOrderBySql = (keys: ReadonlyArray<{ direction?: string; field: string }>): SQL => {
     const parts = keys.map((key) => sql`${columnRefSql(key.field)} ${sql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
 
     if (!keys.some((key) => ID_ORDER_FIELDS.has(key.field))) {
-        parts.push(sql`${columnRefSql("id")} ASC`);
+        const tiebreak = tiebreakDirectionFor(
+            keys.map((key) => {
+                return { direction: key.direction === "desc" ? "desc" : "asc", field: key.field };
+            }),
+        );
+
+        parts.push(sql`${columnRefSql("id")} ${sql.raw(tiebreak === "desc" ? "DESC" : "ASC")}`);
     }
 
     return sql.join(parts, sql`, `);
