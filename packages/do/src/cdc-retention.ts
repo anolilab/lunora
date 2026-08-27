@@ -5,8 +5,8 @@
  * longer account for it.
  *
  * Lives outside `shard-do.ts` because it is a genuinely separable subsystem —
- * everything here reaches the shard through the seven thunks on
- * {@link CdcRetentionHost} and nothing else. `@lunora/shard-engine` owns the
+ * everything here reaches the shard through the {@link CdcRetentionHost} seam
+ * and nothing else. `@lunora/shard-engine` owns the
  * mechanics (the trim, the compaction, the segment format, the floors); this
  * module owns the POLICY: when a sweep runs, which windows it honours, what may
  * be destroyed and only after what has been durably written elsewhere.
@@ -25,8 +25,10 @@ import {
     compactCdcDocs,
     envOptionalPositiveInt,
     readArchivedCdcChanges,
+    readCdcArchivedThrough,
     readCdcChanges,
     trimCdcChanges,
+    writeCdcArchivedThrough,
 } from "@lunora/shard-engine";
 
 /** R2 bucket binding that receives changelog segments. Absent ⇒ archiving is off. */
@@ -197,7 +199,7 @@ class CdcRetentionRunner {
         // Compacting a window WIDER than the one being deleted is a no-op with a
         // misleading configuration: rows leave the log before they can reach the
         // payload cutoff. Clamp rather than ignore, so the stated payload window
-        // is honoured as far as the row window allows, and say so once.
+        // is honoured as far as the row window allows.
         const payloadWindow = keepPayloads === undefined ? undefined : Math.min(keepPayloads, keepRows ?? Number.POSITIVE_INFINITY);
 
         const sql = this.host.sql();
@@ -207,17 +209,26 @@ class CdcRetentionRunner {
 
             // Archiving is gated on ROW retention, not on a bucket alone.
             //
-            // What the archive undoes is the trim, which destroys the only record
-            // that a key changed. Compaction destroys a payload but keeps the key,
-            // and every read path already degrades gracefully to a key-level delta
-            // — so a payload-only deployment has no cliff to soften.
+            // What the archive undoes is the trim. Compaction keeps the key and
+            // drops the payload, and the SHAPE paths degrade gracefully to a
+            // key-level delta — they read current values from the tables anyway.
             //
-            // It also could not be archived correctly from here. This sweep finds
-            // its batch by reading the OLDEST rows in the log, which works because
-            // the trim then deletes them and the window advances. With nothing
-            // deleting anything, the oldest rows stay the oldest forever: every
-            // sweep would re-read and re-upload the identical segment, and no row
-            // past the first batch would ever be archived at all.
+            // Be clear about what that does NOT cover, because the comment this
+            // replaces claimed it covered everything: the CDC export tap, which
+            // is the consumer this whole feature exists for, does not degrade.
+            // `runShardCdcSync` refuses any page holding a doc-less non-delete
+            // (`CDC_PAYLOAD_COMPACTED`) because a compacted insert is
+            // indistinguishable on the wire from a delete, and `syncPage`
+            // deliberately does not recover that from the archive. So payload
+            // retention WITHOUT row retention is a hard re-seed cliff for the
+            // tap, and binding a bucket does not soften it.
+            //
+            // Archiving ahead of compaction would soften it — the watermark
+            // makes that mechanically possible now, where reading from the
+            // oldest live row did not — but it is a different feature: it means
+            // uploading rows that are never deleted, so the log and the archive
+            // both hold them, with only the R2 lifecycle rule bounding either.
+            // Not smuggled in here.
             if (bucket === undefined || keepRows === undefined) {
                 this.applyRetention(sql, payloadWindow, keepRows, Number.POSITIVE_INFINITY, SHARD_CDC_SWEEP_MAX_ROWS);
 
@@ -240,16 +251,39 @@ class CdcRetentionRunner {
 
             const through = Math.min(cutoff, this.host.retentionFloor(sql));
 
+            // Read from the ARCHIVE WATERMARK, not from the oldest live row.
+            //
+            // Those differ whenever the trim is clamped by the retention floor:
+            // rows get archived, survive the delete, and are still the oldest
+            // rows in the log next sweep. Reading from `0` therefore re-archives
+            // them, and since a segment's key is its range's last `seq`, a
+            // re-archived range that ends where the previous one did OVERWRITES
+            // it — with a shorter range whose payloads compaction has since
+            // stripped. The rows the earlier segment held, already deleted from
+            // SQLite, are then gone from both. Reading from the watermark makes
+            // every segment disjoint and its key unique by construction, and
+            // stops a lagging subscriber costing a full re-upload every minute.
+            const archivedAlready = readCdcArchivedThrough(sql);
+
             // ponytail: one segment per sweep, capped by `readCdcChanges`'s own
             // 10k clamp, so a shard committing more than 10k changes per sweep
             // interval archives more slowly than it writes and its log grows.
             // The upgrade is a loop (or a wider clamp) once a real workload hits
             // it; the correctness property — nothing is destroyed before it is
             // archived — holds either way, the log just stays larger.
-            const batch = readCdcChanges(sql, { limit: CDC_ARCHIVE_SEGMENT_MAX_ROWS, sinceSeq: 0 }).changes.filter((change) => change.seq <= through);
+            const batch = readCdcChanges(sql, { limit: CDC_ARCHIVE_SEGMENT_MAX_ROWS, sinceSeq: archivedAlready }).changes.filter(
+                (change) => change.seq <= through,
+            );
             const archivedThrough = batch.at(-1)?.seq;
 
             if (archivedThrough === undefined) {
+                // Nothing NEW to archive — but rows archived by an earlier sweep
+                // can still be sitting in the log, waiting for a floor that has
+                // since moved. Retention still has to run for them, or a shard
+                // that stops writing never trims its backlog again. `maxSeq` is
+                // the watermark, which is exactly what is vouched for.
+                this.applyRetention(sql, payloadWindow, keepRows, archivedAlready, SHARD_CDC_SWEEP_MAX_ROWS);
+
                 return;
             }
 
@@ -259,18 +293,19 @@ class CdcRetentionRunner {
             // log stays larger until the next sweep, which is exactly the
             // degradation a failed DELETE already produces here.
             //
-            // The destructive step is bounded to the range that was actually
-            // archived (`archivedThrough`, `batch.length`) rather than to the
-            // sweep's own cap, because those two differ: the read is clamped at
-            // 10k rows and `SHARD_CDC_SWEEP_MAX_ROWS` is 50k, so an unbounded
-            // trim here would delete up to 40k rows this segment does not
-            // contain. Progress is still made every cycle, just in archive-sized
-            // steps.
+            // The destructive step is bounded by the WATERMARK rather than by
+            // this batch, because rows an earlier sweep archived may still be in
+            // the log — the floor that stopped them being trimmed then may have
+            // moved since. `SHARD_CDC_SWEEP_MAX_ROWS` rather than `batch.length`
+            // for the same reason: the deletable set is everything archived to
+            // date, not the slice just uploaded.
             const task = (async () => {
                 try {
                     // Non-`undefined` because this sweep already returned for a
-                    // shard without CDC, and `readCdcEpoch` mints an epoch
-                    // rather than reporting none. A `?? ""` fallback here would
+                    // shard without CDC, and `readCdcEpoch` mints an epoch rather
+                    // than reporting none. Read synchronously here, before the
+                    // first `await`, so it is still the same turn as the
+                    // `enabled()` guard that proved it. A `?? ""` fallback would
                     // be worse than the assertion: it writes segments under an
                     // epoch the read path refuses, so they would cost storage
                     // forever and answer nothing.
@@ -278,7 +313,13 @@ class CdcRetentionRunner {
 
                     await archiveCdcSegment(bucket, { epoch, shard: this.host.shardKey() }, batch);
 
-                    this.applyRetention(sql, payloadWindow, keepRows, archivedThrough, batch.length);
+                    // Only now. The watermark is the claim "this is durable
+                    // elsewhere", and advancing it over an upload that did not
+                    // land would let the next sweep archive past rows that were
+                    // never written — then trim them.
+                    writeCdcArchivedThrough(sql, archivedThrough);
+
+                    this.applyRetention(sql, payloadWindow, keepRows, archivedThrough, SHARD_CDC_SWEEP_MAX_ROWS);
                 } catch (error) {
                     this.host.recordError("cdc:archive", error);
                 }
@@ -330,11 +371,27 @@ class CdcRetentionRunner {
                 throw error;
             }
 
-            // `limit` is left to `readArchivedCdcChanges` to default and clamp,
-            // rather than repeated from `readCdcChanges` here — the live and
-            // archived halves of one page have to agree on it, and a literal
-            // copied across a package boundary is how they stop agreeing.
-            const archived = await readArchivedCdcChanges(bucket, { epoch, shard: this.host.shardKey() }, args.sinceSeq, args.limit);
+            let archived;
+
+            try {
+                // `limit` is left to `readArchivedCdcChanges` to default and
+                // clamp, rather than repeated from `readCdcChanges` here — the
+                // live and archived halves of one page have to agree on it, and
+                // a literal copied across a package boundary is how they stop
+                // agreeing.
+                archived = await readArchivedCdcChanges(bucket, { epoch, shard: this.host.shardKey() }, args.sinceSeq, args.limit);
+            } catch (archiveError) {
+                // A bucket that is unreachable, revoked, or deleted must not
+                // change what this path answers. The refusal already in hand is
+                // a 409 carrying the retained floor and "resume from a
+                // snapshot"; letting an R2 error escape instead turns that into
+                // an opaque 500 for every lagging consumer, for as long as R2 is
+                // unhappy — trading a documented, actionable answer for an
+                // undiagnosable one at exactly the wrong moment.
+                this.host.recordError("cdc:archive-read", archiveError);
+
+                throw error;
+            }
 
             if (archived === undefined) {
                 throw error;

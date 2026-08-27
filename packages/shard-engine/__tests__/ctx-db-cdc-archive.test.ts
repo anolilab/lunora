@@ -130,6 +130,62 @@ describe("cdc archive", () => {
         expect(page?.changes).toHaveLength(10_000);
     });
 
+    describe("a foreign object under the prefix", () => {
+        /**
+         * The bucket is an operator-supplied binding, and nothing forces it to be
+         * dedicated. A segment's `from`/`to` are therefore a CLAIM, and coverage
+         * has to be decided by what the object actually holds — otherwise anyone
+         * who can write a key under the prefix can advance a warehouse cursor over
+         * changes it was never handed.
+         */
+        const plant = async (bucket: ReturnType<typeof fakeBucket>, to: number, segment: unknown): Promise<void> => {
+            await bucket.put(`cdc/__root__/e1/${String(to).padStart(16, "0")}.json`, JSON.stringify(segment));
+        };
+
+        it("does not let a declared `to` advance the cursor over rows it does not hold", async () => {
+            expect.assertions(1);
+
+            const bucket = fakeBucket();
+
+            await archiveCdcSegment(bucket, scope, [change(1), change(2)]);
+            // Claims to cover 3..6, holds only 5 and 6.
+            await plant(bucket, 6, { changes: [change(5), change(6)], from: 3, to: 6 });
+
+            const page = await readArchivedCdcChanges(bucket, scope, 0, 100);
+
+            // Must stop at the discontinuity, not serve [1,2,5,6] with cursor 6.
+            expect(page?.changes.map((entry) => entry.seq)).toStrictEqual([1, 2]);
+        });
+
+        it("does not let a huge declared range hide a one-row object", async () => {
+            expect.assertions(1);
+
+            const bucket = fakeBucket();
+
+            await plant(bucket, 1000, { changes: [change(1)], from: 1, to: 1000 });
+            await archiveCdcSegment(bucket, scope, [change(1001), change(1002)]);
+
+            const page = await readArchivedCdcChanges(bucket, scope, 0, 100);
+
+            // Serving [1, 1001, 1002] would silently swallow 999 changes.
+            expect(page?.changes.map((entry) => entry.seq)).toStrictEqual([1]);
+        });
+
+        it("stops at a discontinuity inside one object rather than serving across it", async () => {
+            expect.assertions(1);
+
+            const bucket = fakeBucket();
+
+            await plant(bucket, 4, { changes: [change(1), change(4), change(2), change(3)], from: 1, to: 4 });
+
+            const page = await readArchivedCdcChanges(bucket, scope, 0, 100);
+
+            // Out of order in the body: serve the ascending run and stop. Serving
+            // it verbatim would hand back a cursor below rows already delivered.
+            expect(page?.changes.map((entry) => entry.seq)).toStrictEqual([1]);
+        });
+    });
+
     it("refuses a range the archive never covered", async () => {
         expect.assertions(1);
 

@@ -4218,6 +4218,12 @@ const readCapturedMail: (sql: SqlExec, options?: {
 };
 ```
 
+### `readCdcArchivedThrough` (const)
+
+```ts
+const readCdcArchivedThrough: (sql: SqlExec) => number;
+```
+
 ### `readCdcChangeKeys` (const)
 
 ```ts
@@ -4720,6 +4726,12 @@ const unionAll: (branches: ReadonlyArray<SQL>) => SQL;
 
 ```ts
 const validateImportRow: (schema: SchemaLike, table: string, record: Record<string, unknown>) => string | undefined;
+```
+
+### `writeCdcArchivedThrough` (const)
+
+```ts
+const writeCdcArchivedThrough: (sql: SqlExec, seq: number) => void;
 ```
 
 ### `writeGlobalShapeSnapshot` (const)

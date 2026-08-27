@@ -283,7 +283,7 @@ weekend means re-downloading the shard because a few megabytes of changelog were
 deleted.
 
 Bind an R2 bucket as `LUNORA_CDC_ARCHIVE` and the sweep uploads entries before
-destroying them. A consumer below the window is then served out of the archive
+destroying them, so the export tap above can be served out of the archive
 instead of being refused:
 
 ```jsonc
@@ -304,14 +304,21 @@ and a shard without it behaves exactly as before. Three things worth knowing:
 - **Nothing prunes the archive.** It grows without bound by design. Set an R2
   lifecycle rule on the bucket if you want it bounded — an expired segment
   leaves a hole the read-back reports as a refusal, never as a silent gap.
+- **A point-in-time restore orphans everything already archived.** Segments are
+  filed under the changelog's epoch, and a restore forks the timeline onto a new
+  one. That is deliberate — entries describing changes that no longer happened
+  must not be servable — but no read path will ever reach the old segments
+  again, and nothing deletes them. Clear the bucket after a
+  [PITR restore](#point-in-time-recovery), or keep paying for them.
 
 A consumer far enough behind is still told to re-seed: a read reaches back a
 bounded number of segments, which at the default sweep cadence covers roughly
 half an hour of continuous trimming.
 
-<Callout>
-    Read replicas do not use the archive. A follower below the floor still pays a full bootstrap — the replica pull path checks the floor before it reads, and
-    reaching the archive there would put an object-storage round trip on a per-follower poll.
+<Callout type="warn">
+    **This serves the export tap, and nothing else.** A reconnecting realtime subscriber below the retained window still re-seeds, and so does a read replica —
+    both check the floor before they read and never reach the archive. Binding the bucket will not stop your clients re-downloading a shape after a long
+    disconnect; it stops your warehouse connector re-downloading the shard.
 </Callout>
 
 ## Practising a restore

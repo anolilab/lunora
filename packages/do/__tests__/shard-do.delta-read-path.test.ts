@@ -5,7 +5,9 @@ import {
     createShardCtxDb as createShardContextDatabase,
     minCdcReplayableSeq,
     minCdcSeq,
+    readCdcArchivedThrough,
     readCdcChangeKeys,
+    readCdcChanges,
     readCdcCursor,
     runShardMigrations,
 } from "@lunora/shard-engine";
@@ -621,6 +623,33 @@ describe("delta-sync read path", () => {
             await sweepWithArchive({ LUNORA_CDC_ARCHIVE: failing, LUNORA_CDC_LOG_RETENTION: "5" }, 20);
 
             expect(minCdcSeq(harness.sql)).toBe(1);
+        });
+
+        it("archives above the watermark, so survivors are never re-uploaded", async () => {
+            expect.assertions(3);
+
+            const bucket = createFakeR2Bucket();
+
+            // Payload window narrower than the row window is the configuration
+            // that produces survivors: the archive reads through the payload
+            // cutoff, the trim stops at the lower row cutoff, and the rows in
+            // between stay in the log having already been uploaded.
+            await sweepWithArchive({ LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_LOG_RETENTION: "12", LUNORA_CDC_PAYLOAD_RETENTION: "4" }, 20);
+
+            const archivedThrough = readCdcArchivedThrough(harness.sql);
+            const survivors = readCdcChanges(harness.sql, { sinceSeq: 0 }).changes.filter((entry) => entry.seq <= archivedThrough);
+
+            // Survivors exist, so the next sweep has something it could wrongly
+            // re-archive; without them this test would prove nothing.
+            expect(survivors.length).toBeGreaterThan(0);
+
+            // The watermark is what stops it. Reading from the oldest live row
+            // instead would rebuild a batch ending at the same `seq` — and since
+            // a segment's key IS its last seq, that put overwrites the segment
+            // holding the rows already deleted from SQLite, with a shorter range
+            // whose payloads compaction has since stripped.
+            expect(archivedThrough).toBeGreaterThanOrEqual(survivors.at(-1)?.seq ?? 0);
+            expect(bucket.keys()).toHaveLength(1);
         });
 
         it("does not archive when only payload retention is configured", async () => {
