@@ -67,9 +67,13 @@ const SHARD_CDC_SWEEP_MAX_ROWS = 50_000;
  * MATERIALIZES every post-image into the isolate and then serializes the lot
  * into one JSON body, so it is a memory bound, while the sweep cap bounds a
  * `DELETE` that touches no payloads at all. It also matches `readCdcChanges`'s
- * own internal clamp — asking for more would silently return this many anyway,
- * and the destructive step is sized from what actually came back rather than
- * from what was asked for.
+ * own internal clamp — asking for more would silently return this many anyway.
+ *
+ * It does NOT bound the destructive step, which is sized by the sweep cap and
+ * ceilinged by the archive watermark. Those are different questions: how much
+ * can be uploaded in one turn, versus how much is safe to delete — and the
+ * second is "everything archived to date", not "the slice just uploaded", since
+ * rows an earlier sweep archived may still be waiting on a floor that has moved.
  */
 const CDC_ARCHIVE_SEGMENT_MAX_ROWS = 10_000;
 

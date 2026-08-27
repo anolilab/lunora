@@ -298,13 +298,13 @@ const fetchSegment = async (bucket: R2BucketLike, key: string): Promise<CdcSegme
  * and "the archive returned the rows this consumer missed" are different claims
  * and only the second one is safe to act on.
  *
- * Segments may OVERLAP, and this is the function that has to cope with it. The
- * sweep archives the oldest live rows and then trims them, but the trim is
- * clamped by the retention floor — so a subscriber lagging inside the archived
- * range leaves already-archived rows in the live log, and the next sweep's
- * segment starts inside the previous one. This loop therefore treats the
- * running cursor, not each segment's own bounds, as the truth about what has
- * been served.
+ * The writer produces disjoint, ascending segments (see
+ * {@link archiveCdcSegment}), so for anything it wrote a segment's declared
+ * bounds and its contents agree. This loop still refuses to rely on that: the
+ * bucket is an operator-supplied binding that nothing forces to be dedicated, so
+ * `from` and `to` are a CLAIM by whoever wrote the object, and coverage is taken
+ * from the rows actually present instead. That costs nothing for honest
+ * segments and is the whole defence against a foreign one.
  */
 const readArchivedCdcChanges = async (
     bucket: R2BucketLike,
