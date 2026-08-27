@@ -550,6 +550,54 @@ const importSpecifierFor = (handlerFile: SourceFile, declaration: Node, name: st
 };
 
 /**
+ * Whether `specifier` is one the emitted file cannot resolve.
+ *
+ * A `tsconfig` `paths` alias (`~/lib/types`, `@/types`) resolves under the
+ * AUTHORING project's own config and nowhere else — not from a sibling package
+ * that imports `_generated/api.ts`, and not under a dedicated strict config for
+ * generated output, which is the pattern this repo itself ships
+ * (`apps/playground/tsconfig.generated.json` declares no `paths`). None of
+ * `emit.ts`'s three rebasers touch it, so the alias would be written out
+ * verbatim and fail to resolve exactly where `relocateUserRelativeImports`
+ * exists to stop that happening.
+ *
+ * Matched against the project's CONFIGURED patterns rather than guessed from the
+ * shape of the string, because an alias can be spelled anything. Declining sends
+ * the type back to structural expansion, which is what it got before qualifying
+ * existed.
+ */
+const isUnresolvableSpecifier = (specifier: string, node: Node): boolean =>
+    Object.keys(node.getProject().getCompilerOptions().paths ?? {}).some((pattern) => {
+        const star = pattern.indexOf("*");
+
+        return star === -1 ? specifier === pattern : specifier.startsWith(pattern.slice(0, star)) && specifier.endsWith(pattern.slice(star + 1));
+    });
+
+/**
+ * How `_generated/` can name a declaration the handler refers to.
+ *
+ * One question, asked once, with three answers — because there are exactly three
+ * things the emitter can do with a name.
+ *
+ * `verbatim` prints what the checker printed: either the name resolves from
+ * anywhere (a global, or `Doc`/`Id`, which the generated files import), or the
+ * checker already rendered it as a self-contained `import("…")` qualifier
+ * because it is not in scope at the handler either.
+ *
+ * `qualify` means the checker prints it BARE, which does not resolve from
+ * `_generated/`, but the handler's own import says which module to name it from,
+ * so it can be rewritten as `import("<specifier>").<export>`.
+ *
+ * `expand` means it prints bare and no specifier can reach it — declared in the
+ * handler's own module, or behind a `paths` alias that resolves nowhere else.
+ * Only its structure can be reproduced.
+ */
+type NameRendering = { kind: "expand" } | { kind: "qualify"; qualified: QualifiedImport } | { kind: "verbatim" };
+
+const VERBATIM: NameRendering = { kind: "verbatim" };
+const EXPAND: NameRendering = { kind: "expand" };
+
+/**
  * Every declaration kind the checker prints as a BARE name. Interfaces and type
  * aliases were the whole list once, which left `class` and `enum` — two ordinary
  * ways to declare a return type — printing as undeclared identifiers in
@@ -557,9 +605,7 @@ const importSpecifierFor = (handlerFile: SourceFile, declaration: Node, name: st
  * reaches the rule as its MEMBER declarations (`Status.Done` is an enum-literal
  * type), so the member is listed alongside the enum itself.
  *
- * Detecting a kind here only says "this would print bare, so do not print it".
- * Whether it can then be reproduced structurally is
- * {@link expandUnreachableType}'s decision, and for a class the answer is no.
+ * Anything else the checker renders structurally already, so it needs no name.
  */
 const BARE_NAMEABLE_KINDS: ReadonlySet<SyntaxKind> = new Set([
     SyntaxKind.ClassDeclaration,
@@ -570,24 +616,11 @@ const BARE_NAMEABLE_KINDS: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /**
- * True when `declaration` names a type the checker prints BARE at `node` AND
- * that bare name does not resolve from `_generated/`.
- *
- * Both halves matter, and the first guard below is the second half: a GLOBAL
- * declaration also prints bare, and resolves — so it is not this rule's
- * business, even though it would pass a pure printing test.
- *
- * Two ways a name comes out bare, and both must be caught. One: the type is
- * declared in the handler's own module (`handlerFilePath`), at any nesting depth.
- * Two: the type is declared elsewhere in user code but IMPORTED into the
- * handler's module, which makes it equally nameable there. That second half was
- * missing once, so a shared `./lib/types` interface — the ordinary way to write
- * one — leaked into `api.ts`/`functions.ts` unimported.
- *
- * Exported declarations are included — being nameable from the handler is the
- * whole trigger, and `export` does not change that.
+ * Classify one declaration. {@link classifyType} lifts this to a type and
+ * {@link annotationRendering} to a syntactic annotation; both defer here so the
+ * rule has one statement rather than three that must agree.
  */
-const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string): boolean => {
+const classifyDeclaration = (declaration: Node, node: Node, handlerFilePath: string): NameRendering => {
     const declarationFile = declaration.getSourceFile();
 
     // A GLOBAL declaration prints bare AND resolves bare from anywhere — `Date`,
@@ -599,24 +632,18 @@ const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string):
     // `_generated/` than a user's own interface is. A handler importing
     // `PaginationResult` from `lunorash/server` — or any package type at all —
     // had the name written into `api.ts` unimported, a TS2304 in generated
-    // output while `lunora codegen` exited 0.
+    // output while `lunora codegen` exited 0 (issue #509).
     //
     // Script-mode files are ALMOST exactly the globals, and the exception is why
     // this is two tests rather than one: a script-mode `.d.ts` may still carry
     // `declare module "spec" { … }` blocks, whose members are module-scoped and
-    // need an import like any other.
+    // need an import like any other (issue #511).
     if (declarationFile.getSymbol() === undefined && ambientModuleSpecifier(declaration) === undefined) {
-        return false;
+        return VERBATIM;
     }
 
-    // Every declaration kind the checker prints as a BARE name. Interfaces and
-    // type aliases were the whole list once, which left `class` and `enum` — two
-    // ordinary ways to declare a return type — printing as undeclared identifiers
-    // in `api.ts`/`functions.ts` (TS2304) while `lunora codegen` exited 0. An enum
-    // reaches here as its MEMBER declarations (`Status.Done` is an enum-literal
-    // type), so the member is listed alongside the enum itself.
     if (!BARE_NAMEABLE_KINDS.has(declaration.getKind())) {
-        return false;
+        return VERBATIM;
     }
 
     const declarationPath = declarationFile.getFilePath();
@@ -624,49 +651,71 @@ const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string):
     // `Doc`/`Id` and friends: the generated files import these by name, so the
     // bare rendering is correct there. Expanding them instead would discard a
     // branded `Id` (not an expandable object) and fall all the way back to
-    // `unknown` — measured as every `Doc`/`Id`-shaped return type in the
-    // example apps collapsing at once. Keyed on the declaration PATH, never on
-    // the name: a user's own `Doc`/`Id` is a different type, and exempting it by
-    // name let `referencedDataModelImports` bind it to the generated one — a
-    // wrong type with no compile error anywhere.
+    // `unknown` — measured as every `Doc`/`Id`-shaped return type in the example
+    // apps collapsing at once. Keyed on the declaration PATH, never on the name:
+    // a user's own `Doc`/`Id` is a different type, and exempting it by name let
+    // `referencedDataModelImports` bind it to the generated one — a wrong type
+    // with no compile error anywhere.
     if (declarationPath.includes(GENERATED_DIRECTORY_SEGMENT)) {
-        return false;
+        return VERBATIM;
     }
 
+    // Declared in the handler's own module, at any nesting depth. Nameable there
+    // and nowhere else — no import exists to borrow a specifier from.
     if (declarationPath === handlerFilePath) {
-        return true;
+        return EXPAND;
     }
 
-    // An enum member is imported under its ENUM's name, never its own.
-    if (Node.isEnumMember(declaration)) {
-        const enumDeclaration = declaration.getParent();
+    // An enum member is imported under its ENUM's name, never its own. A nameless
+    // `export default class {}` has no name to ask about at all.
+    const named = Node.isEnumMember(declaration) ? declaration.getParent() : declaration;
 
-        return importSpecifierFor(node.getSourceFile(), enumDeclaration, enumDeclaration.getName()) !== undefined;
+    if (!Node.hasName(named)) {
+        return EXPAND;
     }
 
-    // A nameless `export default class {}` has nothing to ask
-    // `importSpecifierFor` about, and is unreachable by name from anywhere.
-    return Node.hasName(declaration) && importSpecifierFor(node.getSourceFile(), declaration, declaration.getName()) !== undefined;
+    const qualified = importSpecifierFor(node.getSourceFile(), named, named.getName());
+
+    // Not imported here either, so the checker prints it as its own `import("…")`
+    // qualifier — already self-contained.
+    if (qualified === undefined) {
+        return VERBATIM;
+    }
+
+    return isUnresolvableSpecifier(qualified.specifier, node) ? EXPAND : { kind: "qualify", qualified };
 };
 
 /**
- * True when the checker will print this user-land named type as a BARE name at
- * `node`.
+ * Classify a type by the declarations behind it.
  *
- * `_generated/api.ts` does not import the handler's modules; codegen only emits
- * an import for a qualifier the checker itself rendered as `import("…")` (plus
- * the fixed `dataModel` one, excluded above). So a bare name must be expanded
- * structurally rather than printed, or it lands in the generated file as an
- * undeclared identifier (TS2304).
+ * A `qualify` counts only from the symbol the checker actually PRINTS — the
+ * alias when there is one, since that is the syntax that reaches the output.
+ * Reachability is judged across both symbols, because either can drag in a name
+ * that does not resolve.
  */
-const printsAsUnimportedName = (type: Type, node: Node, handlerFilePath: string): boolean =>
-    [type.getSymbol(), type.getAliasSymbol()]
-        .flatMap((candidate) => candidate?.getDeclarations() ?? [])
-        .some((declaration) => isBareNameable(declaration, node, handlerFilePath));
+const classifyType = (type: Type, node: Node, handlerFilePath: string): NameRendering => {
+    const aliasSymbol = type.getAliasSymbol();
+    const symbol = type.getSymbol();
+    const printedDeclarations = new Set<Node>((aliasSymbol ?? symbol)?.getDeclarations());
+
+    let needsRenaming = false;
+
+    for (const declaration of [symbol, aliasSymbol].flatMap((candidate) => candidate?.getDeclarations() ?? [])) {
+        const rendering = classifyDeclaration(declaration, node, handlerFilePath);
+
+        if (rendering.kind === "qualify" && printedDeclarations.has(declaration)) {
+            return rendering;
+        }
+
+        needsRenaming ||= rendering.kind !== "verbatim";
+    }
+
+    return needsRenaming ? EXPAND : VERBATIM;
+};
 
 /**
- * True when a declaration's type ANNOTATION names something that would print
- * bare — the half of the printing rule that the resolved type cannot reveal.
+ * Classify a declaration's type ANNOTATION — the half of the printing rule that
+ * the resolved type cannot reveal.
  *
  * TypeScript's node builder reuses the syntax of a declared annotation whenever
  * that syntax resolves at the printing location, so `{ action: AuditAction }`
@@ -681,26 +730,35 @@ const printsAsUnimportedName = (type: Type, node: Node, handlerFilePath: string)
  * that gap; it does not replace the resolved walk, because an inferred return
  * with no annotation anywhere still has to be caught by the type.
  */
-const annotationPrintsAsUnimportedName = (declaration: Node, node: Node, handlerFilePath: string): boolean => {
+const annotationRendering = (declaration: Node, node: Node, handlerFilePath: string): NameRendering => {
     const annotation = Node.isPropertySignature(declaration) || Node.isPropertyDeclaration(declaration) ? declaration.getTypeNode() : undefined;
 
     if (annotation === undefined) {
-        return false;
+        return VERBATIM;
     }
 
-    return [annotation, ...annotation.getDescendantsOfKind(SyntaxKind.TypeReference)]
-        .filter((candidate) => Node.isTypeReference(candidate))
-        .flatMap((reference) => {
-            // Resolved through `getAliasedSymbol()` for an `import type { X }`,
-            // exactly as `resolveValidatorAlias` does — otherwise the symbol is
-            // the `ImportSpecifier`, which is neither an interface nor a type
-            // alias, so every imported name read as reachable and the leak this
-            // walk exists to catch stayed open for the commonest spelling of it.
-            const symbol = reference.getTypeName().getSymbol();
+    let needsRenaming = false;
 
-            return (symbol?.getAliasedSymbol() ?? symbol)?.getDeclarations() ?? [];
-        })
-        .some((referenced) => isBareNameable(referenced, node, handlerFilePath));
+    for (const reference of [annotation, ...annotation.getDescendantsOfKind(SyntaxKind.TypeReference)].filter((candidate) => Node.isTypeReference(candidate))) {
+        // Resolved through `getAliasedSymbol()` for an `import type { X }`,
+        // exactly as `resolveValidatorAlias` does — otherwise the symbol is the
+        // `ImportSpecifier`, which is neither an interface nor a type alias, so
+        // every imported name read as reachable and the leak this walk exists to
+        // catch stayed open for the commonest spelling of it.
+        const symbol = reference.getTypeName().getSymbol();
+
+        for (const referenced of (symbol?.getAliasedSymbol() ?? symbol)?.getDeclarations() ?? []) {
+            const rendering = classifyDeclaration(referenced, node, handlerFilePath);
+
+            if (rendering.kind === "qualify") {
+                return rendering;
+            }
+
+            needsRenaming ||= rendering.kind !== "verbatim";
+        }
+    }
+
+    return needsRenaming ? EXPAND : VERBATIM;
 };
 
 /** Composite child types of `type` (type arguments + union/intersection members) to recurse into. */
@@ -736,11 +794,12 @@ const isExpandableObject = (type: Type): boolean => {
 };
 
 /**
- * Type-tree walker: returns true if any reachable symbol's declaration lives in
- * the handler's own source file but isn't exported (so it cannot be referenced
- * by name from `_generated/`). Descends type arguments, union/intersection
- * members, **and** object property types — the last so an anonymous object that
- * embeds an unreachable interface (`{ post: PostDoc }`) isn't mistaken for safe.
+ * Whether any name inside `type` needs renaming before it can go into
+ * `_generated/` — i.e. anything in it classifies as other than `verbatim`.
+ *
+ * Descends type arguments, union/intersection members, **and** object property
+ * types — the last so an anonymous object that embeds an unreachable interface
+ * (`{ post: PostDoc }`) isn't mistaken for safe.
  */
 const referencesUnreachableLocalType = (type: Type, node: Node, handlerFilePath: string, seen = new Set<Type>()): boolean => {
     if (seen.has(type)) {
@@ -749,7 +808,7 @@ const referencesUnreachableLocalType = (type: Type, node: Node, handlerFilePath:
 
     seen.add(type);
 
-    if (printsAsUnimportedName(type, node, handlerFilePath)) {
+    if (classifyType(type, node, handlerFilePath).kind !== "verbatim") {
         return true;
     }
 
@@ -764,7 +823,7 @@ const referencesUnreachableLocalType = (type: Type, node: Node, handlerFilePath:
     return type.getProperties().some((property) => {
         // The annotation first: it is the syntax the printer reuses, and the
         // resolved type below has already lost the alias by the time we see it.
-        if (property.getDeclarations().some((declaration) => annotationPrintsAsUnimportedName(declaration, node, handlerFilePath))) {
+        if (property.getDeclarations().some((declaration) => annotationRendering(declaration, node, handlerFilePath).kind !== "verbatim")) {
             return true;
         }
 
@@ -956,31 +1015,7 @@ const containsUnencodableMember = (type: Type, node: Node, depth: number, seen: 
 };
 
 /**
- * Whether `specifier` is one the emitted file cannot resolve.
- *
- * A `tsconfig` `paths` alias (`~/lib/types`, `@/types`) resolves under the
- * AUTHORING project's own config and nowhere else — not from a sibling package
- * that imports `_generated/api.ts`, and not under a dedicated strict config for
- * generated output, which is the pattern this repo itself ships
- * (`apps/playground/tsconfig.generated.json` declares no `paths`). None of
- * `emit.ts`'s three rebasers touch it, so the alias would be written out
- * verbatim and fail to resolve exactly where `relocateUserRelativeImports`
- * exists to stop that happening.
- *
- * Matched against the project's CONFIGURED patterns rather than guessed from the
- * shape of the string, because an alias can be spelled anything. Declining sends
- * the type back to structural expansion, which is what it got before qualifying
- * existed.
- */
-const isUnresolvableSpecifier = (specifier: string, node: Node): boolean =>
-    Object.keys(node.getProject().getCompilerOptions().paths ?? {}).some((pattern) => {
-        const star = pattern.indexOf("*");
-
-        return star === -1 ? specifier === pattern : specifier.startsWith(pattern.slice(0, star)) && specifier.endsWith(pattern.slice(star + 1));
-    });
-
-/**
- * Render a type the checker would print BARE as `import("<specifier>").Name<…>`.
+ * Render `qualified` as `import("<specifier>").<export><…type arguments>`.
  *
  * Only the bare NAME is unreachable from `_generated/`; the type itself is
  * perfectly nameable, and the handler's own `import` declaration says which
@@ -991,43 +1026,20 @@ const isUnresolvableSpecifier = (specifier: string, node: Node): boolean =>
  * unresolved) off the `unknown` fallback it would otherwise land on.
  *
  * Type arguments go back through `expand`, so one unreachable argument still
- * decides the outcome for the whole reference. Returns `undefined` when the
- * name is not imported into the handler's module — a type declared in that
- * module itself has no specifier to name it by, and the caller expands instead.
+ * decides the outcome for the whole reference.
  */
-const qualifiedImportText = (type: Type, node: Node, handlerFilePath: string, depth: number, seen: Set<Type>, expand: ExpandFunction): string | undefined => {
-    const aliasSymbol = type.getAliasSymbol();
-    const symbol = aliasSymbol ?? type.getSymbol();
-    const name = symbol?.getName();
-
-    // An anonymous object/function type has no name to qualify — the checker
-    // spells those out structurally already.
-    if (symbol === undefined || name === undefined || name.startsWith("__")) {
-        return undefined;
-    }
-
-    // An `enum` is deliberately NOT qualified. What crosses the wire is the
-    // member's VALUE, and an enum type is NOMINAL — a caller comparing
-    // `result.status === "done"` does not typecheck against `Status`, and a
-    // caller without the enum installed cannot name it at all. The union of wire
-    // values the branches below produce is the honest rendering.
-    if (symbol.getDeclarations().some((declaration) => Node.isEnumDeclaration(declaration) || Node.isEnumMember(declaration))) {
-        return undefined;
-    }
-
-    const handlerFile = node.getSourceFile();
-    const qualified = symbol
-        .getDeclarations()
-        .map((declaration) => importSpecifierFor(handlerFile, declaration, name))
-        .find((candidate) => candidate !== undefined);
-
-    if (qualified === undefined || isUnresolvableSpecifier(qualified.specifier, node)) {
-        return undefined;
-    }
-
+const qualifiedImportText = (
+    qualified: QualifiedImport,
+    type: Type,
+    node: Node,
+    handlerFilePath: string,
+    depth: number,
+    seen: Set<Type>,
+    expand: ExpandFunction,
+): string | undefined => {
     const rendered: string[] = [];
 
-    for (const argument of aliasSymbol ? type.getAliasTypeArguments() : type.getTypeArguments()) {
+    for (const argument of type.getAliasSymbol() === undefined ? type.getTypeArguments() : type.getAliasTypeArguments()) {
         const text = expand(argument, node, handlerFilePath, depth + 1, seen);
 
         if (text === undefined) {
@@ -1039,6 +1051,12 @@ const qualifiedImportText = (type: Type, node: Node, handlerFilePath: string, de
 
     return `import("${qualified.specifier}").${qualified.exportName}${rendered.length > 0 ? `<${rendered.join(", ")}>` : ""}`;
 };
+
+/** Whether `type` is an `enum` or one of its members — the one named type deliberately rendered by VALUE rather than by name. */
+const isEnumDeclared = (type: Type): boolean =>
+    [type.getSymbol(), type.getAliasSymbol()]
+        .flatMap((candidate) => candidate?.getDeclarations() ?? [])
+        .some((declaration) => Node.isEnumDeclaration(declaration) || Node.isEnumMember(declaration));
 
 /**
  * Structurally expand a return type that references a non-exported local type,
@@ -1054,8 +1072,13 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
         return undefined;
     }
 
-    // Reachable types already print correctly by name — leave them verbatim.
-    if (!referencesUnreachableLocalType(type, node, handlerFilePath)) {
+    const rendering = classifyType(type, node, handlerFilePath);
+
+    // Reachable types already print correctly by name — leave them verbatim. The
+    // type's OWN rendering gates the walk rather than the other way round: it is
+    // the cheap half, it is implied by the walk anyway, and checking it first
+    // means a type that already needs renaming never pays for the recursion.
+    if (rendering.kind === "verbatim" && !referencesUnreachableLocalType(type, node, handlerFilePath)) {
         return type.getText(node);
     }
 
@@ -1076,10 +1099,12 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
         return undefined;
     }
 
-    // The member's VALUE is what crosses the wire, so that is both the honest
-    // rendering and a nameable one. (`qualifiedImportText` carries its own enum
-    // guard for the union-of-members case that reaches `isUnion` below — this
-    // branch does not rely on running first.)
+    // An `enum` is the one named type rendered by VALUE rather than by name. The
+    // value is what crosses the wire, and the type is NOMINAL — a caller
+    // comparing `result.status === "done"` does not typecheck against `Status`,
+    // and a caller without the enum installed cannot name it at all. A single
+    // member answers here; a whole enum falls through to the union branch, which
+    // expands each member the same way.
     if (type.isEnumLiteral()) {
         return expandEnumLiteralType(type);
     }
@@ -1088,11 +1113,15 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
     // imports it from. Ahead of the structural branches because an alias for an
     // array or a union (`type Ids = Id<"x">[]`, `type Status = A | B`) is a
     // reference the checker prints by name, and expanding it loses the alias for
-    // no gain — or declines outright on a member it cannot reproduce.
-    const qualified = qualifiedImportText(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
+    // no gain — or declines outright on a member it cannot reproduce. Nothing but
+    // `discover-functions.test.ts`'s alias-of-array and alias-of-union cases
+    // enforces that order.
+    if (rendering.kind === "qualify" && !isEnumDeclared(type)) {
+        const qualified = qualifiedImportText(rendering.qualified, type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
 
-    if (qualified !== undefined) {
-        return qualified;
+        if (qualified !== undefined) {
+            return qualified;
+        }
     }
 
     if (type.isArray()) {
