@@ -1,3 +1,9 @@
+## @lunora/do [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.103...@lunora/do@1.0.0-alpha.104) (2026-08-27)
+
+### Performance Improvements
+
+* **do:** stop allocating a pair array per socket on every fan-out ([#499](https://github.com/anolilab/lunora/issues/499)) ([20ce0dd](https://github.com/anolilab/lunora/commit/20ce0ddb7f88967fa606688cab9de929eab27178))
+
 ## @lunora/do [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.102...@lunora/do@1.0.0-alpha.103) (2026-08-27)
 
 
