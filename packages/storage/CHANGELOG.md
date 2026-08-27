@@ -1,3 +1,9 @@
+## @lunora/storage [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.38...@lunora/storage@1.0.0-alpha.39) (2026-08-27)
+
+### Performance Improvements
+
+* **storage:** emit base64url in one pass instead of remapping base64 ([#498](https://github.com/anolilab/lunora/issues/498)) ([42fb981](https://github.com/anolilab/lunora/commit/42fb9812746805816d95ef25c19809c180c54b0c))
+
 ## @lunora/storage [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.37...@lunora/storage@1.0.0-alpha.38) (2026-08-26)
 
 ### Features
