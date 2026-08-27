@@ -1,9 +1,11 @@
-import type { ArrowFunction, CallExpression, FunctionExpression, Node as TsNode, Project } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { HttpActionGuardIR } from "../ir";
 import { collectCallRows } from "./ast";
+import type { InspectableHandler } from "./functions/inline-handler";
+import { inlineHandler } from "./functions/inline-handler";
 
 /** The `httpRoute.<verb>(...)` factory verbs — the root of a typed-REST-route builder chain. */
 const HTTP_VERBS = new Set(["delete", "get", "head", "options", "patch", "post", "put"]);
@@ -17,15 +19,8 @@ const RUN_SIDE_EFFECTS = new Set(["runAction", "runMutation"]);
 /** `ctx.db.<method>` mutating writes. (`insertManyUnsafe` bypasses per-row validation.) */
 const DB_WRITE_METHODS = new Set(["delete", "insert", "insertManyUnsafe", "patch", "replace"]);
 
-/** A function whose body we can inspect — an inline arrow or function expression handler. */
-type InspectableHandler = ArrowFunction | FunctionExpression;
-
 /** True when `node` is a plain identifier whose text is exactly `name`. */
 const isIdentifierNamed = (node: TsNode | undefined, name: string): boolean => node !== undefined && Node.isIdentifier(node) && node.getText() === name;
-
-/** The inline arrow/function-expression handler at `argument`, or `undefined` when it isn't one (a named ref, a wrapper call, absent). */
-const inlineHandler = (argument: TsNode | undefined): InspectableHandler | undefined =>
-    argument !== undefined && (Node.isArrowFunction(argument) || Node.isFunctionExpression(argument)) ? argument : undefined;
 
 /**
  * The local identifier bound to the action context (`ctx`) inside `handler`, or

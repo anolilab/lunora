@@ -5,6 +5,7 @@ import type { CallExpression, Expression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
+import { isServerSurfaceModule } from "../module-specifiers";
 
 /** Strips a trailing `.ts` extension from a relative source path. */
 const TS_EXTENSION_RE: RegExp = /\.ts$/u;
@@ -311,9 +312,15 @@ const unwrapToCallExpression = (node: Node | undefined): CallExpression | undefi
  * evidence vanished.
  *
  * The alias hop is additive — the text match still answers first, so degraded
- * type info behaves exactly as before. Like the text match it does not gate on
- * the module specifier, so an alias is trusted on the same terms a bare
- * `rls(...)` from anywhere already is.
+ * type info behaves exactly as before.
+ *
+ * The alias hop DOES gate on the module specifier, unlike the text match. These
+ * signals suppress lints as well as enable them (`usesRls` short-circuits
+ * `rls-uncovered-table` and `normalize-id-used-as-authorization`), so widening
+ * the match is not a free "find more policies" — trusting
+ * `import { rls as x } from "some-other-lib"` would silence a real finding. The
+ * text match's own false positives are pre-existing and left alone; the new hop
+ * does not add to them.
  */
 const resolvesToImportedName = (callee: Node, expectedName: string): boolean => {
     if (Node.isPropertyAccessExpression(callee)) {
@@ -329,9 +336,74 @@ const resolvesToImportedName = (callee: Node, expectedName: string): boolean => 
     }
 
     return (callee.getSymbol()?.getDeclarations() ?? []).some(
-        (declaration) => Node.isImportSpecifier(declaration) && declaration.getNameNode().getText() === expectedName,
+        (declaration) =>
+            Node.isImportSpecifier(declaration) &&
+            declaration.getNameNode().getText() === expectedName &&
+            isServerSurfaceModule(declaration.getImportDeclaration().getModuleSpecifierValue()),
     );
 };
+
+/** One `.method(...)` step of a builder chain, in terminal-to-root order. */
+interface BuilderChainStep {
+    /** The step call itself — `.use(rls(p))`, `.input({...})`, `.output(v)`. */
+    call: CallExpression;
+    /** The step's method name. */
+    name: string;
+}
+
+/**
+ * Walk a builder chain leftward from `receiver`, collecting each `.method(...)`
+ * step and the expression the chain bottoms out at.
+ *
+ * This walk was written out longhand in eight places, in three dialects that
+ * disagreed about whether to unwrap `(x)` / `x as T` and about what a
+ * non-property-access callee means — so a cast mid-chain was invisible to some
+ * callers and fatal to others, and a fix applied to one dialect left the rest
+ * drifting. One walk, one unwrapping policy, one termination policy.
+ *
+ * Steps come back TERMINAL-FIRST (the order the chain reads leftward), which is
+ * what the "last one written wins" rules downstream depend on: the first
+ * `.output()` seen is the last one authored.
+ *
+ * `root` is the non-call expression the chain ends at, or `undefined` when a
+ * step's callee was not a property access. Collapsing those two cases is safe —
+ * every caller only ever asks whether `root` is a specific identifier, and a
+ * half-walked chain never yields one.
+ */
+const walkBuilderChain = (receiver: Node): { root: Node | undefined; steps: BuilderChainStep[] } => {
+    const steps: BuilderChainStep[] = [];
+    let current: Node | undefined = unwrapExpression(receiver);
+
+    while (current && Node.isCallExpression(current)) {
+        const callee = unwrapExpression(current.getExpression());
+
+        if (!callee || !Node.isPropertyAccessExpression(callee)) {
+            return { root: undefined, steps };
+        }
+
+        steps.push({ call: current, name: callee.getName() });
+        current = unwrapExpression(callee.getExpression());
+    }
+
+    return { root: current, steps };
+};
+
+/** The `.method(...)` steps of a builder chain, terminal-first. */
+const builderChainSteps = (receiver: Node): BuilderChainStep[] => walkBuilderChain(receiver).steps;
+
+/**
+ * The first argument of every `<method>(<callee>(...))` step in the chain — the
+ * shape `.use(rls(...))` / `.use(mask(...))` take. `callee` is matched through
+ * {@link resolvesToImportedName}, so an import alias counts.
+ */
+const wrappedCallsInChain = (receiver: Node, method: string, callee: string): CallExpression[] =>
+    builderChainSteps(receiver)
+        .filter((step) => step.name === method)
+        .map((step) => step.call.getArguments()[0])
+        .filter(
+            (argument): argument is CallExpression =>
+                argument !== undefined && Node.isCallExpression(argument) && resolvesToImportedName(argument.getExpression(), callee),
+        );
 
 /** Resolve the `export default` expression, following one `const x = …; export default x` indirection. */
 const defaultExportExpression = (source: SourceFile): Expression | undefined => {
@@ -402,6 +474,7 @@ const stringPropertyFor =
     };
 
 export {
+    builderChainSteps,
     collectCallRows,
     defaultExportExpression,
     enclosingExportName,
@@ -421,4 +494,6 @@ export {
     TS_EXTENSION_RE,
     unwrapExpression,
     unwrapToCallExpression,
+    walkBuilderChain,
+    wrappedCallsInChain,
 };

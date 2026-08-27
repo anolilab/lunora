@@ -4,8 +4,8 @@ import { join } from "node:path";
 import type { CallExpression, Identifier, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { defaultExportExpression, propertyInitializer } from "../discover/ast";
 import type { FlagsIR } from "../ir";
+import { defaultExportExpression, propertyInitializer } from "./ast";
 
 /** The only file a feature-flag provider may be declared in — mirrors `lunora/queues.ts`. */
 const FLAGS_FILENAME = "flags.ts";

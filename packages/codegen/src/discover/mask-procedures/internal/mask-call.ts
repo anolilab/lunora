@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { MaskColumnMetadataIR } from "../../../ir";
-import { resolvesToImportedName, unwrapExpression } from "../../ast";
+import { resolvesToImportedName, wrappedCallsInChain } from "../../ast";
 
 /**
  * True when `node` is a `CallExpression` whose callee resolves to the name
@@ -54,36 +54,12 @@ const memberName = (member: TsNode): string | undefined => {
 };
 
 /**
- * Walk a builder chain leftward from `receiver` and collect every `mask(...)`
- * `CallExpression` carried through a `.use(mask(...))` step — the column-masking
- * twin of `discover-rls-procedures`'s `rlsCallsInChain`. Each chain step is a
- * `CallExpression` whose callee is a `PropertyAccessExpression`; a `.use(...)`
- * step whose first argument is a `mask(...)` call is what we collect.
+ * Every `mask(...)` call carried through a `.use(mask(...))` step of the builder
+ * chain rooted at `receiver`, terminal-first. Shares the chain walk with the RLS
+ * twin and with `chainUsesWrappedCall`, so all three agree on aliases and on
+ * seeing through a `(…)` / `as T` wrapper mid-chain.
  */
-const maskCallsInChain = (receiver: TsNode): CallExpression[] => {
-    const calls: CallExpression[] = [];
-    let node: TsNode | undefined = unwrapExpression(receiver);
-
-    while (node && Node.isCallExpression(node)) {
-        const chainCallee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(chainCallee)) {
-            break;
-        }
-
-        if (chainCallee.getName() === "use") {
-            const argument = node.getArguments()[0];
-
-            if (argument && isMaskCall(argument)) {
-                calls.push(argument as CallExpression);
-            }
-        }
-
-        node = unwrapExpression(chainCallee.getExpression());
-    }
-
-    return calls;
-};
+const maskCallsInChain = (receiver: TsNode): CallExpression[] => wrappedCallsInChain(receiver, "use", "mask");
 
 /**
  * The masking strategy declared for one column property. A string-literal

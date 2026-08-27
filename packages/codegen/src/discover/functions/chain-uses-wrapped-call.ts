@@ -1,38 +1,18 @@
-import { Node } from "ts-morph";
+import type { Node } from "ts-morph";
 
-import { unwrapExpression } from "../ast";
-import calleeName from "./internal/callee-name";
+import { wrappedCallsInChain } from "../ast";
 
 /**
  * True when the builder chain rooted at `receiver` carries a
- * `.<method>(<wrappedCallee>(...))` step — a `.<method>(...)` whose first argument
- * is a call to `wrappedCallee` (e.g. `.use(mask(...))` or `.use(rls(...))`).
+ * `.<method>(<wrappedCallee>(...))` step — e.g. `.use(mask(...))` or `.use(rls(...))`.
+ *
+ * Shares `wrappedCallsInChain` with `rlsCallsInChain` / `maskCallsInChain` so all
+ * three answer the same question the same way. They had drifted: those two
+ * resolved an import alias and this one compared callee text, so under
+ * `import { rls as rowLevel }` a procedure read `usesRls: true` to
+ * `discoverRlsProcedures` and `usesRls: false` to the feeders built on this.
  */
-const chainUsesWrappedCall = (receiver: Node, method: string, wrappedCallee: string): boolean => {
-    let node: Node | undefined = unwrapExpression(receiver);
-
-    while (node && Node.isCallExpression(node)) {
-        const callee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(callee)) {
-            break;
-        }
-
-        const argument = node.getArguments()[0];
-
-        if (
-            callee.getName() === method &&
-            argument !== undefined &&
-            Node.isCallExpression(argument) &&
-            calleeName(argument.getExpression()) === wrappedCallee
-        ) {
-            return true;
-        }
-
-        node = unwrapExpression(callee.getExpression());
-    }
-
-    return false;
-};
+const chainUsesWrappedCall = (receiver: Node, method: string, wrappedCallee: string): boolean =>
+    wrappedCallsInChain(receiver, method, wrappedCallee).length > 0;
 
 export default chainUsesWrappedCall;

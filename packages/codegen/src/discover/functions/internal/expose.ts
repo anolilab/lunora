@@ -3,6 +3,7 @@ import { Node } from "ts-morph";
 
 import type { ExposeCacheIR, ValidatorIR } from "../../../ir";
 import { parseObjectShape } from "../../../parse-validator";
+import { builderChainSteps } from "../../ast";
 
 /** Read a property off an object literal as a string literal, or `undefined` when absent / not statically readable. */
 const stringProperty = (literal: ObjectLiteralExpression, name: string): string | undefined => {
@@ -99,23 +100,9 @@ const exposeFromArgument = (argument: Node | undefined): { cache?: ExposeCacheIR
  * (no `@lunora/server` install).
  */
 const exposeFromBuilderChain = (receiver: Node): { cache?: ExposeCacheIR; rest?: boolean } | undefined => {
-    let current: Node = receiver;
+    const step = builderChainSteps(receiver).find((candidate) => candidate.name === "expose");
 
-    while (Node.isCallExpression(current)) {
-        const inner = current.getExpression();
-
-        if (!Node.isPropertyAccessExpression(inner)) {
-            return undefined;
-        }
-
-        if (inner.getName() === "expose") {
-            return exposeFromArgument(current.getArguments()[0]);
-        }
-
-        current = inner.getExpression();
-    }
-
-    return undefined;
+    return step ? exposeFromArgument(step.call.getArguments()[0]) : undefined;
 };
 
 /** Inspect a `query({ args, handler })` call and pull out the args validator map. */

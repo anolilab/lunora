@@ -19,11 +19,14 @@ import chainUsesWrappedCall from "../../../src/discover/functions/chain-uses-wra
  * that is `c.use(x)`.
  *
  * Each call gets its own in-memory project so nothing has to coordinate file
- * names or reset shared state between assertions.
+ * names or reset shared state between assertions. `preamble` exists so a case
+ * can declare imports: without it this helper could not express an aliased
+ * import at all, which is exactly why the drift between `chainUsesWrappedCall`
+ * and `rlsCallsInChain` went untested.
  */
-const terminalReceiver = (expression: string): Node => {
+const terminalReceiver = (expression: string, preamble = ""): Node => {
     const call = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true })
-        .createSourceFile("case.ts", `const value = ${expression};`)
+        .createSourceFile("case.ts", `${preamble}\nconst value = ${expression};`)
         .getFirstDescendantByKindOrThrow(SyntaxKind.CallExpression);
     const callee = call.getExpression();
 
@@ -48,6 +51,13 @@ describe("chainHasStep", () => {
         expect(chainHasStep(terminalReceiver("c.input(a).use(m).query(h)"), "output")).toBe(false);
     });
 
+    it("walks through the wrappers a chain can be dressed in", () => {
+        expect.assertions(2);
+
+        expect(chainHasStep(terminalReceiver("(c.output(v) as B).query(h)"), "output")).toBe(true);
+        expect(chainHasStep(terminalReceiver("((c.output(v) as B).input(a)).query(h)"), "output")).toBe(true);
+    });
+
     it("stops at a non-property-access callee instead of walking past it", () => {
         expect.assertions(1);
 
@@ -69,8 +79,8 @@ describe("chainUsesWrappedCall", () => {
     it("matches a method-call wrapper by its member name, not its receiver", () => {
         expect.assertions(1);
 
-        // `calleeName` reads a property access's member name, so `guards.rls(p)`
-        // is a `rls` call for this purpose.
+        // A property-access callee is matched on its member name, so
+        // `guards.rls(p)` is a `rls` call for this purpose.
         expect(chainUsesWrappedCall(terminalReceiver("c.use(guards.rls(p)).query(h)"), "use", "rls")).toBe(true);
     });
 
@@ -87,6 +97,30 @@ describe("chainUsesWrappedCall", () => {
 
         expect(chainUsesWrappedCall(terminalReceiver("c.use(mask(columns)).query(h)"), "use", "rls")).toBe(false);
         expect(chainUsesWrappedCall(terminalReceiver("c.input(rls(p)).query(h)"), "use", "rls")).toBe(false);
+    });
+
+    it("resolves an aliased import, agreeing with rlsCallsInChain and maskCallsInChain", () => {
+        expect.assertions(2);
+
+        // These three answer the same question about the same chain and had
+        // drifted: the other two resolved an alias and this one compared callee
+        // text, so `import { rls as rowLevel }` read as protected to
+        // `discoverRlsProcedures` and unprotected to the feeders built on this
+        // one (`normalize-id-authorization`, `raw-row-returns`). They share the
+        // walk now, so the answers cannot diverge again.
+        expect(chainUsesWrappedCall(terminalReceiver(`c.use(rowLevel(p)).query(h)`, `import { rls as rowLevel } from "@lunora/server";`), "use", "rls")).toBe(
+            true,
+        );
+
+        // No import to resolve — nothing ties the name to `rls`.
+        expect(chainUsesWrappedCall(terminalReceiver(`c.use(rowLevel(p)).query(h)`), "use", "rls")).toBe(false);
+    });
+
+    it("walks through the wrappers a chain can be dressed in", () => {
+        expect.assertions(2);
+
+        expect(chainUsesWrappedCall(terminalReceiver(`(c.use(rls(p)) as B).query(h)`), "use", "rls")).toBe(true);
+        expect(chainUsesWrappedCall(terminalReceiver(`((c.input(a) as B).use(rls(p))).query(h)`), "use", "rls")).toBe(true);
     });
 
     it("only inspects the first argument of a step", () => {

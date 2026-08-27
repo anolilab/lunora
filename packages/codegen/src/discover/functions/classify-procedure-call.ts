@@ -2,7 +2,7 @@ import type { CallExpression, Identifier } from "ts-morph";
 import { Node } from "ts-morph";
 
 import { isServerSurfaceModule } from "../../module-specifiers";
-import { unwrapExpression } from "../ast";
+import { unwrapExpression, walkBuilderChain } from "../ast";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
@@ -98,21 +98,9 @@ const resolveCalleeKind = (identifier: Identifier): string | undefined => {
  * middleware — while codegen still exited `ok`.
  */
 const builderChainRoot = (receiver: Node): Identifier | undefined => {
-    let current: Node | undefined = unwrapExpression(receiver);
+    const { root } = walkBuilderChain(receiver);
 
-    // Each builder step (`x.input({...})`, `x.use(...)`, `x.output(...)`) is a
-    // CallExpression whose callee is a PropertyAccess; descend to its receiver.
-    while (current && Node.isCallExpression(current)) {
-        const inner = unwrapExpression(current.getExpression());
-
-        if (!inner || !Node.isPropertyAccessExpression(inner)) {
-            return undefined;
-        }
-
-        current = unwrapExpression(inner.getExpression());
-    }
-
-    return current && Node.isIdentifier(current) ? current : undefined;
+    return root && Node.isIdentifier(root) ? root : undefined;
 };
 
 /**
@@ -202,19 +190,28 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
             return undefined;
         }
 
-        // Hand callers the UNWRAPPED receiver. Every chain walker built on this
+        // Callers get the UNWRAPPED receiver: every chain walker built on this
         // (`rlsCallsInChain`, `maskCallsInChain`, `chainHasStep`, …) descends
         // from a call expression, so a `(…)` / `as T` wrapper would stop them at
-        // the first hop. Unwrapping also makes the brand check below read the
-        // builder's real type rather than whatever a cast asserted.
-        const receiver = unwrapExpression(callee.getExpression()) ?? callee.getExpression();
+        // the first hop.
+        const wrapped = callee.getExpression();
+        const receiver = unwrapExpression(wrapped) ?? wrapped;
 
-        // Fast path: the runtime `__lunoraProcedure` brand on the receiver's
-        // type. Internal builders also carry `__lunoraVisibility: "internal"`,
-        // so its mere presence marks the procedure internal. This works when the
-        // project's `@lunora/server` types resolve.
-        if (receiver.getType().getProperty("__lunoraProcedure")) {
-            return { kind: method, receiver, visibility: receiver.getType().getProperty("__lunoraVisibility") ? "internal" : "public" };
+        // Fast path: the runtime `__lunoraProcedure` brand. Internal builders
+        // also carry `__lunoraVisibility: "internal"`, so its mere presence
+        // marks the procedure internal. Works when `@lunora/server` types resolve.
+        //
+        // Read the brand off the ORIGINAL node first. `as T` and `!` are exactly
+        // the operators that narrow, so the brand often lives only on the
+        // wrapped type: `(maybeBuilder as Builder)` erases to `Builder |
+        // undefined`, whose `getProperty` finds nothing because `undefined` has
+        // no members. Checking only the unwrapped node dropped those
+        // registrations from `LUNORA_FUNCTIONS` — silently, and only when the
+        // chain also failed to root at an imported factory.
+        const brandedType = [wrapped, receiver].map((node) => node.getType()).find((type) => type.getProperty("__lunoraProcedure"));
+
+        if (brandedType) {
+            return { kind: method, receiver, visibility: brandedType.getProperty("__lunoraVisibility") ? "internal" : "public" };
         }
 
         // Robust fallback: walk the builder chain (`.input()`/`.use()`/`.output()`)

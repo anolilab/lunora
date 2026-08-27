@@ -13,7 +13,7 @@ import type { Node as TsNode } from "ts-morph";
 import { Project, SyntaxKind } from "ts-morph";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { isRlsCall, rlsCallsInChain } from "../../src/discover/rls-procedures/internal-chain";
+import { isRlsCall, rlsCallsInChain } from "../../src/discover/rls-procedures/internal/chain";
 
 let project: Project;
 
@@ -90,6 +90,16 @@ describe("rls internal chain", () => {
             // Without an import there is nothing tying the name to `rls`.
             expect(isRlsCall(expressionOf(`rowLevel(policies)`, ``))).toBe(false);
         });
+    });
+
+    it("does not trust an alias imported from outside the Lunora surface", () => {
+        expect.assertions(1);
+
+        // `usesRls` SUPPRESSES `rls-uncovered-table` and
+        // `normalize-id-used-as-authorization`, so widening the match is not a
+        // free "find more policies" — an unrelated library's `rls` would
+        // silence a real finding.
+        expect(isRlsCall(expressionOf(`rowLevel(policies)`, `import { rls as rowLevel } from "some-other-lib";`))).toBe(false);
     });
 
     describe("rlsCallsInChain", () => {

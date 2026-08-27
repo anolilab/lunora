@@ -6,12 +6,12 @@
  * the studio's read-only access-rules view lists. The `when` predicate is never
  * read — it's an opaque closure whose logic belongs in code, not the UI.
  */
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { StorageRuleIR, StorageRulesMetadataIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath, stringPropertyOf } from "./ast";
-import { classifyProcedureCall } from "./functions/classify-procedure-call";
+import exportedProcedureChains from "./functions/exported-procedure-chains";
 
 /** The operations `defineStorageRule({ on })` accepts; anything else is ignored as malformed. */
 const STORAGE_OPERATIONS = new Set<StorageRuleIR["on"]>(["delete", "list", "read", "write"]);
@@ -89,28 +89,6 @@ const extractRules = (call: CallExpression, file: string, procedure: string): St
     }
 
     return rules;
-};
-
-/** The exported variable declarations in `sourceFile` whose initializer is a procedure builder chain with a receiver. */
-const exportedProcedureChains = (sourceFile: SourceFile): { name: string; receiver: TsNode }[] => {
-    const chains: { name: string; receiver: TsNode }[] = [];
-
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
-
-        for (const declaration of statement.getDeclarations()) {
-            const initializer = declaration.getInitializer();
-            const classified = initializer && Node.isCallExpression(initializer) ? classifyProcedureCall(initializer) : undefined;
-
-            if (classified?.receiver) {
-                chains.push({ name: declaration.getName(), receiver: classified.receiver });
-            }
-        }
-    }
-
-    return chains;
 };
 
 /**

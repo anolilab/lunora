@@ -3,6 +3,7 @@ import { Node } from "ts-morph";
 
 import type { ValidatorIR } from "../../../ir";
 import { parseObjectShape, parseValidator } from "../../../parse-validator";
+import { builderChainSteps } from "../../ast";
 import unwrapHandlerReturn from "../unwrap-handler-return";
 
 /**
@@ -55,24 +56,17 @@ const returnTypeFromBuilderCall = (call: CallExpression): string => {
  */
 const argsFromBuilderChain = (receiver: Node): Record<string, ValidatorIR> => {
     let merged: Record<string, ValidatorIR> = {};
-    let node: Node = receiver;
 
-    while (Node.isCallExpression(node)) {
-        const chainCallee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(chainCallee)) {
-            break;
+    for (const step of builderChainSteps(receiver)) {
+        if (step.name !== "input") {
+            continue;
         }
 
-        if (chainCallee.getName() === "input") {
-            const argument = node.getArguments()[0];
+        const argument = step.call.getArguments()[0];
 
-            if (argument && Node.isObjectLiteralExpression(argument)) {
-                merged = { ...parseObjectShape(argument), ...merged };
-            }
+        if (argument && Node.isObjectLiteralExpression(argument)) {
+            merged = { ...parseObjectShape(argument), ...merged };
         }
-
-        node = chainCallee.getExpression();
     }
 
     return merged;
@@ -86,25 +80,15 @@ const argsFromBuilderChain = (receiver: Node): Record<string, ValidatorIR> => {
  * that wins at runtime (each `.output()` replaces the previous).
  */
 const outputFromBuilderChain = (receiver: Node): ValidatorIR | undefined => {
-    let node: Node = receiver;
+    const step = builderChainSteps(receiver).find((candidate) => candidate.name === "output");
 
-    while (Node.isCallExpression(node)) {
-        const chainCallee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(chainCallee)) {
-            return undefined;
-        }
-
-        if (chainCallee.getName() === "output") {
-            const argument = node.getArguments()[0];
-
-            return argument && Node.isExpression(argument) ? parseValidator(argument) : undefined;
-        }
-
-        node = chainCallee.getExpression();
+    if (!step) {
+        return undefined;
     }
 
-    return undefined;
+    const argument = step.call.getArguments()[0];
+
+    return argument && Node.isExpression(argument) ? parseValidator(argument) : undefined;
 };
 
 export { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall, returnTypeFromCall };

@@ -276,24 +276,30 @@ describe("containsUnencodableMember", () => {
         expect(unencodable(`interface Tree { child: Tree; go: () => void }\ndeclare const subject: Tree;`)).toBe(true);
     });
 
-    it("refuses past the depth ceiling rather than clearing what it did not examine", () => {
-        expect.assertions(2);
+    it("finds a class however deeply it is nested", () => {
+        expect.assertions(3);
 
-        // The bail used to answer "encodable", so a class nested deeper than the
-        // ceiling was never reported and reached `api.ts` verbatim — publishing
-        // its methods to clients for a value `encodeWire` throws on. It now
-        // refuses, collapsing the type to `unknown`, which is what the ceiling
-        // already did on the expansion path.
+        // This walk used to stop at `MAX_EXPANSION_DEPTH` and answer "encodable"
+        // for whatever it had not looked at, so a class below that depth reached
+        // `api.ts` verbatim and published its methods to clients for a value
+        // `encodeWire` throws on.
         expect(unencodable(`declare const subject: import("./deep").L0;`, nestedModule(8, "Money"))).toBe(true);
         expect(unencodable(`declare const subject: import("./deep").L0;`, nestedModule(9, "Money"))).toBe(true);
+        expect(unencodable(`declare const subject: import("./deep").L0;`, nestedModule(14, "Money"))).toBe(true);
     });
 
-    it("still clears a plain type nested right up to the ceiling", () => {
-        expect.assertions(1);
+    it("does not refuse ordinary deep types", () => {
+        expect.assertions(3);
 
-        // The refusal must be the ceiling doing its job, not everything deep
-        // reading as unencodable — otherwise the test above passes for the
-        // wrong reason.
+        // Refusing at `MAX_EXPANSION_DEPTH` was far more aggressive than it
+        // looked: the walk spends two units per nesting level (one for the
+        // property, one for the `T | undefined` union or the array element), so
+        // the real budget was four. A five-level optional settings blob came
+        // back `unknown`, with no diagnostic — the same silent failure this
+        // check exists to prevent. The ceiling is now stack insurance only;
+        // `seen` is what terminates recursion.
         expect(unencodable(`declare const subject: import("./deep").L0;`, nestedModule(8, "string"))).toBe(false);
+        expect(unencodable(`declare const subject: import("./deep").L0;`, nestedModule(14, "string"))).toBe(false);
+        expect(unencodable(`declare const subject: { v?: { v?: { v?: { v?: { v?: string } } } } };`)).toBe(false);
     });
 });

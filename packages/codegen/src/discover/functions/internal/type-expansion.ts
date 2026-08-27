@@ -96,6 +96,14 @@ const isOptionalProperty = (property: TsSymbol, propertyType: Type): boolean => 
     return propertyType.isUnion() && propertyType.getUnionTypes().some((member) => member.isUndefined());
 };
 
+/**
+ * Stack-insurance ceiling for the encodability walk. Cycles are terminated by
+ * the `seen` set, not by this, so it only has to sit above any hand-written
+ * type — and far enough above that the walk's two-units-per-nesting-level cost
+ * never reaches it for real code. See `containsUnencodableMember`.
+ */
+const ENCODABILITY_WALK_LIMIT = 32;
+
 /** Depth ceiling so a pathological nested type can't blow the stack — beyond it we bail to `unknown`. */
 const MAX_EXPANSION_DEPTH = 8;
 
@@ -224,14 +232,22 @@ const containsUnencodableMember = (type: Type, node: Node, depth: number, seen: 
         return false;
     }
 
-    // Out of depth, though, is a refusal. This is a "can it round-trip?" check,
-    // so an unexamined subtree has to count against the type: answering
-    // "encodable" cleared everything below the ceiling, and a class nested
-    // deeper than it reached `api.ts` verbatim — publishing its methods to
-    // clients for a value `encodeWire` then throws on. Refusing collapses the
-    // type to `unknown` instead, which is what the ceiling already does on the
-    // expansion path and what this constant's docblock always claimed.
-    if (depth > MAX_EXPANSION_DEPTH) {
+    // Out of depth is a refusal. This is a "can it round-trip?" check, so an
+    // unexamined subtree has to count against the type: answering "encodable"
+    // cleared everything below the ceiling, and a class nested deeper than it
+    // reached `api.ts` verbatim — publishing its methods to clients for a value
+    // `encodeWire` then throws on.
+    //
+    // Deliberately NOT `MAX_EXPANSION_DEPTH`. That ceiling bounds how much TEXT
+    // the expansion path emits, so 8 is generous there. Here it bounded a walk
+    // that spends two units per nesting level — one for the property, one for
+    // the `T | undefined` union or the array element — which put the real budget
+    // at four. Refusing at that depth erased ordinary return types: a five-level
+    // optional settings blob came back `unknown`, with no diagnostic, which is
+    // the same silent failure this check exists to prevent. `seen` is what
+    // terminates recursive types; this is only stack insurance, so it is set
+    // where no hand-written type reaches it.
+    if (depth > ENCODABILITY_WALK_LIMIT) {
         return true;
     }
 

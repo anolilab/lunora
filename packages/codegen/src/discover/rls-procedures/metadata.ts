@@ -4,7 +4,7 @@ import { Node } from "ts-morph";
 import type { RlsMetadataIR, RlsPolicyIR, RlsRoleIR } from "../../ir";
 import { listLunoraSourceFiles, lunoraRelativePath, stringPropertyOf } from "../ast";
 import exportedProcedureChains from "../functions/exported-procedure-chains";
-import { rlsCallsInChain } from "./internal-chain";
+import { rlsCallsInChain } from "./internal/chain";
 
 /** The operations `definePolicy({ on })` accepts; anything else is ignored as malformed. */
 const POLICY_OPERATIONS = new Set<RlsPolicyIR["on"]>(["delete", "insert", "read", "update"]);

@@ -133,6 +133,21 @@ describe("classifyProcedureCall", () => {
         expect(classify(`export const list = ((query.input(a) as Builder).use(rls(p))).query(async () => []);`)?.kind).toBe("query");
     });
 
+    it("reads the brand off the wrapper when only the wrapper carries it", () => {
+        expect.assertions(3);
+
+        // `as T` and `!` are exactly the operators that NARROW, so the brand
+        // often lives only on the wrapped type: unwrapping `(maybeBuilder as
+        // Builder)` erases to `Builder | undefined`, whose `getProperty` finds
+        // nothing because `undefined` has no members. Checking only the
+        // unwrapped node dropped these registrations from `LUNORA_FUNCTIONS`.
+        const builder = `interface B { __lunoraProcedure: true; query(h: unknown): unknown; }`;
+
+        expect(classify(`${builder}\ndeclare const mb: B | undefined;\nexport const list = mb!.query(h);`, ``)?.kind).toBe("query");
+        expect(classify(`${builder}\ndeclare const mb: B | null;\nexport const list = (mb as B).query(h);`, ``)?.kind).toBe("query");
+        expect(classify(`${builder}\ndeclare const u: unknown;\nexport const list = (u as B).query(h);`, ``)?.kind).toBe("query");
+    });
+
     it("hands back an unwrapped receiver so chain walkers can descend it", () => {
         expect.assertions(1);
 
