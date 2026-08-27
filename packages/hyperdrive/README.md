@@ -146,7 +146,7 @@ Three things to know before you build on it:
 
 - **It polls; it is not logical replication.** Freshness is the refresh cadence: every alarm tick by default, `refresh: { everyMs }` to throttle, `refresh: "manual"` to drive it yourself. Writes from other systems land on the next pull.
 - **`tenantBy` is the isolation boundary.** `defineSchema` throws at load if a sourced `.shardBy()` table omits it, and the `external_source_unscoped` advisor lint catches it at build time. Without it, one tenant's DO pulls every tenant's rows.
-- **`mode: "full-pull"` (the default) diffs the whole slice each tick**, so upstream deletes are detected for free, at a bench ceiling around 10k rows. Past that, `mode: "incremental"` pulls only rows past a durable watermark via a cursor column, and needs a periodic reconcile to see deletes.
+- **`mode: "full-pull"` (the default) diffs the whole slice each tick**, so upstream deletes are detected for free, at a bench ceiling around 10k rows. Past that, `mode: "incremental"` pulls only rows past a durable watermark via a cursor column. An incremental slice cannot see a delete on its own — an absent row means "unchanged", not "deleted" — so it **requires** a delete-visibility path: either `reconcileEveryMs` (a periodic full-pull sweep) or `softDeleteColumn` (an upstream tombstone column the cursor query returns, so do not filter it out). `defineSchema` throws and the `external_source_incremental_no_delete_path` lint fails the build if an incremental source declares neither.
 
 `.source()` cannot be combined with `.global()` — they are contradictory tiers, and `defineSchema` rejects it.
 
