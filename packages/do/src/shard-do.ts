@@ -1388,7 +1388,9 @@ abstract class ShardDO {
         enabled: () => this.cdcEnabled(),
         env: () => this.env,
         epoch: () => this.currentCdcEpoch(),
-        recordError: (scope, error) => { this.recordShapeError(scope, error); },
+        recordError: (scope, error) => {
+            this.recordShapeError(scope, error);
+        },
         retentionFloor: (sql) => this.retentionFloor(sql),
         shardKey: () => this.currentShardKey(),
         sql: () => this.sql as SqlExec,
