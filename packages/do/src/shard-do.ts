@@ -3114,14 +3114,19 @@ abstract class ShardDO {
      * rebuilt, so the floor and remediation a connector sees are identical
      * whether or not a bucket is configured.
      *
-     * Deliberately layered around the sync method rather than folded into it.
-     * `runShardCdcSync` is also the replica link's `readChanges`, which is sync
-     * all the way up through `servePull` — and that path gates on the floor
-     * BEFORE it reads, so it would never reach a fallback anyway. Making the
-     * shared method async to serve a caller that cannot use the result would
-     * have rippled two packages' signatures for nothing. Replica bootstrap
-     * therefore still re-seeds across a trimmed range; that is a follow-up, not
-     * an oversight.
+     * Deliberately layered around the sync method rather than folded into it,
+     * and the reason is latency, not signatures. `runShardCdcSync` is also the
+     * replica link's `readChanges`; that path is sync only as far as
+     * `servePull`, whose own caller is already async, so threading a promise
+     * through it would cost one `await` in one function. What it would also cost
+     * is an R2 round trip on the replica pull path, which runs per follower per
+     * poll — and `servePull` gates on the floor before it reads, so it would
+     * have to be restructured to reach the fallback at all rather than merely
+     * awaited.
+     *
+     * The consequence is real and not merely theoretical: a follower below the
+     * floor still pays a full bootstrap where a connector no longer does. It is
+     * tracked as a follow-up, not absorbed silently here.
      */
     protected async cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{ changes: CdcChange[]; cursor: number }> {
         try {
@@ -3142,7 +3147,11 @@ abstract class ShardDO {
                 throw error;
             }
 
-            const archived = await readArchivedCdcChanges(bucket, { epoch, shard: this.currentShardKey() }, args.sinceSeq, args.limit ?? 1000);
+            // `limit` is left to `readArchivedCdcChanges` to default and clamp,
+            // rather than repeated from `readCdcChanges` here — the live and
+            // archived halves of one page have to agree on it, and a literal
+            // copied across a package boundary is how they stop agreeing.
+            const archived = await readArchivedCdcChanges(bucket, { epoch, shard: this.currentShardKey() }, args.sinceSeq, args.limit);
 
             if (archived === undefined) {
                 throw error;
@@ -9842,7 +9851,15 @@ abstract class ShardDO {
             // steps.
             const task = (async () => {
                 try {
-                    await archiveCdcSegment(bucket, { epoch: this.currentCdcEpoch() ?? "", shard: this.currentShardKey() }, batch);
+                    // Non-`undefined` because this sweep already returned for a
+                    // shard without CDC, and `readCdcEpoch` mints an epoch
+                    // rather than reporting none. A `?? ""` fallback here would
+                    // be worse than the assertion: it writes segments under an
+                    // epoch the read path refuses, so they would cost storage
+                    // forever and answer nothing.
+                    const epoch = this.currentCdcEpoch() as string;
+
+                    await archiveCdcSegment(bucket, { epoch, shard: this.currentShardKey() }, batch);
 
                     this.applyCdcRetention(sql, payloadWindow, keepRows, archivedThrough, batch.length);
                 } catch (error) {
@@ -9875,6 +9892,11 @@ abstract class ShardDO {
      * computes its own before an `await` and a subscriber can advance or arrive
      * across that gap; a floor that is stale-high deletes a range a live
      * subscription still has to be told about.
+     *
+     * The caller's own pre-await floor is NOT corrected by this, and does not
+     * need to be: it only ever narrows what gets ARCHIVED, and archiving too
+     * little is a cost (the rows are archived next sweep instead) rather than a
+     * correctness failure. Only the destructive side needs the fresh reading.
      */
     private applyCdcRetention(sql: SqlExec, payloadWindow: number | undefined, keepRows: number | undefined, maxSeq: number, maxRows: number): void {
         const floor = this.retentionFloor(sql);

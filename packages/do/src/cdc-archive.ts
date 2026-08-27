@@ -37,8 +37,30 @@ const CDC_ARCHIVE_BINDING = "LUNORA_CDC_ARCHIVE";
  */
 const SEQ_KEY_WIDTH = 16;
 
-/** How many segments one read-back may fetch before giving up and letting the caller re-seed. */
+/**
+ * How many segments one read-back may fetch before giving up and letting the
+ * caller re-seed.
+ *
+ * This is the knob that decides HOW FAR BEHIND a consumer can be and still be
+ * served, because a read must reach the consumer's cursor within one listing or
+ * it refuses. At one segment per sweep and a 60s sweep interval, 32 covers
+ * roughly half an hour of continuous trimming — comfortably past a deploy, a
+ * restart, or a brief connector outage, which are the lags this exists for.
+ * A consumer further behind than that pays the re-seed it would have paid
+ * anyway; raising this trades isolate memory for a longer recoverable window.
+ */
 const MAX_SEGMENTS_PER_READ = 32;
+
+/**
+ * Ceiling on the changes one archive page may return, mirroring the `[1, 10000]`
+ * clamp `readCdcChanges` applies to the live path so both answer a caller's
+ * `limit` the same way. Without it the archive page is bounded only by
+ * {@link MAX_SEGMENTS_PER_READ} × {@link CdcSegment} size.
+ */
+const MAX_ARCHIVE_PAGE_ROWS = 10_000;
+
+/** Page size when the caller names none — the same default `readCdcChanges` applies on the live path. */
+const DEFAULT_ARCHIVE_PAGE_ROWS = 1000;
 
 /** One archived run of changelog entries, exactly as it is stored. */
 interface CdcSegment {
@@ -107,8 +129,19 @@ const cdcArchiveBucket = (environment: unknown): R2BucketLike | undefined => {
  * lives at the call site (`ShardDO.sweepCdcRetention`) because only the caller
  * knows what it is about to destroy.
  *
- * Overwriting an existing key is fine and expected: a sweep that archived a
- * range and then failed to trim it re-archives the identical range next cycle.
+ * Segments are NOT guaranteed disjoint. A sweep archives the oldest live rows
+ * and then trims them, but the trim is clamped by the retention floor, so rows
+ * that were archived can survive in the live log and be archived again — under a
+ * different key, since keys are derived from the range's last `seq`. The
+ * read-back owns that: it de-overlaps against its running cursor rather than
+ * trusting each segment's bounds. Do not "fix" it here by trying to make the
+ * writer produce disjoint ranges; the floor moves for reasons this call site
+ * cannot see.
+ *
+ * Nothing here ever deletes a segment. The archive grows without bound by
+ * design — an operator who wants it bounded sets an R2 lifecycle rule on the
+ * bucket, and the read-back degrades correctly (a refusal, never a gap) when an
+ * expired segment leaves a hole.
  */
 const archiveCdcSegment = async (bucket: R2BucketLike, scope: CdcArchiveScope, changes: CdcChange[]): Promise<void> => {
     const from = changes[0]?.seq;
@@ -143,20 +176,29 @@ const parseSegment = (raw: string): CdcSegment | undefined => {
 };
 
 /**
- * The changes in one segment that a consumer at `sinceSeq` has not seen, or
+ * The changes in one segment that sit strictly above `servedThrough`, or
  * `undefined` when the segment cannot be served at all.
  *
- * The refusal is for a row that was payload-compacted before it was archived: it
- * stores an insert/update with no post-image, which is exactly the corruption
- * `CDC_PAYLOAD_COMPACTED` exists to prevent on the live path. Going through
- * object storage makes it no less corrupting, so the same test is applied here
- * rather than trusted to have been applied upstream.
+ * `servedThrough` is the RUNNING cursor — the last seq already collected on this
+ * read — not the cursor the consumer asked from. Segments are not guaranteed
+ * disjoint (see {@link readArchivedCdcChanges}), so filtering against the
+ * request's cursor would re-emit rows an earlier segment in the same page had
+ * already supplied, with `seq` running backwards mid-page. For a change-feed
+ * consumer applying ops in order that is a corrupted stream, not a redundant
+ * one: a delete followed by a re-insert, replayed backwards, inverts the final
+ * state of the row.
+ *
+ * The other refusal is for a row that was payload-compacted before it was
+ * archived: it stores an insert/update with no post-image, which is exactly the
+ * corruption `CDC_PAYLOAD_COMPACTED` exists to prevent on the live path. Going
+ * through object storage makes it no less corrupting, so the same test is
+ * applied here rather than trusted to have been applied upstream.
  */
-const serveableChanges = (segment: CdcSegment, sinceSeq: number): CdcChange[] | undefined => {
+const serveableChanges = (segment: CdcSegment, servedThrough: number): CdcChange[] | undefined => {
     const changes: CdcChange[] = [];
 
     for (const change of segment.changes) {
-        if (change.seq <= sinceSeq) {
+        if (change.seq <= servedThrough) {
             continue;
         }
 
@@ -193,14 +235,29 @@ const fetchSegment = async (bucket: R2BucketLike, key: string): Promise<CdcSegme
  * Contiguity is checked rather than assumed, because "the archive returned rows"
  * and "the archive returned the rows this consumer missed" are different claims
  * and only the second one is safe to act on.
+ *
+ * Segments may OVERLAP, and this is the function that has to cope with it. The
+ * sweep archives the oldest live rows and then trims them, but the trim is
+ * clamped by the retention floor — so a subscriber lagging inside the archived
+ * range leaves already-archived rows in the live log, and the next sweep's
+ * segment starts inside the previous one. This loop therefore treats the
+ * running cursor, not each segment's own bounds, as the truth about what has
+ * been served.
  */
 const readArchivedCdcChanges = async (
     bucket: R2BucketLike,
     scope: CdcArchiveScope,
     sinceSeq: number,
-    limit: number,
+    limit: number | undefined,
 ): Promise<{ changes: CdcChange[]; cursor: number } | undefined> => {
     const prefix = scopePrefix(scope);
+
+    // Clamped like `readCdcChanges` clamps the live path, and for a sharper
+    // reason: nothing downstream bounds this. A caller-supplied `limit` is
+    // honoured by collecting whole segments until it is reached, so an
+    // unclamped one would materialize up to `MAX_SEGMENTS_PER_READ`
+    // segments' worth of post-images into the isolate to answer one request.
+    const pageLimit = Math.max(1, Math.min(limit ?? DEFAULT_ARCHIVE_PAGE_ROWS, MAX_ARCHIVE_PAGE_ROWS));
 
     const listing = await bucket.list({ limit: MAX_SEGMENTS_PER_READ, prefix, startAfter: `${prefix}${padSeq(sinceSeq)}.json` });
 
@@ -223,16 +280,24 @@ const readArchivedCdcChanges = async (
             break;
         }
 
-        const serveable = serveableChanges(segment, sinceSeq);
+        // `expectedFrom - 1` is the running cursor: everything strictly below it
+        // is already in `changes`. Passing `sinceSeq` here instead is what lets
+        // an overlapping segment re-emit rows out of order.
+        const serveable = serveableChanges(segment, expectedFrom - 1);
 
         if (serveable === undefined) {
             return undefined;
         }
 
         changes.push(...serveable);
-        expectedFrom = segment.to + 1;
 
-        if (changes.length >= limit) {
+        // `Math.max`, because a segment can be wholly CONTAINED in one already
+        // read — it sorts first by its own `to` but adds nothing — and letting
+        // the cursor move backwards there would re-admit its rows on the next
+        // iteration.
+        expectedFrom = Math.max(expectedFrom, segment.to + 1);
+
+        if (changes.length >= pageLimit) {
             break;
         }
     }
@@ -243,7 +308,7 @@ const readArchivedCdcChanges = async (
         return undefined;
     }
 
-    const served = changes.slice(0, limit);
+    const served = changes.slice(0, pageLimit);
 
     return { changes: served, cursor: served.at(-1)?.seq ?? sinceSeq };
 };

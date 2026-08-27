@@ -68,6 +68,68 @@ describe("cdc archive", () => {
         expect(page?.changes.map((entry) => entry.seq)).toStrictEqual([9, 10]);
     });
 
+    it("de-overlaps segments whose ranges intersect", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+
+        // Reachable state, not a contrived one: sweep 1 archives 1..5 but its
+        // trim is clamped by the retention floor at 3, so 4 and 5 stay in the
+        // live log and sweep 2 archives 4..8 on top of them.
+        await archiveCdcSegment(bucket, scope, [change(1), change(2), change(3), change(4), change(5)]);
+        await archiveCdcSegment(bucket, scope, [change(4), change(5), change(6), change(7), change(8)]);
+
+        const page = await readArchivedCdcChanges(bucket, scope, 0, 100);
+
+        // 4 and 5 exactly once, and `seq` never goes backwards. Serving the
+        // segments verbatim would emit 1,2,3,4,5,4,5,6,7,8 — for a consumer
+        // applying ops in order, a delete replayed after the re-insert that
+        // followed it inverts the row's final state.
+        expect(page?.changes.map((entry) => entry.seq)).toStrictEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+        expect(page?.cursor).toBe(8);
+    });
+
+    it("ignores a segment wholly contained in one already served", async () => {
+        expect.assertions(1);
+
+        const bucket = fakeBucket();
+
+        await archiveCdcSegment(bucket, scope, [change(3), change(4)]);
+        await archiveCdcSegment(bucket, scope, [change(1), change(2), change(3), change(4), change(5)]);
+
+        // The 3..4 segment sorts FIRST (keys are the range's last seq), so the
+        // wider segment is read second and must not rewind the cursor.
+        const page = await readArchivedCdcChanges(bucket, scope, 2, 100);
+
+        expect(page?.changes.map((entry) => entry.seq)).toStrictEqual([3, 4, 5]);
+    });
+
+    it("clamps a caller-supplied limit instead of materializing every segment", async () => {
+        expect.assertions(1);
+
+        const bucket = fakeBucket();
+
+        // Two segments totalling 12,000 changes, so the 10,000 ceiling is the
+        // only thing that can bound the page — with fewer rows than the clamp
+        // this test would pass whether or not the clamp existed.
+        await archiveCdcSegment(
+            bucket,
+            scope,
+            Array.from({ length: 6000 }, (_, index) => change(index + 1)),
+        );
+        await archiveCdcSegment(
+            bucket,
+            scope,
+            Array.from({ length: 6000 }, (_, index) => change(index + 6001)),
+        );
+
+        // An admin RPC passes `limit` straight through unvalidated, so the page
+        // ceiling has to hold here rather than upstream.
+        const page = await readArchivedCdcChanges(bucket, scope, 0, Number.MAX_SAFE_INTEGER);
+
+        expect(page?.changes).toHaveLength(10_000);
+    });
+
     it("refuses a range the archive never covered", async () => {
         expect.assertions(1);
 
@@ -148,6 +210,8 @@ describe("cdc archive", () => {
         expect(cdcArchiveBucket(undefined)).toBeUndefined();
         expect(cdcArchiveBucket({})).toBeUndefined();
         expect(cdcArchiveBucket({ LUNORA_CDC_ARCHIVE: "not-a-bucket" })).toBeUndefined();
-        expect(cdcArchiveBucket({ LUNORA_CDC_ARCHIVE: fakeBucket() })).toBeDefined();
+        // A binding shaped like R2 but missing one of the three methods used is
+        // still off — half a bucket would fail mid-sweep, after the trim decision.
+        expect(cdcArchiveBucket({ LUNORA_CDC_ARCHIVE: { get: () => undefined, put: () => undefined } })).toBeUndefined();
     });
 });

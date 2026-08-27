@@ -98,11 +98,6 @@ class ProbeCountingShard extends ShardDO {
         return this.runShardCdcSync({ sinceSeq });
     }
 
-    /** Attach an archive bucket after construction, so a test can trim without one and then turn it on. */
-    public bindArchive(bucket: unknown): void {
-        this.env = { ...(this.env as Record<string, unknown>), LUNORA_CDC_ARCHIVE: bucket };
-    }
-
     /** The same page as {@link ProbeCountingShard.syncCdc}, but through the admin dispatch's archive-backed path. */
     public syncCdcArchived(sinceSeq: number): Promise<{ changes: CdcChange[]; cursor: number }> {
         return this.cdcSyncPage({ sinceSeq });
@@ -555,10 +550,7 @@ describe("delta-sync read path", () => {
          * off the write path — a test that did not await it would assert against
          * a log the sweep had not finished touching.
          */
-        const sweepWithArchive = async (
-            environment: Record<string, unknown>,
-            rows: number,
-        ): Promise<{ pending: Promise<unknown>[]; shard: ProbeCountingShard }> => {
+        const sweepWithArchive = async (environment: Record<string, unknown>, rows: number): Promise<ProbeCountingShard> => {
             const pending: Promise<unknown>[] = [];
             const sockets: FakeWebSocket[] = [];
             const state: ShardDOState = {
@@ -577,14 +569,14 @@ describe("delta-sync read path", () => {
             await shard.fetch(write("messages:send", { _id: "trigger", channelId: "c1" }));
             await Promise.all(pending);
 
-            return { pending, shard };
+            return shard;
         };
 
         it("serves a trimmed range from the archive instead of demanding a re-seed", async () => {
             expect.assertions(3);
 
             const bucket = createFakeR2Bucket();
-            const { shard } = await sweepWithArchive({ LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_LOG_RETENTION: "5" }, 20);
+            const shard = await sweepWithArchive({ LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_LOG_RETENTION: "5" }, 20);
 
             // The rows really did leave SQLite — this is not a sweep that quietly
             // did nothing because a bucket was configured.
@@ -640,9 +632,14 @@ describe("delta-sync read path", () => {
             // one. The fallback must re-throw the original refusal rather than
             // treat an empty archive as an empty page, which would advance the
             // consumer's cursor past changes nobody has.
-            const { shard } = await sweepWithArchive({ LUNORA_CDC_LOG_RETENTION: "5" }, 20);
+            //
+            // The env object is held by reference and read on every sweep and
+            // every page, so turning the archive on later is a plain mutation of
+            // what was passed in — no test-only setter on the production class.
+            const environment: Record<string, unknown> = { LUNORA_CDC_LOG_RETENTION: "5" };
+            const shard = await sweepWithArchive(environment, 20);
 
-            shard.bindArchive(createFakeR2Bucket());
+            environment["LUNORA_CDC_ARCHIVE"] = createFakeR2Bucket();
 
             await expect(shard.syncCdcArchived(0)).rejects.toThrow(/trimmed/u);
         });
