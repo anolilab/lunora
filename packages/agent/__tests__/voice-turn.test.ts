@@ -65,6 +65,70 @@ describe("voice naming", () => {
     });
 });
 
+describe("sentence chunking", () => {
+    /** Run one turn through the real chunker, returning what TTS was asked to speak. */
+    const spokenFor = async (deltas: string[]): Promise<string[]> => {
+        const store = createThreadStore();
+        const spoken: string[] = [];
+
+        await runVoiceTurn({
+            agent,
+            connectionId: "c1",
+            env,
+            exportName: "support",
+            paths,
+            run: store.run,
+            send: () => {},
+            sendAudio: () => {},
+            signal: new AbortController().signal,
+            streamGenerate: scriptedStream(deltas),
+            synthesize: async (text) => {
+                spoken.push(text);
+
+                return new Uint8Array([1]);
+            },
+            text: "hello",
+            threadKey: "t1",
+            transcribe: async () => "",
+            turn: 0,
+        });
+
+        return spoken;
+    };
+
+    it("keeps the text before a period that is not followed by whitespace", async () => {
+        expect.assertions(1);
+
+        // The chunker sliced by the match's LENGTH while the match could begin past
+        // offset 0. Any `.` not followed by whitespace — a version, a decimal, a
+        // filename, an `e.g.` — pushed the match right, so the text before it was
+        // dropped and the tail was spoken twice: this came out as
+        // ["2 here.", "here.", "Next one."].
+        const spoken = await spokenFor(["See v1.2 here. Next one. "]);
+
+        expect(spoken).toStrictEqual(["See v1.2 here.", "Next one."]);
+    });
+
+    it("does not stall the turn on a reply with no sentence terminator", async () => {
+        expect.assertions(2);
+
+        // The chunker runs on the whole accumulated buffer once per delta, so a
+        // quadratic scan made the turn cubic. A code block, a URL list or a table —
+        // ordinary model output — carries no `.` followed by whitespace for a long
+        // stretch: a 20k-character reply measured 156 SECONDS of CPU in the DO.
+        const deltas = Array.from<string>({ length: 1600 }).fill("const x = 1; ");
+        const started = Date.now();
+
+        const spoken = await spokenFor(deltas);
+        const elapsedMs = Date.now() - started;
+
+        // No terminator, so nothing chunks mid-stream; the whole reply is flushed
+        // once at end of turn. Nothing is lost — it just must not take minutes.
+        expect(spoken).toHaveLength(1);
+        expect(elapsedMs).toBeLessThan(2000);
+    });
+});
+
 describe(runVoiceTurn, () => {
     it("transcribes, persists both turns, and streams sentence-chunked TTS", async () => {
         const store = createThreadStore();
