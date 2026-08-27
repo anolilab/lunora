@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.88...@lunora/server@1.0.0-alpha.89) (2026-08-27)
+
+### Bug Fixes
+
+* **agent,server:** bound two regex scans that go quadratic on hostile input ([#502](https://github.com/anolilab/lunora/issues/502)) ([02ecb37](https://github.com/anolilab/lunora/commit/02ecb371dfd89dea930f6825990a38e267d7a5bb))
+
 ## @lunora/server [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.87...@lunora/server@1.0.0-alpha.88) (2026-08-27)
 
 
