@@ -306,6 +306,23 @@ describe("lunora dev", () => {
             expect(plan.remote.enabled).toBe(true);
         });
 
+        it("forwards --no-codegen to the vite child as LUNORA_CODEGEN=0", () => {
+            expect.assertions(3);
+
+            // On this flavor `@lunora/vite` owns the codegen watch, inside a child
+            // process that re-parses its own argv — so `codegenEnabled: false`
+            // alone left the flag inert and `_generated/**` kept being rewritten
+            // on every save.
+            const plan = planDevCommand({ codegen: false, cwd: workdir, flavor: "vite", logger: silentLogger() });
+
+            expect(plan.wrangler.env).toStrictEqual({ LUNORA_CODEGEN: "0" });
+            expect(plan.codegenEnabled).toBe(false);
+
+            const enabled = planDevCommand({ cwd: workdir, flavor: "vite", logger: silentLogger() });
+
+            expect(enabled.wrangler.env).toBeUndefined();
+        });
+
         it.each([
             ["sveltekit", { "@sveltejs/kit": "^2.0.0" }],
             ["nuxt", { nuxt: "^4.0.0" }],

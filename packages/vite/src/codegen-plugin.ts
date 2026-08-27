@@ -3,7 +3,7 @@ import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, findTsconfig, refreshCodegenProject, runCodegen } from "@lunora/codegen";
-import { inferLunoraBindings, LUNORA_CONFIG_FILE } from "@lunora/config";
+import { CODEGEN_ENV, inferLunoraBindings, isCodegenDisabled, LUNORA_CONFIG_FILE } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectWranglerSecretVariables, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, WRANGLER_FILES } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
@@ -202,6 +202,18 @@ const runCodegenSafely = (
     overlay?: OverlayCallbacks,
     project?: Project,
 ): CodegenSafelyResult => {
+    // `lunora dev --no-codegen` reaches this process as an env var — the CLI
+    // spawns the framework dev server, which re-parses its own argv and never
+    // sees the flag. Gated here rather than at each call site so the startup run
+    // and the watch run are covered by one check, and `_generated/**` is written
+    // by nothing but an explicit `lunora codegen`. Logged rather than silent:
+    // discovering it by diffing generated output is the failure this closes.
+    if (isCodegenDisabled()) {
+        logger.info?.(`${LUNORA_TAG} codegen disabled (${CODEGEN_ENV}=0) — _generated/ left untouched`);
+
+        return {};
+    }
+
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
     if (!existsSync(schemaPath)) {

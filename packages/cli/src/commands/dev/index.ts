@@ -47,7 +47,7 @@ const devCommand: Command = {
             name: "no-worker",
             type: Boolean,
         },
-        { description: "Don't watch + regenerate codegen", name: "no-codegen", type: Boolean },
+        { description: "Don't watch + regenerate codegen (or set LUNORA_CODEGEN=0)", name: "no-codegen", type: Boolean },
         { description: "Proxy D1/KV/R2 bindings to the deployed worker (or set LUNORA_REMOTE=1)", name: "remote", type: Boolean },
     ],
 };

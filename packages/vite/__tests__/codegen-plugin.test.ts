@@ -136,6 +136,28 @@ describe("codegen-plugin", () => {
             expect(dataModel).toContain("export interface Doc_users");
         });
 
+        it("writes nothing when LUNORA_CODEGEN=0 (the `lunora dev --no-codegen` hop)", () => {
+            expect.assertions(2);
+
+            // The CLI spawns this dev server as a child process that re-parses its
+            // own argv, so `--no-codegen` arrives as env or not at all. Before
+            // this, the flag looked accepted while `_generated/**` kept being
+            // rewritten on every save, silently discarding post-processing.
+            writeFixture(workdir);
+            vi.stubEnv("LUNORA_CODEGEN", "0");
+
+            const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.buildStart as (this: unknown) => void).call(undefined);
+
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+            expect(infoSpy.mock.calls.flat().join(" ")).toContain("codegen disabled");
+
+            vi.unstubAllEnvs();
+            infoSpy.mockRestore();
+        });
+
         it("vite build fails when codegen reports an ERROR-level advisory (index_references_unknown_field)", async () => {
             expect.assertions(2);
 

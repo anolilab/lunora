@@ -10,6 +10,7 @@ import {
     claimAgentRulesHint,
     claimDevServerState,
     clearDevServerState,
+    CODEGEN_ENV,
     detectAgentRules,
     detectAiAgent,
     detectFramework,
@@ -346,6 +347,18 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             sidecar = { args: sidecarExec.args, command: sidecarExec.command, cwd, tag: "worker" };
         }
 
+        // The framework dev server is a separate process that re-reads nothing of
+        // this parse, so both flags travel as env. `--no-codegen` in particular:
+        // on these flavors the plugin — not this command — owns the codegen
+        // watch, so `codegenEnabled: false` below only says "the CLI runs no
+        // watch of its own". Without forwarding, the flag looked accepted and
+        // `_generated/**` kept being rewritten on every source save, silently,
+        // destroying whatever post-processed it (#496).
+        const viteEnvironment: Record<string, string> = {
+            ...(options.remote === true ? { LUNORA_REMOTE: "1" } : {}),
+            ...(options.codegen === false ? { [CODEGEN_ENV]: "0" } : {}),
+        };
+
         if (options.worker === false) {
             options.logger.warn(
                 `--no-worker does not apply to the ${flavor} flavor: Vite owns the worker, codegen and studio in-process. Run your framework's dev script instead.`,
@@ -372,7 +385,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
                 args: exec.args,
                 command: exec.command,
                 cwd,
-                ...(options.remote === true ? { env: { LUNORA_REMOTE: "1" } } : {}),
+                ...(Object.keys(viteEnvironment).length > 0 ? { env: viteEnvironment } : {}),
                 tag: "vite",
             },
         };
@@ -938,7 +951,11 @@ const attachedModeNotice = (plan: DevCommandPlan): string => {
  * every single-process flavor. A failure is surfaced but non-fatal.
  */
 const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions, cwd: string, logger: Logger, target: string): void => {
-    if (plan.sidecar === undefined) {
+    // `--no-codegen` means nothing writes `_generated/**` but an explicit
+    // `lunora codegen` — including this one. `plan.codegenEnabled` cannot answer
+    // that here: it is false on every Vite flavor regardless of the flag,
+    // because the plugin owns the watch.
+    if (plan.sidecar === undefined || options.codegen === false) {
         return;
     }
 

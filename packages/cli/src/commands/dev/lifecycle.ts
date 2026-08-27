@@ -21,6 +21,7 @@ import type { DevServerState } from "@lunora/config";
 import {
     claimDevServerState,
     clearDevServerState,
+    CODEGEN_ENV,
     detectFramework,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
@@ -557,10 +558,19 @@ const startBackground = async (context: {
 
     try {
         if (flavor === "vite") {
+            // This branch spawns the framework dev script directly — it does not
+            // go through `planDevCommand`, so flags it does not forward here are
+            // dropped for good. `--no-codegen` reaches `@lunora/vite` (which owns
+            // the watch on this flavor) only as env; without it the flag looked
+            // accepted while `_generated/**` kept being rewritten (#496).
             return await run({
                 command: viteDevCommand(cwd),
                 cwd,
-                env: { ...(remote ? { LUNORA_REMOTE: "1" } : {}), ...handoff },
+                env: {
+                    ...(remote ? { LUNORA_REMOTE: "1" } : {}),
+                    ...(options.codegen === false ? { [CODEGEN_ENV]: "0" } : {}),
+                    ...handoff,
+                },
                 json: jsonLogs,
                 logger,
             });
