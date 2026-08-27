@@ -327,7 +327,7 @@ describe("redactSecrets", () => {
         // there that a real credential exceeded would silently stop redacting it —
         // failing open on the one thing this function exists to prevent.
         const password = "p".repeat(4096);
-        const out = redactSecrets(`postgres://appuser:${password}@db.internal/app`);
+        const out = redactSecrets(`postgres://appuser:${password}@db.internal/app`); // secret-scanner:allow -- the "credential" is 4096 literal "p" chars from the line above; this URL is the fixture being redacted.
 
         expect(out).not.toContain(password);
         expect(out).toContain("postgres://appuser");
