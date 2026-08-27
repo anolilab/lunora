@@ -3913,18 +3913,12 @@ abstract class ShardDO {
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
             // `Object.keys`, not `Object.entries`: this runs once per socket for
-            // every mutation, and `entries` allocates a fresh [key, value] pair
-            // array per socket — two allocations each for the common
-            // one-subscription socket — before a single subscription has been
-            // tested. The sockets that do NOT match paid the same price as the
-            // ones that did, which is why a 500-socket fan-out where only 10%
-            // matched still cost two thirds of the all-match case (30.5 -> 12.4 us;
-            // all-match 45.3 -> 28.0 us).
+            // every mutation, and `entries` allocates a pair array per socket
+            // before any subscription has been tested — so sockets that match
+            // nothing pay the same as sockets that do.
             //
-            // NOT `for...in`, which measured slightly faster still but walks
-            // inherited enumerable keys. `Object.keys` is own-only, exactly like
-            // the `Object.entries` it replaces, so this is a pure allocation fix
-            // with no change in which subscriptions are visited.
+            // NOT `for...in`: it walks inherited enumerable keys, where
+            // `Object.entries` was own-only. See the "never inherited ones" test.
             const { subs } = attachment;
 
             for (const subId of Object.keys(subs)) {
@@ -9113,9 +9107,6 @@ abstract class ShardDO {
             const delivery = this.socketDelivery(attachment);
 
             // `Object.keys` for the same reason as `broadcastDelta` — see there.
-            // This loop skips most subscriptions on most flushes via the memo
-            // gates below, so the per-socket `entries` allocation was paid mainly
-            // by sockets that then did nothing.
             const { subs } = attachment;
 
             for (const subId of Object.keys(subs)) {

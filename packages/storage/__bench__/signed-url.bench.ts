@@ -1,5 +1,6 @@
 import { beforeAll, bench, describe } from "vitest";
 
+import { fromBase64Url } from "../../../shared/base64";
 import { buildSignedUrl, verifySignedUrl } from "../src/signed-url";
 
 /**
@@ -22,19 +23,10 @@ const textEncoder = new TextEncoder();
 const importUncached = async (secret: string): Promise<CryptoKey> =>
     crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
 
-// Reproduce verify's canonicalize + fromBase64Url inline for the uncached
-// baseline so the only difference vs the cached path is the key import.
-const fromBase64Url = (input: string): Uint8Array => {
-    const padded = input.replaceAll("-", "+").replaceAll("_", "/") + "===".slice((input.length + 3) % 4);
-    const binary = atob(padded);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.codePointAt(index) ?? 0;
-    }
-
-    return bytes;
-};
+// Reproduce verify's canonicalize inline for the uncached baseline so the only
+// difference vs the cached path is the key import. The decode itself comes from
+// `shared/base64` — the same function verify uses, so the bench cannot drift
+// from it (an earlier inline copy outlived the implementation it mirrored).
 
 // Async state the benches close over — seeded in beforeAll (see below).
 let signedUrl: string;

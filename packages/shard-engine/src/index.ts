@@ -266,6 +266,7 @@ export {
     applySelect,
     buildSeekBeforeWhere,
     buildSeekWhere,
+    CURSOR_PREFIX,
     decodeCursor,
     encodeCursor,
     normalizeOrderKeys,

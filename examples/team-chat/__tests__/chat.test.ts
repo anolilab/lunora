@@ -65,11 +65,10 @@ it("posts messages into a channel and reads them back", async () => {
     // disagree. A table that needs write order declares `.commitOrdered()` and
     // reads `orderBy: [{ _commitSeq: "asc" }]`; two chat messages a millisecond
     // apart do not need it.
-    expect(messages).toHaveLength(2);
-    expect(messages.map((message) => `${message.authorId}:${message.content}`).toSorted((left, right) => left.localeCompare(right))).toStrictEqual([
-        "u-ada:hello",
-        "u-grace:hi back",
-    ]);
+    // Compared as a set, with no comparator: `localeCompare` would make this
+    // assertion depend on the runner's ICU build, which is exactly the locale
+    // sensitivity the shared key encoder documents avoiding.
+    expect(new Set(messages.map((message) => `${message.authorId}:${message.content}`))).toStrictEqual(new Set(["u-ada:hello", "u-grace:hi back"]));
 });
 
 it("keeps channels apart", async () => {

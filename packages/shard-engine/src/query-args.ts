@@ -41,7 +41,7 @@ const TIEBREAK_FIELD = "id";
  * seek that disagrees with its own ORDER BY about tie direction skips or repeats
  * rows at a page boundary where the sort keys tie.
  */
-const tiebreakDirectionFor = (keys: ReadonlyArray<OrderKey>): SortDirection => (keys.at(-1)?.direction === "desc" ? "desc" : "asc");
+const tiebreakDirectionFor = (keys: ReadonlyArray<{ direction?: string }>): SortDirection => (keys.at(-1)?.direction === "desc" ? "desc" : "asc");
 
 const ID_FIELDS = new Set(["_id", "id"]);
 
@@ -97,6 +97,28 @@ const fromBase64 = (encoded: string): string => {
 };
 
 /**
+ * Prefix stamped on every cursor this build mints.
+ *
+ * A cursor is an opaque `[...sortValues, id]` tuple with no self-describing
+ * shape, so its BYTES cannot tell you which seek predicate was meant to read
+ * them. When the implicit `id` tiebreak changed direction (see
+ * {@link tiebreakDirectionFor}), the bytes stayed identical and only their
+ * MEANING moved: a cursor minted under `… DESC, id ASC` fed to the `… DESC,
+ * id DESC` predicate seeks the wrong way through a group of rows that tie on
+ * the real sort key.
+ *
+ * That is not hypothetical. A mounted paginated feed holds its page boundaries
+ * in client state for the life of the component and replays them on every
+ * reactive re-run, so a deploy hands pre-change cursors straight to the changed
+ * predicate. Measured on six rows tied on one `_creationTime`: the page came
+ * back holding a row from the PREVIOUS page while four rows became unreachable.
+ *
+ * `~` is deliberately outside the base64 alphabet, so a legacy (unprefixed)
+ * cursor can never be mistaken for a prefixed one whatever its payload.
+ */
+const CURSOR_PREFIX = "~2";
+
+/**
  * Encode the sort key of `doc` (the values of each `orderBy` field, then its
  * id) as an opaque base64 cursor. The id is always included so the seek has a
  * unique terminal column.
@@ -111,7 +133,7 @@ const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string
     // in here and threw `TypeError: Do not know how to serialize a BigInt` — the
     // same defect class this store's blob codec exists to fix, surviving in the
     // cursor. Identity for pure-JSON keys, so existing cursors are byte-identical.
-    return toBase64(JSON.stringify(encodeWire(values)));
+    return CURSOR_PREFIX + toBase64(JSON.stringify(encodeWire(values)));
 };
 
 /**
@@ -124,10 +146,19 @@ const invalidCursor = (): LunoraError => new LunoraError("BAD_REQUEST", "invalid
 
 /** Decode a cursor back into its ordered sort-key values (orderBy fields, then id). */
 const decodeCursor = (cursor: string): unknown[] => {
+    // Refuse an unprefixed cursor rather than seek with it. It was minted by a
+    // build whose tiebreak ran the other way, so reading it here returns rows
+    // from the wrong side of the tie group — silently, and looking exactly like
+    // a correct page. A typed 400 is recoverable (the client resets the feed);
+    // wrong rows presented as right ones are not.
+    if (!cursor.startsWith(CURSOR_PREFIX)) {
+        throw invalidCursor();
+    }
+
     let decoded: unknown;
 
     try {
-        decoded = decodeWire(JSON.parse(fromBase64(cursor)));
+        decoded = decodeWire(JSON.parse(fromBase64(cursor.slice(CURSOR_PREFIX.length))));
     } catch {
         // atob() throws InvalidCharacterError on non-base64 input, JSON.parse
         // throws SyntaxError on malformed JSON, and `decodeWire` throws
@@ -280,6 +311,7 @@ export {
     applySelect,
     buildSeekBeforeWhere,
     buildSeekWhere,
+    CURSOR_PREFIX,
     decodeCursor,
     encodeCursor,
     fromBase64,
