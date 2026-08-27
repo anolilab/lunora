@@ -85,7 +85,19 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
-import type { AgentIR, ContainerIR, MaskMetadataIR, QueueIR, ShapeIR, WorkflowIR, WranglerVariableIR } from "./ir";
+import type {
+    AgentIR,
+    ContainerIR,
+    FunctionIR,
+    HttpRouteIR,
+    MaskMetadataIR,
+    MigrationIR,
+    MutatorIR,
+    QueueIR,
+    ShapeIR,
+    WorkflowIR,
+    WranglerVariableIR,
+} from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import { setStandardTypeResolver } from "./parse-validator";
@@ -331,6 +343,100 @@ const syncProjectFile = (project: Project, filePath: string, content: string): v
     existing.replaceWithText(content);
 };
 
+/** Whether `project` already holds `filePath` with exactly `content`. */
+const projectFileMatches = (project: Project, filePath: string, content: string): boolean => project.getSourceFile(filePath)?.getFullText() === content;
+
+/**
+ * Ceiling on the infer → render → re-infer loop below. Cold trees were measured
+ * converging on the fourth pass, so the cap sits above that with room. It is a spin guard, not a correctness guarantee — see
+ * {@link inferToFixpoint} for what happens when it is reached.
+ */
+const MAX_INFERENCE_PASSES = 8;
+
+/**
+ * Infer every handler's return type against a project that already contains the
+ * `api.ts` / `functions.ts` those types are read back through.
+ *
+ * `dataModel.ts` and `server.ts` are rendered into the project before any
+ * inference happens, precisely so a cold tree cannot collapse the types that
+ * depend on them. These two cannot be seeded that way, because their content IS
+ * the inference result: a handler doing `ctx.runQuery(api.messages.list)` — or a
+ * streaming route whose chunk type comes back through one — infers against a
+ * module that does not exist yet on a cold `_generated/`, collapses, and the
+ * collapse is written out. The tree then converges only on a later invocation,
+ * which is what pushes projects into wrapping the CLI in a
+ * run-until-the-hash-stops-changing loop (issue #283).
+ *
+ * So iterate: infer, render, feed the render back, re-infer. The loop returns as
+ * soon as a pass's render matches what inference already saw — the first pass on
+ * any warm tree, where `syncProjectFile` leaves an identical file alone and
+ * nothing is re-inferred, so a converged project pays one extra render and no
+ * extra inference.
+ *
+ * The render that matched is RETURNED rather than recomputed by the caller. Two
+ * call sites building the same emit arguments 150 lines apart is how the
+ * convergence check silently starts comparing something other than what gets
+ * written.
+ *
+ * **Reaching the cap is not an error.** A handler that embeds its own result —
+ * `{ deeper: await createCaller(ctx).grow.grow() }`, the shape of any
+ * self-referential tree query — grows its inferred type by one level per pass
+ * and has no fixpoint to reach. Throwing there would turn a project that
+ * previously built (with that one return typed `unknown`) into one that produces
+ * no `_generated/` at all. So the last render wins, exactly as it did before this
+ * loop existed: never worse than one run's output, usually better.
+ */
+const inferToFixpoint = (options: {
+    agents: ReadonlyArray<AgentIR>;
+    apiPath: string;
+    generatedFunctionsPath: string;
+    lunoraDirectory: string;
+    migrations: ReadonlyArray<MigrationIR>;
+    project: Project;
+    shapes: ReadonlyArray<ShapeIR>;
+    usesSandbox: boolean;
+    useUmbrella: boolean;
+    workflows: ReadonlyArray<WorkflowIR>;
+}): {
+    apiContent: string;
+    functions: ReadonlyArray<FunctionIR>;
+    functionsContent: string;
+    httpRoutes: ReadonlyArray<HttpRouteIR>;
+    mutators: ReadonlyArray<MutatorIR>;
+} => {
+    const { agents, apiPath, generatedFunctionsPath, lunoraDirectory, migrations, project, shapes, usesSandbox, useUmbrella, workflows } = options;
+
+    // The three discoverers that read an inferred return type through
+    // `unwrapHandlerReturn`, and therefore the three that have to be re-run when
+    // the files those types resolve against change. Everything else in the
+    // pipeline reads syntax, not inference, and stays outside.
+    let functions = discoverFunctions(project, lunoraDirectory);
+    let mutators = discoverMutators(project, lunoraDirectory);
+    let httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
+
+    for (let pass = 1; ; pass += 1) {
+        const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
+        const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
+
+        // Converged, or out of budget — either way this render is the answer, and
+        // the budget check sits HERE so the final pass's re-inference is never
+        // computed and then discarded.
+        if (
+            pass >= MAX_INFERENCE_PASSES ||
+            (projectFileMatches(project, apiPath, apiContent) && projectFileMatches(project, generatedFunctionsPath, functionsContent))
+        ) {
+            return { apiContent, functions, functionsContent, httpRoutes, mutators };
+        }
+
+        syncProjectFile(project, apiPath, apiContent);
+        syncProjectFile(project, generatedFunctionsPath, functionsContent);
+
+        functions = discoverFunctions(project, lunoraDirectory);
+        mutators = discoverMutators(project, lunoraDirectory);
+        httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
+    }
+};
+
 /**
  * Construct the ts-morph `Project` codegen discovers over. Prefers the user's
  * `tsconfig.json` (when one is found walking up from `lunoraDirectory`) so
@@ -497,6 +603,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const outputDirectory = join(lunoraDirectory, "_generated");
     const dataModelPath = join(outputDirectory, "dataModel.ts");
     const serverPath = join(outputDirectory, "server.ts");
+    const apiPath = join(outputDirectory, "api.ts");
+    const generatedFunctionsPath = join(outputDirectory, "functions.ts");
 
     // In MEMORY only — the disk write waits for the write phase with everything
     // else. `discoverFunctions` infers against the ts-morph `Project`, not the
@@ -512,8 +620,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     syncProjectFile(project, dataModelPath, dataModelContent);
     syncProjectFile(project, serverPath, serverContent);
 
-    const functions = discoverFunctions(project, lunoraDirectory);
-    const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
     const migrations = discoverMigrations(project, lunoraDirectory);
 
     // Local-first sync engine (Phase 7): replication shapes (`lunora/shapes.ts`)
@@ -522,8 +628,22 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // mutators register into `LUNORA_FUNCTIONS` (transaction-wrapped) and the
     // `isCustomMutator` push-protocol override. Both return `[]` when their file
     // is absent, so a project without them emits byte-identical generated code.
+    // Neither reads a handler's inferred return type, so both sit outside the
+    // fixpoint below — unlike `discoverHttpRoutes`, which does.
     const shapes = discoverShapes(project, lunoraDirectory);
-    const mutators = discoverMutators(project, lunoraDirectory);
+
+    const { apiContent, functions, functionsContent, httpRoutes, mutators } = inferToFixpoint({
+        agents,
+        apiPath,
+        generatedFunctionsPath,
+        lunoraDirectory,
+        migrations,
+        project,
+        shapes,
+        useUmbrella,
+        usesSandbox,
+        workflows,
+    });
 
     const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
 
@@ -667,8 +787,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // a throw between here and there leaves `_generated/` untouched.
     const emitStartedAt = timingEnabled ? performance.now() : 0;
 
-    const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
-    const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
     // Structural schema snapshot for the pre-deploy drift gate. Built from the
     // discovered schema + the declared migration ids; the CLI gate diffs the
     // CURRENT snapshot against the committed baseline. Always computed (cheap,

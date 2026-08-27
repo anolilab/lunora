@@ -787,7 +787,12 @@ const relocateBaseQualifiers = (rendered: string, useUmbrella: boolean): string 
  * `emitFunctions` so the selection rule stays in one place.
  */
 const referencedDataModelImports = (body: string): ReadonlyArray<"Doc" | "Id"> =>
-    (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`\b${name}<`, "u").test(body));
+    // A QUALIFIED occurrence does not count. A handler may import its own
+    // `Doc`/`Id` from its own module, which renders as
+    // `import("../lib/mydoc.js").Doc<"posts">` — that names its own module and
+    // needs no import here, so counting it would emit an unused
+    // `import type { Doc }` and fail the generated file under `noUnusedLocals`.
+    (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`(?<![.$\w])${name}<`, "u").test(body));
 
 /**
  * The `Return` a `FunctionReference` should carry.
