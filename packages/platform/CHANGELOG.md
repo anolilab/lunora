@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.18...@lunora/platform@1.0.0-alpha.19) (2026-08-27)
+
+### Features
+
+* **do:** archive trimmed changelog rows to R2 ([#507](https://github.com/anolilab/lunora/issues/507)) ([9daef2e](https://github.com/anolilab/lunora/commit/9daef2eb4b4fa2ec7163390e3155c32d5e814294))
+
 ## @lunora/platform [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.17...@lunora/platform@1.0.0-alpha.18) (2026-08-26)
 
 ### Features
