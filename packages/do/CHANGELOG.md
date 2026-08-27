@@ -1,3 +1,18 @@
+## @lunora/do [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.105...@lunora/do@1.0.0-alpha.106) (2026-08-27)
+
+### Features
+
+* **do:** archive trimmed changelog rows to R2 ([#507](https://github.com/anolilab/lunora/issues/507)) ([9daef2e](https://github.com/anolilab/lunora/commit/9daef2eb4b4fa2ec7163390e3155c32d5e814294))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.45
+* **@lunora/platform:** upgraded to 1.0.0-alpha.19
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.24
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.44
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.40
+
 ## @lunora/do [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.104...@lunora/do@1.0.0-alpha.105) (2026-08-27)
 
 ### Bug Fixes
