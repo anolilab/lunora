@@ -633,6 +633,59 @@ describe("discoverFunctions", () => {
             expect(discoverFunctions(project, workdir)[0]?.returnType).toBe("unknown");
         });
 
+        it("qualifies a type from an ambient `declare module` — a script-mode file is not automatically global (#511)", () => {
+            expect.assertions(1);
+
+            // The bare-name exemption is keyed on the file having no module
+            // symbol, because that is what a global looks like. A script-mode
+            // `.d.ts` can still carry `declare module "spec" { … }`, whose members
+            // are module-scoped and reachable only through an import — the
+            // ordinary packaging of `declare module "*.svg"` and of a shim for an
+            // untyped dependency. Those went out bare.
+            //
+            // The specifier has to be matched as TEXT here: an ambient module
+            // declaration has no source file for the import to resolve to, so the
+            // symbol-identity check every other path uses has nothing to compare.
+            writeFunction("amb.d.ts", `declare module "virtual:thing" {\n    export interface Badge { label: string }\n}\n`);
+            writeFunction(
+                "badges.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Badge } from "virtual:thing";
+
+            export const get = query({ args: {}, handler: async (): Promise<Badge> => ({ label: "x" }) });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("virtual:thing").Badge');
+        });
+
+        it("qualifies a DEFAULT-imported type under `default`, not under its local alias (#511)", () => {
+            expect.assertions(1);
+
+            // A default import's local name is an alias the exporting module never
+            // agreed to, so `import("./lib/boxed").Boxed` would not resolve even
+            // though `Boxed` is what the handler calls it. Matching resolves the
+            // binding rather than comparing names, and the export is written under
+            // the name the module actually publishes.
+            writeFunction("lib/boxed.ts", `interface Boxed { v: number }\nexport default Boxed;\n`);
+            writeFunction(
+                "boxed.ts",
+                `
+            import { query } from "@lunora/server";
+            import type Renamed from "./lib/boxed";
+
+            export const get = query({ args: {}, handler: async (): Promise<Renamed> => ({ v: 1 }) });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/boxed").default');
+        });
+
         it("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {
             expect.hasAssertions();
 

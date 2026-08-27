@@ -3,6 +3,7 @@ import type {
     CallExpression,
     FunctionExpression,
     Identifier,
+    ImportDeclaration,
     ObjectLiteralExpression,
     Project,
     SourceFile,
@@ -363,6 +364,56 @@ const isGloballyDeclared = (type: Type): boolean => {
 };
 
 /**
+ * How `_generated/` can name a type the checker would print bare: the module
+ * specifier to qualify it with, and the name that module exports it under.
+ *
+ * The two differ for a DEFAULT import, where the local binding is an alias the
+ * exporting module never agreed to — `import Boxed from "./def"` has to be
+ * written `import("./def").default`, not `import("./def").Boxed`.
+ */
+interface QualifiedImport {
+    /** The name the module exports it under — `"default"` for a default export. */
+    exportName: string;
+    /** The specifier verbatim as the user wrote it. */
+    specifier: string;
+}
+
+/**
+ * `ModuleDeclaration.getName()` keeps the quotes for a string-literal module
+ * name (`"virtual:thing"`), which is what distinguishes an ambient MODULE from a
+ * `declare global` / namespace block.
+ */
+const AMBIENT_MODULE_NAME_RE = /^(?<quote>["'])(?<specifier>.*)\k<quote>$/su;
+
+/**
+ * The specifier of the ambient `declare module "…"` block `declaration` sits
+ * inside, or `undefined` when it is not in one.
+ *
+ * A script-mode `.d.ts` normally declares globals — which is why one is exempt
+ * from the bare-name rule — but it can also carry `declare module "spec" { … }`
+ * blocks whose members are MODULE-scoped and reachable only through an import.
+ * That is the ordinary packaging of `declare module "*.svg"`, of a hand-written
+ * shim for an untyped dependency, and of older DefinitelyTyped layouts, so the
+ * file-level test alone let those names out bare (issue #511).
+ *
+ * Nearest ancestor wins, and a `declare global` block is skipped by the quoting
+ * rule rather than by name — `global` is an identifier there, never a literal.
+ */
+const ambientModuleSpecifier = (declaration: Node): string | undefined => {
+    for (const ancestor of declaration.getAncestors()) {
+        if (Node.isModuleDeclaration(ancestor)) {
+            const match = AMBIENT_MODULE_NAME_RE.exec(ancestor.getName());
+
+            if (match?.groups?.specifier !== undefined) {
+                return match.groups.specifier;
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/**
  * Per-module export lookup, memoised.
  *
  * `getExport` reads the module symbol's OWN export table, which does not list an
@@ -403,6 +454,58 @@ const moduleExport = (moduleFile: SourceFile, name: string): TsSymbol | undefine
     return byName.get(name);
 };
 
+/** Whether `importDeclaration` reaches `name` by name — named, or through a namespace alias `_generated/` does not have either. */
+const bindsByName = (importDeclaration: ImportDeclaration, name: string): boolean =>
+    importDeclaration.getNamespaceImport() !== undefined || importDeclaration.getNamedImports().some((entry) => entry.getName() === name);
+
+/**
+ * Whether `importDeclaration` brings `name` in from an ambient
+ * `declare module "…"` block.
+ *
+ * Matched on the specifier TEXT, because an ambient module declaration has no
+ * source file for `getModuleSpecifierSourceFile()` to resolve to — the symbol
+ * identity check every other path uses has nothing to compare against here.
+ */
+const matchesAmbientModule = (importDeclaration: ImportDeclaration, ambientSpecifier: string, name: string): QualifiedImport | undefined => {
+    const specifier = importDeclaration.getModuleSpecifierValue();
+
+    return specifier === ambientSpecifier && bindsByName(importDeclaration, name) ? { exportName: name, specifier } : undefined;
+};
+
+/**
+ * Whether `importDeclaration`'s DEFAULT binding resolves to `declaration`.
+ *
+ * A default import's local name says nothing about the export it came from, so
+ * this matches by resolving the binding rather than by comparing names — and the
+ * name it must be written under is `default`, whatever the local alias is.
+ */
+const matchesDefaultImport = (importDeclaration: ImportDeclaration, declaration: Node): QualifiedImport | undefined => {
+    const defaultImport = importDeclaration.getDefaultImport();
+
+    if (defaultImport === undefined) {
+        return undefined;
+    }
+
+    const bound = defaultImport.getSymbol();
+
+    return (bound?.getAliasedSymbol() ?? bound)?.getDeclarations().includes(declaration) === true
+        ? { exportName: "default", specifier: importDeclaration.getModuleSpecifierValue() }
+        : undefined;
+};
+
+/** Whether `importDeclaration` brings `name` in from the module that declares it, through any re-export chain. */
+const matchesNamedImport = (importDeclaration: ImportDeclaration, declaration: Node, name: string): QualifiedImport | undefined => {
+    if (!bindsByName(importDeclaration, name)) {
+        return undefined;
+    }
+
+    const moduleFile = importDeclaration.getModuleSpecifierSourceFile();
+    const exported = moduleFile === undefined ? undefined : moduleExport(moduleFile, name);
+    const target = exported?.getAliasedSymbol() ?? exported;
+
+    return target?.getDeclarations().includes(declaration) === true ? { exportName: name, specifier: importDeclaration.getModuleSpecifierValue() } : undefined;
+};
+
 /**
  * The module specifier the handler's file imports `name` from, when that import
  * resolves to `declaration` — the literal string the user wrote, never a
@@ -429,25 +532,17 @@ const moduleExport = (moduleFile: SourceFile, name: string): TsSymbol | undefine
  * deep. Asking the module directly is depth-independent, because the recursion
  * visits each type on its own.
  */
-const importSpecifierFor = (handlerFile: SourceFile, declaration: Node, name: string): string | undefined => {
+const importSpecifierFor = (handlerFile: SourceFile, declaration: Node, name: string): QualifiedImport | undefined => {
+    const ambientSpecifier = ambientModuleSpecifier(declaration);
+
     for (const importDeclaration of handlerFile.getImportDeclarations()) {
-        // A namespace import (`import * as t`) makes every exported name
-        // reachable, but only as `t.Bar` — which the checker prints qualified by
-        // a local alias `_generated/` does not have either, so it counts exactly
-        // like a named import.
-        const importsIt =
-            importDeclaration.getNamespaceImport() !== undefined || importDeclaration.getNamedImports().some((specifier) => specifier.getName() === name);
+        const matched =
+            ambientSpecifier === undefined
+                ? (matchesDefaultImport(importDeclaration, declaration) ?? matchesNamedImport(importDeclaration, declaration, name))
+                : matchesAmbientModule(importDeclaration, ambientSpecifier, name);
 
-        if (!importsIt) {
-            continue;
-        }
-
-        const moduleFile = importDeclaration.getModuleSpecifierSourceFile();
-        const exported = moduleFile === undefined ? undefined : moduleExport(moduleFile, name);
-        const target = exported?.getAliasedSymbol() ?? exported;
-
-        if (target?.getDeclarations().includes(declaration) === true) {
-            return importDeclaration.getModuleSpecifierValue();
+        if (matched !== undefined) {
+            return matched;
         }
     }
 
@@ -497,8 +592,7 @@ const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string):
 
     // A GLOBAL declaration prints bare AND resolves bare from anywhere — `Date`,
     // `Uint8Array`, the whole `lib.*.d.ts` surface, an app's own ambient
-    // `declare global`. Script-mode files (the ones with no module symbol) are
-    // exactly those, so that is the test.
+    // `declare global`.
     //
     // Skipping every `.d.ts`/`node_modules` file instead was wrong by a wide
     // margin: a MODULE-scoped declaration there is no more reachable from
@@ -506,7 +600,12 @@ const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string):
     // `PaginationResult` from `lunorash/server` — or any package type at all —
     // had the name written into `api.ts` unimported, a TS2304 in generated
     // output while `lunora codegen` exited 0.
-    if (declarationFile.getSymbol() === undefined) {
+    //
+    // Script-mode files are ALMOST exactly the globals, and the exception is why
+    // this is two tests rather than one: a script-mode `.d.ts` may still carry
+    // `declare module "spec" { … }` blocks, whose members are module-scoped and
+    // need an import like any other.
+    if (declarationFile.getSymbol() === undefined && ambientModuleSpecifier(declaration) === undefined) {
         return false;
     }
 
@@ -917,12 +1016,12 @@ const qualifiedImportText = (type: Type, node: Node, handlerFilePath: string, de
     }
 
     const handlerFile = node.getSourceFile();
-    const specifier = symbol
+    const qualified = symbol
         .getDeclarations()
         .map((declaration) => importSpecifierFor(handlerFile, declaration, name))
         .find((candidate) => candidate !== undefined);
 
-    if (specifier === undefined || isUnresolvableSpecifier(specifier, node)) {
+    if (qualified === undefined || isUnresolvableSpecifier(qualified.specifier, node)) {
         return undefined;
     }
 
@@ -938,7 +1037,7 @@ const qualifiedImportText = (type: Type, node: Node, handlerFilePath: string, de
         rendered.push(text);
     }
 
-    return `import("${specifier}").${name}${rendered.length > 0 ? `<${rendered.join(", ")}>` : ""}`;
+    return `import("${qualified.specifier}").${qualified.exportName}${rendered.length > 0 ? `<${rendered.join(", ")}>` : ""}`;
 };
 
 /**
