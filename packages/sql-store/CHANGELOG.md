@@ -1,3 +1,15 @@
+## @lunora/sql-store [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.93...@lunora/sql-store@1.0.0-alpha.94) (2026-08-27)
+
+### Performance Improvements
+
+* **shard-engine:** sort the id tiebreak the way the key it breaks sorts ([#495](https://github.com/anolilab/lunora/issues/495)) ([8302b06](https://github.com/anolilab/lunora/commit/8302b06c8cbb81c4392c1ca1a3b1e520bdf03a6d))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.42
+* **@lunora/do:** upgraded to 1.0.0-alpha.103
+
 ## @lunora/sql-store [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.92...@lunora/sql-store@1.0.0-alpha.93) (2026-08-26)
 
 
