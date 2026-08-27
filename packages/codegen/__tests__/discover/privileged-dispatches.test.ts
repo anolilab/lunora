@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverPrivilegedDispatches from "../src/discover-privileged-dispatches";
+import discoverPrivilegedDispatches from "../../src/discover/privileged-dispatches";
 
 let workdir: string;
 let project: Project;

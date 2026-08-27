@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverShapes } from "../src/discover-shapes";
+import { discoverShapes } from "../../src/discover/shapes";
 
 let workdir: string;
 
@@ -15,7 +15,7 @@ const writeShapes = (source: string): void => {
     writeFileSync(join(workdir, "shapes.ts"), source);
 };
 
-describe("discover-shapes", () => {
+describe("discover/shapes", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-shape-disco-"));
     });

@@ -1,9 +1,8 @@
 import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, lunoraRelativePath } from "./discover-ast";
-import { listLunoraSourceFiles } from "./discover-functions";
-import type { AuthApiCallIR } from "./ir";
+import type { AuthApiCallIR } from "../ir";
+import { enclosingExportName, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * True for a `ctx.authApi.<method>(...)` (or bare `authApi.<method>(...)`)

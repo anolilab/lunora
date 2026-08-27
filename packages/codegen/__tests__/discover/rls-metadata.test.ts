@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverRlsMetadata } from "../src/discover-rls-procedures";
+import discoverRlsMetadata from "../../src/discover/rls-procedures/metadata";
 
 // A self-contained branded builder + RLS DSL. Discovery resolves the
 // `__lunoraProcedure` brand off the receiver's *type*, so the builder is

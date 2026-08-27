@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverOwnerFieldWrites from "../src/discover-owner-field-writes";
+import discoverOwnerFieldWrites from "../../src/discover/owner-field-writes";
 
 let workdir: string;
 let project: Project;

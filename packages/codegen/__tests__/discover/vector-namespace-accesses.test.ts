@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverVectorNamespaceAccesses from "../src/discover-vector-namespace-accesses";
+import discoverVectorNamespaceAccesses from "../../src/discover/vector-namespace-accesses";
 
 let workdir: string;
 let project: Project;

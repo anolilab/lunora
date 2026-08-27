@@ -7,9 +7,9 @@ import { agentComponent } from "@lunora/agent";
 import { Project, SyntaxKind } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverAgents } from "../src/discover-agents";
-import { emitAgents, emitApi, emitFunctions, emitServer, emitShard } from "../src/emit";
-import type { FunctionIR, SchemaIR } from "../src/ir";
+import { discoverAgents } from "../../src/discover/agents";
+import { emitAgents, emitApi, emitFunctions, emitServer, emitShard } from "../../src/emit";
+import type { FunctionIR, SchemaIR } from "../../src/ir";
 
 let workdir: string;
 
@@ -23,13 +23,13 @@ const newProject = (): Project => new Project({ skipAddingFilesFromTsConfig: tru
  * recover each public function's declared return type for the drift guard
  * below.
  */
-const AGENT_COMPONENT_SOURCE_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "agent", "src", "component.ts");
+const AGENT_COMPONENT_SOURCE_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "agent", "src", "component.ts");
 
 /**
  * Read `const <constantName> = query|mutation.input({...}).query|mutation(async (...): Promise<T> => ...)`'s
  * declared return-type text out of `component.ts`, unwrapped of its outer
  * `Promise<…>` — mirroring codegen's own Promise-unwrap convention
- * (`unwrapHandlerReturn` in `discover-functions.ts`) so the comparison lines up
+ * (`unwrapHandlerReturn` in `discover/functions.ts`) so the comparison lines up
  * with what `syntheticAgentApiFunctions` hand-pins in `emit.ts`.
  */
 const sourceReturnTypeOf = (constantName: string): string => {
@@ -106,7 +106,7 @@ const describeValidator = (validator: unknown): ArgShape => {
 const describeArgs = (args: unknown): Record<string, ArgShape> =>
     Object.fromEntries(Object.entries(args as Record<string, unknown>).map(([name, validator]) => [name, describeValidator(validator)]));
 
-describe("discover-agents", () => {
+describe("discover/agents", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-agent-disco-"));
     });

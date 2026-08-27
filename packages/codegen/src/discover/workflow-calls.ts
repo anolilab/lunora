@@ -1,9 +1,8 @@
 import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "./discover-ast";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { WorkflowCallIR } from "./ir";
+import type { WorkflowCallIR } from "../ir";
+import { enclosingExportName, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * True for a `ctx.workflows.get(...)` (or bare `workflows.get(...)`) call — the

@@ -1,9 +1,9 @@
 import type { ArrowFunction, CallExpression, FunctionExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "./argument-taint";
-import { collectCallRows } from "./discover-ast";
-import type { HttpActionGuardIR } from "./ir";
+import { enclosingExportName } from "../argument-taint";
+import type { HttpActionGuardIR } from "../ir";
+import { collectCallRows } from "./ast";
 
 /** The `httpRoute.<verb>(...)` factory verbs — the root of a typed-REST-route builder chain. */
 const HTTP_VERBS = new Set(["delete", "get", "head", "options", "patch", "post", "put"]);

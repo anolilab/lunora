@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
-import { collectCallRows } from "./discover-ast";
-import type { AiRawRunIR } from "./ir";
+import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import type { AiRawRunIR } from "../ir";
+import { collectCallRows } from "./ast";
 
 /**
  * True when `node` is a `ctx.ai.run` call callee — the raw Workers AI binding

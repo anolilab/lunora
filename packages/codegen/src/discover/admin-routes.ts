@@ -1,8 +1,8 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { AdminRouteIR } from "./ir";
+import type { AdminRouteIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /** The `httpRoute.<verb>(...)` factory verbs. */
 const HTTP_VERBS = new Set(["delete", "get", "head", "options", "patch", "post", "put"]);

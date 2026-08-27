@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverArgumentDerivedFetches from "../src/discover-argument-derived-fetches";
+import discoverArgumentDerivedFetches from "../../src/discover/argument-derived-fetches";
 
 let workdir: string;
 let project: Project;

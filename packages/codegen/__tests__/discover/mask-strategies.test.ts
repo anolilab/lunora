@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverMaskStrategies } from "../src/discover-mask-procedures";
+import discoverMaskStrategies from "../../src/discover/mask-procedures/strategies";
 
 // A self-contained branded builder + mask DSL — the same shape the
-// discover-mask-procedures / discover-mask-metadata tests use. `.use` returns
+// discover/mask-procedures / discover-mask-metadata tests use. `.use` returns
 // the same builder so the `.use(mask(...)).query(...)` chain type-checks and
 // the chain walk finds the `mask(...)` call. `discoverMaskStrategies` reads the
 // strategy off each column property initializer (string literal vs.

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverImageDeliveryUrlAccesses from "../src/discover-image-delivery-url-accesses";
+import discoverImageDeliveryUrlAccesses from "../../src/discover/image-delivery-url-accesses";
 
 let workdir: string;
 let project: Project;

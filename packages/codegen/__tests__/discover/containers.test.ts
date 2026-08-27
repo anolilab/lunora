@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverContainers } from "../src/discover-containers";
-import { emitContainers, emitServer, emitShard } from "../src/emit";
-import type { SchemaIR } from "../src/ir";
+import { discoverContainers } from "../../src/discover/containers";
+import { emitContainers, emitServer, emitShard } from "../../src/emit";
+import type { SchemaIR } from "../../src/ir";
 
 let workdir: string;
 
@@ -19,7 +19,7 @@ const writeContainers = (source: string): void => {
 
 const EMPTY_SCHEMA: SchemaIR = { tables: [], vectorIndexes: [] };
 
-describe("discover-containers", () => {
+describe("discover/containers", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-container-disco-"));
     });

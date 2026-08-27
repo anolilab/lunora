@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverFlagKeys, discoverFlags } from "../src/discover-flags";
+import { discoverFlagKeys } from "../../src/discover/flag-keys";
+import { discoverFlags } from "../../src/discover/flags";
 
 let workdir: string;
 
@@ -19,7 +20,7 @@ const writeSource = (relative: string, source: string): void => {
     writeFileSync(join(workdir, relative), source);
 };
 
-describe("discover-flags", () => {
+describe("discover/flags", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-flags-disco-"));
     });

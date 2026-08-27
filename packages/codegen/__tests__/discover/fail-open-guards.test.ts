@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverFailOpenGuards from "../src/discover-fail-open-guards";
+import discoverFailOpenGuards from "../../src/discover/fail-open-guards";
 
 let workdir: string;
 let project: Project;

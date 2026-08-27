@@ -1,7 +1,7 @@
 import type { Project } from "ts-morph";
 
-import { discoverArgumentDerivedAccesses } from "./discover-argument-derived-accesses";
-import type { FunctionIR, StorageKeyAccessIR } from "./ir";
+import type { FunctionIR, StorageKeyAccessIR } from "../ir";
+import { discoverArgumentDerivedAccesses } from "./argument-derived-accesses";
 
 /**
  * The `ctx.storage.<bucket>.<method>(...)` bucket methods whose first argument is a

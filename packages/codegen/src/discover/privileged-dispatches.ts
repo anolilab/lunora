@@ -1,9 +1,9 @@
 import type { ArrowFunction, CallExpression, FunctionExpression, Identifier, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { PrivilegedDispatchIR } from "./ir";
+import { enclosingExportName } from "../argument-taint";
+import type { PrivilegedDispatchIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * The privileged-dispatch handler factories. A `defineQueue` push handler and a

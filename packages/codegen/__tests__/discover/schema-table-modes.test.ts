@@ -1,8 +1,8 @@
 import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import discoverSchema from "../src/discover-schema";
-import { emitDataModel } from "../src/emit";
+import discoverSchema from "../../src/discover/schema";
+import { emitDataModel } from "../../src/emit";
 
 /**
  * Discovery of the two table modes this branch added: `.commitOrdered()` and

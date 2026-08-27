@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverAiRawRuns from "../src/discover-ai-raw-runs";
+import discoverAiRawRuns from "../../src/discover/ai-raw-runs";
 
 let workdir: string;
 let project: Project;

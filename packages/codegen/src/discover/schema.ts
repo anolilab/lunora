@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Expression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
+import { diagnosticAt } from "../diagnostics";
 import type {
     ExternalSourceIR,
     GeoIndexIR,
@@ -16,9 +16,9 @@ import type {
     TtlIR,
     ValidatorIR,
     VectorIndexIR,
-} from "./ir";
-import { parseObjectShape } from "./parse-validator";
-import { resolvePackageExtension } from "./resolve-package-extension";
+} from "../ir";
+import { parseObjectShape } from "../parse-validator";
+import { resolvePackageExtension } from "../resolve-package-extension";
 
 const VECTOR_METRICS = new Set(["cosine", "dot-product", "euclidean"]);
 const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);

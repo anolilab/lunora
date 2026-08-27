@@ -1,11 +1,10 @@
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
-import { lunoraRelativePath } from "./discover-ast";
-import { listLunoraSourceFiles } from "./discover-functions";
-import type { MigrationIR } from "./ir";
-import { isServerPackageModule } from "./module-specifiers";
+import { diagnosticAt } from "../diagnostics";
+import type { MigrationIR } from "../ir";
+import { isServerPackageModule } from "../module-specifiers";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Decide whether a callee identifier refers to `@lunora/server`'s

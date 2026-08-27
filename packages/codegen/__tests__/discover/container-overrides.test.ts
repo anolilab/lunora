@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverContainerOverrides from "../src/discover-container-overrides";
+import discoverContainerOverrides from "../../src/discover/container-overrides";
 
 let workdir: string;
 let project: Project;

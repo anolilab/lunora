@@ -585,7 +585,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        // discover-sandbox.ts (codegen) only ever scans `lunora/` — a `src/`-only
+        // discover/sandbox.ts (codegen) only ever scans `lunora/` — a `src/`-only
         // import never registers the sandbox:invoke dispatcher, so config must not
         // provision BROWSER for it either (config previously also scanned `src/`).
         write("src/tools.ts", `import { browserTool } from "@lunora/agent/sandbox";\nexport const t = browserTool();`);
@@ -595,7 +595,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.usesBrowser).toBe(false);
     });
 
-    describe("agreement with discover-sandbox.ts (CONFIG-01 shared fixture matrix)", () => {
+    describe("agreement with discover/sandbox.ts (CONFIG-01 shared fixture matrix)", () => {
         /**
          * Feed the SAME `lunora/agents.ts` source through both browserTool
          * detectors — codegen's AST-based `discoverSandboxUsage` and config's

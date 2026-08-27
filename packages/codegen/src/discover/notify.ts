@@ -5,8 +5,8 @@ import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "@lunora/advisor";
 import type { Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { defaultExportExpression, handlerOf } from "./discover-ast";
-import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { defaultExportExpression, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** The only file a `@lunora/notify` provider may be declared in — mirrors `lunora/flags.ts`. */
 const NOTIFY_FILENAME = "notify.ts";

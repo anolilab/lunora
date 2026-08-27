@@ -1,9 +1,9 @@
 import type { Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { propertyInitializer, readTargetOf } from "./discover-ast";
-import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { RelationLoadIR } from "./ir";
+import type { RelationLoadIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, readTargetOf } from "./ast";
+import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** The relation accessor names declared by a `with: { … }` object literal (`{ author: true }`, `{ author }`, `{ author() {} }`) — the keys matched against the schema's relation names. Spreads/computed keys yield nothing. */
 const relationNamesOf = (withValue: TsNode | undefined): string[] => {

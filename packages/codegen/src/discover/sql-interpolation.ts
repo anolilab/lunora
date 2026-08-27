@@ -1,8 +1,8 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { collectCallRows } from "./discover-ast";
-import type { SqlInterpolationIR } from "./ir";
+import type { SqlInterpolationIR } from "../ir";
+import { collectCallRows } from "./ast";
 
 /** The `SqlClient` methods that splice their first (`text`) argument verbatim into the query. */
 const SQL_TEXT_METHODS = new Set(["query", "unsafe"]);

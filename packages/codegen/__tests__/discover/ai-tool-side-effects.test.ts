@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverAiToolSideEffects from "../src/discover-ai-tool-side-effects";
+import discoverAiToolSideEffects from "../../src/discover/ai-tool-side-effects";
 
 let workdir: string;
 let project: Project;

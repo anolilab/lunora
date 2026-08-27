@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverHttpHeaderWrites from "../src/discover-http-header-writes";
+import discoverHttpHeaderWrites from "../../src/discover/http-header-writes";
 
 let workdir: string;
 let project: Project;

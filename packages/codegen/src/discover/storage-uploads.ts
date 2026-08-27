@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName } from "./argument-taint";
-import { collectCallRows } from "./discover-ast";
-import type { StorageUploadIR } from "./ir";
+import { enclosingExportName } from "../argument-taint";
+import type { StorageUploadIR } from "../ir";
+import { collectCallRows } from "./ast";
 
 /**
  * `ctx.storage.<bucket>.<method>` calls this feeder inspects, mapped to the

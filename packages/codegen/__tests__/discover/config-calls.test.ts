@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverConfigCalls from "../src/discover-config-calls";
+import discoverConfigCalls from "../../src/discover/config-calls";
 
 let workdir: string;
 let project: Project;

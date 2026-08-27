@@ -5,9 +5,9 @@ import { containerBindingName, containerClassName, normalizeContainerImage } fro
 import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
-import { stringPropertyFor } from "./discover-ast";
-import type { ContainerIR } from "./ir";
+import { diagnosticAt } from "../diagnostics";
+import type { ContainerIR } from "../ir";
+import { stringPropertyFor } from "./ast";
 
 /** The only file containers may be declared in — mirrors `lunora/crons.ts`. */
 const CONTAINERS_FILENAME = "containers.ts";

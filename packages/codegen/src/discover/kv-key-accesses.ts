@@ -1,7 +1,7 @@
 import type { Project } from "ts-morph";
 
-import { discoverArgumentDerivedAccesses } from "./discover-argument-derived-accesses";
-import type { KvKeyAccessIR } from "./ir";
+import type { KvKeyAccessIR } from "../ir";
+import { discoverArgumentDerivedAccesses } from "./argument-derived-accesses";
 
 /**
  * The `ctx.kv` methods whose first argument is a per-entry namespace key. `list`

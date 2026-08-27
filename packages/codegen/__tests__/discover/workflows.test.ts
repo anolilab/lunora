@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverWorkflows } from "../src/discover-workflows";
-import { emitServer, emitShard, emitWorkflows } from "../src/emit";
-import type { SchemaIR } from "../src/ir";
+import { discoverWorkflows } from "../../src/discover/workflows";
+import { emitServer, emitShard, emitWorkflows } from "../../src/emit";
+import type { SchemaIR } from "../../src/ir";
 
 let workdir: string;
 
@@ -19,7 +19,7 @@ const writeWorkflows = (source: string): void => {
 
 const EMPTY_SCHEMA: SchemaIR = { tables: [], vectorIndexes: [] };
 
-describe("discover-workflows", () => {
+describe("discover/workflows", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-workflow-disco-"));
     });

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverStorageRulesMetadata from "../src/discover-storage-rules";
+import discoverStorageRulesMetadata from "../../src/discover/storage-rules";
 
 // A self-contained branded builder + storage-rules DSL, mirroring the RLS
 // metadata test's inline preamble (the isolated project has no workspace

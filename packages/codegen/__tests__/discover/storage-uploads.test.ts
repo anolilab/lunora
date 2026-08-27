@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverStorageUploads from "../src/discover-storage-uploads";
+import discoverStorageUploads from "../../src/discover/storage-uploads";
 
 let workdir: string;
 let project: Project;

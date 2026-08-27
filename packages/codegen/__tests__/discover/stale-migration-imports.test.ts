@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverStaleMigrationImports from "../src/discover-stale-migration-imports";
+import discoverStaleMigrationImports from "../../src/discover/stale-migration-imports";
 
 let workdir: string;
 let project: Project;

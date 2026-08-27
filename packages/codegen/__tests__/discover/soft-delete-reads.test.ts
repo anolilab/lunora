@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverSoftDeleteReads from "../src/discover-soft-delete-reads";
+import discoverSoftDeleteReads from "../../src/discover/soft-delete-reads";
 
 let workdir: string;
 let project: Project;

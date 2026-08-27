@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverNotifyCalls, discoverNotifyConfig } from "../src/discover-notify";
+import { discoverNotifyCalls, discoverNotifyConfig } from "../../src/discover/notify";
 
 /** A mutation that sends a push via `ctx.push.send` — must be recorded (outside-action). */
 const MUTATION_PUSH_SEND = `

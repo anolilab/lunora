@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverPaymentWebhooks from "../src/discover-payment-webhooks";
+import discoverPaymentWebhooks from "../../src/discover/payment-webhooks";
 
 let workdir: string;
 let project: Project;

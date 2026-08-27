@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverGeoIndexUsages from "../src/discover-geo-index-usages";
+import discoverGeoIndexUsages from "../../src/discover/geo-index-usages";
 
 const PLACES = `
     import { query } from "@lunora/server";

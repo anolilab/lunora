@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverIdentityClaimReads from "../src/discover-identity-claim-reads";
+import discoverIdentityClaimReads from "../../src/discover/identity-claim-reads";
 
 let workdir: string;
 let project: Project;

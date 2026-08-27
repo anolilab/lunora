@@ -1,8 +1,8 @@
 import type { ArrowFunction, FunctionExpression, IfStatement, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { UnrestrictedWhereBranchIR } from "./ir";
+import type { UnrestrictedWhereBranchIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Config keys whose value is a row predicate returning a `WhereInput`: a

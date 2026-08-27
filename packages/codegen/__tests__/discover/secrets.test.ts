@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverSecrets from "../src/discover-secrets";
+import discoverSecrets from "../../src/discover/secrets";
 
 // Secret-shaped literals across the provider rules. The values are synthetic —
 // shaped to match each gitleaks-style pattern without being live credentials.

@@ -1,14 +1,14 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "./argument-taint";
-import { collectCallRows, isContextIdentifier } from "./discover-ast";
-import type { FlagSecurityDefaultIR } from "./ir";
+import { enclosingExportName } from "../argument-taint";
+import type { FlagSecurityDefaultIR } from "../ir";
+import { collectCallRows, isContextIdentifier } from "./ast";
 
 /**
  * Whether `callee` is a `ctx.flags.boolean` property access — the boolean flag
  * read whose default a provider outage returns. Anchored on a literal `ctx.flags`
- * receiver (the same fail-closed, `import`-agnostic convention `discover-flags`
+ * receiver (the same fail-closed, `import`-agnostic convention `discover/flags`
  * uses); deliberately does NOT match `ctx.flags.details.boolean` (a different
  * return shape), nor a destructured `flags` binding, nor the non-boolean typed
  * reads (`number`/`string`/`object`).

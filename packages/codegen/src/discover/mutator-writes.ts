@@ -4,14 +4,14 @@ import { join } from "node:path";
 import type { CallExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { isDefineMutatorCallee, MUTATORS_FILENAME } from "./discover-mutators";
-import type { MutatorWriteIR } from "./ir";
+import type { MutatorWriteIR } from "../ir";
+import { isDefineMutatorCallee, MUTATORS_FILENAME } from "./mutators";
 
 /**
  * True for a `ctx.db.replace(...)` (or bare `db.replace(...)`) call — the
  * whole-row write entry point. The receiver must be `.db` so unrelated
  * `.replace(...)` calls (e.g. `string.replace`) don't match. Mirrors
- * `discover-inserts`' `isDatabaseInsertCall`, narrowed to `replace`.
+ * `discover/inserts`' `isDatabaseInsertCall`, narrowed to `replace`.
  */
 const isDatabaseReplaceCall = (call: CallExpression): boolean => {
     const callee = call.getExpression();

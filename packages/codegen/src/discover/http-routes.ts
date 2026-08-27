@@ -1,10 +1,10 @@
 import type { CallExpression, Node as TsNode, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { lunoraRelativePath } from "./discover-ast";
-import { listLunoraSourceFiles, unwrapHandlerReturn } from "./discover-functions";
-import type { HttpRouteIR, ValidatorIR } from "./ir";
-import { parseObjectShape, parseValidator } from "./parse-validator";
+import type { HttpRouteIR, ValidatorIR } from "../ir";
+import { parseObjectShape, parseValidator } from "../parse-validator";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /**
  * The `httpRoute.<verb>(...)` factory verbs. Each opens a fresh typed-route
@@ -90,7 +90,7 @@ const readRootVerb = (node: TsNode): { method: string; path: string } | undefine
  * Walk a `httpRoute.<verb>("/p").searchParams({...}).body({...}).output(v).handler(fn)`
  * chain leftward from the terminal call, merging the input maps and recording
  * `.output()`, until it reaches the `httpRoute.<verb>(path)` root. Mirrors
- * `discover-functions`' `argsFromBuilderChain`: chains read terminal → root, so a
+ * `discover/functions`' `argsFromBuilderChain`: chains read terminal → root, so a
  * key set by a later (encountered-first) `.body()` wins over an earlier one —
  * matching the runtime's `{ ...state.body, ...validators }` spread.
  *

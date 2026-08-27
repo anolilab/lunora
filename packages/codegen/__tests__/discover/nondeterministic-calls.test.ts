@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverNondeterministicCalls from "../src/discover-nondeterministic-calls";
+import discoverNondeterministicCalls from "../../src/discover/nondeterministic-calls";
 
 /** A mutation handler that reads wall-clock time via `Date.now()`. */
 const MUTATION_DATE_NOW = `

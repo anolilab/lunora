@@ -4,11 +4,11 @@ import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression, warnIf
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
-import { listLunoraSourceFiles } from "./discover-functions";
-import type { AgentIR, CronJobIR, WorkflowIR } from "./ir";
-import { isCronSourceModule } from "./module-specifiers";
-import sanitizeNamespace from "./paths";
+import { CodegenDiagnosticError, diagnosticAt } from "../diagnostics";
+import type { AgentIR, CronJobIR, WorkflowIR } from "../ir";
+import { isCronSourceModule } from "../module-specifiers";
+import sanitizeNamespace from "../paths";
+import { listLunoraSourceFiles } from "./ast";
 
 /** All builder method names — the structured schedules plus the raw `.cron`. */
 const CRON_METHODS = new Set<string>([...CRON_SCHEDULE_KINDS, "cron"]);

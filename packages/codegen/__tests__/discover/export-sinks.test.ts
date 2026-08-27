@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverExportSinks from "../src/discover-export-sinks";
+import discoverExportSinks from "../../src/discover/export-sinks";
 
 const SINKS = `
     import { defineExportSink, r2Sink, webhookExportSink } from "@lunora/runtime";

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverMutators } from "../src/discover-mutators";
+import { discoverMutators } from "../../src/discover/mutators";
 
 let workdir: string;
 
@@ -15,7 +15,7 @@ const writeMutators = (source: string): void => {
     writeFileSync(join(workdir, "mutators.ts"), source);
 };
 
-describe("discover-mutators", () => {
+describe("discover/mutators", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-mutator-disco-"));
     });

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverAuthApiCalls from "../src/discover-authapi-calls";
+import discoverAuthApiCalls from "../../src/discover/authapi-calls";
 
 /** An httpAction-like exported function calling ctx.authApi.banUser with headers. */
 const WITH_HEADERS = `

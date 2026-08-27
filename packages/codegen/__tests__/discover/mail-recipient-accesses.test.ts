@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverMailRecipientAccesses from "../src/discover-mail-recipient-accesses";
+import discoverMailRecipientAccesses from "../../src/discover/mail-recipient-accesses";
 
 let workdir: string;
 let project: Project;

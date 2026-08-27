@@ -50,7 +50,7 @@ import type { ParseError } from "jsonc-parser";
 import { parse as parseJsonc } from "jsonc-parser";
 
 import type { CapabilityKey } from "./capabilities";
-import type { FeatureUsage } from "./discover-feature-usage";
+import type { FeatureUsage } from "./discover/feature-usage";
 
 /** The default codegen target — today's behavior, byte-identical goldens. */
 const DEFAULT_TARGET = "cloudflare";

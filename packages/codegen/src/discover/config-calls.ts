@@ -1,9 +1,9 @@
 import type { ArrowFunction, Block, FunctionExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { calleeName } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { ConfigCallIR } from "./ir";
+import { calleeName } from "../argument-taint";
+import type { ConfigCallIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Factory functions whose first-argument config object literal a security lint

@@ -1,7 +1,7 @@
 import type { Project } from "ts-morph";
 
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-ast";
-import type { StaleMigrationImportIR } from "./ir";
+import type { StaleMigrationImportIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Module prefixes that mean "this app still talks to the platform it migrated

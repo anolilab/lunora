@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { FeatureUsage } from "../src/discover-feature-usage";
-import { buildStudioFeatures, discoverFeatureUsage, hasPaymentStoreTables } from "../src/discover-feature-usage";
-import type { TableIR } from "../src/ir";
+import type { FeatureUsage } from "../../src/discover/feature-usage";
+import { discoverFeatureUsage } from "../../src/discover/feature-usage";
+import hasPaymentStoreTables from "../../src/discover/payment-store-tables";
+import { buildStudioFeatures } from "../../src/discover/studio-features";
+import type { TableIR } from "../../src/ir";
 
 let workdir: string;
 
@@ -45,7 +47,7 @@ const NO_SIGNALS = {
     workflowCount: 0,
 };
 
-describe("discover-feature-usage", () => {
+describe("discover/feature-usage", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-feature-disco-"));
     });

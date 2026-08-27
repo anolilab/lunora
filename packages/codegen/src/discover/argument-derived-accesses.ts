@@ -1,8 +1,8 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext, isUnmodifiedArgumentPassthrough } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { enclosingExportName, isArgumentDerived, isScopedByContext, isUnmodifiedArgumentPassthrough } from "../argument-taint";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * The sink method name when `node` is a `<receiver>.<method>` property access

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverNormalizeIdAuthorization from "../src/discover-normalize-id-authorization";
+import discoverNormalizeIdAuthorization from "../../src/discover/normalize-id-authorization";
 
 let workdir: string;
 let project: Project;

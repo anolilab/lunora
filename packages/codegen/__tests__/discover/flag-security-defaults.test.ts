@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverFlagSecurityDefaults from "../src/discover-flag-security-defaults";
+import discoverFlagSecurityDefaults from "../../src/discover/flag-security-defaults";
 
 let workdir: string;
 let project: Project;

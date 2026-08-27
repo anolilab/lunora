@@ -2,7 +2,7 @@ import type { AdvisorExportSink } from "@lunora/advisor";
 import type { CallExpression, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /** The three CDC export-sink factories the runtime ships (plan 170). */
 const SINK_FACTORIES = new Set<AdvisorExportSink["factory"]>(["defineExportSink", "r2Sink", "webhookExportSink"]);

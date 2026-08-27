@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverSandboxUsage } from "../src/discover-sandbox";
+import { discoverSandboxUsage } from "../../src/discover/sandbox";
 
 let workdir: string;
 
@@ -15,7 +15,7 @@ const writeAgents = (source: string): void => {
     writeFileSync(join(workdir, "agents.ts"), source);
 };
 
-describe("discover-sandbox", () => {
+describe("discover/sandbox", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-sandbox-disco-"));
     });

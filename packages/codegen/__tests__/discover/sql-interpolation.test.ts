@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverSqlInterpolation from "../src/discover-sql-interpolation";
+import discoverSqlInterpolation from "../../src/discover/sql-interpolation";
 
 /** A `ctx.sql.query` whose `text` is a substitution template referencing a handler arg — the injection smell. */
 const TEMPLATE = `

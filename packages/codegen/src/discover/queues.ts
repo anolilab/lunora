@@ -6,9 +6,9 @@ import { queueBindingName, queueDefaultName } from "@lunora/queue";
 import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
-import { stringPropertyFor } from "./discover-ast";
-import type { QueueIR } from "./ir";
+import { diagnosticAt } from "../diagnostics";
+import type { QueueIR } from "../ir";
+import { stringPropertyFor } from "./ast";
 
 /** The only file queues may be declared in — mirrors `lunora/workflows.ts`. */
 const QUEUES_FILENAME = "queues.ts";

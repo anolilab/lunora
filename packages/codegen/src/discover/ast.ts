@@ -4,7 +4,7 @@ import { extname, join, relative, sep } from "node:path";
 import type { CallExpression, Expression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
+import { diagnosticAt } from "../diagnostics";
 
 /** Strips a trailing `.ts` extension from a relative source path. */
 const TS_EXTENSION_RE: RegExp = /\.ts$/u;
@@ -91,9 +91,9 @@ const collectCallRows = <Row>(project: Project, lunoraDirectory: string, rowOf: 
  * the call isn't inside an exported declaration. Walks out past any local
  * `const x = …` declarations to the exported one.
  *
- * Shared by the call-attribution discoverers (`discover-inserts`,
- * `discover-authapi-calls`, `discover-workflow-calls`). The
- * `discover-sql-interpolation` variant has divergent semantics (no export-keyword
+ * Shared by the call-attribution discoverers (`discover/inserts`,
+ * `discover/authapi-calls`, `discover/workflow-calls`). The
+ * `discover/sql-interpolation` variant has divergent semantics (no export-keyword
  * check, `"<module>"` fallback) and is intentionally NOT this helper.
  */
 const enclosingExportName = (call: CallExpression): string => {
@@ -261,19 +261,76 @@ const tablesAccessedIn = (
 };
 
 /**
+ * Strip the type-level and grouping wrappers an expression may be dressed in —
+ * `(x)`, `x as T`, `x satisfies T`, `x!` — down to the expression itself.
+ *
+ * Builder chains are walked structurally, so a wrapper anywhere along one used
+ * to end the walk early: `(c.use(rls(p)) as QueryBuilder).query(h)` failed to
+ * classify as a procedure at all, dropping the whole function from
+ * `LUNORA_FUNCTIONS` while codegen still exited `ok`. None of these wrappers
+ * change what the expression evaluates to, so none of them should change what
+ * discovery sees.
+ */
+const unwrapExpression = (node: Node | undefined): Node | undefined => {
+    let current: Node | undefined = node;
+
+    while (
+        current &&
+        (Node.isAsExpression(current) || Node.isSatisfiesExpression(current) || Node.isParenthesizedExpression(current) || Node.isNonNullExpression(current))
+    ) {
+        current = current.getExpression();
+    }
+
+    return current;
+};
+
+/**
  * Unwrap `as`/`satisfies`/parenthesized wrappers around a call expression —
  * `define…({...}) satisfies Definition`, `define…({...}) as const`, or
  * `(define…({...}))` — down to the inner `CallExpression`. Returns `undefined`
  * when the (possibly wrapped) node isn't ultimately a call.
  */
 const unwrapToCallExpression = (node: Node | undefined): CallExpression | undefined => {
-    let current: Node | undefined = node;
-
-    while (current && (Node.isAsExpression(current) || Node.isSatisfiesExpression(current) || Node.isParenthesizedExpression(current))) {
-        current = current.getExpression();
-    }
+    const current = unwrapExpression(node);
 
     return current && Node.isCallExpression(current) ? current : undefined;
+};
+
+/**
+ * True when a call's `callee` names `expectedName` — literally, or through an
+ * import alias.
+ *
+ * The middleware detectors (`isRlsCall`, `isMaskCall`) match by NAME rather than
+ * by import origin on purpose: it keeps them working when ts-morph has degraded
+ * type info, where an origin check resolves to nothing and would drop every
+ * policy. The plain text comparison alone missed `import { rls as rowLevel }`
+ * though, so an aliased import read as unrelated middleware — `usesRls: false`,
+ * no policies in the inspector, and the dispatch lint suppressed for that
+ * target. The asymmetry made it worse: `classifyProcedureCall` DOES resolve
+ * aliases, so the same file's procedure classified correctly while its policy
+ * evidence vanished.
+ *
+ * The alias hop is additive — the text match still answers first, so degraded
+ * type info behaves exactly as before. Like the text match it does not gate on
+ * the module specifier, so an alias is trusted on the same terms a bare
+ * `rls(...)` from anywhere already is.
+ */
+const resolvesToImportedName = (callee: Node, expectedName: string): boolean => {
+    if (Node.isPropertyAccessExpression(callee)) {
+        return callee.getName() === expectedName;
+    }
+
+    if (!Node.isIdentifier(callee)) {
+        return false;
+    }
+
+    if (callee.getText() === expectedName) {
+        return true;
+    }
+
+    return (callee.getSymbol()?.getDeclarations() ?? []).some(
+        (declaration) => Node.isImportSpecifier(declaration) && declaration.getNameNode().getText() === expectedName,
+    );
 };
 
 /** Resolve the `export default` expression, following one `const x = …; export default x` indirection. */
@@ -356,10 +413,12 @@ export {
     lunoraRelativePath,
     propertyInitializer,
     readTargetOf,
+    resolvesToImportedName,
     stringPropertyFor,
     stringPropertyOf,
     tableArgumentOf,
     tablesAccessedIn,
     TS_EXTENSION_RE,
+    unwrapExpression,
     unwrapToCallExpression,
 };

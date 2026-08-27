@@ -1,6 +1,6 @@
 /**
  * Static discovery of `.use(storageRules([...]))` chains — the storage analogue
- * of `discoverRlsMetadata` (`./discover-rls-procedures`). Walks every exported
+ * of `discoverRlsMetadata` (`./discover/rls-procedures`). Walks every exported
  * Lunora procedure's builder chain, finds each `storageRules(rules)` call, and
  * lifts the `{ bucket, on, prefix }` shape of every literal rule into metadata
  * the studio's read-only access-rules view lists. The `when` predicate is never
@@ -9,9 +9,9 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { stringPropertyOf } from "./discover-ast";
-import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { StorageRuleIR, StorageRulesMetadataIR } from "./ir";
+import type { StorageRuleIR, StorageRulesMetadataIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath, stringPropertyOf } from "./ast";
+import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** The operations `defineStorageRule({ on })` accepts; anything else is ignored as malformed. */
 const STORAGE_OPERATIONS = new Set<StorageRuleIR["on"]>(["delete", "list", "read", "write"]);

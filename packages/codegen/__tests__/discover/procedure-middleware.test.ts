@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverProcedureMiddleware from "../src/discover-procedure-middleware";
+import discoverProcedureMiddleware from "../../src/discover/procedure-middleware";
 
 // A self-contained branded builder + middleware DSL. Discovery resolves the
 // `__lunoraProcedure` brand off the receiver's *type*, so the builder is declared

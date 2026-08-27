@@ -5,15 +5,15 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { CodegenDiagnosticError } from "../src/diagnostics";
-import { discoverAgents } from "../src/discover-agents";
-import discoverCrons from "../src/discover-crons";
-import { discoverWorkflows } from "../src/discover-workflows";
-import { emitCrons, emitWranglerCronTriggers } from "../src/emit";
+import { CodegenDiagnosticError } from "../../src/diagnostics";
+import { discoverAgents } from "../../src/discover/agents";
+import discoverCrons from "../../src/discover/crons";
+import { discoverWorkflows } from "../../src/discover/workflows";
+import { emitCrons, emitWranglerCronTriggers } from "../../src/emit";
 
 let workdir: string;
 
-describe("discover-crons", () => {
+describe("discover/crons", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-cron-disco-"));
     });
@@ -276,7 +276,7 @@ describe("discover-crons", () => {
     it("warns (does not throw) during codegen when a raw 6-field .cron() is accepted (build path)", () => {
         expect.assertions(2);
 
-        // Regression: `discover-crons.ts` validated a raw `.cron()` with
+        // Regression: `discover/crons.ts` validated a raw `.cron()` with
         // `isValidCronExpression` directly and never routed the accepted
         // 6-field case through the shared seconds-leading advisory, so codegen
         // silently emitted a Cloudflare-incompatible trigger to wrangler.jsonc.

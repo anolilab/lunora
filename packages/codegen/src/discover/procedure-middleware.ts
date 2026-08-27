@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { ProcedureMiddlewareIR } from "./ir";
-import { argumentNames, procedureArgumentObjects } from "./procedure-argument-objects";
+import type { ProcedureMiddlewareIR } from "../ir";
+import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
  * Middleware factory names mapped to the protection flag they set. Matched by the

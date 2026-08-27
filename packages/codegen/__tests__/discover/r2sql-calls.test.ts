@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverR2sqlCalls from "../src/discover-r2sql-calls";
+import discoverR2sqlCalls from "../../src/discover/r2sql-calls";
 
 /** A query handler that reads R2 SQL via `ctx.r2sql.from(...)`. */
 const QUERY_R2SQL_FROM = `

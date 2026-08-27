@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { FunctionIR, OwnerFieldWriteIR } from "./ir";
+import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import type { FunctionIR, OwnerFieldWriteIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Ownership / identity columns whose value must come from the server-trusted

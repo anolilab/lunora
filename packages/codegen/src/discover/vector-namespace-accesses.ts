@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
-import { collectCallRows, propertyInitializer } from "./discover-ast";
-import type { VectorNamespaceAccessIR } from "./ir";
+import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import type { VectorNamespaceAccessIR } from "../ir";
+import { collectCallRows, propertyInitializer } from "./ast";
 
 /**
  * The `ctx.vectors` methods whose second argument may carry a `namespace`

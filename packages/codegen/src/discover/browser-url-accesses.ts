@@ -1,7 +1,7 @@
 import type { Project } from "ts-morph";
 
-import { discoverArgumentDerivedAccesses } from "./discover-argument-derived-accesses";
-import type { BrowserUrlAccessIR } from "./ir";
+import type { BrowserUrlAccessIR } from "../ir";
+import { discoverArgumentDerivedAccesses } from "./argument-derived-accesses";
 
 /**
  * The `ctx.browser.<method>(url, …)` navigation methods whose first argument is

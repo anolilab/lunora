@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverContainerKeyAccesses from "../src/discover-container-key-accesses";
+import discoverContainerKeyAccesses from "../../src/discover/container-key-accesses";
 
 let workdir: string;
 let project: Project;

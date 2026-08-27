@@ -639,7 +639,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             // Nothing stops a schema from declaring a `__originals__` field: the only
             // reserved-name enforcement in the stack is `RESERVED_TABLE_NAMES`
-            // in `packages/codegen/src/discover-schema.ts:64`, which covers
+            // in `packages/codegen/src/discover/schema.ts:64`, which covers
             // TABLE names, and `SYSTEM_INDEX_FIELDS`
             // (`packages/server/src/schema.ts:861`), which is a two-entry list
             // of indexable system fields, not a prohibition on user ones.

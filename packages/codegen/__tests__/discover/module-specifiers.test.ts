@@ -17,11 +17,11 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverCrons from "../src/discover-crons";
-import { discoverFunctions } from "../src/discover-functions";
-import discoverMigrations from "../src/discover-migrations";
-import { discoverMutators } from "../src/discover-mutators";
-import { discoverShapes } from "../src/discover-shapes";
+import discoverCrons from "../../src/discover/crons";
+import discoverFunctions from "../../src/discover/functions";
+import discoverMigrations from "../../src/discover/migrations";
+import { discoverMutators } from "../../src/discover/mutators";
+import { discoverShapes } from "../../src/discover/shapes";
 
 let workdir: string;
 

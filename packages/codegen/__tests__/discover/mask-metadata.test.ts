@@ -5,10 +5,11 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverMaskHasNonLiteralPolicy, discoverMaskMetadata } from "../src/discover-mask-procedures";
+import discoverMaskHasNonLiteralPolicy from "../../src/discover/mask-procedures/has-non-literal-policy";
+import discoverMaskMetadata from "../../src/discover/mask-procedures/metadata";
 
 // A self-contained branded builder + mask DSL — the same shape the
-// discover-mask-procedures test uses. `.use` returns the same builder so the
+// discover/mask-procedures test uses. `.use` returns the same builder so the
 // `.use(mask(...)).query(...)` chain type-checks and the chain walk finds the
 // `mask(...)` call. `discoverMaskMetadata` reads the strategy off each column
 // property initializer (string literal vs. function), so the policies are

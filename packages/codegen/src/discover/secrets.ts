@@ -1,9 +1,9 @@
 import type { Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { SecretLiteralIR } from "./ir";
-import { isHeuristicSecretKind, isSecretishName, redact, secretKindOf } from "./secret-rules";
+import type { SecretLiteralIR } from "../ir";
+import { isHeuristicSecretKind, isSecretishName, redact, secretKindOf } from "../secret-rules";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * The constant string value of a node, folding `+` concatenations of string

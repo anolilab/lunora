@@ -5,14 +5,14 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverMigrations from "../src/discover-migrations";
+import discoverMigrations from "../../src/discover/migrations";
 
 const NON_STATIC_ID_RE = /must declare `id` as a non-empty string literal/u;
 const DUPLICATE_ID_RE = /Duplicate migration id "dup"/u;
 
 let workdir: string;
 
-describe("discover-migrations", () => {
+describe("discover/migrations", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-migrate-disco-"));
     });

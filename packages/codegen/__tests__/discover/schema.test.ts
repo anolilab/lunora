@@ -6,10 +6,10 @@ import { defineTable, v } from "@lunora/server";
 import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import { CodegenDiagnosticError } from "../src/diagnostics";
-import discoverSchema from "../src/discover-schema";
-import { emitDataModel, emitServer } from "../src/emit";
-import { runtimeTableToIR } from "../src/resolve-package-extension";
+import { CodegenDiagnosticError } from "../../src/diagnostics";
+import discoverSchema from "../../src/discover/schema";
+import { emitDataModel, emitServer } from "../../src/emit";
+import { runtimeTableToIR } from "../../src/resolve-package-extension";
 
 /**
  * Build a fresh in-memory project hosting a `schema.ts` with the given source.

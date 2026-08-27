@@ -3,7 +3,7 @@
  * the `ctx.*` helpers and `defineApp` builder methods each backed by an
  * `@lunora/*` add-on. Before this table the same capability was described four
  * times, each drifting independently: the code-usage probe
- * (`discover-feature-usage.ts`), the typed `ctx.*` field seam (`emit.ts`), the
+ * (`discover/feature-usage.ts`), the typed `ctx.*` field seam (`emit.ts`), the
  * fluent `defineApp` builder method (`emit-app.ts`), and the `has*` flag
  * plumbing (`run-codegen.ts`). Adding a capability now means one row here.
  *

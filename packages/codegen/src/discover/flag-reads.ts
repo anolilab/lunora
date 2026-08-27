@@ -1,9 +1,9 @@
 import type { Node as TsNode, Project, PropertyAccessExpression, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { handlerOf } from "./discover-ast";
-import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { FlagReadIR } from "./ir";
+import type { FlagReadIR } from "../ir";
+import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** One resolved query handler with its attribution. */
 interface ResolvedQuery {

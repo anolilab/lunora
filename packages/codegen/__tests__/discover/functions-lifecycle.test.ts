@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverFunctions } from "../src/discover-functions";
-import { emitFunctions } from "../src/emit";
+import discoverFunctions from "../../src/discover/functions";
+import { emitFunctions } from "../../src/emit";
 
 /**
  * Discovery of the two lifecycle factories this branch added: `onShardInit` and

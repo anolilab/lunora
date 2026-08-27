@@ -1,9 +1,9 @@
 import type { CallExpression, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName } from "./argument-taint";
-import { collectCallRows } from "./discover-ast";
-import type { ContainerOverrideIR } from "./ir";
+import { enclosingExportName } from "../argument-taint";
+import type { ContainerOverrideIR } from "../ir";
+import { collectCallRows } from "./ast";
 
 /** Runtime egress-firewall mutators on a `<handle>.egress` control surface — the `egress_relaxation` sink set. */
 const EGRESS_MUTATING_METHODS = new Set(["allow", "deny", "setAllowed"]);

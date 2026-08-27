@@ -2,14 +2,14 @@ import type { AdvisorGeoIndexUsage } from "@lunora/advisor";
 import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * True for a `.withGeoIndex(name, build)` call — the geo-query read entry point
  * on a table reader (`ctx.db.query("t").withGeoIndex(...)` /
  * `ctx.db.<table>.withGeoIndex(...)`). `withGeoIndex` is a Lunora-only reader
  * method, so matching the callee name alone is unambiguous (mirrors how
- * `discover-queries` keys off the `.query`/`.withIndex` chain method names).
+ * `discover/queries` keys off the `.query`/`.withIndex` chain method names).
  */
 const isWithGeoIndexCall = (call: CallExpression): boolean => {
     const callee = call.getExpression();

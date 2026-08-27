@@ -1,7 +1,7 @@
 import type { Project } from "ts-morph";
 
-import { discoverArgumentDerivedAccesses } from "./discover-argument-derived-accesses";
-import type { ContainerKeyAccessIR } from "./ir";
+import type { ContainerKeyAccessIR } from "../ir";
+import { discoverArgumentDerivedAccesses } from "./argument-derived-accesses";
 
 /** The `ctx.containers.` accessor prefix a single-container instance sink must start with. */
 const CONTAINER_ACCESSOR_PREFIX = "ctx.containers.";

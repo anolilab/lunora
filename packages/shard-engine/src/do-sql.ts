@@ -35,7 +35,7 @@ const DOC_COLUMN = "__doc__";
  * ones it can.
  *
  * **Nothing upstream reserves this name.** The only reserved-name enforcement in
- * the stack is `RESERVED_TABLE_NAMES` in `@lunora/codegen`'s `discover-schema`,
+ * the stack is `RESERVED_TABLE_NAMES` in `@lunora/codegen`'s `discover/schema`,
  * which covers TABLE names colliding with `ctx.db` members, and
  * `SYSTEM_INDEX_FIELDS` in `@lunora/server`'s `schema`, which is the two-entry
  * list `["_creationTime", "_id"]` of indexable system fields. Neither prohibits

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverFlagReads from "../src/discover-flag-reads";
+import discoverFlagReads from "../../src/discover/flag-reads";
 
 /** A query handler that branches on a boolean flag — the hazard this feeder exists for. */
 const QUERY_FLAG_BOOLEAN = `

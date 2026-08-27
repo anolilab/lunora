@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverHttpRoutes from "../src/discover-http-routes";
+import discoverHttpRoutes from "../../src/discover/http-routes";
 
 let workdir: string;
 
-describe("discover-http-routes", () => {
+describe("discover/http-routes", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-http-disco-"));
     });

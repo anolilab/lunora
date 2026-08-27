@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverHttpActionGuards from "../src/discover-http-action-guards";
+import discoverHttpActionGuards from "../../src/discover/http-action-guards";
 
 let workdir: string;
 let project: Project;

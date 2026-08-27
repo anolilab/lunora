@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverRelationLoads from "../src/discover-relation-loads";
+import discoverRelationLoads from "../../src/discover/relation-loads";
 
 let workdir: string;
 let project: Project;

@@ -4,10 +4,10 @@ import { join } from "node:path";
 import type { CallExpression, Identifier, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
-import type { ShapeIR, ValidatorIR } from "./ir";
-import { isServerPackageModule } from "./module-specifiers";
-import { parseObjectShape } from "./parse-validator";
+import { diagnosticAt } from "../diagnostics";
+import type { ShapeIR, ValidatorIR } from "../ir";
+import { isServerPackageModule } from "../module-specifiers";
+import { parseObjectShape } from "../parse-validator";
 
 /** The only file shapes may be declared in — mirrors `lunora/queues.ts`. */
 const SHAPES_FILENAME = "shapes.ts";

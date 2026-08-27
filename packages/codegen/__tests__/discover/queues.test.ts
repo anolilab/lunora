@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverQueues } from "../src/discover-queues";
+import { discoverQueues } from "../../src/discover/queues";
 
 let workdir: string;
 
@@ -15,7 +15,7 @@ const writeQueues = (source: string): void => {
     writeFileSync(join(workdir, "queues.ts"), source);
 };
 
-describe("discover-queues", () => {
+describe("discover/queues", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-queue-disco-"));
     });

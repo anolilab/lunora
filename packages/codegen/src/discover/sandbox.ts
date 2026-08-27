@@ -1,6 +1,6 @@
 import type { ImportDeclaration, Project } from "ts-morph";
 
-import { listLunoraSourceFiles } from "./discover-functions";
+import { listLunoraSourceFiles } from "./ast";
 
 /**
  * The specifiers the batteries-included sandbox tools are imported from. The

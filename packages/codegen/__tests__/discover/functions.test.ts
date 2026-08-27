@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverFunctions } from "../src/discover-functions";
+import discoverFunctions from "../../src/discover/functions";
 
 const NAMESPACE_COLLISION_RE = /Namespace collision/u;
 

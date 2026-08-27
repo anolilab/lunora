@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverWorkflowCalls from "../src/discover-workflow-calls";
+import discoverWorkflowCalls from "../../src/discover/workflow-calls";
 
 const CHANNELS = `
     import { mutation } from "@lunora/server";

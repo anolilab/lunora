@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { calleeName, enclosingExportName, referencesArgs } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { AiToolSideEffectIR } from "./ir";
+import { calleeName, enclosingExportName, referencesArgs } from "../argument-taint";
+import type { AiToolSideEffectIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /** The AI SDK text-generation entrypoints that accept a `tools` map — the injection sink surface. Matched by callee name, `import`-agnostic like the other feeders. */
 const GENERATION_CALLEES = new Set(["generateText", "streamText"]);

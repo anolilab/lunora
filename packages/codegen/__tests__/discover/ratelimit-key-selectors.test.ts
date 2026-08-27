@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverRatelimitKeySelectors from "../src/discover-ratelimit-key-selectors";
+import discoverRatelimitKeySelectors from "../../src/discover/ratelimit-key-selectors";
 
 let workdir: string;
 let project: Project;

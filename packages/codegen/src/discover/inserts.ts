@@ -1,9 +1,8 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "./discover-ast";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { InsertWriteIR } from "./ir";
+import type { InsertWriteIR } from "../ir";
+import { enclosingExportName, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * True for a `ctx.db.insert(...)` (or bare `db.insert(...)`) call — the database

@@ -1,9 +1,10 @@
 import type { ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { ArgumentValidatorIR } from "./ir";
-import { procedureArgumentObjects } from "./procedure-argument-objects";
+import type { ArgumentValidatorIR } from "../ir";
+import { procedureArgumentObjects } from "../procedure-argument-objects";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** A constraint fragment that bounds a string's length — its presence means the arg is *not* unbounded. */
 const BOUND_RE = /\.check\(|\.meta\(|length|max/iu;

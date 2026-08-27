@@ -1,16 +1,13 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import type { InspectableHandler } from "./discover-functions";
-import {
-    chainUsesWrappedCall,
-    classifyProcedureCall,
-    isDatabaseAccessor,
-    listLunoraSourceFiles,
-    lunoraRelativePath,
-    procedureHandler,
-} from "./discover-functions";
-import type { NormalizeIdAuthorizationIR } from "./ir";
+import type { NormalizeIdAuthorizationIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import chainUsesWrappedCall from "./functions/chain-uses-wrapped-call";
+import { classifyProcedureCall } from "./functions/classify-procedure-call";
+import type { InspectableHandler } from "./functions/inline-handler";
+import isDatabaseAccessor from "./functions/is-database-accessor";
+import procedureHandler from "./functions/procedure-handler";
 
 /**
  * `ctx.db` id-first row operations that resolve a whole row by its primitive id:

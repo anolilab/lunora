@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverArgumentValidators from "../src/discover-argument-validators";
+import discoverArgumentValidators from "../../src/discover/argument-validators";
 
 /** A public mutation with a `v.any()` arg and an unbounded `v.string()` arg. */
 const WEAK_ARGS = `

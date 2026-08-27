@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
-import { collectCallRows } from "./discover-ast";
-import type { MailRecipientAccessIR } from "./ir";
+import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import type { MailRecipientAccessIR } from "../ir";
+import { collectCallRows } from "./ast";
 
 /** The mailer methods whose first argument is an options object carrying recipient fields. */
 const MAIL_METHODS = new Set(["queue", "send"]);

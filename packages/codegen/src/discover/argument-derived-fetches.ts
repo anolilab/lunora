@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived } from "./argument-taint";
-import { collectCallRows } from "./discover-ast";
-import type { ArgumentDerivedFetchIR } from "./ir";
+import { enclosingExportName, isArgumentDerived } from "../argument-taint";
+import type { ArgumentDerivedFetchIR } from "../ir";
+import { collectCallRows } from "./ast";
 
 /**
  * True when `node` is a `ctx.fetch` member access — the action-only outbound-request

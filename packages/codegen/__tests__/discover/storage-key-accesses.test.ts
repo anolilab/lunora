@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverStorageKeyAccesses from "../src/discover-storage-key-accesses";
-import type { FunctionIR } from "../src/ir";
+import discoverStorageKeyAccesses from "../../src/discover/storage-key-accesses";
+import type { FunctionIR } from "../../src/ir";
 
 let workdir: string;
 let project: Project;

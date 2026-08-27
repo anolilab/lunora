@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverMaskProcedures from "../src/discover-mask-procedures";
+import discoverMaskProcedures from "../../src/discover/mask-procedures";
 
 // A self-contained branded builder + mask DSL. Discovery resolves the
 // `__lunoraProcedure` brand off the receiver's *type*, so the builder is

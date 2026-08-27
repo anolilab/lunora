@@ -2,8 +2,8 @@ import type { Finding } from "@lunora/advisor";
 import type { Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { FunctionIR } from "./ir";
+import type { FunctionIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * The types `@lunora/server`'s builder chains terminate in. A binding whose

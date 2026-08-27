@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverInserts from "../src/discover-inserts";
+import discoverInserts from "../../src/discover/inserts";
 
 const MESSAGES = `
     import { mutation, query } from "@lunora/server";

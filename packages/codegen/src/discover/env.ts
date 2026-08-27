@@ -4,9 +4,9 @@ import { join } from "node:path";
 import type { CallExpression, Identifier, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
-import type { EnvIR } from "./ir";
-import { isServerPackageModule } from "./module-specifiers";
+import { diagnosticAt } from "../diagnostics";
+import type { EnvIR } from "../ir";
+import { isServerPackageModule } from "../module-specifiers";
 
 /** The only file a `defineEnv` contract may be declared in — mirrors `lunora/identity.ts`. */
 const ENV_FILENAME = "env.ts";

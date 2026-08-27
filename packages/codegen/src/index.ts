@@ -16,34 +16,35 @@ export type { LintSchemaOptions } from "./advisor";
 export { formatAdvisories, lintSchema, toAdvisorContext } from "./advisor";
 export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnosticNames } from "./blocking";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
-export { AGENTS_FILENAME, discoverAgents } from "./discover-agents";
-export { default as discoverAuthApiCalls } from "./discover-authapi-calls";
-export { CONTAINERS_FILENAME, discoverContainers } from "./discover-containers";
-export { default as discoverCrons } from "./discover-crons";
-export { discoverFlags, FLAGS_FILENAME } from "./discover-flags";
-export { discoverFunctions } from "./discover-functions";
-export { default as discoverHttpRoutes } from "./discover-http-routes";
-export { default as discoverInserts } from "./discover-inserts";
-export { default as discoverMaskProcedures } from "./discover-mask-procedures";
-export { default as discoverMigrations } from "./discover-migrations";
-export { discoverMutators, MUTATORS_FILENAME } from "./discover-mutators";
-export { default as discoverNondeterministicCalls } from "./discover-nondeterministic-calls";
-export { discoverNotifyCalls, discoverNotifyConfig, NOTIFY_FILENAME } from "./discover-notify";
+export { AGENTS_FILENAME, discoverAgents } from "./discover/agents";
+export { default as discoverAuthApiCalls } from "./discover/authapi-calls";
+export { CONTAINERS_FILENAME, discoverContainers } from "./discover/containers";
+export { default as discoverCrons } from "./discover/crons";
+export { discoverFlags, FLAGS_FILENAME } from "./discover/flags";
+export { default as discoverFunctions } from "./discover/functions";
+export { default as discoverHttpRoutes } from "./discover/http-routes";
+export { default as discoverInserts } from "./discover/inserts";
+export { default as discoverMaskProcedures } from "./discover/mask-procedures";
+export { default as discoverMigrations } from "./discover/migrations";
+export { discoverMutators, MUTATORS_FILENAME } from "./discover/mutators";
+export { default as discoverNondeterministicCalls } from "./discover/nondeterministic-calls";
+export { discoverNotifyCalls, discoverNotifyConfig, NOTIFY_FILENAME } from "./discover/notify";
 // Exported so the CLI's scaffolds pick the same import form codegen emits —
 // `lunorash/server` for an umbrella project, `@lunora/server` otherwise.
 // Returns `undefined` (not an empty set) for an absent/unparseable manifest, so
 // a caller can tell "no dependencies declared" from "could not read".
-export { default as readPackageDependencies } from "./discover-package-dependencies";
-export { default as discoverQueries } from "./discover-queries";
-export { discoverQueues, QUEUES_FILENAME } from "./discover-queues";
-export { default as discoverR2sqlCalls } from "./discover-r2sql-calls";
-export { discoverRlsMetadata, default as discoverRlsProcedures } from "./discover-rls-procedures";
-export type { SandboxUsage } from "./discover-sandbox";
-export { discoverSandboxUsage } from "./discover-sandbox";
-export { default as discoverSchema } from "./discover-schema";
-export { discoverShapes, SHAPES_FILENAME } from "./discover-shapes";
-export { default as discoverStorageRulesMetadata } from "./discover-storage-rules";
-export { discoverWorkflows, WORKFLOWS_FILENAME } from "./discover-workflows";
+export { default as readPackageDependencies } from "./discover/package-dependencies";
+export { default as discoverQueries } from "./discover/queries";
+export { discoverQueues, QUEUES_FILENAME } from "./discover/queues";
+export { default as discoverR2sqlCalls } from "./discover/r2sql-calls";
+export { default as discoverRlsProcedures } from "./discover/rls-procedures";
+export { default as discoverRlsMetadata } from "./discover/rls-procedures/metadata";
+export type { SandboxUsage } from "./discover/sandbox";
+export { discoverSandboxUsage } from "./discover/sandbox";
+export { default as discoverSchema } from "./discover/schema";
+export { discoverShapes, SHAPES_FILENAME } from "./discover/shapes";
+export { default as discoverStorageRulesMetadata } from "./discover/storage-rules";
+export { discoverWorkflows, WORKFLOWS_FILENAME } from "./discover/workflows";
 export {
     emitAgents,
     emitApi,

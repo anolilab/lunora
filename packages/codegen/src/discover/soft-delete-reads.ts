@@ -1,10 +1,10 @@
 import type { Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { isArgumentDerived } from "./argument-taint";
-import { propertyInitializer, readTargetOf } from "./discover-ast";
-import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { SoftDeleteReadIR } from "./ir";
+import { isArgumentDerived } from "../argument-taint";
+import type { SoftDeleteReadIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, readTargetOf } from "./ast";
+import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
  * Reduce one exported procedure declaration to the `includeDeleted` list reads

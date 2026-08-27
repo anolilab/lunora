@@ -6,9 +6,9 @@ import { workflowBindingName, workflowClassName, workflowDefaultName } from "@lu
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
-import { stringPropertyFor, unwrapToCallExpression } from "./discover-ast";
-import type { WorkflowIR, WorkflowStepIR } from "./ir";
+import { diagnosticAt } from "../diagnostics";
+import type { WorkflowIR, WorkflowStepIR } from "../ir";
+import { stringPropertyFor, unwrapToCallExpression } from "./ast";
 
 /** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
 const WORKFLOWS_FILENAME = "workflows.ts";

@@ -4,10 +4,10 @@ import { join } from "node:path";
 import type { Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { calleeName, enclosingExportName } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import { IDENTITY_FILENAME } from "./discover-identity";
-import type { IdentityClaimReadIR } from "./ir";
+import { calleeName, enclosingExportName } from "../argument-taint";
+import type { IdentityClaimReadIR } from "../ir";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { IDENTITY_FILENAME } from "./identity";
 
 /**
  * Receiver texts a `.identity` member access must sit on to count as the

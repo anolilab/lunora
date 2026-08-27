@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverBrowserUrlAccesses from "../src/discover-browser-url-accesses";
+import discoverBrowserUrlAccesses from "../../src/discover/browser-url-accesses";
 
 let workdir: string;
 let project: Project;

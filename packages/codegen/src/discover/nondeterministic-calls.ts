@@ -1,9 +1,9 @@
 import type { CallExpression, NewExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { handlerOf } from "./discover-ast";
-import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
-import type { NondeterministicCallIR } from "./ir";
+import type { NondeterministicCallIR } from "../ir";
+import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
  * The non-deterministic global APIs disallowed inside `query`/`mutation`

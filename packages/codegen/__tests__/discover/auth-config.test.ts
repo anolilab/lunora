@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverAuthConfig from "../src/discover-auth-config";
+import discoverAuthConfig from "../../src/discover/auth-config";
 
 let workdir: string;
 let project: Project;

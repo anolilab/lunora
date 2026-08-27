@@ -251,7 +251,7 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
  * The export name of the nearest *exported* `const x = …` ancestor, or `"<module>"`
  * when the node isn't inside one (e.g. an inline-mounted handler). Walks out past
  * any local `const result = …` bindings to the exported declaration — matching
- * {@link import("./discover-ast").enclosingExportName} — so a sink nested in a
+ * {@link import("./discover/ast").enclosingExportName} — so a sink nested in a
  * local `const` is still attributed to its exported handler, not the local.
  */
 export const enclosingExportName = (node: TsNode): string => {

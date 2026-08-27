@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverUnrestrictedWhereBranches from "../src/discover-unrestricted-where-branches";
+import discoverUnrestrictedWhereBranches from "../../src/discover/unrestricted-where-branches";
 
 let workdir: string;
 
@@ -17,7 +17,7 @@ const write = (name: string, source: string): void => {
 
 const discover = () => discoverUnrestrictedWhereBranches(newProject(), workdir);
 
-describe("discover-unrestricted-where-branches", () => {
+describe("discover/unrestricted-where-branches", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-where-branch-"));
     });

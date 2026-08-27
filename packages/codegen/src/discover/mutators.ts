@@ -4,11 +4,11 @@ import { join } from "node:path";
 import type { CallExpression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
-import { unwrapHandlerReturn } from "./discover-functions";
-import type { MutatorIR, ValidatorIR } from "./ir";
-import { isServerSurfaceModule } from "./module-specifiers";
-import { parseObjectShape } from "./parse-validator";
+import { diagnosticAt } from "../diagnostics";
+import type { MutatorIR, ValidatorIR } from "../ir";
+import { isServerSurfaceModule } from "../module-specifiers";
+import { parseObjectShape } from "../parse-validator";
+import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /** The only file custom mutators may be declared in — mirrors `lunora/queues.ts`. */
 const MUTATORS_FILENAME = "mutators.ts";

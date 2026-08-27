@@ -8,9 +8,9 @@ import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { diagnosticAt } from "./diagnostics";
-import { stringPropertyFor, unwrapToCallExpression } from "./discover-ast";
-import type { AgentIR } from "./ir";
+import { diagnosticAt } from "../diagnostics";
+import type { AgentIR } from "../ir";
+import { stringPropertyFor, unwrapToCallExpression } from "./ast";
 
 /** The only file agents may be declared in — mirrors `lunora/workflows.ts`. */
 const AGENTS_FILENAME = "agents.ts";
@@ -175,7 +175,7 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
  * the `AGENT_*` Workflow binding, and the `_generated/agents.ts` class), and agent
  * naming case-folds (`supportBot`/`SupportBot` both derive `AGENT_SUPPORT_BOT`), so a
  * collision on any one of them silently clobbers a binding or a generated class.
- * Mirrors `discover-workflows.ts`'s `assertUniqueNames`, extended with `className`.
+ * Mirrors `discover/workflows.ts`'s `assertUniqueNames`, extended with `className`.
  */
 const assertUniqueNames = (agents: ReadonlyArray<AgentIR>): void => {
     const seenNames = new Map<string, string>();

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverRawRowReturns from "../src/discover-raw-row-returns";
+import discoverRawRowReturns from "../../src/discover/raw-row-returns";
 
 let workdir: string;
 let project: Project;
