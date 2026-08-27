@@ -207,11 +207,11 @@ interface DevCommandOptions {
 
 ```ts
 interface DevCommandPlan {
-    codegenEnabled: boolean;
     flavor: DevFlavor;
     frameworkHint?: string;
     ipv4LoopbackForced: boolean;
     remote: DevRemotePlan;
+    runsCodegenWatch: boolean;
     sidecar?: SpawnDescriptor & {
         tag: string;
     };

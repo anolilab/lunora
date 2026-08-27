@@ -26,7 +26,7 @@ const projectWith = (schemaSource: string): { project: Project; schemaPath: stri
 
 describe("discoverSchema", () => {
     it("keeps a shorthand column (`defineTable({ status })`) in the table shape", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // A shorthand property is its own initializer. Skipping it dropped the
         // column from the shape entirely: `Doc_tasks` came out without `status`,
@@ -47,10 +47,15 @@ describe("discoverSchema", () => {
         const tasks = schema.tables.find((table) => table.name === "tasks");
 
         expect(Object.keys(tasks?.shape ?? {})).toStrictEqual(["title", "status"]);
-        // The validator is behind an identifier, so its type is unresolvable
-        // here — but the column exists, which is what the index and the runtime
-        // insert both depend on.
-        expect(tasks?.shape.status?.kind).toBe("any");
+        // The identifier is followed to the const it names, so the column keeps
+        // its real kind. It used to stop at the shorthand PROPERTY's symbol and
+        // degrade to `any` — rendering `unknown` in `Doc_*` and in the public api
+        // surface — while the longhand `status: status` spelling of the same
+        // thing resolved fine.
+        expect(tasks?.shape.status?.kind).toBe("union");
+        // Not just "some union" — the members are what `Doc_tasks` and the public
+        // api surface render, which is the whole point of following the alias.
+        expect(tasks?.shape.status?.members?.map((member) => member.literalValue)).toStrictEqual(['"todo"', '"done"']);
     });
 
     it("captures `.externallyManaged()` into the table IR; defaults to false", () => {
