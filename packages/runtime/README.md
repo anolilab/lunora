@@ -103,6 +103,35 @@ export const refreshProducts = action.action(async ({ ctx }) => {
 
 The `ctx.cache` binding is only available in **action** handlers (not query/mutation), because actions run in the Worker while queries/mutations run inside the Durable Object. Cache header declarations on `httpRoute` (`.cacheControl()`, `.cacheTag()`, `.vary()`) are attached by `@lunora/server` before the response leaves the handler.
 
+### Scheduled backups
+
+The worker can take its own NDJSON snapshots on a Cron Trigger, writing them to an R2 bucket in your account — the same format and key layout `lunora backup list|restore` reads, so cron-written and hand-taken snapshots share one history.
+
+```ts
+export default {
+    fetch: (request: Request, env: Env, ctx: ExecutionContext) => worker(env).fetch(request, env, ctx),
+    scheduled: (controller: ScheduledController, env: Env, ctx: ExecutionContext) => worker(env).scheduled(controller, env, ctx),
+};
+
+const worker = (env: Env) =>
+    createWorker({
+        adminToken: env.LUNORA_ADMIN_TOKEN,
+        backupCron: "0 3 * * *", // must match an entry in wrangler `triggers.crons`, verbatim
+        backupRetain: 14,
+        backupStore: env.BACKUPS, // a bound R2 bucket satisfies `BackupStore`
+        shardDO: env.SHARD,
+    });
+```
+
+Four things are easy to get wrong:
+
+- **`scheduled` must be wired.** `createWorker` returns it, but a worker that only exports `fetch` never runs a backup, and nothing reports that.
+- **`backupCron` is compared verbatim** against the firing expression. `"0 3 * * *"` and `"0  3 * * *"` are different strings, and the mismatch is silent — the trigger fires, no backup runs.
+- **`backupStore` and `adminToken` are both required.** The snapshot is taken through the worker's own admin export route, so without a token there is nothing to authorize it with.
+- **`backupRetain` does not delete anything.** It is a reporting window: each run logs how many snapshots sit past the newest N and tells you to run `lunora backup prune`, which is the only thing that removes a backup. A bucket therefore grows until you prune it.
+
+`backupPrefix` (default `"backups/"`) sets the key prefix, and `backupTables` narrows the snapshot to an allowlist. The scheduled snapshot is assembled inside a Worker isolate, so it is capped at 24 MiB — smaller than the 32 MiB cap on `lunora backup create --bucket`, which travels through the checksum-verified upload route instead.
+
 ## Related
 
 - [`@lunora/do`](https://www.npmjs.com/package/@lunora/do) — the `ShardDO` / `SessionDO` Durable Objects this runtime routes to.
