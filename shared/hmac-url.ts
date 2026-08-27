@@ -25,6 +25,7 @@
  * `outDir`/`rootDir` from their `tsconfig.json` (a set `rootDir` raises TS6059
  * for this out-of-package file under `tsc --noEmit`).
  */
+import { fromBase64Url, toBase64Url } from "./base64";
 import { memoizePromise } from "./promise-memo";
 
 const textEncoder = new TextEncoder();
@@ -42,28 +43,6 @@ const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+\-.]*:\/\//i;
 // sitting inside this source file.
 const CONTROL_CHAR_CODES: number[] = Array.from({ length: 32 }, (_, index) => index);
 const CONTROL_CHAR_RE = new RegExp(`[${CONTROL_CHAR_CODES.map((code) => String.fromCodePoint(code)).join("")}]`, "u");
-
-const toBase64Url = (bytes: Uint8Array): string => {
-    // A SHA-256 HMAC is a fixed 32 bytes, well under the argument-spread limit,
-    // so building the binary string in one `fromCodePoint` call is safe and
-    // cheaper than a per-byte loop. Each byte is < 256, so code point and char
-    // code are identical here.
-    const binary = String.fromCodePoint(...bytes);
-
-    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-};
-
-const fromBase64Url = (input: string): Uint8Array => {
-    const padded = input.replaceAll("-", "+").replaceAll("_", "/") + "===".slice((input.length + 3) % 4);
-    const binary = atob(padded);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.codePointAt(index) ?? 0;
-    }
-
-    return bytes;
-};
 
 // The signing secret is effectively constant per process, so the imported
 // (non-extractable) CryptoKey is memoized by secret value: this removes one
