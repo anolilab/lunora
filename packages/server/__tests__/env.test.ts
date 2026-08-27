@@ -333,6 +333,46 @@ describe("redactSecrets", () => {
         expect(out).toContain("postgres://appuser");
     });
 
+    it("redacts a credential whose scheme is longer than any bound a scheme match would use", () => {
+        expect.assertions(2);
+
+        // The scheme is not matched at all — the pattern anchors on the literal
+        // `://` — so its length cannot decide whether a credential is redacted.
+        // A length-bounded scheme match failed OPEN here: past the bound it
+        // stopped matching, and the password went out verbatim.
+        const scheme = "s".repeat(40);
+        const out = redactSecrets(`${scheme}://appuser:hunter2@db.internal/app`); // secret-scanner:allow -- "hunter2" is the fixture being redacted, not a credential.
+
+        expect(out).not.toContain("hunter2");
+        // The username and the shape survive; the password does not. The scheme
+        // itself is NOT asserted here — at this length the standalone-token rule
+        // (>=24 chars) redacts it too, so it never reaches the output either way.
+        expect(out).toContain("://appuser:[redacted]@");
+    });
+
+    it("redacts a usernameless credential URL", () => {
+        expect.assertions(3);
+
+        // `redis://:password@host` and `amqps://:pw@broker` are ordinary URLs —
+        // both schemes routinely carry a password with no username. Requiring a
+        // username left those passwords in the clear.
+        const redis = redactSecrets("redis://:onlypass@cache.internal:6379"); // secret-scanner:allow -- "onlypass" is the fixture being redacted.
+        const amqp = redactSecrets("amqps://:brokerpw@broker.internal/vhost"); // secret-scanner:allow -- "brokerpw" is the fixture being redacted.
+
+        expect(redis).not.toContain("onlypass");
+        expect(amqp).not.toContain("brokerpw");
+        expect(redis).toContain("redis://:");
+    });
+
+    it("leaves a scheme-only URL and an SSH remote untouched", () => {
+        expect.assertions(2);
+
+        // Neither carries a password, so neither should be rewritten. `git@` in
+        // particular is a username before the host, not a credential pair.
+        expect(redactSecrets("https://example.com/path")).toBe("https://example.com/path");
+        expect(redactSecrets("git+ssh://git@github.com/o/r.git")).toBe("git+ssh://git@github.com/o/r.git");
+    });
+
     it("redacts a known-prefix token embedded in free-form text (no entropy floor)", () => {
         expect.assertions(1);
 

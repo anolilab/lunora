@@ -77,26 +77,35 @@ const EMBEDDED_PREFIXED_TOKEN_LONG = /\b(?:AKIA|AIza)[\w./+-]+|Bearer\s+[\w./+-]
  * leaks verbatim. We redact only the password segment, keeping scheme/user/host
  * for diagnostics.
  *
- * The scheme run is LENGTH-BOUNDED, and that bound is what keeps the scan
- * linear. `\b` alone does not: it limits which offsets are tried, but a payload
- * of alternating word/non-word characters (`.a.a.a…`) opens a boundary at every
- * other position, and at each one an unbounded `[\w.+-]*` ran to the end of the
- * string before failing to find `://`. That is quadratic, and this function is
- * documented as safe to call on request bodies and thrown errors — so the input
- * is attacker-controlled. Measured on a 128KB body: 4.8 SECONDS of CPU, against
- * 7ms bounded. RFC 3986 schemes are a handful of characters, so 32 is generous.
+ * Anchored on the literal `://`, and the scheme is not matched at all.
  *
- * The user and password runs stay UNBOUNDED on purpose: a bound there that a
- * real credential exceeded would silently stop redacting it, which is the one
- * failure this function must not have. They are safe unbounded because they are
- * only reached after a literal `://` matched, and the runs between those cannot
- * overlap — their total length is bounded by the input, so the scan stays linear.
+ * Matching it was the whole problem. An unbounded `[\w.+-]*` before `://` is
+ * quadratic — `\b` limits which offsets are tried, but a payload of alternating
+ * word/non-word characters (`.a.a.a…`) opens a boundary at every other position,
+ * and at each one the run reached the end of the string before failing to find
+ * `://`. This function is documented as safe to call on request bodies and thrown
+ * errors, so that input is attacker-controlled: a 128KB body cost 4.8 SECONDS.
  *
- * The scheme character class covers valid URI-scheme continuation characters (so
- * schemes such as the postgres and mongodb variants match); the user/password
- * class covers alphanumerics plus dot, percent-encoding, plus and hyphen.
+ * Length-bounding the scheme fixed the cost and introduced a quieter bug — a
+ * credential whose scheme exceeded the bound stopped being redacted at all,
+ * failing OPEN on the one thing this function exists to prevent. That is the same
+ * trap the user and password runs are deliberately left unbounded to avoid.
+ *
+ * Anchoring on `://` removes both. The scheme is only ever echoed back into the
+ * replacement, never validated, so there is nothing to gain by matching it: the
+ * engine finds candidates from a literal substring instead of scanning from every
+ * word boundary. Measured on the same 128KB payload: 4.8s unbounded, 6ms bounded,
+ * **0ms** here — and a 40-character scheme redacts correctly.
+ *
+ * The user run is `*`, not `+`: `redis://:password@host` and `amqps://:pw@broker`
+ * are ordinary usernameless credential URLs, and requiring a username left their
+ * passwords in the clear.
+ *
+ * The user/password class covers alphanumerics plus dot, percent-encoding, plus
+ * and hyphen. Both runs stay unbounded on purpose — a bound either could exceed
+ * would silently stop redacting a real credential.
  */
-const URL_CREDENTIAL = /\b([a-z][\w.+-]{0,31}:\/\/[\w.%+-]+):[\w.%+-]+@/gu;
+const URL_CREDENTIAL = /:\/\/([\w.%+-]*):[\w.%+-]+@/gu;
 
 /** The fixed placeholder substituted for any redacted secret. */
 const REDACTED = "[redacted]";
@@ -147,7 +156,7 @@ const redactSecrets = (message: string): string => {
     });
 
     // Redact only the password segment (between `:` and `@`), keeping scheme/user/host.
-    out = out.replaceAll(URL_CREDENTIAL, (_match, prefix: string) => `${prefix}:${REDACTED}@`);
+    out = out.replaceAll(URL_CREDENTIAL, (_match, user: string) => `://${user}:${REDACTED}@`);
 
     // Known-prefix credential tokens anywhere, any length (no entropy floor).
     out = out.replaceAll(EMBEDDED_PREFIXED_TOKEN_SHORT, REDACTED);
