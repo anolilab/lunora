@@ -299,6 +299,40 @@ describe("redactSecrets", () => {
         expect(out).toContain("postgres://appuser");
     });
 
+    it("stays linear on a boundary-rich payload — redaction runs on request bodies and thrown errors", () => {
+        expect.assertions(2);
+
+        // The URL-credential pattern led with an unbounded scheme run. `\b` limits
+        // which offsets are tried, but `.a.a.a…` opens a boundary at every other
+        // position, and at each one the run scanned to end-of-input before failing
+        // to find `://` — quadratic. This function is documented as safe to call on
+        // request bodies and thrown errors, so that input is attacker-controlled:
+        // a 128KB body cost 4.8 SECONDS of CPU inside the Worker.
+        const payload = ".a".repeat(64 * 1024);
+        const started = Date.now();
+
+        const out = redactSecrets(payload);
+        const elapsedMs = Date.now() - started;
+
+        // The payload is one long token run, so the entropy rule masks it — that is
+        // incidental. What this pins is the COST of getting there.
+        expect(out).toContain("[redacted]");
+        expect(elapsedMs).toBeLessThan(1000);
+    });
+
+    it("still redacts a password longer than any bound the scheme run uses", () => {
+        expect.assertions(2);
+
+        // The scheme is length-bounded; the password deliberately is NOT. A bound
+        // there that a real credential exceeded would silently stop redacting it —
+        // failing open on the one thing this function exists to prevent.
+        const password = "p".repeat(4096);
+        const out = redactSecrets(`postgres://appuser:${password}@db.internal/app`);
+
+        expect(out).not.toContain(password);
+        expect(out).toContain("postgres://appuser");
+    });
+
     it("redacts a known-prefix token embedded in free-form text (no entropy floor)", () => {
         expect.assertions(1);
 
