@@ -95,6 +95,25 @@ const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "geoP
 const TRANSPARENT_MODIFIERS = new Set(["check", "meta"]);
 
 /**
+ * The value-level refinements `@lunora/values` puts on the column surfaces —
+ * `v.string().max(200)`, `v.number().int()`, `v.string().email()`, and the rest
+ * of `StringColumnValidator` / `NumberColumnValidator` / `ArrayColumnValidator`.
+ *
+ * Every one is a `self.check(...)` at runtime (see `v.ts`), so it refines the
+ * value without changing the validator's kind — exactly like `.check(...)`
+ * spelled out, and it carries a predicate for the same reason: the AOT
+ * compiler must decline the node rather than emit a fast path that accepts a
+ * 10,000-character string the interpreted parser rejects.
+ *
+ * Absent from this set they reached {@link parseBuilderMember} as if `.max`
+ * were a validator factory, and codegen ABORTED with `Unsupported validator
+ * kind: max` — on a schema column as readily as on an `.input()` arg, so a
+ * published, publicly-typed API that `@lunora/seed` already reads constraints
+ * from made the whole app ungeneratable.
+ */
+const REFINEMENT_MODIFIERS = new Set(["email", "int", "length", "max", "min", "pattern", "positive", "url"]);
+
+/**
  * Identifiers currently being followed to their declaration, so a self- or
  * mutually-referential `const` (`const a = b; const b = a;`) terminates instead
  * of recursing forever. Parsing is synchronous and single-threaded, so one
@@ -124,7 +143,22 @@ const resolvingAliases = new Set<Identifier>();
  */
 const resolveValidatorAlias = (identifier: Identifier): Expression | undefined => {
     const symbol = identifier.getSymbol();
-    const declaration = (symbol?.getAliasedSymbol() ?? symbol)?.getValueDeclaration();
+    let declaration = (symbol?.getAliasedSymbol() ?? symbol)?.getValueDeclaration();
+
+    // A shorthand property (`{ bounded }`) is its own initializer, so the
+    // identifier reaching here IS the property name — and its symbol is the
+    // PROPERTY, whose declaration is the shorthand assignment rather than the
+    // const it stands for. Resolution stopped there and the field degraded to
+    // `unknown` in the public api surface, while the longhand `{ bounded: bounded }`
+    // spelling of the same thing resolved fine. Silent, and the wrong way round:
+    // `object-shorthand` autofixes the working spelling into the broken one.
+    // `getValueSymbol` is the checker's answer to "what does this shorthand
+    // stand for"; the aliased hop after it covers an imported validator.
+    if (declaration !== undefined && Node.isShorthandPropertyAssignment(declaration)) {
+        const valueSymbol = declaration.getValueSymbol();
+
+        declaration = (valueSymbol?.getAliasedSymbol() ?? valueSymbol)?.getValueDeclaration();
+    }
 
     if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
         return undefined;
@@ -394,7 +428,7 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     const member = callee.getName();
     const args = call.getArguments();
 
-    if (COLUMN_MODIFIERS.has(member) || TRANSPARENT_MODIFIERS.has(member)) {
+    if (COLUMN_MODIFIERS.has(member) || TRANSPARENT_MODIFIERS.has(member) || REFINEMENT_MODIFIERS.has(member)) {
         const receiver = callee.getExpression();
         const base = Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
 
@@ -402,12 +436,13 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
             return applyColumnModifier(base, member);
         }
 
-        // `.check(...)` / `.meta(...)` refine or annotate the base validator without
-        // altering its kind — unwrap to the receiver's IR. `.check(...)` additionally
-        // records a `hasRefinement` flag (its predicate is a runtime closure the IR
-        // can't represent) so the AOT compiler declines the node; `.meta(...)` is pure
-        // metadata and leaves the IR unchanged.
-        return member === "check" ? { ...base, hasRefinement: true } : base;
+        // `.check(...)`, the named refinements, and `.meta(...)` all refine or
+        // annotate the base validator without altering its kind — unwrap to the
+        // receiver's IR. Everything carrying a runtime predicate records
+        // `hasRefinement` (the closure is not representable in the IR) so the AOT
+        // compiler declines the node; `.meta(...)` alone is pure metadata and
+        // leaves the IR unchanged.
+        return member === "meta" ? base : { ...base, hasRefinement: true };
     }
 
     return parseBuilderMember(member, args, call);
