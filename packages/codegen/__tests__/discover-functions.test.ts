@@ -562,6 +562,77 @@ describe("discoverFunctions", () => {
             expect(discoverFunctions(project, workdir)[0]?.returnType).toBe("{ at: Date; raw: Uint8Array<ArrayBuffer>; }");
         });
 
+        it("keeps an alias for an ARRAY — qualifying runs ahead of the structural branches on purpose", () => {
+            expect.assertions(1);
+
+            // `type Badges = Badge[]` is a reference the checker prints by name.
+            // Expanding it would emit `import("./lib/badges").Badge[]` and throw
+            // the alias away for nothing; worse, an alias for a union whose member
+            // cannot be reproduced would decline to `unknown` when naming it would
+            // have worked. That is the whole reason the qualifier sits above
+            // `isArray`/`isUnion`, and nothing but this test enforces the order.
+            writeFunction("lib/badges.ts", `export interface Badge { label: string }\nexport type Badges = Badge[];\n`);
+            writeFunction(
+                "badges.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Badges } from "./lib/badges";
+
+            export const list = query({ args: {}, handler: async (): Promise<Badges> => [] });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/badges").Badges');
+        });
+
+        it("keeps an alias for a UNION, rather than flattening it to its members", () => {
+            expect.assertions(1);
+
+            // The other half of the ordering rule. Moving the qualifier back below
+            // `isUnion` still passes every other test in this file.
+            writeFunction("lib/result.ts", `export type Outcome = { kind: "ok"; value: string } | { kind: "err"; reason: string };\n`);
+            writeFunction(
+                "outcome.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Outcome } from "./lib/result";
+
+            export const get = query({ args: {}, handler: async (): Promise<Outcome> => ({ kind: "ok", value: "x" }) });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/result").Outcome');
+        });
+
+        it("declines a return whose member the wire cannot encode, imported or not", () => {
+            expect.assertions(1);
+
+            // `encodeWire` throws on a class instance at the send site, so naming
+            // one types a call that can never complete. The handler imports only
+            // `Envelope` here — `Money` is therefore NOT bare-nameable, the
+            // reachability walk waves it through, and the checker prints it fully
+            // qualified. Catching that needs a gate on the whole return type, not
+            // a branch inside the expansion.
+            writeFunction("lib/money.ts", `export class Money { format(): string { return "x"; } }\nexport interface Envelope { at: Money; label: string }\n`);
+            writeFunction(
+                "wallet.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Envelope } from "./lib/money";
+
+            export const get = query({ args: {}, handler: async (): Promise<Envelope> => null as never });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe("unknown");
+        });
+
         it("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {
             expect.hasAssertions();
 

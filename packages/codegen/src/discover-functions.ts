@@ -348,6 +348,62 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
 const GENERATED_DIRECTORY_SEGMENT = "/_generated/";
 
 /**
+ * Whether every declaration of `type` lives in a script-mode file — i.e. the
+ * name is GLOBAL, resolving from anywhere without an import. `lib.*.d.ts` and an
+ * app's own ambient `declare global` are the whole population.
+ *
+ * A file with a module symbol declares module-scoped names, so a `.d.ts` inside
+ * `node_modules` is emphatically not global. Assuming otherwise is what put
+ * unimported package types into `_generated/` as TS2304 (issue #509).
+ */
+const isGloballyDeclared = (type: Type): boolean => {
+    const declarations = [type.getSymbol(), type.getAliasSymbol()].flatMap((candidate) => candidate?.getDeclarations() ?? []);
+
+    return declarations.length > 0 && declarations.every((declaration) => declaration.getSourceFile().getSymbol() === undefined);
+};
+
+/**
+ * Per-module export lookup, memoised.
+ *
+ * `getExport` reads the module symbol's OWN export table, which does not list an
+ * `export * from "…"` re-export — and a star re-export is exactly how the
+ * umbrella republishes `@lunora/server`, so for the commonest spelling the cheap
+ * lookup always misses. `getExportSymbols` asks the checker instead and sees
+ * through it, at the cost of materialising every export of the module.
+ *
+ * That is why this is cached rather than merely guarded. The caller's
+ * already-imported check does not bound it: a namespace import (`import * as t`)
+ * makes the check unconditionally true, so without a cache every candidate name
+ * would rebuild `lunorash/server`'s whole export table, inside a per-property
+ * recursion, once per inference pass.
+ *
+ * Keyed on the module's compiler symbol, which is replaced wholesale when a file
+ * is re-parsed — so a stale entry cannot outlive the program it was read from.
+ */
+const MODULE_EXPORT_CACHE = new WeakMap<object, Map<string, TsSymbol | undefined>>();
+
+const moduleExport = (moduleFile: SourceFile, name: string): TsSymbol | undefined => {
+    const moduleSymbol = moduleFile.getSymbol();
+
+    if (moduleSymbol === undefined) {
+        return undefined;
+    }
+
+    let byName = MODULE_EXPORT_CACHE.get(moduleSymbol.compilerSymbol);
+
+    if (byName === undefined) {
+        byName = new Map<string, TsSymbol | undefined>();
+        MODULE_EXPORT_CACHE.set(moduleSymbol.compilerSymbol, byName);
+    }
+
+    if (!byName.has(name)) {
+        byName.set(name, moduleSymbol.getExport(name) ?? moduleFile.getExportSymbols().find((symbol) => symbol.getName() === name));
+    }
+
+    return byName.get(name);
+};
+
+/**
  * The module specifier the handler's file imports `name` from, when that import
  * resolves to `declaration` — the literal string the user wrote, never a
  * resolved path. `undefined` when the module does not import it.
@@ -387,13 +443,7 @@ const importSpecifierFor = (handlerFile: SourceFile, declaration: Node, name: st
         }
 
         const moduleFile = importDeclaration.getModuleSpecifierSourceFile();
-        // `getExport` reads the module symbol's OWN export table, which does not
-        // list a `export * from "…"` re-export — and a star re-export is exactly
-        // how the umbrella republishes `@lunora/server`. `getExportSymbols` asks
-        // the checker instead and sees through it; it costs an array of every
-        // export, so it stays behind the cheap lookup and behind the
-        // already-imported guard above.
-        const exported = moduleFile?.getSymbol()?.getExport(name) ?? moduleFile?.getExportSymbols().find((symbol) => symbol.getName() === name);
+        const exported = moduleFile === undefined ? undefined : moduleExport(moduleFile, name);
         const target = exported?.getAliasedSymbol() ?? exported;
 
         if (target?.getDeclarations().includes(declaration) === true) {
@@ -425,8 +475,12 @@ const BARE_NAMEABLE_KINDS: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /**
- * True when `declaration` names a user-land type the checker can print BARE at
- * `node` — the case that does not resolve from `_generated/`.
+ * True when `declaration` names a type the checker prints BARE at `node` AND
+ * that bare name does not resolve from `_generated/`.
+ *
+ * Both halves matter, and the first guard below is the second half: a GLOBAL
+ * declaration also prints bare, and resolves — so it is not this rule's
+ * business, even though it would pass a pure printing test.
  *
  * Two ways a name comes out bare, and both must be caught. One: the type is
  * declared in the handler's own module (`handlerFilePath`), at any nesting depth.
@@ -730,6 +784,103 @@ const isClassInstance = (type: Type): boolean =>
         .some((declaration) => Node.isClassDeclaration(declaration) || Node.isClassExpression(declaration));
 
 /**
+ * Whether `type` reaches a value `encodeWire` refuses — a user-land class
+ * instance or anything with a call signature — at any depth.
+ *
+ * {@link expandUnreachableType} declines a class instance outright, and the
+ * reasoning there (a method or a `#private` field is absent from the serialized
+ * value, so a `result.format(...)` typed off one is a runtime TypeError with no
+ * compile error anywhere) applies just as much when the class is a MEMBER of the
+ * type being named. Printing `import("./money").Envelope` publishes
+ * `at.format()` to every caller for a value that cannot cross the wire at all —
+ * `shared/wire-codec.ts` throws on it at the send site.
+ *
+ * Keyed on the same script-mode test the global exemption uses, so the built-ins
+ * that DO round-trip (`Date`, `URL`, `Map`, `Set`, the typed arrays) are not
+ * caught by it — they are declared in `lib.*.d.ts` and are exactly the set
+ * `encodeWire` supports.
+ *
+ * An index signature is deliberately NOT a refusal: a `Record`-shaped return
+ * encodes fine, and declining one is the collapse-to-`unknown` this whole path
+ * exists to avoid.
+ */
+const containsUnencodableMember = (type: Type, node: Node, depth: number, seen: Set<Type>): boolean => {
+    if (depth > MAX_EXPANSION_DEPTH || seen.has(type)) {
+        return false;
+    }
+
+    const nextSeen = new Set(seen).add(type);
+
+    // Type arguments and union/intersection members first, so a supported
+    // container carrying an unsupported payload (`Map<string, Money>`, an array
+    // of them) is still caught — the container encodes, its contents do not.
+    if (childTypes(type).some((child) => containsUnencodableMember(child, node, depth + 1, nextSeen))) {
+        return true;
+    }
+
+    const element = type.getArrayElementType();
+
+    if (element !== undefined) {
+        return containsUnencodableMember(element, node, depth + 1, nextSeen);
+    }
+
+    // A GLOBAL type is trusted and NOT descended into. The globals a return type
+    // realistically names are the built-ins `encodeWire` supports (`Date`, `Map`,
+    // `Set`, `URL`, the typed arrays), and every one of them carries prototype
+    // methods — walking their members would report `Date` itself as unencodable
+    // on the strength of `getTime()`. Same script-mode test as the bare-name
+    // exemption uses, for the same reason.
+    if (isGloballyDeclared(type)) {
+        return false;
+    }
+
+    // A function/callable is not a plain object, so `encodeWire` throws on it.
+    if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0) {
+        return true;
+    }
+
+    const isUserLandClass = [type.getSymbol(), type.getAliasSymbol()]
+        .flatMap((candidate) => candidate?.getDeclarations() ?? [])
+        .some((declaration) => Node.isClassDeclaration(declaration) || Node.isClassExpression(declaration));
+
+    if (isUserLandClass) {
+        return true;
+    }
+
+    // Members are walked only for shapes structural expansion would itself walk —
+    // which excludes arrays, tuples, and anything carrying call or index
+    // signatures, so a prototype method never reaches the callable test above.
+    return (
+        isExpandableObject(type) &&
+        type.getProperties().some((property) => containsUnencodableMember(property.getTypeAtLocation(node), node, depth + 1, nextSeen))
+    );
+};
+
+/**
+ * Whether `specifier` is one the emitted file cannot resolve.
+ *
+ * A `tsconfig` `paths` alias (`~/lib/types`, `@/types`) resolves under the
+ * AUTHORING project's own config and nowhere else — not from a sibling package
+ * that imports `_generated/api.ts`, and not under a dedicated strict config for
+ * generated output, which is the pattern this repo itself ships
+ * (`apps/playground/tsconfig.generated.json` declares no `paths`). None of
+ * `emit.ts`'s three rebasers touch it, so the alias would be written out
+ * verbatim and fail to resolve exactly where `relocateUserRelativeImports`
+ * exists to stop that happening.
+ *
+ * Matched against the project's CONFIGURED patterns rather than guessed from the
+ * shape of the string, because an alias can be spelled anything. Declining sends
+ * the type back to structural expansion, which is what it got before qualifying
+ * existed.
+ */
+const isUnresolvableSpecifier = (specifier: string, node: Node): boolean =>
+    Object.keys(node.getProject().getCompilerOptions().paths ?? {}).some((pattern) => {
+        const star = pattern.indexOf("*");
+
+        return star === -1 ? specifier === pattern : specifier.startsWith(pattern.slice(0, star)) && specifier.endsWith(pattern.slice(star + 1));
+    });
+
+/**
  * Render a type the checker would print BARE as `import("<specifier>").Name<…>`.
  *
  * Only the bare NAME is unreachable from `_generated/`; the type itself is
@@ -771,7 +922,7 @@ const qualifiedImportText = (type: Type, node: Node, handlerFilePath: string, de
         .map((declaration) => importSpecifierFor(handlerFile, declaration, name))
         .find((candidate) => candidate !== undefined);
 
-    if (specifier === undefined) {
+    if (specifier === undefined || isUnresolvableSpecifier(specifier, node)) {
         return undefined;
     }
 
@@ -812,7 +963,8 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
     const nextSeen = new Set(seen).add(type);
 
     // A CLASS INSTANCE is not reproducible, and expanding it would be worse than
-    // declining. `encodeWire` refuses a class instance outright (`shared/wire-codec.ts`
+    // declining. Answered before every branch below — including the qualifier —
+    // so no path can publish one. `encodeWire` refuses a class instance outright (`shared/wire-codec.ts`
     // — only plain objects and the supported built-ins round-trip), so no such value
     // ever reaches a caller; and the structural expansion would describe one wrongly
     // in three directions at once: methods and getters live on the prototype and are
@@ -825,9 +977,10 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
         return undefined;
     }
 
-    // An enum-literal member is imported under its ENUM's name, so the qualifier
-    // below would name the wrong thing; its VALUE is what crosses the wire and
-    // is answered first.
+    // The member's VALUE is what crosses the wire, so that is both the honest
+    // rendering and a nameable one. (`qualifiedImportText` carries its own enum
+    // guard for the union-of-members case that reaches `isUnion` below — this
+    // branch does not rely on running first.)
     if (type.isEnumLiteral()) {
         return expandEnumLiteralType(type);
     }
@@ -899,6 +1052,22 @@ const unwrapHandlerReturn = (handler: Node): string => {
     // wiring to resolve `@lunora/server`/`@lunora/values`. Surfacing such
     // partial types would mislead users; fall back to `unknown` instead.
     if (ANY_TOKEN_RE.test(rendered.replaceAll(STRING_LITERAL_SPAN_RE, ""))) {
+        return "unknown";
+    }
+
+    // A value `encodeWire` refuses never reaches a caller — it throws at the send
+    // site (`shared/wire-codec.ts`: only plain objects, arrays, and the supported
+    // built-ins round-trip). Naming one in the contract types a call that can
+    // never complete: `result.at.format()` compiles and is a runtime TypeError,
+    // and `private`/`#private` members get published to clients besides.
+    //
+    // {@link expandUnreachableType} already declined a class it was asked to
+    // expand, but that only covers the types it walks. A class the handler does
+    // NOT import is not bare-nameable, so the checker prints it fully qualified
+    // and the reachability walk waves it through — `{ at: import("./money").Money }`
+    // reached `api.ts` intact. Every return type funnels through here, so this is
+    // the one place the rule holds for all of them.
+    if (containsUnencodableMember(returnType, handler, 0, new Set<Type>())) {
         return "unknown";
     }
 

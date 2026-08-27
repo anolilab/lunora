@@ -2139,7 +2139,88 @@ export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "
                 // Qualified and rebased one level out of `_generated/`, so it
                 // resolves without an import statement of its own.
                 expect(rendered).toContain('import("../lib/shapes.js").Badge');
-                expect(rendered).not.toMatch(/[^.]\bBadge\b/u);
+                expect(rendered).not.toMatch(/(?<![.\w])Badge\b/u);
+            }
+        });
+
+        it("declines to name an imported type carrying a member the wire cannot encode", () => {
+            expect.assertions(4);
+
+            // Naming a type publishes every member of it. `Money` is a class, so
+            // `encodeWire` throws on the value at the send site
+            // (`shared/wire-codec.ts`) — but `import("../lib/money.js").Envelope`
+            // would type `result.at.format()` for every caller, a runtime
+            // TypeError with no compile error anywhere. Structural expansion
+            // already declined a bare class for exactly this reason; qualifying
+            // must not become the way around it.
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "lib", "money.ts"),
+                `export class Money {
+    format(): string {
+        return "x";
+    }
+}
+
+export interface Envelope {
+    at: Money;
+    label: string;
+}
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "wallet.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Envelope } from "./lib/money";
+
+export const get = query.input({}).query(async (): Promise<Envelope> => null as never);
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            expect(api).toContain('get: FunctionReference<"query", {}, unknown>');
+            expect(functions).toContain("Promise<unknown>");
+
+            for (const rendered of [api, functions]) {
+                expect(rendered).not.toMatch(/Envelope|Money/u);
+            }
+        });
+
+        it("declines a tsconfig `paths` alias — it resolves under the app's config and nowhere else", () => {
+            expect.assertions(4);
+
+            // The emitted qualifier is the specifier the USER wrote, and none of
+            // emit.ts's three rebasers touch an alias. Written out verbatim it
+            // resolves under the authoring project's own tsconfig and fails from a
+            // sibling package or under a dedicated strict config for generated
+            // output — which is the pattern this repo itself ships. Falling back
+            // to structural expansion is what the type got before qualifying
+            // existed, and it always resolves.
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `{
+    "compilerOptions": { "moduleResolution": "bundler", "module": "ESNext", "target": "ES2022", "strict": true, "baseUrl": ".", "paths": { "~/*": ["./lunora/lib/*"] } },
+    "include": ["lunora/**/*"]
+}
+`,
+            );
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "lib", "aliased.ts"), `export interface Badge {\n    label: string;\n}\n`);
+            writeFileSync(
+                join(workdir, "lunora", "aliased.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Badge } from "~/aliased";
+
+export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "x" }));
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [api, functions]) {
+                expect(rendered).not.toContain('import("~/aliased")');
+                expect(rendered).toContain("{ label: string }");
             }
         });
 

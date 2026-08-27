@@ -49,15 +49,22 @@ export const list = query.use(notesReadRls).query(async ({ ctx }): Promise<Doc<"
  * Deliberately annotated with an imported PACKAGE alias and deliberately
  * without `.output()`: that is the exact shape whose inferred return type used
  * to reach `_generated/api.ts` as a bare, unimported `PaginationResult` —
- * TS2304 in generated output, invisible to every unit test because emitted code
- * is only ever compiled inside a real app. `tsconfig.generated.json` compiles
- * it here, so this procedure is the CI gate for that class (issue #509). Keep
- * the annotation, keep the import, and do not add `.output()`.
+ * TS2304 in generated output (issue #509).
+ *
+ * This is the INTEGRATION half of the gate for that class: `lint:types` compiles
+ * `lunora/_generated/**` under `tsconfig.generated.json`, against a real
+ * `node_modules`, so it also proves the umbrella rewrite actually resolves —
+ * which a sandboxed unit test cannot. The unit half lives where the emitter does
+ * (`packages/codegen/__tests__/run-codegen.test.ts`) and cannot be disarmed from
+ * here. Keep the annotation, keep the import, and do not add `.output()`.
  */
 export const listPage = query
     .input({
         cursor: v.optional(v.string().check((value) => value.length <= 512, { message: "must be at most 512 characters", schema: { maxLength: 512 } })),
-        numItems: v.number(),
+        numItems: v.number().check((value) => Number.isInteger(value) && value > 0 && value <= 200, {
+            message: "must be a whole number between 1 and 200",
+            schema: { maximum: 200, minimum: 1, type: "integer" },
+        }),
     })
     .use(notesReadRls)
     .query(
