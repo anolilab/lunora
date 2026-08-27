@@ -374,7 +374,7 @@ const isGloballyDeclared = (type: Type): boolean => {
 interface QualifiedImport {
     /** The name the module exports it under — `"default"` for a default export. */
     exportName: string;
-    /** The specifier verbatim as the user wrote it. */
+    /** The specifier as the user wrote it, except that a directory module is pointed at its `index` (see {@link resolveEmittedSpecifier}). */
     specifier: string;
 }
 
@@ -506,10 +506,81 @@ const matchesNamedImport = (importDeclaration: ImportDeclaration, declaration: N
     return target?.getDeclarations().includes(declaration) === true ? { exportName: name, specifier: importDeclaration.getModuleSpecifierValue() } : undefined;
 };
 
+/** A specifier resolved from the handler's own directory rather than from a package name. */
+const RELATIVE_SPECIFIER_RE = /^\.\.?(?:$|\/)/u;
+
+/** A specifier whose final segment already names the directory's index module, with or without an extension. */
+const INDEX_SEGMENT_RE = /(?:^|\/)index(?:\.\w+)?$/u;
+
+/** A written-out trailing slash, dropped so the appended `/index` does not double it. */
+const TRAILING_SLASH_RE = /\/$/u;
+
+/** A TypeScript source extension written into an import specifier — legal in the app's own source, not in generated output (see {@link resolveEmittedSpecifier}). */
+const TS_EXTENSION_RE = /\.(?<extension>[cm]?tsx?)$/u;
+
+/** What each TypeScript source extension is written as once emitted. */
+const EMITTED_EXTENSIONS = new Map([
+    ["cts", "cjs"],
+    ["mts", "mjs"],
+    ["ts", "js"],
+    ["tsx", "js"],
+]);
+
+/**
+ * Rewrite the specifier a handler wrote into one that also resolves from
+ * `_generated/`.
+ *
+ * The qualifier is the user's own import text, and there are two spellings that
+ * resolve where they were written and nowhere else. Both are TS2307/TS5097 in a
+ * file nobody wrote and nothing can repair from outside: `paths` does not apply
+ * to a relative specifier, and no ambient declaration satisfies a qualified
+ * `import("…").T`.
+ *
+ * A DIRECTORY module (`./agent/client` → `agent/client/index.ts`) is the first.
+ * `emit.ts` appends `.js` to a rebased relative qualifier, because the generated
+ * files are consumed under NodeNext where the extension is mandatory. Extension
+ * substitution answers that for a file — `./lib/types.js` finds `lib/types.ts` —
+ * but a directory has no extension to substitute, so `../agent/client.js`
+ * resolves to nothing. Naming the index module explicitly gives the suffix
+ * something to attach to. Asked of the RESOLVED source file rather than guessed
+ * from the shape of the string: `./agent/client` is spelled the same whether it
+ * is a file or a directory, and only the checker knows which one it found.
+ *
+ * A TS EXTENSION (`./lib/types.ts`) is the second. It is legal in the app's own
+ * source under `allowImportingTsExtensions`, and illegal everywhere that flag is
+ * off — which includes a dedicated strict config for generated output, the
+ * pattern this repo itself ships. The emitted extension resolves under both.
+ */
+const resolveEmittedSpecifier = (importDeclaration: ImportDeclaration, matched: QualifiedImport): QualifiedImport => {
+    if (!RELATIVE_SPECIFIER_RE.test(matched.specifier)) {
+        return matched;
+    }
+
+    const written = TS_EXTENSION_RE.exec(matched.specifier)?.groups?.extension;
+    const emitted = written === undefined ? undefined : EMITTED_EXTENSIONS.get(written);
+
+    // An extension means the specifier already names a file, so the directory
+    // question below is answered and `emit.ts` appends nothing either.
+    if (written !== undefined && emitted !== undefined) {
+        return { ...matched, specifier: `${matched.specifier.slice(0, -written.length)}${emitted}` };
+    }
+
+    if (INDEX_SEGMENT_RE.test(matched.specifier)) {
+        return matched;
+    }
+
+    const moduleFile = importDeclaration.getModuleSpecifierSourceFile();
+
+    return moduleFile?.getBaseNameWithoutExtension() === "index"
+        ? { ...matched, specifier: `${matched.specifier.replace(TRAILING_SLASH_RE, "")}/index` }
+        : matched;
+};
+
 /**
  * The module specifier the handler's file imports `name` from, when that import
- * resolves to `declaration` — the literal string the user wrote, never a
- * resolved path. `undefined` when the module does not import it.
+ * resolves to `declaration` — the string the user wrote, never a resolved path,
+ * beyond the retargeting {@link resolveEmittedSpecifier} does.
+ * `undefined` when the module does not import it.
  *
  * This answers both questions the printing rule needs: whether the checker will
  * print the name BARE at `node` (it will, exactly when the module imports it),
@@ -542,7 +613,7 @@ const importSpecifierFor = (handlerFile: SourceFile, declaration: Node, name: st
                 : matchesAmbientModule(importDeclaration, ambientSpecifier, name);
 
         if (matched !== undefined) {
-            return matched;
+            return resolveEmittedSpecifier(importDeclaration, matched);
         }
     }
 

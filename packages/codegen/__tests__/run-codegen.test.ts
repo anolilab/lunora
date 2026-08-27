@@ -2143,6 +2143,72 @@ export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "
             }
         });
 
+        it("names the index module when the handler imports the type through a DIRECTORY", () => {
+            expect.assertions(4);
+
+            // `emit.ts` appends `.js` to a rebased relative qualifier, because
+            // the generated files are consumed under NodeNext. Extension
+            // substitution covers a file — `./lib/shapes.js` finds
+            // `lib/shapes.ts` — but a directory has nothing to substitute, so
+            // `../agent/client.js` for `agent/client/index.ts` was a TS2307 in a
+            // file the user did not write and could not repair: `paths` does not
+            // apply to a relative specifier and no ambient declaration satisfies
+            // a qualified `import("…").T`.
+            mkdirSync(join(workdir, "lunora", "agent", "client"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "agent", "messages.ts"), `export interface UIMessage {\n    text: string;\n}\n`);
+            writeFileSync(join(workdir, "lunora", "agent", "client", "index.ts"), `export type { UIMessage } from "../messages";\n`);
+            writeFileSync(
+                join(workdir, "lunora", "chat.ts"),
+                `import { query } from "./_generated/server.js";
+import type { UIMessage } from "./agent/client";
+
+export const get = query.input({}).query(async (): Promise<UIMessage> => ({ text: "x" }));
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [api, functions]) {
+                expect(rendered).toContain('import("../agent/client/index.js").UIMessage');
+                expect(rendered).not.toContain('import("../agent/client.js")');
+            }
+        });
+
+        it("retargets a TypeScript-extension specifier onto the extension the generated file can name", () => {
+            expect.assertions(4);
+
+            // `./lib/shapes.ts` is legal in the app's own source, and illegal
+            // wherever the flag permitting it is off — which includes a dedicated
+            // strict config for generated output, the pattern this repo itself
+            // ships. Written through verbatim it is a TS5097 in a file the user
+            // did not write; `.js` resolves under both.
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `{
+    "compilerOptions": { "moduleResolution": "bundler", "module": "ESNext", "target": "ES2022", "strict": true, "noEmit": true, "allowImportingTsExtensions": true },
+    "include": ["lunora/**/*"]
+}
+`,
+            );
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "lib", "shapes.ts"), `export interface Badge {\n    label: string;\n}\n`);
+            writeFileSync(
+                join(workdir, "lunora", "badges.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Badge } from "./lib/shapes.ts";
+
+export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "x" }));
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [api, functions]) {
+                expect(rendered).toContain('import("../lib/shapes.js").Badge');
+                expect(rendered).not.toContain('import("../lib/shapes.ts")');
+            }
+        });
+
         it("declines to name an imported type carrying a member the wire cannot encode", () => {
             expect.assertions(4);
 
