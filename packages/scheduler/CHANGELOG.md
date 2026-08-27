@@ -1,3 +1,14 @@
+## @lunora/scheduler [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.40...@lunora/scheduler@1.0.0-alpha.41) (2026-08-27)
+
+### Documentation
+
+* repair 404 package links, and document .source() in the hyperdrive readme ([#501](https://github.com/anolilab/lunora/issues/501)) ([d519ac2](https://github.com/anolilab/lunora/commit/d519ac23f2bd8ddf5a10af5db11f141e8728babf))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.19
+
 ## @lunora/scheduler [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.39...@lunora/scheduler@1.0.0-alpha.40) (2026-08-27)
 
 ### Bug Fixes
