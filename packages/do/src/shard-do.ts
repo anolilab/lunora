@@ -3912,9 +3912,25 @@ abstract class ShardDO {
 
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
+            // `Object.keys`, not `Object.entries`: this runs once per socket for
+            // every mutation, and `entries` allocates a fresh [key, value] pair
+            // array per socket — two allocations each for the common
+            // one-subscription socket — before a single subscription has been
+            // tested. The sockets that do NOT match paid the same price as the
+            // ones that did, which is why a 500-socket fan-out where only 10%
+            // matched still cost two thirds of the all-match case (30.5 -> 12.4 us;
+            // all-match 45.3 -> 28.0 us).
+            //
+            // NOT `for...in`, which measured slightly faster still but walks
+            // inherited enumerable keys. `Object.keys` is own-only, exactly like
+            // the `Object.entries` it replaces, so this is a pure allocation fix
+            // with no change in which subscriptions are visited.
+            const { subs } = attachment;
 
-            for (const [subId, query] of Object.entries(attachment.subs)) {
-                if (!this.matchesSubscription(query, delta)) {
+            for (const subId of Object.keys(subs)) {
+                const query = subs[subId];
+
+                if (query === undefined || !this.matchesSubscription(query, delta)) {
                     continue;
                 }
 
@@ -9096,12 +9112,23 @@ abstract class ShardDO {
             // identical for every subscription on it. See {@link SocketDelivery}.
             const delivery = this.socketDelivery(attachment);
 
-            for (const [subId, query] of Object.entries(attachment.subs)) {
-                const { functionPath } = query;
+            // `Object.keys` for the same reason as `broadcastDelta` — see there.
+            // This loop skips most subscriptions on most flushes via the memo
+            // gates below, so the per-socket `entries` allocation was paid mainly
+            // by sockets that then did nothing.
+            const { subs } = attachment;
 
-                if (!functionPath) {
+            for (const subId of Object.keys(subs)) {
+                const query = subs[subId];
+
+                // One guard, not two: a truthy `functionPath` already proves
+                // `query` is present, and splitting them pushed this function
+                // past the cognitive-complexity ceiling for no benefit.
+                if (!query?.functionPath) {
                     continue;
                 }
+
+                const { functionPath } = query;
 
                 const isAdmin = functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
                 const memo = this.subMemos.get(ws)?.get(subId);
