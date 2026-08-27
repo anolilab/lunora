@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.94...@lunora/advisor@1.0.0-alpha.95) (2026-08-27)
+
+### Documentation
+
+* repair 404 package links, and document .source() in the hyperdrive readme ([#501](https://github.com/anolilab/lunora/issues/501)) ([d519ac2](https://github.com/anolilab/lunora/commit/d519ac23f2bd8ddf5a10af5db11f141e8728babf))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.89
+
 ## @lunora/advisor [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.93...@lunora/advisor@1.0.0-alpha.94) (2026-08-27)
 
 
