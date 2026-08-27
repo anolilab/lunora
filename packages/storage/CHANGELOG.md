@@ -1,3 +1,15 @@
+## @lunora/storage [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.39...@lunora/storage@1.0.0-alpha.40) (2026-08-27)
+
+### Bug Fixes
+
+* **shard-engine:** reject cursors minted before the tiebreak changed direction ([#503](https://github.com/anolilab/lunora/issues/503)) ([fdc58bc](https://github.com/anolilab/lunora/commit/fdc58bc6acc6c4f794da42e038c6953d2554c0fe))
+
+## @lunora/storage [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.38...@lunora/storage@1.0.0-alpha.39) (2026-08-27)
+
+### Performance Improvements
+
+* **storage:** emit base64url in one pass instead of remapping base64 ([#498](https://github.com/anolilab/lunora/issues/498)) ([42fb981](https://github.com/anolilab/lunora/commit/42fb9812746805816d95ef25c19809c180c54b0c))
+
 ## @lunora/storage [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.37...@lunora/storage@1.0.0-alpha.38) (2026-08-26)
 
 ### Features

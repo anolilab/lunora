@@ -25,6 +25,10 @@
 
     "path_filters":
         - "packages/**"
+        # `shared/` is bundler-inlined rather than a package, so it matched no
+        # filter here and was skipped in full — including the cache-key encoder
+        # and the base64url codec on the HMAC signed-URL path.
+        - "shared/**"
         - "apps/**"
         - "tools/**"
         - "scripts/**"

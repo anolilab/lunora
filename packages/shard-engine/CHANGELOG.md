@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.42...@lunora/shard-engine@1.0.0-alpha.43) (2026-08-27)
+
+### Bug Fixes
+
+* **shard-engine:** reject cursors minted before the tiebreak changed direction ([#503](https://github.com/anolilab/lunora/issues/503)) ([fdc58bc](https://github.com/anolilab/lunora/commit/fdc58bc6acc6c4f794da42e038c6953d2554c0fe))
+
 ## @lunora/shard-engine [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.41...@lunora/shard-engine@1.0.0-alpha.42) (2026-08-27)
 
 ### Performance Improvements

@@ -1,0 +1,161 @@
+---
+title: Keep Postgres, get live queries
+description: "Someone asked whether Lunora can sit in front of an existing Postgres: real-time reads, Postgres as the system of record. It can, but not by proxying it. Here is why a query cannot read your database directly, and the two ways to bridge it."
+publishedAt: 2026-08-27
+author: Daniel Bannert
+category: Engineering
+image: /og-default.jpg
+tags:
+    - postgres
+    - hyperdrive
+    - realtime
+    - cloudflare
+---
+
+Someone asked this after a release post, and it is the most common shape of question I get:
+
+> Can this also just sit between my Postgres? Say I have a Channel with Messages, and I want those
+> to be real time, but the storage to be Postgres ultimately?
+
+The answer is yes, and the interesting part is why it cannot work the obvious way.
+
+## Why a query cannot read your Postgres
+
+The obvious design is a proxy. Point Lunora at your database, let `query` read from it, and live
+queries fire when rows change. Every part of that is wrong, and for two separate reasons.
+
+**A live query has to be re-runnable.** When a write lands, Lunora re-runs the queries that read
+the affected rows and pushes the diff. Re-running a function that hits an external database over
+the network is not the same operation twice. It is a `fetch` wearing a SQL costume: the result can
+change between runs for reasons the framework cannot see, and the subscription machinery has no way
+to reason about it.
+
+**A live query has to know when to re-run.** Reactivity comes from a change feed. Writes to the
+shard's SQLite and to D1 append to it, and that append is what wakes subscribers. An `UPDATE` sent
+over Hyperdrive produces no such event. Postgres does not tell Lunora anything, so nothing re-runs.
+
+So `ctx.sql`, the Hyperdrive-backed client, is available on `ActionCtx` and nowhere else. Not in
+`query`, not in `mutation`. Actions are already the place for non-deterministic work, which is
+exactly what an external read is. There is even an advisor lint, `hyperdrive_outside_action`, that
+flags it at build time rather than letting you discover it in production.
+
+That constraint is the whole design. Everything below is a way to live inside it.
+
+## The bridge: project, then subscribe
+
+If external data cannot be reactive, make a copy of it that is. Read Postgres in an action, write
+the rows into a normal Lunora table in the same call, and subscribe to the table. That write is on
+the change feed, so live queries over it behave like any other.
+
+```ts
+import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
+import postgres from "postgres";
+
+import { api } from "@/lunora/_generated/api";
+import { action, v } from "@/lunora/_generated/server";
+
+export const syncOrder = action.input({ id: v.string() }).action(async ({ ctx, args: { id } }) => {
+    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
+    ctx.sql = fromPostgresJs(postgres(connectionString));
+
+    const [row] = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where id = $1", [id]);
+
+    // This write is tracked. A `query` over `orders` re-runs for subscribers.
+    await ctx.runMutation(api.orders.upsert, { id: row.id, total: row.total });
+});
+```
+
+Postgres stays the system of record. The Lunora table is a materialized view of it that happens to
+be live. Nothing about the client changes: it reads the table.
+
+No driver ships with the package. `postgres`, `pg` and `mysql2` are heavy and the choice is yours,
+so they are optional peer dependencies with an adapter each (`fromPostgresJs`, `fromNodePg`,
+`fromMysql2`). The package never rewrites your SQL, so use whichever placeholder syntax your driver
+wants.
+
+## Skip the boilerplate: `.source()`
+
+That bridge is the escape hatch. For the common case you declare the source on the table and Lunora
+runs the loop on the shard's alarm: pull, diff, materialize, poke subscribers. No action, no
+mutation, no cron.
+
+```ts
+// lunora/schema.ts
+export default defineSchema({
+    messages: defineTable({ body: v.string(), channelId: v.string() })
+        .shardBy("channelId")
+        .source({
+            binding: "HYPERDRIVE_MESSAGES",
+            query: 'select id, body, channel_id as "channelId" from messages where channel_id = $1',
+            tenantBy: (shardKey) => [shardKey], // mandatory under .shardBy(), the tenant boundary
+        }),
+});
+
+export const channelMessages = defineShape({ table: "messages", where: () => ({}) });
+```
+
+You supply the driver once, when the shard DO is constructed, and Lunora memoizes it per binding:
+
+```ts
+createShardDO({
+    sourceClient: (env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)),
+});
+```
+
+Clients subscribe with the shape they would use over any table. There is no special case on the
+client for external data, because by the time it reaches the client it is not external any more.
+
+For the chat schema in the original question, `.shardBy("channelId")` is the detail that makes this
+comfortable. Each channel gets its own Durable Object and its own slice, so the working set per
+poll is one channel's messages rather than the whole table.
+
+## Tenant scoping is not optional
+
+The `tenantBy` line above is the isolation boundary, and it is enforced twice. `defineSchema` throws
+at load if a sourced `.shardBy()` table omits it, and the `external_source_unscoped` advisor lint
+catches it earlier, at build time, in your terminal and in Studio.
+
+Both exist because the failure mode is silent and severe: a query without the tenant predicate pulls
+every tenant's rows into one tenant's Durable Object. That is not a bug you want to find in
+production, so it is not one you are allowed to write.
+
+## Three limits worth knowing before you build on it
+
+**It polls. It is not logical replication.** There is no CDC listener on your Postgres. Freshness is
+your refresh cadence: every alarm tick by default, `refresh: { everyMs }` to throttle, or
+`refresh: "manual"` if you would rather drive it yourself. If a write lands in Postgres from
+somewhere else, subscribers see it on the next pull, not the same millisecond.
+
+**Reads are reactive. Writes are not.** `ctx.sql` is still action-only, so a user action that writes
+a message goes through an action, and the projection catches up on its own schedule. If your app is
+the only writer you can write both sides in one action and keep it tight. If three other services
+write that table, everything arrives on the poll interval.
+
+**Full-pull has a ceiling.** The default `mode: "full-pull"` reads the whole slice each tick and
+diffs it, which means upstream deletes are detected for free. It costs a full read per tick and the
+bench ceiling is around 10k rows. Past that, `mode: "incremental"` pulls only rows past a durable
+watermark, using a cursor column such as `updatedAt`.
+
+That is more configuration, and one part of it is not optional. An incremental slice cannot see a
+delete by itself, because an absent row means "unchanged" rather than "deleted". So incremental
+**requires** a delete-visibility path: either `reconcileEveryMs`, a periodic full-pull sweep, or
+`softDeleteColumn`, an upstream tombstone column your cursor query returns and does not filter out.
+Declare neither and `defineSchema` throws, with the `external_source_incremental_no_delete_path`
+lint failing the build before you get that far. Take incremental when the slice makes you, not before.
+
+## When this is the wrong tool
+
+If you want sub-second propagation of writes made by other systems, this is not it, and no amount of
+tuning the poll interval turns polling into replication. If your slice is large and high-churn, you
+will be fighting the ceiling.
+
+Where it fits well is the shape the question actually described: an existing Postgres you are not
+going to move, an app that owns most of the writes, and a read path that should feel live. You keep
+your database, your migrations, your backups and whatever else already reads that table, and you get
+live queries on top without a sync service in the middle.
+
+Lunora is still alpha, and this part of it is the newest. If you try it against a real database, I
+want to hear where it breaks.
+
+- [`@lunora/hyperdrive` docs](/docs/packages/hyperdrive)
+- [Lunora on GitHub](https://github.com/anolilab/lunora)

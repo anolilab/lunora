@@ -27,16 +27,20 @@ let warmWorkdir: string | undefined;
 /**
  * A workdir with `_generated/*` already written, created on first use.
  *
- * Neither of the two obvious places for this works under the instrumented
- * runner. tinybench's `setup`/`teardown` options are ignored by it outright;
- * `beforeAll` runs in a DIFFERENT context from the bench bodies, so the variable
- * it assigns reads back `undefined` inside them.
+ * tinybench's `setup`/`teardown` options are ignored by the instrumented
+ * runner outright, so the priming cannot live there.
  *
- * That second failure is why this bench measured nothing at all. The warm body
- * threw `The "path" argument must be of type string` on every iteration — and a
- * bench that throws takes the whole FILE's samples with it, silently and with a
- * zero exit, so the cold run reported nothing either and the summary printed
- * `NaNx faster than`. CodSpeed was tracking a number that was never measured.
+ * `beforeAll` DOES run under it — `AnalysisRunner` calls the suite's
+ * `beforeAll`/`afterAll` hooks around the benchmarks, in the same process as the
+ * bodies. An earlier version of this comment claimed otherwise; that was wrong,
+ * and the claim is corrected here rather than left to mislead the next reader
+ * into thinking every `beforeAll` in `__bench__` is inert. It is not.
+ *
+ * Priming lazily on first use is still the better shape, for a reason that does
+ * hold: the workdir is then owned by the code that needs it, cleanup is tied to
+ * process exit rather than to a hook whose ordering relative to repeated
+ * instrumented invocations is easy to get wrong, and a cold run stays entirely
+ * self-contained.
  *
  * Lazily initialising on first call sidesteps both: it runs in whichever context
  * the bench body runs in, and it primes exactly once per context.

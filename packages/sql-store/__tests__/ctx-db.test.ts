@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import { CURSOR_PREFIX } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -755,7 +756,9 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
             const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema: rankSchema });
 
             // A 4-element cursor matches [partition, sort_0, sort_1, __id__].
-            const cursor = btoa(JSON.stringify(["0", 30, "a", "x"]));
+            // Minted the way the engine mints them: `decodeCursor` refuses a
+            // cursor without the format marker.
+            const cursor = CURSOR_PREFIX + btoa(JSON.stringify(["0", 30, "a", "x"]));
 
             await writer.rankPage("notes", "byPriority", { cursor, take: 2 });
 

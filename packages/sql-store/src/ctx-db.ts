@@ -67,6 +67,7 @@ import {
     compileWhereSql,
     ConflictError,
     CountRlsUnsupportedError,
+    CURSOR_PREFIX,
     cursorBelowRetainedFloor,
     decodeCursor,
     encodeAggregateKey,
@@ -151,11 +152,9 @@ const compileOrderBySql = (keys: ReadonlyArray<{ direction?: string; field: stri
     const parts = keys.map((key) => sql`${columnRefSql(key.field)} ${sql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
 
     if (!keys.some((key) => ID_ORDER_FIELDS.has(key.field))) {
-        const tiebreak = tiebreakDirectionFor(
-            keys.map((key) => {
-                return { direction: key.direction === "desc" ? "desc" : "asc", field: key.field };
-            }),
-        );
+        // No adaptation: the helper reads `direction` off the last key and
+        // nothing else, so the keys go in as they are.
+        const tiebreak = tiebreakDirectionFor(keys);
 
         parts.push(sql`${columnRefSql("id")} ${sql.raw(tiebreak === "desc" ? "DESC" : "ASC")}`);
     }
@@ -641,7 +640,14 @@ const hydrateRankRows = async (
     return documents;
 };
 
-/** Base64-encode a rankPage continuation cursor (the `[partition, ...sortValues, id]` tuple) as JSON. */
+/**
+ * Base64-encode a rankPage continuation cursor (the `[partition, ...sortValues, id]`
+ * tuple) as JSON, behind the shared cursor marker.
+ *
+ * The marker is not decoration: `decodeCursor` refuses anything without it, so
+ * a mint site that forgets it produces cursors its own reader rejects. This one
+ * did, and only the rank pagination test caught it.
+ */
 const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
     const json = JSON.stringify(cursorValues);
     const bytes = new TextEncoder().encode(json);
@@ -651,7 +657,7 @@ const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
         binary += String.fromCodePoint(byte);
     }
 
-    return btoa(binary);
+    return CURSOR_PREFIX + btoa(binary);
 };
 
 /**
