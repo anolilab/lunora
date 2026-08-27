@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import { renderSql } from "../src/drizzle";
-import { buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys } from "../src/query-args";
+import { buildSeekWhere, CURSOR_PREFIX, decodeCursor, encodeCursor, normalizeOrderKeys } from "../src/query-args";
 import type { WhereSqlStrategy } from "../src/where-sql";
 import { compileWhereSql } from "../src/where-sql";
 import type { WhereInput } from "../src/where-types";
@@ -70,9 +70,21 @@ describe("encodeCursor / decodeCursor", () => {
     it("rejects a non-array payload", () => {
         expect.assertions(1);
 
-        const bogus = btoa(JSON.stringify({ not: "an array" }));
+        // Carries the format marker on purpose. Without it the marker check
+        // rejects first and this stops exercising the shape check it is named
+        // for — passing for the wrong reason.
+        const bogus = CURSOR_PREFIX + btoa(JSON.stringify({ not: "an array" }));
 
         expect(() => decodeCursor(bogus)).toThrow("invalid cursor");
+    });
+
+    it("rejects a cursor with no format marker", () => {
+        expect.assertions(1);
+
+        // A cursor minted before the tiebreak direction changed. Its bytes are a
+        // perfectly good payload; only the seek's reading of them moved, so the
+        // marker is the sole thing that can tell the two apart.
+        expect(() => decodeCursor(btoa(JSON.stringify([1, "row-1"])))).toThrow("invalid cursor");
     });
 });
 

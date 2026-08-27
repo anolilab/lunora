@@ -31,7 +31,7 @@ import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { SCAN_DEP } from "./dependency-tracker";
 import { runDrizzle } from "./do-exec";
 import { sqliteInList } from "./drizzle";
-import { decodeCursor, toBase64 } from "./query-args";
+import { CURSOR_PREFIX, decodeCursor, toBase64 } from "./query-args";
 import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { RankDirection, RankIndexDefinitionLike, RankPageOptions, RankPageRowKey } from "./schema-types";
 
@@ -44,7 +44,7 @@ const DOC_COLUMN = "__doc__";
  * `findMany`/`paginate`. Not `encodeCursor` (which is row-shaped) — rank
  * cursors are N-tuples.
  */
-const encodeRankCursor = (values: ReadonlyArray<unknown>): string => toBase64(JSON.stringify(values));
+const encodeRankCursor = (values: ReadonlyArray<unknown>): string => CURSOR_PREFIX + toBase64(JSON.stringify(values));
 
 /**
  * Resolve a `rankPage` keyset resume point to the flat `[partitionKey,

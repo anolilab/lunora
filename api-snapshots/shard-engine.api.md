@@ -320,6 +320,12 @@ const COMMIT_SEQ_FIELD = "_commitSeq";
 const COMMIT_SEQ_TABLE = "__commit_seq";
 ```
 
+### `CURSOR_PREFIX` (const)
+
+```ts
+const CURSOR_PREFIX = "~2";
+```
+
 ### `CacheEntry` (interface)
 
 ```ts
@@ -4645,7 +4651,9 @@ const throwingScheduler: SchedulerLike;
 ### `tiebreakDirectionFor` (const)
 
 ```ts
-const tiebreakDirectionFor: (keys: ReadonlyArray<OrderKey>) => SortDirection;
+const tiebreakDirectionFor: (keys: ReadonlyArray<{
+    direction?: string;
+}>) => SortDirection;
 ```
 
 ### `trimCdcChanges` (const)

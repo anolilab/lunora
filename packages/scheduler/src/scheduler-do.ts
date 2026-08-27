@@ -1,3 +1,4 @@
+import { toBase64Url } from "../../../shared/base64";
 import { jsonResponse } from "../../../shared/json-response";
 import type { RetryPolicy, ScheduleRecord } from "./types";
 
@@ -122,17 +123,7 @@ const MAX_SCHEDULED_FOR_MS = 999_999_999_999_999;
 const TIME_PAD = 15;
 const padTime = (n: number): string => String(n).padStart(TIME_PAD, "0");
 
-const base64url = (bytes: Uint8Array): string => {
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
-
-    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-};
-
-const generateId = (): string => base64url(crypto.getRandomValues(new Uint8Array(12)));
+const generateId = (): string => toBase64Url(crypto.getRandomValues(new Uint8Array(12)));
 
 interface ScheduleRequestBody {
     args: Record<string, unknown>;
@@ -878,7 +869,7 @@ class SchedulerDO {
         const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
         const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
 
-        return base64url(new Uint8Array(signature));
+        return toBase64Url(new Uint8Array(signature));
     }
 
     /**

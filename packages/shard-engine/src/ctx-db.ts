@@ -1202,7 +1202,7 @@ const compileOrderByText = (keys: OrderKey[]): string => {
     return parts.join(", ");
 };
 
-/** Drizzle ORDER BY for the DO: each key as `<jsonPath> ASC|DESC`, with an `id ASC` tiebreak unless an id field is already ordered (keeps paging deterministic). The drizzle twin of `compileOrderBy`. */
+/** Drizzle ORDER BY for the DO: each key as `<jsonPath> ASC|DESC`, with an `id` tiebreak in the last key's direction (see `tiebreakDirectionFor`) unless an id field is already ordered. The drizzle twin of `compileOrderBy`. */
 const compileOrderBySql = (keys: OrderKey[]): SQL => {
     const parts = keys.map((key) => dsql`${jsonPathSql(key.field)} ${dsql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
 
