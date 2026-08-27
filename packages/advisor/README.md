@@ -148,7 +148,7 @@ if (diff.regressed) {
 
 `@lunora/codegen` exposes `toAdvisorContext()` to build the context straight from the feeder, and `lunora advisor` wraps all of this as a command. Full reference for the scoring, verdicts, and the baseline gate is in the [package docs](https://lunora.sh/docs/packages/advisor).
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/studio)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/studio)**.
 
 ## Related
 

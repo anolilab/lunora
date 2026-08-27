@@ -104,7 +104,7 @@ await storage.upload("uploads/avatar.png", bytes, { contentType: "image/png", ma
 const url = await storage.getSignedUrl("uploads/avatar.png", { expiresInSeconds: 600 });
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/storage)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/storage)**.
 
 ## Related
 
