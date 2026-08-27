@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.41...@lunora/shard-engine@1.0.0-alpha.42) (2026-08-27)
+
+### Performance Improvements
+
+* **shard-engine:** sort the id tiebreak the way the key it breaks sorts ([#495](https://github.com/anolilab/lunora/issues/495)) ([8302b06](https://github.com/anolilab/lunora/commit/8302b06c8cbb81c4392c1ca1a3b1e520bdf03a6d))
+
 ## @lunora/shard-engine [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.40...@lunora/shard-engine@1.0.0-alpha.41) (2026-08-26)
 
 ### Performance Improvements
