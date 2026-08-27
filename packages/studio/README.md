@@ -86,7 +86,7 @@ const functions = [
 
 Both surfaces are read-only until you opt in: pass `dataEditable` to allow row insert/edit/delete, and `runAsIdentity` to let the runner execute as a chosen identity (loopback-dev only — it forges identity on an admin RPC). Every admin surface stays disabled unless the worker sets `LUNORA_ADMIN_TOKEN` and the client presents a matching `Authorization: Bearer` token.
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/studio)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/studio)**.
 
 ## Related
 

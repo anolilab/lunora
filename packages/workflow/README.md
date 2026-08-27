@@ -246,7 +246,7 @@ const detail = await client.getInstance({ workflowName: "order-pipeline", instan
 await client.setInstanceStatus({ workflowName: "order-pipeline", instanceId: detail.id, action: "terminate" });
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/workflows)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/workflow)**.
 
 ## Related
 

@@ -92,6 +92,49 @@ describe("implicit id tiebreak follows the sort direction", () => {
         expect(seen).toStrictEqual(seen.toSorted((left, right) => right.localeCompare(left)));
     });
 
+    it("refuses a cursor minted before the tiebreak changed direction", async () => {
+        expect.assertions(4);
+
+        const { harness, writer } = await seeded(6);
+
+        // What a pre-change build handed the client: the raw base64 tuple, with
+        // no marker. The BYTES of a cursor never changed — only the direction the
+        // seek reads them in — so this is byte-for-byte what was in flight.
+        const legacy = btoa(JSON.stringify([1_700_000_000_000, "b"]));
+
+        // Seeking with it used to return rows from the wrong side of the tie
+        // group: measured on this exact fixture it produced a row from the
+        // PREVIOUS page and made four rows unreachable. Silently, and shaped
+        // exactly like a correct page. A typed 400 is recoverable; that is not.
+        await expect(writer.findMany("events", { cursor: legacy, limit: 2, orderBy: [{ _creationTime: "desc" }] })).rejects.toThrow(/invalid cursor/iu);
+
+        // The case above rejects even without the marker check, because slicing
+        // two characters off unaligned base64 happens to break JSON.parse — an
+        // accident, not a guarantee. This one does not: it is a real payload
+        // behind a WRONG two-character marker, so dropping the check would slice
+        // it cleanly and seek with values it should have refused. It also covers
+        // a future marker being handed to this build.
+        const wrongMarker = `~9${legacy}`;
+
+        await expect(writer.findMany("events", { cursor: wrongMarker, limit: 2, orderBy: [{ _creationTime: "desc" }] })).rejects.toThrow(/invalid cursor/iu);
+
+        // A cursor this build mints round-trips, and carries the marker that
+        // makes the two distinguishable at all.
+        const page = await writer.findMany("events", { limit: 2, orderBy: [{ _creationTime: "desc" }] });
+
+        expect(page.continueCursor).toMatch(/^~2/u);
+
+        const next: { page: Record<string, unknown>[] } = await writer.findMany("events", {
+            cursor: page.continueCursor,
+            limit: 2,
+            orderBy: [{ _creationTime: "desc" }],
+        });
+
+        expect(next.page).toHaveLength(2);
+
+        harness.close();
+    });
+
     it("keeps the declared index usable for a descending page (no temp b-tree)", async () => {
         expect.assertions(2);
 

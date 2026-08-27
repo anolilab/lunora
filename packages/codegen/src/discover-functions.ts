@@ -372,6 +372,26 @@ const importsName = (handlerFile: SourceFile, declarationFile: SourceFile, name:
     });
 
 /**
+ * Every declaration kind the checker prints as a BARE name. Interfaces and type
+ * aliases were the whole list once, which left `class` and `enum` — two ordinary
+ * ways to declare a return type — printing as undeclared identifiers in
+ * `api.ts`/`functions.ts` (TS2304) while `lunora codegen` exited 0. An enum
+ * reaches the rule as its MEMBER declarations (`Status.Done` is an enum-literal
+ * type), so the member is listed alongside the enum itself.
+ *
+ * Detecting a kind here only says "this would print bare, so do not print it".
+ * Whether it can then be reproduced structurally is
+ * {@link expandUnreachableType}'s decision, and for a class the answer is no.
+ */
+const BARE_NAMEABLE_KINDS: ReadonlySet<SyntaxKind> = new Set([
+    SyntaxKind.ClassDeclaration,
+    SyntaxKind.EnumDeclaration,
+    SyntaxKind.EnumMember,
+    SyntaxKind.InterfaceDeclaration,
+    SyntaxKind.TypeAliasDeclaration,
+]);
+
+/**
  * True when `declaration` names a user-land type the checker can print BARE at
  * `node` — the case that does not resolve from `_generated/`.
  *
@@ -392,7 +412,13 @@ const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string):
         return false;
     }
 
-    if (!Node.isInterfaceDeclaration(declaration) && !Node.isTypeAliasDeclaration(declaration)) {
+    // Every declaration kind the checker prints as a BARE name. Interfaces and
+    // type aliases were the whole list once, which left `class` and `enum` — two
+    // ordinary ways to declare a return type — printing as undeclared identifiers
+    // in `api.ts`/`functions.ts` (TS2304) while `lunora codegen` exited 0. An enum
+    // reaches here as its MEMBER declarations (`Status.Done` is an enum-literal
+    // type), so the member is listed alongside the enum itself.
+    if (!BARE_NAMEABLE_KINDS.has(declaration.getKind())) {
         return false;
     }
 
@@ -410,7 +436,18 @@ const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string):
         return false;
     }
 
-    return declarationPath === handlerFilePath || importsName(node.getSourceFile(), declarationFile, declaration.getName());
+    if (declarationPath === handlerFilePath) {
+        return true;
+    }
+
+    // An enum member is imported under its ENUM's name, never its own.
+    if (Node.isEnumMember(declaration)) {
+        return importsName(node.getSourceFile(), declarationFile, declaration.getParent().getName());
+    }
+
+    // A nameless `export default class {}` has nothing to ask `importsName`
+    // about, and is unreachable by name from anywhere.
+    return Node.hasName(declaration) && importsName(node.getSourceFile(), declarationFile, declaration.getName());
 };
 
 /**
@@ -625,6 +662,28 @@ const expandObjectType = (type: Type, node: Node, handlerFilePath: string, depth
 };
 
 /**
+ * An enum-literal member prints as `Status.Done` — the enum's name, bare. What
+ * actually crosses the wire is the member's VALUE, so that is both the honest
+ * rendering and a nameable one. A member is a string or a number and nothing
+ * else; anything else declines, so the caller keeps the `unknown` fallback.
+ */
+const expandEnumLiteralType = (type: Type): string | undefined => {
+    const value = type.getLiteralValue();
+
+    if (typeof value === "string") {
+        return JSON.stringify(value);
+    }
+
+    return typeof value === "number" ? String(value) : undefined;
+};
+
+/** Whether `type` is the INSTANCE type of a user-land `class` declaration. */
+const isClassInstance = (type: Type): boolean =>
+    [type.getSymbol(), type.getAliasSymbol()]
+        .flatMap((candidate) => candidate?.getDeclarations() ?? [])
+        .some((declaration) => Node.isClassDeclaration(declaration) || Node.isClassExpression(declaration));
+
+/**
  * Structurally expand a return type that references a non-exported local type,
  * so the generated `FunctionReference` carries the real shape (`PostDoc[]` →
  * `{ _id: Id<"posts">; … }[]`) instead of erasing to `unknown`. Reachable names
@@ -651,6 +710,24 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
 
     if (type.isUnion()) {
         return expandUnionType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
+    }
+
+    if (type.isEnumLiteral()) {
+        return expandEnumLiteralType(type);
+    }
+
+    // A CLASS INSTANCE is not reproducible, and expanding it would be worse than
+    // declining. `encodeWire` refuses a class instance outright (`shared/wire-codec.ts`
+    // — only plain objects and the supported built-ins round-trip), so no such value
+    // ever reaches a caller; and the structural expansion would describe one wrongly
+    // in three directions at once: methods and getters live on the prototype and are
+    // absent from the serialized value, `#private` fields are absent too, and
+    // `private`/`protected` members would be published into the client-facing type.
+    // A `result.format(...)` typed from a method is then a runtime TypeError with no
+    // compile error anywhere. Declining keeps `unknown` — which is the contract this
+    // function opens with, and the only answer that is never wrong.
+    if (isClassInstance(type)) {
+        return undefined;
     }
 
     return expandObjectType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);

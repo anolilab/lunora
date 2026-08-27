@@ -60,7 +60,9 @@ import { recordSchemaVersion } from "./schema-history";
  * gone from the plan.
  *
  * DESC reads keep the index too (SQLite walks it backwards); only a MIXED
- * direction (`_creationTime DESC, id ASC`) still needs a partial sort.
+ * direction would still need a partial sort — which is why the implicit `id`
+ * tiebreak follows the last sort key's direction (see `tiebreakDirectionFor`),
+ * so a descending read stays an index walk rather than producing that shape.
  *
  * The geo and rank companions (below) already index their sort keys. This brings
  * the user-declared index in line with them.

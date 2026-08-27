@@ -1,3 +1,29 @@
+## @lunora/cli [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.196...@lunora/cli@1.0.0-alpha.197) (2026-08-27)
+
+### Bug Fixes
+
+* **codegen,cli:** generated output that compiles, refinements that don't abort the run, and a --no-codegen that takes effect ([#500](https://github.com/anolilab/lunora/issues/500)) ([8500289](https://github.com/anolilab/lunora/commit/85002899c3de93d87e0741869115d89199dfca97))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.132
+* **@lunora/config:** upgraded to 1.0.0-alpha.164
+
+## @lunora/cli [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.195...@lunora/cli@1.0.0-alpha.196) (2026-08-27)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.94
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.131
+* **@lunora/config:** upgraded to 1.0.0-alpha.163
+* **@lunora/d1:** upgraded to 1.0.0-alpha.93
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.92
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.77
+* **@lunora/seed:** upgraded to 1.0.0-alpha.88
+* **@lunora/testing:** upgraded to 1.0.0-alpha.128
+
 ## @lunora/cli [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.194...@lunora/cli@1.0.0-alpha.195) (2026-08-27)
 
 

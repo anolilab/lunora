@@ -1,3 +1,15 @@
+## @lunora/do [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.104...@lunora/do@1.0.0-alpha.105) (2026-08-27)
+
+### Bug Fixes
+
+* **shard-engine:** reject cursors minted before the tiebreak changed direction ([#503](https://github.com/anolilab/lunora/issues/503)) ([fdc58bc](https://github.com/anolilab/lunora/commit/fdc58bc6acc6c4f794da42e038c6953d2554c0fe))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.44
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.43
+
 ## @lunora/do [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.103...@lunora/do@1.0.0-alpha.104) (2026-08-27)
 
 ### Performance Improvements

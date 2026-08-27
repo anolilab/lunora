@@ -1,3 +1,12 @@
+## @lunora/studio [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.130...@lunora/studio@1.0.0-alpha.131) (2026-08-27)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.94
+* **@lunora/notify:** upgraded to 1.0.0-alpha.26
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.77
+
 ## @lunora/studio [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.129...@lunora/studio@1.0.0-alpha.130) (2026-08-26)
 
 

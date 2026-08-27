@@ -371,6 +371,103 @@ describe("emitApi", () => {
         expect(rendered).not.toContain('import("./dataModel")');
     });
 
+    // The qualifier as reported: a pnpm store path, hash and all, where a module
+    // specifier belongs.
+    const STORE_QUALIFIER = 'import(".pnpm/@lunora+server@1.0.0-alpha.87/node_modules/@lunora/server/data-model")';
+
+    it("recovers a module specifier from a qualifier the checker printed as a node_modules path", () => {
+        expect.assertions(4);
+
+        // The checker prints a type it resolved inside `node_modules` as the path it
+        // found on disk — under pnpm, a store path carrying a content hash. That is
+        // not a specifier and resolves from nowhere; everything after the final
+        // `node_modules/` is the one that was wanted.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "list",
+                filePath: "messages",
+                kind: "query",
+                returnType: `${STORE_QUALIFIER}.LoadWith<"messages">[]`,
+            },
+            {
+                args: {},
+                exportName: "one",
+                filePath: "nested/messages",
+                kind: "query",
+                returnType: 'import("../../node_modules/@lunora/server/data-model").LoadWith<"messages">',
+            },
+        ];
+
+        const umbrella = emitApi({ functions, useUmbrella: true });
+
+        expect(umbrella).toContain('import("lunorash/server/data-model").LoadWith<"messages">[]');
+        expect(umbrella).not.toContain("node_modules");
+
+        const scoped = emitApi({ functions });
+
+        expect(scoped).toContain('import("@lunora/server/data-model").LoadWith<"messages">');
+        expect(scoped).not.toContain(".pnpm");
+    });
+
+    it("only recovers across a path boundary, and never from a @types directory", () => {
+        expect.assertions(3);
+
+        // `vendor-node_modules/` ends with the segment's text but is an ordinary
+        // directory — a word boundary matched inside it and turned a working
+        // relative path into a bare specifier. And a `@types/foo` tail is never a
+        // specifier: the declarations for `foo` live there, but the name anything
+        // imports is `foo`, so recovering the directory would invent a package.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "vendored",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("../vendor-node_modules/pkg/index").Row',
+            },
+            {
+                args: {},
+                exportName: "typed",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("../../node_modules/@types/foo/index").Row',
+            },
+            {
+                args: {},
+                exportName: "real",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("../../node_modules/@lunora/server/data-model").Row',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("vendor-node_modules/pkg/index");
+        expect(rendered).toContain("@types/foo/index");
+        expect(rendered).toContain('import("@lunora/server/data-model").Row');
+    });
+
+    it("recovers in linear time on a qualifier with many node_modules runs", () => {
+        expect.assertions(1);
+
+        // The pattern this replaced — `(?:[^"]*\/)?node_modules\/` — backtracks
+        // polynomially on exactly this shape (CodeQL flagged it), and the rendered
+        // text is the user's own types, so the input is not ours to bound.
+        // Sized so the replaced pattern measurably blows the budget (~1.3s here)
+        // while the scan stays flat at well under a millisecond.
+        const pathological = `import("${"node_modules/".repeat(12_000)}`;
+
+        const started = process.hrtime.bigint();
+
+        emitApi({ functions: [{ args: {}, exportName: "slow", filePath: "messages", kind: "query", returnType: pathological }] });
+
+        const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+        expect(elapsedMs).toBeLessThan(1000);
+    });
+
     it("rewrites base-package qualifiers to the umbrella subpath (and only for base packages)", () => {
         expect.assertions(4);
 

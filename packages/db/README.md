@@ -89,7 +89,7 @@ Keep a **single `db` instance**, and treat its collections as the one source of
 truth per table — don't mirror rows into your own store. A derived index (a tree,
 a search index, an undo capture) built from a copy of the rows can silently read
 stale data while the UI renders through `useLiveQuery`. See [One source of truth
-per table](https://lunora.sh/docs/addons/db#one-source-of-truth-per-table).
+per table](https://lunora.sh/docs/packages/db#one-source-of-truth-per-table).
 
 ### Local-first sync engine
 
@@ -103,7 +103,7 @@ every sync tick). The framework adapters add a `useMutator` / `createMutator` /
 `mutator` hook over a bound handle. See the
 **[local-first guide](https://lunora.sh/docs/concepts/local-first)**.
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/db)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/db)**.
 
 ## Related
 

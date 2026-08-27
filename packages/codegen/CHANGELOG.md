@@ -1,3 +1,25 @@
+## @lunora/codegen [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.131...@lunora/codegen@1.0.0-alpha.132) (2026-08-27)
+
+### Bug Fixes
+
+* **codegen,cli:** generated output that compiles, refinements that don't abort the run, and a --no-codegen that takes effect ([#500](https://github.com/anolilab/lunora/issues/500)) ([8500289](https://github.com/anolilab/lunora/commit/85002899c3de93d87e0741869115d89199dfca97))
+
+## @lunora/codegen [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.130...@lunora/codegen@1.0.0-alpha.131) (2026-08-27)
+
+### Bug Fixes
+
+* **shard-engine:** reject cursors minted before the tiebreak changed direction ([#503](https://github.com/anolilab/lunora/issues/503)) ([fdc58bc](https://github.com/anolilab/lunora/commit/fdc58bc6acc6c4f794da42e038c6953d2554c0fe))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.94
+* **@lunora/agent:** upgraded to 1.0.0-alpha.69
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.40
+* **@lunora/do:** upgraded to 1.0.0-alpha.105
+* **@lunora/server:** upgraded to 1.0.0-alpha.88
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.43
+
 ## @lunora/codegen [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.129...@lunora/codegen@1.0.0-alpha.130) (2026-08-26)
 
 ### Bug Fixes

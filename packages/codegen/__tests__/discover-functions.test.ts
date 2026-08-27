@@ -284,6 +284,124 @@ describe("discoverFunctions", () => {
             expect(result[0]?.returnType).toBe("{ id: string }[]");
         });
 
+        it("expands an `enum` to its wire values — the bare-name rule is not interfaces-and-aliases only", () => {
+            expect.assertions(2);
+
+            // An `enum` prints as `Status.Done` — the enum's name, bare — and a
+            // `class` as `Receipt`. Both are ordinary ways to declare a return
+            // type, and both landed in `_generated/api.ts` as undeclared
+            // identifiers (TS2304) while `lunora codegen` exited 0, because the
+            // bare-name rule only recognised interfaces and type aliases. What
+            // actually crosses the wire for an enum is the member's VALUE.
+            writeFunction(
+                "reports.ts",
+                `
+            import { query } from "@lunora/server";
+
+            export enum Status {
+                Done = "done",
+                Open = "open",
+            }
+
+            enum Priority {
+                Low = 1,
+                High = 2,
+            }
+
+            export const status = query({
+                args: {},
+                handler: (): Status => Status.Open,
+            });
+
+            export const priority = query({
+                args: {},
+                handler: (): Priority => Priority.Low,
+            });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+            const byName = new Map(result.map((definition) => [definition.exportName, definition.returnType]));
+
+            expect(byName.get("status")).toBe('"done" | "open"');
+            expect(byName.get("priority")).toBe("1 | 2");
+        });
+
+        it("declines a `class` return type to `unknown` rather than inventing a shape", () => {
+            expect.assertions(1);
+
+            // Detecting the class is right — printed bare it is a TS2304. Expanding
+            // it is not. `encodeWire` REFUSES a class instance outright
+            // (`shared/wire-codec.ts`: only plain objects and the supported built-ins
+            // round-trip), so no such value ever reaches a caller; and the structural
+            // shape would be wrong in three directions at once — methods and getters
+            // live on the prototype and never serialize, `#private` fields never
+            // serialize, and `private`/`protected` members would be published into
+            // the client-facing type. `result.format(...)` typed off a method is a
+            // runtime TypeError with no compile error anywhere. `unknown` is the
+            // contract this expander opens with: never worse than a bare name.
+            writeFunction(
+                "receipts.ts",
+                `
+            import { query } from "@lunora/server";
+
+            export class Receipt {
+                #hidden = 1;
+                constructor(public readonly id: string, private secret: string) {}
+                get total(): number { return 1; }
+                format(prefix: string): string { return prefix + this.id; }
+            }
+
+            export const latest = query({
+                args: {},
+                handler: (): Receipt | null => null,
+            });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+
+            expect(result[0]?.returnType).toBe("unknown");
+        });
+
+        it("expands an enum imported from a SIBLING module — the member is imported under its enum's name", () => {
+            expect.assertions(1);
+
+            // The reachability half: an enum member's declaration is the member,
+            // whose own name (`Done`) is never what the handler imports. Asking
+            // whether `Done` was imported answers no, so the qualified bare name
+            // would be judged reachable and printed.
+            writeFunction(
+                "lib/status.ts",
+                `
+            export enum Status {
+                Done = "done",
+                Open = "open",
+            }
+        `,
+            );
+            writeFunction(
+                "orders.ts",
+                `
+            import { query } from "@lunora/server";
+            import { Status } from "./lib/status";
+
+            export const state = query({
+                args: {},
+                handler: (): { status: Status } => ({ status: Status.Open }),
+            });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+            const state = result.find((definition) => definition.exportName === "state");
+
+            expect(state?.returnType).toBe('{ status: "done" | "open" }');
+        });
+
         it("expands an alias the checker reuses from a declaration's syntax, which the type graph reports as absent", () => {
             expect.assertions(2);
 
