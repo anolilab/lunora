@@ -108,29 +108,38 @@ The `ctx.cache` binding is only available in **action** handlers (not query/muta
 The worker can take its own NDJSON snapshots on a Cron Trigger, writing them to an R2 bucket in your account — the same format and key layout `lunora backup list|restore` reads, so cron-written and hand-taken snapshots share one history.
 
 ```ts
-export default {
-    fetch: (request: Request, env: Env, ctx: ExecutionContext) => worker(env).fetch(request, env, ctx),
-    scheduled: (controller: ScheduledController, env: Env, ctx: ExecutionContext) => worker(env).scheduled(controller, env, ctx),
-};
+interface BackupEnv extends Env {
+    BACKUPS: R2Bucket;
+    LUNORA_ADMIN_TOKEN: string;
+}
 
-const worker = (env: Env) =>
-    createWorker({
+let worker: LunoraWorker | null = null;
+
+const build = (env: BackupEnv): LunoraWorker =>
+    (worker ??= createWorker({
         adminToken: env.LUNORA_ADMIN_TOKEN,
         backupCron: "0 3 * * *", // must match an entry in wrangler `triggers.crons`, verbatim
         backupRetain: 14,
         backupStore: env.BACKUPS, // a bound R2 bucket satisfies `BackupStore`
+        queryCoordinator, // the export walks every shard through it
         shardDO: env.SHARD,
-    });
+    }));
+
+export default {
+    fetch: (request: Request, env: BackupEnv, ctx: ExecutionContext) => build(env).fetch(request, env, ctx),
+    scheduled: (controller: ScheduledController, env: BackupEnv, ctx: ExecutionContext) => build(env).scheduled(controller, env, ctx),
+};
 ```
 
-Four things are easy to get wrong:
+Five things are easy to get wrong, and four of them fail silently:
 
 - **`scheduled` must be wired.** `createWorker` returns it, but a worker that only exports `fetch` never runs a backup, and nothing reports that.
 - **`backupCron` is compared verbatim** against the firing expression. `"0 3 * * *"` and `"0  3 * * *"` are different strings, and the mismatch is silent — the trigger fires, no backup runs.
-- **`backupStore` and `adminToken` are both required.** The snapshot is taken through the worker's own admin export route, so without a token there is nothing to authorize it with.
+- **`backupStore`, `adminToken` and `queryCoordinator` are all required.** The snapshot is assembled by walking every shard's admin export route, so it needs the coordinator to reach them and a token to authorize itself. Missing any one throws `BACKUP_NOT_CONFIGURED` from inside the scheduled handler — the one failure here that is loud.
 - **`backupRetain` does not delete anything.** It is a reporting window: each run logs how many snapshots sit past the newest N and tells you to run `lunora backup prune`, which is the only thing that removes a backup. A bucket therefore grows until you prune it.
+- **The snapshot is built in memory.** It is capped at 24 MiB and refuses past it, writing nothing — narrow it with `backupTables`, or take that snapshot off-platform with `lunora backup create --bucket`.
 
-`backupPrefix` (default `"backups/"`) sets the key prefix, and `backupTables` narrows the snapshot to an allowlist. The scheduled snapshot is assembled inside a Worker isolate, so it is capped at 24 MiB — smaller than the 32 MiB cap on `lunora backup create --bucket`, which travels through the checksum-verified upload route instead.
+`backupPrefix` (default `"backups/"`) sets the key prefix, and `backupTables` narrows the snapshot to an allowlist. The 24 MiB cap is smaller than the 32 MiB one on `lunora backup create --bucket`, which travels through the checksum-verified upload route instead of being held in an isolate.
 
 ## Related
 

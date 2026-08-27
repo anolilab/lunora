@@ -215,21 +215,31 @@ const parseSegment = (raw: string): CdcSegment | undefined => {
 };
 
 /**
- * The changes in one segment that sit strictly above `servedThrough`, or
- * `undefined` when the segment cannot be served at all.
+ * The changes in one segment that sit strictly above `servedThrough`, stopping
+ * at the first row that cannot be served.
  *
- * The refusal is for a row that was payload-compacted before it was archived: it
- * stores an insert/update with no post-image, which is exactly the corruption
- * `CDC_PAYLOAD_COMPACTED` exists to prevent on the live path. Going through
- * object storage makes it no less corrupting, so the same test is applied here
- * rather than trusted to have been applied upstream.
+ * That row is one payload-compacted before it was archived: an insert/update
+ * with no post-image, indistinguishable on the wire from a delete. It is the
+ * corruption `CDC_PAYLOAD_COMPACTED` exists to prevent on the live path, and
+ * going through object storage makes it no less corrupting, so the same test is
+ * applied here rather than trusted to have been applied upstream.
+ *
+ * Stopping rather than refusing the whole segment, because the two are not the
+ * same answer. Refusing discards every change already collected from earlier
+ * segments in this read, and refuses a page the caller's `limit` would never
+ * have reached — a compacted row 10,000 rows into a segment would deny a
+ * `limit: 1` request that is perfectly serveable. Truncating serves what is
+ * sound and leaves the consumer sitting exactly at the compacted boundary,
+ * where its next call collects nothing and is correctly told to re-seed. Same
+ * shape as the hole handling in {@link readArchivedCdcChanges}, and for the
+ * same reason.
  *
  * `servedThrough` is the RUNNING cursor, not the one the consumer asked from.
  * The writer produces disjoint segments, so for anything it wrote the two are
  * the same — but this filter is also what keeps a foreign object from injecting
  * rows below the cursor, and that is not the writer's to guarantee.
  */
-const serveableChanges = (segment: CdcSegment, servedThrough: number): CdcChange[] | undefined => {
+const serveableChanges = (segment: CdcSegment, servedThrough: number): CdcChange[] => {
     const changes: CdcChange[] = [];
 
     for (const change of segment.changes) {
@@ -238,7 +248,7 @@ const serveableChanges = (segment: CdcSegment, servedThrough: number): CdcChange
         }
 
         if (change.op !== "delete" && change.doc === undefined) {
-            return undefined;
+            break;
         }
 
         changes.push(change);
@@ -339,10 +349,6 @@ const readArchivedCdcChanges = async (
         }
 
         const serveable = serveableChanges(segment, servedThrough);
-
-        if (serveable === undefined) {
-            return undefined;
-        }
 
         // Coverage is decided by what the segment CONTAINS, never by the `from`
         // and `to` it declares. Those are two independent claims, and only the

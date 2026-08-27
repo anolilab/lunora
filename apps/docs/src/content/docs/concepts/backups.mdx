@@ -261,10 +261,10 @@ every committed mutation. Nothing trims it by default, so on a write-heavy shard
 it grows for the lifetime of the app. Two environment variables bound it, and
 both are off unless you set them:
 
-| Variable                       | What it does                                                                                         |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `LUNORA_CDC_PAYLOAD_RETENTION` | Keeps the newest N entries' documents and strips the rest, retaining every key. Where the bytes are. |
-| `LUNORA_CDC_LOG_RETENTION`     | Keeps the newest N entries and **deletes** the rest outright.                                        |
+| Variable                       | What it does                                                                                                                      |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `LUNORA_CDC_PAYLOAD_RETENTION` | Keeps the newest N entries' documents and strips the rest, retaining every key. The documents are where nearly all the bytes are. |
+| `LUNORA_CDC_LOG_RETENTION`     | Keeps the newest N entries and **deletes** the rest outright.                                                                     |
 
 They are deliberately opt-in. A shard can read the cursors of its own
 subscribers and never sweeps past the slowest of them, but it cannot see where
@@ -295,7 +295,7 @@ instead of being refused:
 ```
 
 There is no flag to turn this on — the presence of the binding is the switch,
-and a shard without it behaves exactly as before. Three things worth knowing:
+and a shard without it behaves exactly as before. Four things worth knowing:
 
 - **It needs `LUNORA_CDC_LOG_RETENTION`.** Payload retention alone keeps every
   key, so there is no cliff to soften and nothing is uploaded.

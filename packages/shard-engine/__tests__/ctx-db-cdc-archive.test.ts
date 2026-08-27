@@ -214,15 +214,39 @@ describe("cdc archive", () => {
         await expect(readArchivedCdcChanges(bucket, scope, 2, 100)).resolves.toBeUndefined();
     });
 
-    it("refuses a payload-compacted insert rather than serving it as a delete", async () => {
-        expect.assertions(1);
+    it("serves up to a payload-compacted row, then refuses at it", async () => {
+        expect.assertions(2);
 
         const bucket = fakeBucket();
 
         // A row compacted before it was archived: op says insert, post-image gone.
         await archiveCdcSegment(bucket, scope, [change(1), { id: "row-2", op: "update", seq: 2, table: "messages", ts: 2 }]);
 
-        await expect(readArchivedCdcChanges(bucket, scope, 0, 100)).resolves.toBeUndefined();
+        // Row 1 is sound and is served. Refusing the whole read instead would
+        // deny a page the consumer can use, and would discard anything already
+        // collected from earlier segments.
+        const page = await readArchivedCdcChanges(bucket, scope, 0, 100);
+
+        expect(page?.changes.map((entry) => entry.seq)).toStrictEqual([1]);
+
+        // Sitting on the compacted row, there is nothing sound to serve, so the
+        // consumer is told to re-seed rather than handed a doc-less insert it
+        // cannot distinguish from a delete.
+        await expect(readArchivedCdcChanges(bucket, scope, 1, 100)).resolves.toBeUndefined();
+    });
+
+    it("does not let a compacted row past the limit deny a serveable page", async () => {
+        expect.assertions(1);
+
+        const bucket = fakeBucket();
+
+        await archiveCdcSegment(bucket, scope, [change(1), change(2), { id: "row-3", op: "update", seq: 3, table: "messages", ts: 3 }]);
+
+        // The caller asked for one change and the compacted row is two beyond it.
+        // Refusing here would fail a request the archive can answer exactly.
+        const page = await readArchivedCdcChanges(bucket, scope, 0, 1);
+
+        expect(page?.changes.map((entry) => entry.seq)).toStrictEqual([1]);
     });
 
     it("keeps a delete's absent post-image serveable", async () => {
