@@ -392,7 +392,19 @@ const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string):
         return false;
     }
 
-    if (!Node.isInterfaceDeclaration(declaration) && !Node.isTypeAliasDeclaration(declaration)) {
+    // Every declaration kind the checker prints as a BARE name. Interfaces and
+    // type aliases were the whole list once, which left `class` and `enum` — two
+    // ordinary ways to declare a return type — printing as undeclared identifiers
+    // in `api.ts`/`functions.ts` (TS2304) while `lunora codegen` exited 0. An enum
+    // reaches here as its MEMBER declarations (`Status.Done` is an enum-literal
+    // type), so the member is listed alongside the enum itself.
+    if (
+        !Node.isInterfaceDeclaration(declaration) &&
+        !Node.isTypeAliasDeclaration(declaration) &&
+        !Node.isClassDeclaration(declaration) &&
+        !Node.isEnumDeclaration(declaration) &&
+        !Node.isEnumMember(declaration)
+    ) {
         return false;
     }
 
@@ -410,7 +422,15 @@ const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string):
         return false;
     }
 
-    return declarationPath === handlerFilePath || importsName(node.getSourceFile(), declarationFile, declaration.getName());
+    if (declarationPath === handlerFilePath) {
+        return true;
+    }
+
+    // An enum member is imported under its ENUM's name, and a class expression
+    // has no name to import at all.
+    const importedName = Node.isEnumMember(declaration) ? declaration.getParent().getName() : declaration.getName();
+
+    return importedName !== undefined && importsName(node.getSourceFile(), declarationFile, importedName);
 };
 
 /**
@@ -651,6 +671,21 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
 
     if (type.isUnion()) {
         return expandUnionType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
+    }
+
+    // An enum-literal member prints as `Status.Done` — the enum's name, bare. What
+    // actually crosses the wire is the member's VALUE, so that is both the honest
+    // rendering and a nameable one.
+    if (type.isEnumLiteral()) {
+        const value = type.getLiteralValue();
+
+        if (typeof value === "string") {
+            return JSON.stringify(value);
+        }
+
+        // A member is a string or a number and nothing else; anything else
+        // declines, so the caller keeps the `unknown` fallback.
+        return typeof value === "number" ? String(value) : undefined;
     }
 
     return expandObjectType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
