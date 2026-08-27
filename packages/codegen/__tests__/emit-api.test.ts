@@ -410,6 +410,64 @@ describe("emitApi", () => {
         expect(scoped).not.toContain(".pnpm");
     });
 
+    it("only recovers across a path boundary, and never from a @types directory", () => {
+        expect.assertions(3);
+
+        // `vendor-node_modules/` ends with the segment's text but is an ordinary
+        // directory — a word boundary matched inside it and turned a working
+        // relative path into a bare specifier. And a `@types/foo` tail is never a
+        // specifier: the declarations for `foo` live there, but the name anything
+        // imports is `foo`, so recovering the directory would invent a package.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "vendored",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("../vendor-node_modules/pkg/index").Row',
+            },
+            {
+                args: {},
+                exportName: "typed",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("../../node_modules/@types/foo/index").Row',
+            },
+            {
+                args: {},
+                exportName: "real",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("../../node_modules/@lunora/server/data-model").Row',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("vendor-node_modules/pkg/index");
+        expect(rendered).toContain("@types/foo/index");
+        expect(rendered).toContain('import("@lunora/server/data-model").Row');
+    });
+
+    it("recovers in linear time on a qualifier with many node_modules runs", () => {
+        expect.assertions(1);
+
+        // The pattern this replaced — `(?:[^"]*\/)?node_modules\/` — backtracks
+        // polynomially on exactly this shape (CodeQL flagged it), and the rendered
+        // text is the user's own types, so the input is not ours to bound.
+        // Sized so the replaced pattern measurably blows the budget (~1.3s here)
+        // while the scan stays flat at well under a millisecond.
+        const pathological = `import("${"node_modules/".repeat(12_000)}`;
+
+        const started = process.hrtime.bigint();
+
+        emitApi({ functions: [{ args: {}, exportName: "slow", filePath: "messages", kind: "query", returnType: pathological }] });
+
+        const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+        expect(elapsedMs).toBeLessThan(1000);
+    });
+
     it("rewrites base-package qualifiers to the umbrella subpath (and only for base packages)", () => {
         expect.assertions(4);
 

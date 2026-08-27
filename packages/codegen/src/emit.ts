@@ -581,15 +581,22 @@ const relocateGeneratedImports = (returnType: string): string =>
  *
  * Everything after the FINAL `node_modules/` is the specifier that was wanted
  * (`@lunora/server/data-model`), whatever nesting the store put in front of it —
- * so that is what we keep. The segment is anchored on a path boundary rather than
- * a word boundary: `\b` also matches inside `vendor-node_modules/`, which would
- * turn an ordinary relative path into a bare specifier. Runs before the relative rebasers, which would
+ * so that is what we keep. Runs before the relative rebasers, which would
  * otherwise treat a `../../node_modules/…` form as one of the user's own modules
  * and rebase + `.js`-suffix it into something even further from a specifier, and
  * before {@link relocateBaseQualifiers}, which maps the recovered
  * `@lunora/<base>` onto the umbrella the project actually depends on.
+ *
+ * The segment is located by scanning, not by matching. A pattern of the shape
+ * `(?:[^"]*\/)?node_modules\/` backtracks polynomially on a qualifier carrying
+ * many `/node_modules/` runs — flagged by CodeQL, and the rendered text this walks
+ * comes from the user's own types, so the input is not ours to bound.
+ * `lastIndexOf` answers the same question in one pass.
  */
-const STORE_PATH_QUALIFIER_RE = /import\("(?:[^"]*\/)?node_modules\/(?<spec>[^"]+)"\)/gu;
+const IMPORT_QUALIFIER_RE = /import\("(?<spec>[^"]+)"\)/gu;
+
+/** The path segment whose LAST occurrence separates the store layout from the specifier. */
+const NODE_MODULES_SEGMENT = "node_modules/";
 
 /**
  * A `@types/*` tail is never a specifier: the declarations for `foo` live in
@@ -601,7 +608,20 @@ const STORE_PATH_QUALIFIER_RE = /import\("(?:[^"]*\/)?node_modules\/(?<spec>[^"]
 const TYPES_PACKAGE_SPEC_RE = /^@types\//u;
 
 const unresolveStoreQualifiers = (rendered: string): string =>
-    rendered.replaceAll(STORE_PATH_QUALIFIER_RE, (match, spec: string) => (TYPES_PACKAGE_SPEC_RE.test(spec) ? match : `import("${spec}")`));
+    rendered.replaceAll(IMPORT_QUALIFIER_RE, (match, spec: string) => {
+        const segmentStart = spec.lastIndexOf(NODE_MODULES_SEGMENT);
+
+        // Anchored on a path boundary, never a word boundary: `vendor-node_modules/`
+        // ends with the segment's text but is an ordinary directory, and rewriting
+        // through it would turn a working relative path into a bare specifier.
+        if (segmentStart === -1 || (segmentStart > 0 && spec[segmentStart - 1] !== "/")) {
+            return match;
+        }
+
+        const recovered = spec.slice(segmentStart + NODE_MODULES_SEGMENT.length);
+
+        return recovered === "" || TYPES_PACKAGE_SPEC_RE.test(recovered) ? match : `import("${recovered}")`;
+    });
 
 /** Any relative `import("…")` qualifier — the user's own modules as well as `_generated/*`. */
 const RELATIVE_IMPORT_RE = /import\("(?<spec>\.\.?\/[^"]+)"\)/gu;
