@@ -2102,7 +2102,7 @@ export const run = query.input({ tool: v.from(toolSchema) }).query(async () => 1
             }
         });
 
-        it("expands a type IMPORTED into the handler's module instead of leaking a bare name", () => {
+        it("qualifies a type IMPORTED into the handler's module instead of leaking a bare name", () => {
             expect.assertions(4);
 
             // The other half of the same leak. When the handler DOES import the
@@ -2112,6 +2112,10 @@ export const run = query.input({ tool: v.from(toolSchema) }).query(async () => 1
             // reachability guard only covered types declared in the handler's OWN
             // file, so a shared `./lib/types` interface — the ordinary way to
             // write one — leaked straight through.
+            //
+            // The handler's own `import` names the module, so the alias survives
+            // as an `import("…")` qualifier rebased out of `_generated/`, rather
+            // than being flattened to its members.
             mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
             writeFileSync(
                 join(workdir, "lunora", "lib", "shapes.ts"),
@@ -2132,9 +2136,10 @@ export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "
             const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
 
             for (const rendered of [api, functions]) {
-                // Expanded structurally, so it resolves with no import at all.
-                expect(rendered).toContain("{ label: string }");
-                expect(rendered).not.toMatch(/,\s*Badge>/u);
+                // Qualified and rebased one level out of `_generated/`, so it
+                // resolves without an import statement of its own.
+                expect(rendered).toContain('import("../lib/shapes.js").Badge');
+                expect(rendered).not.toMatch(/[^.]\bBadge\b/u);
             }
         });
 

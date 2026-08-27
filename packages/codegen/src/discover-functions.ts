@@ -348,28 +348,61 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
 const GENERATED_DIRECTORY_SEGMENT = "/_generated/";
 
 /**
- * Whether the module at `node` imports `name` from `declarationFile` — the
- * precise form of "the checker will print this bare".
+ * The module specifier the handler's file imports `name` from, when that import
+ * resolves to `declaration` — the literal string the user wrote, never a
+ * resolved path. `undefined` when the module does not import it.
+ *
+ * This answers both questions the printing rule needs: whether the checker will
+ * print the name BARE at `node` (it will, exactly when the module imports it),
+ * and — since a bare name does not resolve from `_generated/` — which specifier
+ * to qualify it with instead. `emit.ts` takes it from there: a relative
+ * qualifier is rebased out of the source directory, an `@lunora/*` one is mapped
+ * onto the umbrella, and a bare package specifier is already correct from any
+ * directory.
+ *
+ * Resolved through the checker's ALIAS CHAIN, not by comparing source files.
+ * `lunorash/server` re-exports `@lunora/server`, which re-exports its own
+ * `types.d.ts`, so the file an import declaration resolves to is almost never
+ * the file the interface is DECLARED in — and comparing the two answered "not
+ * imported" for every umbrella type, which is the commonest spelling there is.
  *
  * Deliberately NOT `type.getText(node).includes("import(")`: that renders the
  * WHOLE type, type arguments and all, so an imported `Wrapper` wrapping an
  * out-of-scope `Bar` renders text containing `import(` and the wrapper is
  * wrongly cleared — printed bare into `_generated/` as a TS2304, one generic
- * deep. Asking the source file directly is depth-independent, because the
- * recursion visits each type on its own.
+ * deep. Asking the module directly is depth-independent, because the recursion
+ * visits each type on its own.
  */
-const importsName = (handlerFile: SourceFile, declarationFile: SourceFile, name: string): boolean =>
-    handlerFile.getImportDeclarations().some((declaration) => {
-        if (declaration.getModuleSpecifierSourceFile() !== declarationFile) {
-            return false;
+const importSpecifierFor = (handlerFile: SourceFile, declaration: Node, name: string): string | undefined => {
+    for (const importDeclaration of handlerFile.getImportDeclarations()) {
+        // A namespace import (`import * as t`) makes every exported name
+        // reachable, but only as `t.Bar` — which the checker prints qualified by
+        // a local alias `_generated/` does not have either, so it counts exactly
+        // like a named import.
+        const importsIt =
+            importDeclaration.getNamespaceImport() !== undefined || importDeclaration.getNamedImports().some((specifier) => specifier.getName() === name);
+
+        if (!importsIt) {
+            continue;
         }
 
-        // A namespace import (`import * as t`) makes every exported name
-        // reachable, but only as `t.Bar` — which the checker prints qualified
-        // by a local alias that `_generated/` does not have either, so it
-        // counts as bare-nameable exactly like a named import.
-        return declaration.getNamespaceImport() !== undefined || declaration.getNamedImports().some((specifier) => specifier.getName() === name);
-    });
+        const moduleFile = importDeclaration.getModuleSpecifierSourceFile();
+        // `getExport` reads the module symbol's OWN export table, which does not
+        // list a `export * from "…"` re-export — and a star re-export is exactly
+        // how the umbrella republishes `@lunora/server`. `getExportSymbols` asks
+        // the checker instead and sees through it; it costs an array of every
+        // export, so it stays behind the cheap lookup and behind the
+        // already-imported guard above.
+        const exported = moduleFile?.getSymbol()?.getExport(name) ?? moduleFile?.getExportSymbols().find((symbol) => symbol.getName() === name);
+        const target = exported?.getAliasedSymbol() ?? exported;
+
+        if (target?.getDeclarations().includes(declaration) === true) {
+            return importDeclaration.getModuleSpecifierValue();
+        }
+    }
+
+    return undefined;
+};
 
 /**
  * Every declaration kind the checker prints as a BARE name. Interfaces and type
@@ -408,7 +441,18 @@ const BARE_NAMEABLE_KINDS: ReadonlySet<SyntaxKind> = new Set([
 const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string): boolean => {
     const declarationFile = declaration.getSourceFile();
 
-    if (declarationFile.isInNodeModules() || declarationFile.isDeclarationFile()) {
+    // A GLOBAL declaration prints bare AND resolves bare from anywhere — `Date`,
+    // `Uint8Array`, the whole `lib.*.d.ts` surface, an app's own ambient
+    // `declare global`. Script-mode files (the ones with no module symbol) are
+    // exactly those, so that is the test.
+    //
+    // Skipping every `.d.ts`/`node_modules` file instead was wrong by a wide
+    // margin: a MODULE-scoped declaration there is no more reachable from
+    // `_generated/` than a user's own interface is. A handler importing
+    // `PaginationResult` from `lunorash/server` — or any package type at all —
+    // had the name written into `api.ts` unimported, a TS2304 in generated
+    // output while `lunora codegen` exited 0.
+    if (declarationFile.getSymbol() === undefined) {
         return false;
     }
 
@@ -442,12 +486,14 @@ const isBareNameable = (declaration: Node, node: Node, handlerFilePath: string):
 
     // An enum member is imported under its ENUM's name, never its own.
     if (Node.isEnumMember(declaration)) {
-        return importsName(node.getSourceFile(), declarationFile, declaration.getParent().getName());
+        const enumDeclaration = declaration.getParent();
+
+        return importSpecifierFor(node.getSourceFile(), enumDeclaration, enumDeclaration.getName()) !== undefined;
     }
 
-    // A nameless `export default class {}` has nothing to ask `importsName`
-    // about, and is unreachable by name from anywhere.
-    return Node.hasName(declaration) && importsName(node.getSourceFile(), declarationFile, declaration.getName());
+    // A nameless `export default class {}` has nothing to ask
+    // `importSpecifierFor` about, and is unreachable by name from anywhere.
+    return Node.hasName(declaration) && importSpecifierFor(node.getSourceFile(), declaration, declaration.getName()) !== undefined;
 };
 
 /**
@@ -684,6 +730,67 @@ const isClassInstance = (type: Type): boolean =>
         .some((declaration) => Node.isClassDeclaration(declaration) || Node.isClassExpression(declaration));
 
 /**
+ * Render a type the checker would print BARE as `import("<specifier>").Name<…>`.
+ *
+ * Only the bare NAME is unreachable from `_generated/`; the type itself is
+ * perfectly nameable, and the handler's own `import` declaration says which
+ * module to name it from. Emitting the qualifier keeps the alias intact — a
+ * paginated page of `Doc`s stays that, rather than becoming the flattened record
+ * structural expansion produces — and keeps a type expansion cannot reproduce at
+ * all (an index signature, a call signature, a generic the checker left
+ * unresolved) off the `unknown` fallback it would otherwise land on.
+ *
+ * Type arguments go back through `expand`, so one unreachable argument still
+ * decides the outcome for the whole reference. Returns `undefined` when the
+ * name is not imported into the handler's module — a type declared in that
+ * module itself has no specifier to name it by, and the caller expands instead.
+ */
+const qualifiedImportText = (type: Type, node: Node, handlerFilePath: string, depth: number, seen: Set<Type>, expand: ExpandFunction): string | undefined => {
+    const aliasSymbol = type.getAliasSymbol();
+    const symbol = aliasSymbol ?? type.getSymbol();
+    const name = symbol?.getName();
+
+    // An anonymous object/function type has no name to qualify — the checker
+    // spells those out structurally already.
+    if (symbol === undefined || name === undefined || name.startsWith("__")) {
+        return undefined;
+    }
+
+    // An `enum` is deliberately NOT qualified. What crosses the wire is the
+    // member's VALUE, and an enum type is NOMINAL — a caller comparing
+    // `result.status === "done"` does not typecheck against `Status`, and a
+    // caller without the enum installed cannot name it at all. The union of wire
+    // values the branches below produce is the honest rendering.
+    if (symbol.getDeclarations().some((declaration) => Node.isEnumDeclaration(declaration) || Node.isEnumMember(declaration))) {
+        return undefined;
+    }
+
+    const handlerFile = node.getSourceFile();
+    const specifier = symbol
+        .getDeclarations()
+        .map((declaration) => importSpecifierFor(handlerFile, declaration, name))
+        .find((candidate) => candidate !== undefined);
+
+    if (specifier === undefined) {
+        return undefined;
+    }
+
+    const rendered: string[] = [];
+
+    for (const argument of aliasSymbol ? type.getAliasTypeArguments() : type.getTypeArguments()) {
+        const text = expand(argument, node, handlerFilePath, depth + 1, seen);
+
+        if (text === undefined) {
+            return undefined;
+        }
+
+        rendered.push(text);
+    }
+
+    return `import("${specifier}").${name}${rendered.length > 0 ? `<${rendered.join(", ")}>` : ""}`;
+};
+
+/**
  * Structurally expand a return type that references a non-exported local type,
  * so the generated `FunctionReference` carries the real shape (`PostDoc[]` →
  * `{ _id: Id<"posts">; … }[]`) instead of erasing to `unknown`. Reachable names
@@ -704,18 +811,6 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
 
     const nextSeen = new Set(seen).add(type);
 
-    if (type.isArray()) {
-        return expandArrayType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
-    }
-
-    if (type.isUnion()) {
-        return expandUnionType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
-    }
-
-    if (type.isEnumLiteral()) {
-        return expandEnumLiteralType(type);
-    }
-
     // A CLASS INSTANCE is not reproducible, and expanding it would be worse than
     // declining. `encodeWire` refuses a class instance outright (`shared/wire-codec.ts`
     // — only plain objects and the supported built-ins round-trip), so no such value
@@ -728,6 +823,32 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
     // function opens with, and the only answer that is never wrong.
     if (isClassInstance(type)) {
         return undefined;
+    }
+
+    // An enum-literal member is imported under its ENUM's name, so the qualifier
+    // below would name the wrong thing; its VALUE is what crosses the wire and
+    // is answered first.
+    if (type.isEnumLiteral()) {
+        return expandEnumLiteralType(type);
+    }
+
+    // Nameable, just not BARE-nameable — qualify it with the module the handler
+    // imports it from. Ahead of the structural branches because an alias for an
+    // array or a union (`type Ids = Id<"x">[]`, `type Status = A | B`) is a
+    // reference the checker prints by name, and expanding it loses the alias for
+    // no gain — or declines outright on a member it cannot reproduce.
+    const qualified = qualifiedImportText(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
+
+    if (qualified !== undefined) {
+        return qualified;
+    }
+
+    if (type.isArray()) {
+        return expandArrayType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
+    }
+
+    if (type.isUnion()) {
+        return expandUnionType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
     }
 
     return expandObjectType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);

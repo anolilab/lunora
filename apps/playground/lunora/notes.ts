@@ -1,6 +1,6 @@
 import type { RateLimitConfigMap } from "@lunora/ratelimit";
 import { dbRateLimit } from "@lunora/ratelimit";
-import type { Middleware } from "lunorash/server";
+import type { Middleware, PaginationResult } from "lunorash/server";
 import { definePolicies, definePolicy, rls } from "lunorash/server";
 
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
@@ -41,6 +41,29 @@ const notesWriteRls = rls(policies) as unknown as Middleware<MutationCtx, Mutati
  * to prove the policy (not the handler) is the isolation boundary.
  */
 export const list = query.use(notesReadRls).query(async ({ ctx }): Promise<Doc<"notes">[]> => ctx.db.query("notes").take(200));
+
+/**
+ * One page of the caller's notes, under the same RLS read policy as
+ * {@link list}.
+ *
+ * Deliberately annotated with an imported PACKAGE alias and deliberately
+ * without `.output()`: that is the exact shape whose inferred return type used
+ * to reach `_generated/api.ts` as a bare, unimported `PaginationResult` —
+ * TS2304 in generated output, invisible to every unit test because emitted code
+ * is only ever compiled inside a real app. `tsconfig.generated.json` compiles
+ * it here, so this procedure is the CI gate for that class (issue #509). Keep
+ * the annotation, keep the import, and do not add `.output()`.
+ */
+export const listPage = query
+    .input({
+        cursor: v.optional(v.string().check((value) => value.length <= 512, { message: "must be at most 512 characters", schema: { maxLength: 512 } })),
+        numItems: v.number(),
+    })
+    .use(notesReadRls)
+    .query(
+        async ({ args, ctx }): Promise<PaginationResult<Doc<"notes">>> =>
+            await ctx.db.query("notes").paginate({ cursor: args.cursor, numItems: args.numItems }),
+    );
 
 /**
  * Add a note owned by the caller. `createdAt` is stamped by the client so the

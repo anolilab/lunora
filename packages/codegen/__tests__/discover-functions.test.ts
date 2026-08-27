@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Project } from "ts-morph";
+import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { discoverFunctions } from "../src/discover-functions";
@@ -474,15 +474,15 @@ describe("discoverFunctions", () => {
             expect(discoverFunctions(project, workdir)[0]?.returnType).toBe("{ a: string; b: number }");
         });
 
-        it("expands a user's own `Doc` — the dataModel exemption is by declaration path, never by name", () => {
+        it("qualifies a user's own `Doc` — the dataModel exemption is by declaration path, never by name", () => {
             expect.assertions(1);
 
             // `Doc`/`Id` print correctly bare only because emit imports THOSE from
             // `./dataModel.js`. Exempting the NAME instead of the declaration path
-            // is worse than the leak it guards: `referencedDataModelImports`
-            // triggers on `\bDoc<`, so a user's own generic `Doc` would be emitted
-            // bare AND given the generated import — silently bound to a different
-            // type, with no compile error anywhere to show for it.
+            // is worse than the leak it guards: a user's own generic `Doc` would be
+            // emitted bare AND given the generated import — silently bound to a
+            // different type, with no compile error anywhere to show for it.
+            // Qualified by the user's own module, it can be neither.
             writeFunction("lib/mydoc.ts", `export type Doc<T extends string> = { table: T; body: string };`);
 
             writeFunction(
@@ -499,7 +499,67 @@ describe("discoverFunctions", () => {
 
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
-            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('{ table: "posts"; body: string }');
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/mydoc").Doc<"posts">');
+        });
+
+        it("qualifies a PACKAGE type the handler imports — a module `.d.ts` is no more reachable than a user's own file (#509)", () => {
+            expect.assertions(1);
+
+            // Every `.d.ts` and everything under `node_modules` used to be waved
+            // through as "prints correctly bare", on the reasoning that reached
+            // `Date` and the rest of `lib.*.d.ts`. But those are GLOBAL; a
+            // module-scoped declaration in a package is reachable only through an
+            // import, and `_generated/` has none — so a handler returning an
+            // imported `PaginationResult` (or `lunorash/server`'s own) wrote the
+            // bare name into `api.ts` as a TS2304 while `lunora codegen` exited 0.
+            writeFunction("node_modules/pkg/package.json", `{ "name": "pkg", "version": "1.0.0", "types": "index.d.ts" }`);
+            writeFunction("node_modules/pkg/index.d.ts", `export interface Page<T> { items: T[]; cursor: string | null }`);
+
+            writeFunction(
+                "feed.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Page } from "pkg";
+
+            declare const load: () => Promise<Page<string>>;
+
+            export const list = query({ args: {}, handler: async () => await load() });
+        `,
+            );
+
+            const project = new Project({
+                compilerOptions: { module: ModuleKind.ESNext, moduleResolution: ModuleResolutionKind.Bundler, strict: true, target: ScriptTarget.ES2022 },
+                skipAddingFilesFromTsConfig: true,
+                useInMemoryFileSystem: false,
+            });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("pkg").Page<string>');
+        });
+
+        it("leaves a GLOBAL declaration bare — `lib.*.d.ts` resolves from `_generated/` as well as it does from the handler", () => {
+            expect.assertions(1);
+
+            // The other side of the same rule, and the reason it is keyed on
+            // "script-mode file" rather than "`.d.ts` file": expanding `Date`
+            // structurally would be wrong (it is a class instance, so the walk
+            // declines outright and the return collapses to `unknown`), and
+            // qualifying it is impossible — there is no module to name.
+            writeFunction(
+                "clock.ts",
+                `
+            import { query } from "@lunora/server";
+
+            export const now = query({ args: {}, handler: async () => ({ at: new Date(), raw: new Uint8Array() }) });
+        `,
+            );
+
+            const project = new Project({
+                compilerOptions: { module: ModuleKind.ESNext, moduleResolution: ModuleResolutionKind.Bundler, strict: true, target: ScriptTarget.ES2022 },
+                skipAddingFilesFromTsConfig: true,
+                useInMemoryFileSystem: false,
+            });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe("{ at: Date; raw: Uint8Array<ArrayBuffer>; }");
         });
 
         it("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {
