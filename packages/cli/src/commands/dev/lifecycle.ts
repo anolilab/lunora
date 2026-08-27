@@ -27,6 +27,7 @@ import {
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
+    isCodegenDisabled,
     isRecordedProcessCurrent,
     readDevServerState,
     readLiveDevServerState,
@@ -455,6 +456,36 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
 };
 
 /**
+ * Whether codegen should run at all for this invocation.
+ *
+ * `--no-codegen` and {@link CODEGEN_ENV} are one switch with two spellings, and
+ * both are one-directional: either turns codegen off, neither turns it back on.
+ * Reading both here is what makes the documented `LUNORA_CODEGEN=0` true on the
+ * wrangler flavor as well — the CLI owns the watcher there, and consulting only
+ * the flag meant the env var silently did nothing outside a Vite project.
+ */
+const codegenRequested = (options: { codegen?: boolean }): boolean => options.codegen !== false && !isCodegenDisabled(process.env[CODEGEN_ENV]);
+
+/**
+ * The environment the FRAMEWORK dev server inherits, as an optional `env` field
+ * ready to spread into a spawn descriptor.
+ *
+ * Two call sites spawn `viteDevCommand`: the foreground plan in `handler.ts` and
+ * the background branch below, which does not go through `planDevCommand` at all.
+ * Both need every flag the plugin cannot read from argv, and the bug this closes
+ * (#496) is precisely what happens when only one of them remembers a flag — so
+ * the answer lives in one function and the next flag is added once.
+ */
+const withViteChildEnv = (options: { codegen?: boolean; remote?: boolean }): { env?: Record<string, string> } => {
+    const environment: Record<string, string> = {
+        ...(options.remote === true ? { LUNORA_REMOTE: "1" } : {}),
+        ...(options.codegen === false ? { [CODEGEN_ENV]: "0" } : {}),
+    };
+
+    return Object.keys(environment).length > 0 ? { env: environment } : {};
+};
+
+/**
  * Rebuild the argv a detached daemon `lunora dev` re-invocation needs, from the
  * already-parsed options. `--background`/`--json` are deliberately NOT
  * forwarded: the daemon must run the foreground path (its detachment marker is
@@ -559,18 +590,12 @@ const startBackground = async (context: {
     try {
         if (flavor === "vite") {
             // This branch spawns the framework dev script directly — it does not
-            // go through `planDevCommand`, so flags it does not forward here are
-            // dropped for good. `--no-codegen` reaches `@lunora/vite` (which owns
-            // the watch on this flavor) only as env; without it the flag looked
-            // accepted while `_generated/**` kept being rewritten (#496).
+            // go through `planDevCommand`, so anything {@link withViteChildEnv}
+            // does not carry is dropped for good.
             return await run({
                 command: viteDevCommand(cwd),
                 cwd,
-                env: {
-                    ...(remote ? { LUNORA_REMOTE: "1" } : {}),
-                    ...(options.codegen === false ? { [CODEGEN_ENV]: "0" } : {}),
-                    ...handoff,
-                },
+                env: { ...withViteChildEnv({ ...options, remote }).env, ...handoff },
                 json: jsonLogs,
                 logger,
             });
@@ -908,6 +933,7 @@ const runLifecycleSubcommand = (parameters: {
 
 export type { DevFlavor };
 export {
+    codegenRequested,
     detectDevFlavor,
     reportExistingServer,
     runDevBackground,
@@ -917,4 +943,5 @@ export {
     runLifecycleSubcommand,
     startBackground,
     viteDevCommand,
+    withViteChildEnv,
 };

@@ -328,19 +328,29 @@ describe("discoverFunctions", () => {
             expect(byName.get("priority")).toBe("1 | 2");
         });
 
-        it("expands a `class` return type to its instance shape", () => {
+        it("declines a `class` return type to `unknown` rather than inventing a shape", () => {
             expect.assertions(1);
 
-            // Same rule, the other unhandled declaration kind. A class instance
-            // reaches the client as a plain serialized object, so its structural
-            // shape is both the honest rendering and a nameable one.
+            // Detecting the class is right — printed bare it is a TS2304. Expanding
+            // it is not. `encodeWire` REFUSES a class instance outright
+            // (`shared/wire-codec.ts`: only plain objects and the supported built-ins
+            // round-trip), so no such value ever reaches a caller; and the structural
+            // shape would be wrong in three directions at once — methods and getters
+            // live on the prototype and never serialize, `#private` fields never
+            // serialize, and `private`/`protected` members would be published into
+            // the client-facing type. `result.format(...)` typed off a method is a
+            // runtime TypeError with no compile error anywhere. `unknown` is the
+            // contract this expander opens with: never worse than a bare name.
             writeFunction(
                 "receipts.ts",
                 `
             import { query } from "@lunora/server";
 
             export class Receipt {
-                constructor(public readonly id: string) {}
+                #hidden = 1;
+                constructor(public readonly id: string, private secret: string) {}
+                get total(): number { return 1; }
+                format(prefix: string): string { return prefix + this.id; }
             }
 
             export const latest = query({
@@ -353,7 +363,7 @@ describe("discoverFunctions", () => {
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
             const result = discoverFunctions(project, workdir);
 
-            expect(result[0]?.returnType).toBe("null | { id: string }");
+            expect(result[0]?.returnType).toBe("unknown");
         });
 
         it("expands an enum imported from a SIBLING module — the member is imported under its enum's name", () => {

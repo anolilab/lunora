@@ -1170,7 +1170,7 @@ const interpretRemote: (value: unknown) => RemotePreference;
 ### `isCodegenDisabled` (const)
 
 ```ts
-const isCodegenDisabled: (env?: Readonly<Record<string, string | undefined>>) => boolean;
+const isCodegenDisabled: (value: string | undefined) => boolean;
 ```
 
 ### `isInteractive` (const)

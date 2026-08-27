@@ -106,6 +106,32 @@ describe("transparent .check()/.meta() modifiers in codegen", () => {
         expect(result[0]?.args.tags).toEqual({ hasRefinement: true, inner: { kind: "string" }, kind: "array" });
     });
 
+    it("treats .serverDefault() as a column default instead of aborting the run", () => {
+        expect.assertions(2);
+
+        // Published on `ColumnValidator` and the documented way to make a field
+        // non-client-controllable — so refusing to parse it took a security
+        // control down together with the build, with the same
+        // `Unsupported validator kind` abort as the refinements.
+        writeFunction(
+            "messages.ts",
+            `
+            import { mutation, v } from "@lunora/server";
+            export const send = mutation({
+                args: { owner: v.string().serverDefault(({ auth }) => auth.userId) },
+                handler: () => null,
+            });
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        // The server fills it, so it is optional on insert — same as `.default()`.
+        expect(result[0]?.args.owner?.kind).toBe("string");
+        expect(result[0]?.args.owner?.column?.hasDefault).toBe(true);
+    });
+
     it("follows a SHORTHAND arg to the const it names, like the longhand spelling", () => {
         expect.assertions(2);
 

@@ -202,18 +202,6 @@ const runCodegenSafely = (
     overlay?: OverlayCallbacks,
     project?: Project,
 ): CodegenSafelyResult => {
-    // `lunora dev --no-codegen` reaches this process as an env var — the CLI
-    // spawns the framework dev server, which re-parses its own argv and never
-    // sees the flag. Gated here rather than at each call site so the startup run
-    // and the watch run are covered by one check, and `_generated/**` is written
-    // by nothing but an explicit `lunora codegen`. Logged rather than silent:
-    // discovering it by diffing generated output is the failure this closes.
-    if (isCodegenDisabled()) {
-        logger.info?.(`${LUNORA_TAG} codegen disabled (${CODEGEN_ENV}=0) — _generated/ left untouched`);
-
-        return {};
-    }
-
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
     if (!existsSync(schemaPath)) {
@@ -363,6 +351,11 @@ const notifyEnvironmentsAfterCodegen = (server: ViteDevServer, changedFile: stri
 const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     const absoluteSchemaDirectory = resolve(options.projectRoot, options.schemaDir);
 
+    // Read once, at construction: the env cannot change under a running server,
+    // and both consumers below (the dev-only `buildStart` skip and the watcher
+    // registration) must agree on one answer.
+    const codegenDisabled = isCodegenDisabled(process.env[CODEGEN_ENV]);
+
     // Seed from the resolved option, but treat codegen's returned output dir as
     // authoritative once it has run — codegen always writes to
     // `<schemaDir>/_generated` and ignores any custom `generatedDir`, so a
@@ -431,7 +424,15 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             };
 
             // Build mode: no devServer, no overlay callbacks.
-            const { blockingMessage, outputDirectory } = runCodegenSafely(options, logger);
+            //
+            // {@link isCodegenDisabled} is a DEV switch, honoured only in serve mode:
+            // `vite build` must keep generating, because the escalation below is the
+            // only thing that fails a build on an ERROR-level advisory or platform
+            // diagnostic. Skipping generation would skip that gate too — an app
+            // shipping against a surface its target cannot serve, CI green the whole
+            // way, from a variable someone exported in a shell profile.
+            const skipCodegen = command !== "build" && codegenDisabled;
+            const { blockingMessage, outputDirectory } = skipCodegen ? {} : runCodegenSafely(options, logger);
 
             if (outputDirectory !== undefined) {
                 absoluteGeneratedDirectory = outputDirectory;
@@ -704,10 +705,23 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 }
             };
 
-            server.watcher.on("add", onChange);
-            server.watcher.on("change", onChange);
-            server.watcher.on("unlink", onChange);
-            server.watcher.on("unlink", onConfigFileRemoved);
+            // Gated at REGISTRATION, not inside the handler. Gating the run would
+            // still pay for it: the debounced body builds or refreshes the whole
+            // ts-morph program before calling codegen, and reads the skipped result
+            // as "codegen threw" — dropping the cached Project, so the next save
+            // rebuilds from scratch. Disabling codegen would cost more than leaving
+            // it on, and log a line per keystroke. The tsconfig-invalidation handler
+            // goes with it: it exists only to keep that cache honest.
+            if (codegenDisabled) {
+                server.config.logger.info(
+                    `${LUNORA_TAG} codegen watch disabled (${CODEGEN_ENV}) — _generated/ is written only by an explicit \`lunora codegen\``,
+                );
+            } else {
+                server.watcher.on("add", onChange);
+                server.watcher.on("change", onChange);
+                server.watcher.on("unlink", onChange);
+                server.watcher.on("unlink", onConfigFileRemoved);
+            }
 
             // The config files whose binding-relevant drift restarts the dev server
             // in place. Both wrangler candidate names are watched (even if absent

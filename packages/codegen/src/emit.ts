@@ -581,15 +581,27 @@ const relocateGeneratedImports = (returnType: string): string =>
  *
  * Everything after the FINAL `node_modules/` is the specifier that was wanted
  * (`@lunora/server/data-model`), whatever nesting the store put in front of it —
- * so that is what we keep. Runs before the relative rebasers, which would
+ * so that is what we keep. The segment is anchored on a path boundary rather than
+ * a word boundary: `\b` also matches inside `vendor-node_modules/`, which would
+ * turn an ordinary relative path into a bare specifier. Runs before the relative rebasers, which would
  * otherwise treat a `../../node_modules/…` form as one of the user's own modules
  * and rebase + `.js`-suffix it into something even further from a specifier, and
  * before {@link relocateBaseQualifiers}, which maps the recovered
  * `@lunora/<base>` onto the umbrella the project actually depends on.
  */
-const STORE_PATH_QUALIFIER_RE = /import\("[^"]*\bnode_modules\/(?<spec>[^"]+)"\)/gu;
+const STORE_PATH_QUALIFIER_RE = /import\("(?:[^"]*\/)?node_modules\/(?<spec>[^"]+)"\)/gu;
 
-const unresolveStoreQualifiers = (rendered: string): string => rendered.replaceAll(STORE_PATH_QUALIFIER_RE, (_match, spec: string) => `import("${spec}")`);
+/**
+ * A `@types/*` tail is never a specifier: the declarations for `foo` live in
+ * `@types/foo`, but the name anything imports is `foo`. Recovering the directory
+ * name would emit a package that does not exist, replacing a path that at least
+ * resolved locally — so leave the qualifier alone and let the relative rebasers
+ * have it.
+ */
+const TYPES_PACKAGE_SPEC_RE = /^@types\//u;
+
+const unresolveStoreQualifiers = (rendered: string): string =>
+    rendered.replaceAll(STORE_PATH_QUALIFIER_RE, (match, spec: string) => (TYPES_PACKAGE_SPEC_RE.test(spec) ? match : `import("${spec}")`));
 
 /** Any relative `import("…")` qualifier — the user's own modules as well as `_generated/*`. */
 const RELATIVE_IMPORT_RE = /import\("(?<spec>\.\.?\/[^"]+)"\)/gu;
@@ -655,12 +667,15 @@ const relocateUserRelativeImports = (returnType: string, filePath: string): stri
     });
 
 /**
- * Rebase every relative `import("…")` qualifier in a rendered type so it
- * resolves from inside `_generated/` — `_generated/*` targets via
- * {@link relocateGeneratedImports}, the user's own modules via
- * {@link relocateUserRelativeImports}. Order is load-bearing (the user rebase
- * skips `_generated/` prefixes and hands them on), which is why the pair lives
- * behind one name instead of being spelled out at each site.
+ * Make every `import("…")` qualifier in a rendered type resolve from inside
+ * `_generated/`: a `node_modules` path recovered back to a specifier by
+ * {@link unresolveStoreQualifiers}, `_generated/*` targets rebased by
+ * {@link relocateGeneratedImports}, the user's own modules by
+ * {@link relocateUserRelativeImports}. Order is load-bearing throughout (the
+ * store-path recovery must precede the relative rebasers, which would otherwise
+ * claim a `../../node_modules/…` form as a user module; the user rebase skips
+ * `_generated/` prefixes and hands them on), which is why the three live behind
+ * one name instead of being spelled out at each site.
  *
  * Applies to ARGUMENT types as well as return types. Only the return type was
  * rebased before, so a relative qualifier reaching an argument — a
