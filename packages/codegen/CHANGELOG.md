@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.134...@lunora/codegen@1.0.0-alpha.135) (2026-08-27)
+
+### Bug Fixes
+
+* **codegen:** generated output that resolves, from a cold tree, in one run ([#510](https://github.com/anolilab/lunora/issues/510)) ([1bc114f](https://github.com/anolilab/lunora/commit/1bc114fa93fd75f03b8a7a8bff01ef831f1303c1))
+
 ## @lunora/codegen [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.133...@lunora/codegen@1.0.0-alpha.134) (2026-08-27)
 
 
