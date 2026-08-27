@@ -286,6 +286,7 @@ interface PlatformCapabilities {
         memoryTables?: Capability;
         objectStorage?: Capability;
         objectStorageBackups?: Capability;
+        objectStorageCdcArchive?: Capability;
         pipelines?: Capability;
         queues?: Capability;
         scheduler?: Capability;

@@ -252,8 +252,67 @@ Import the referenced table before the table that references it.
 Snapshots are point-in-time. To keep an external warehouse or ETL sink in step
 with the deployment as it changes, use the continuous CDC export tap instead: it
 streams the shard op-log to named sinks with at-least-once, per-shard-ordered,
-resumable delivery. Configuration and delivery semantics are covered in
-[@lunora/runtime](/docs/packages/runtime#continuous-cdc-export-tap).
+resumable delivery.
+
+### Keeping the changelog from growing forever
+
+The tap reads a per-shard changelog (`__cdc_log`) that the shard appends to on
+every committed mutation. Nothing trims it by default, so on a write-heavy shard
+it grows for the lifetime of the app. Two environment variables bound it, and
+both are off unless you set them:
+
+| Variable                       | What it does                                                                                         |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `LUNORA_CDC_PAYLOAD_RETENTION` | Keeps the newest N entries' documents and strips the rest, retaining every key. Where the bytes are. |
+| `LUNORA_CDC_LOG_RETENTION`     | Keeps the newest N entries and **deletes** the rest outright.                                        |
+
+They are deliberately opt-in. A shard can read the cursors of its own
+subscribers and never sweeps past the slowest of them, but it cannot see where
+an external consumer sits — a warehouse connector holds a cursor token issued by
+the Worker, and nothing in the shard knows what it is. So you state the window
+you can afford, and the sweep additionally never crosses the in-shard floor.
+
+Both are parsed strictly. `LUNORA_CDC_LOG_RETENTION=10k` is not "10,000" — it is
+ignored entirely, which is the safe reading for a value that controls a delete.
+
+### Archiving trimmed entries to R2
+
+Trimming is a cliff. A consumer that resumes below the retained window is told
+to re-seed from a full snapshot, which for a connector that was offline over a
+weekend means re-downloading the shard because a few megabytes of changelog were
+deleted.
+
+Bind an R2 bucket as `LUNORA_CDC_ARCHIVE` and the sweep uploads entries before
+destroying them. A consumer below the window is then served out of the archive
+instead of being refused:
+
+```jsonc
+// wrangler.jsonc
+{
+    "r2_buckets": [{ "binding": "LUNORA_CDC_ARCHIVE", "bucket_name": "my-app-cdc-archive" }],
+    "vars": { "LUNORA_CDC_LOG_RETENTION": "100000" },
+}
+```
+
+There is no flag to turn this on — the presence of the binding is the switch,
+and a shard without it behaves exactly as before. Three things worth knowing:
+
+- **It needs `LUNORA_CDC_LOG_RETENTION`.** Payload retention alone keeps every
+  key, so there is no cliff to soften and nothing is uploaded.
+- **Nothing is deleted before the upload is acknowledged.** A failed upload
+  skips that cycle's trim; the log stays larger until the next sweep.
+- **Nothing prunes the archive.** It grows without bound by design. Set an R2
+  lifecycle rule on the bucket if you want it bounded — an expired segment
+  leaves a hole the read-back reports as a refusal, never as a silent gap.
+
+A consumer far enough behind is still told to re-seed: a read reaches back a
+bounded number of segments, which at the default sweep cadence covers roughly
+half an hour of continuous trimming.
+
+<Callout>
+    Read replicas do not use the archive. A follower below the floor still pays a full bootstrap — the replica pull path checks the floor before it reads, and
+    reaching the archive there would put an object-storage round trip on a per-follower poll.
+</Callout>
 
 ## Practising a restore
 
