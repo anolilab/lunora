@@ -396,6 +396,7 @@ interface R2BucketLike {
         delimiter?: string;
         limit?: number;
         prefix?: string;
+        startAfter?: string;
     }) => Promise<{
         cursor?: string;
         objects: R2ObjectLike[];

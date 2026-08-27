@@ -318,6 +318,7 @@ import {
     toWorkflowInstanceState,
 } from "./admin-rpc-args";
 import { buildBatchEntryRequest } from "./batch";
+import { archiveCdcSegment, cdcArchiveBucket, readArchivedCdcChanges } from "./cdc-archive";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
 import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 
@@ -856,6 +857,19 @@ const CDC_SWEEP_INTERVAL_MS = 60_000;
  * sweeps instead of never draining at all.
  */
 const SHARD_CDC_SWEEP_MAX_ROWS = 50_000;
+
+/**
+ * How many changelog rows one archived segment may hold.
+ *
+ * Not `SHARD_CDC_SWEEP_MAX_ROWS`: this bound governs a read that MATERIALIZES
+ * every post-image into the isolate and then serializes the lot into one JSON
+ * body, so it is a memory bound, while the sweep cap bounds a `DELETE` that
+ * touches no payloads at all. It also matches `readCdcChanges`'s own internal
+ * clamp — asking for more would silently return this many anyway, and the
+ * destructive step is sized from what actually came back rather than from what
+ * was asked for.
+ */
+const CDC_ARCHIVE_SEGMENT_MAX_ROWS = 10_000;
 
 /**
  * Minimum spacing between throttled, in-line GC sweeps of the dedup table —
@@ -3086,6 +3100,56 @@ abstract class ShardDO {
         }
 
         return page;
+    }
+
+    /**
+     * Page the changelog the way {@link ShardDO.runShardCdcSync} does, with the
+     * R2 cold tier behind it.
+     *
+     * The live log answers whenever it can, unchanged and synchronously; this
+     * only does anything on the path where the live log gives up. A consumer
+     * below the retained floor is offered the archived range instead of a
+     * refusal, and gets the SAME refusal as before whenever the archive cannot
+     * account for it — the error object is re-thrown verbatim rather than
+     * rebuilt, so the floor and remediation a connector sees are identical
+     * whether or not a bucket is configured.
+     *
+     * Deliberately layered around the sync method rather than folded into it.
+     * `runShardCdcSync` is also the replica link's `readChanges`, which is sync
+     * all the way up through `servePull` — and that path gates on the floor
+     * BEFORE it reads, so it would never reach a fallback anyway. Making the
+     * shared method async to serve a caller that cannot use the result would
+     * have rippled two packages' signatures for nothing. Replica bootstrap
+     * therefore still re-seeds across a trimmed range; that is a follow-up, not
+     * an oversight.
+     */
+    protected async cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{ changes: CdcChange[]; cursor: number }> {
+        try {
+            return this.runShardCdcSync(args);
+        } catch (error) {
+            // Only the "you are below what I still hold" refusal is recoverable
+            // from object storage. `CDC_PAYLOAD_COMPACTED` is NOT: those rows are
+            // still in the live log, so the archive holds the same doc-less
+            // versions and would answer the identical corruption.
+            if (!(error instanceof LunoraError) || error.code !== "CDC_LOG_TRIMMED") {
+                throw error;
+            }
+
+            const bucket = cdcArchiveBucket(this.env);
+            const epoch = this.currentCdcEpoch();
+
+            if (bucket === undefined || epoch === undefined) {
+                throw error;
+            }
+
+            const archived = await readArchivedCdcChanges(bucket, { epoch, shard: this.currentShardKey() }, args.sinceSeq, args.limit ?? 1000);
+
+            if (archived === undefined) {
+                throw error;
+            }
+
+            return archived;
+        }
     }
 
     /**
@@ -6724,7 +6788,7 @@ abstract class ShardDO {
                 // Read-only: page this shard's change-data-capture log past the
                 // caller's per-shard cursor. The coordinator collects each
                 // shard's `{ changes, cursor }` into one streaming-export batch.
-                const result = this.runShardCdcSync(parseCdcSyncArgs(args));
+                const result = await this.cdcSyncPage(parseCdcSyncArgs(args));
 
                 return adminResponse(result);
             }
@@ -9713,34 +9777,127 @@ abstract class ShardDO {
         const sql = this.sql as SqlExec;
 
         try {
-            const floor = this.retentionFloor(sql);
+            const bucket = cdcArchiveBucket(environment);
 
-            if (payloadWindow !== undefined) {
-                // `cdcSeqLeavingRows` IS the "is anything past the window?"
-                // probe — an indexed `LIMIT 1 OFFSET keep - 1` that returns
-                // `undefined` when the log is shorter than the window. The
-                // `COUNT(*)` pre-check this replaces was a full b-tree walk on
-                // the write path every 60s, on exactly the multi-million-row
-                // logs this sweep exists to bound.
-                const cutoff = cdcSeqLeavingRows(sql, payloadWindow);
+            // Archiving is gated on ROW retention, not on a bucket alone.
+            //
+            // What the archive undoes is the trim, which destroys the only record
+            // that a key changed. Compaction destroys a payload but keeps the key,
+            // and every read path already degrades gracefully to a key-level delta
+            // — so a payload-only deployment has no cliff to soften.
+            //
+            // It also could not be archived correctly from here. This sweep finds
+            // its batch by reading the OLDEST rows in the log, which works because
+            // the trim then deletes them and the window advances. With nothing
+            // deleting anything, the oldest rows stay the oldest forever: every
+            // sweep would re-read and re-upload the identical segment, and no row
+            // past the first batch would ever be archived at all.
+            if (bucket === undefined || keepRows === undefined) {
+                this.applyCdcRetention(sql, payloadWindow, keepRows, Number.POSITIVE_INFINITY, SHARD_CDC_SWEEP_MAX_ROWS);
 
-                if (cutoff !== undefined && cutoff > 0) {
-                    compactCdcDocs(sql, Math.min(cutoff, floor), SHARD_CDC_SWEEP_MAX_ROWS);
-                }
+                return;
             }
 
-            if (keepRows !== undefined) {
-                const cutoff = cdcSeqLeavingRows(sql, keepRows);
+            // Archive through the cutoff of the FIRST destructive step, which is
+            // compaction whenever payload retention is configured: `payloadWindow
+            // <= keepRows` and a LARGER window yields a LOWER cutoff, so the
+            // payload cutoff always sits at or above the trim cutoff. Reading the
+            // batch at the trim cutoff instead would archive rows whose `doc`
+            // this same sweep had already stripped — an archive full of
+            // post-image-less inserts, which the read-back correctly refuses to
+            // serve, i.e. an archive that costs storage and answers nothing.
+            const cutoff = cdcSeqLeavingRows(sql, payloadWindow ?? keepRows);
 
-                if (cutoff !== undefined && cutoff > 0) {
-                    trimCdcChanges(sql, Math.min(cutoff, floor), SHARD_CDC_SWEEP_MAX_ROWS);
-                }
+            if (cutoff === undefined || cutoff <= 0) {
+                return;
             }
+
+            const through = Math.min(cutoff, this.retentionFloor(sql));
+
+            // ponytail: one segment per sweep, capped by `readCdcChanges`'s own
+            // 10k clamp, so a shard committing more than 10k changes per sweep
+            // interval archives more slowly than it writes and its log grows.
+            // The upgrade is a loop (or a wider clamp) once a real workload hits
+            // it; the correctness property — nothing is destroyed before it is
+            // archived — holds either way, the log just stays larger.
+            const batch = readCdcChanges(sql, { limit: CDC_ARCHIVE_SEGMENT_MAX_ROWS, sinceSeq: 0 }).changes.filter((change) => change.seq <= through);
+            const archivedThrough = batch.at(-1)?.seq;
+
+            if (archivedThrough === undefined) {
+                return;
+            }
+
+            // Archive first, destroy second, and never in the same turn: no row
+            // may leave SQLite before object storage has acknowledged it. A
+            // failed put therefore skips this cycle's retention entirely — the
+            // log stays larger until the next sweep, which is exactly the
+            // degradation a failed DELETE already produces here.
+            //
+            // The destructive step is bounded to the range that was actually
+            // archived (`archivedThrough`, `batch.length`) rather than to the
+            // sweep's own cap, because those two differ: the read is clamped at
+            // 10k rows and `SHARD_CDC_SWEEP_MAX_ROWS` is 50k, so an unbounded
+            // trim here would delete up to 40k rows this segment does not
+            // contain. Progress is still made every cycle, just in archive-sized
+            // steps.
+            const task = (async () => {
+                try {
+                    await archiveCdcSegment(bucket, { epoch: this.currentCdcEpoch() ?? "", shard: this.currentShardKey() }, batch);
+
+                    this.applyCdcRetention(sql, payloadWindow, keepRows, archivedThrough, batch.length);
+                } catch (error) {
+                    this.recordShapeError("cdc:archive", error);
+                }
+            })();
+
+            this.shardHost.waitUntil?.(task);
         } catch (error) {
             // A missing table (pre-CDC shard), a stub handle, or a failed DELETE:
             // retention is maintenance, and skipping a sweep only means the log
             // stays larger until the next one.
             this.recordShapeError("cdc:sweep", error);
+        }
+    }
+
+    /**
+     * The destructive half of {@link ShardDO.sweepCdcRetention}: strip payloads
+     * past the payload window, then delete rows past the row window.
+     *
+     * Split out because the archiving path has to run it AFTER an `await`, and a
+     * second copy of two cutoff calculations that must agree on `Math.min(cutoff,
+     * floor)` is exactly the kind of duplication that drifts into deleting rows a
+     * live subscriber still needs.
+     *
+     * `maxSeq` is the ceiling the caller can vouch for — `POSITIVE_INFINITY` when
+     * nothing is archived (every row is expendable once past its window), or the
+     * last `seq` actually written to object storage when something is. The floor
+     * is re-read HERE rather than passed in, because the archiving caller
+     * computes its own before an `await` and a subscriber can advance or arrive
+     * across that gap; a floor that is stale-high deletes a range a live
+     * subscription still has to be told about.
+     */
+    private applyCdcRetention(sql: SqlExec, payloadWindow: number | undefined, keepRows: number | undefined, maxSeq: number, maxRows: number): void {
+        const floor = this.retentionFloor(sql);
+
+        if (payloadWindow !== undefined) {
+            // `cdcSeqLeavingRows` IS the "is anything past the window?" probe —
+            // an indexed `LIMIT 1 OFFSET keep - 1` that returns `undefined` when
+            // the log is shorter than the window. The `COUNT(*)` pre-check this
+            // replaces was a full b-tree walk on the write path every 60s, on
+            // exactly the multi-million-row logs this sweep exists to bound.
+            const cutoff = cdcSeqLeavingRows(sql, payloadWindow);
+
+            if (cutoff !== undefined && cutoff > 0) {
+                compactCdcDocs(sql, Math.min(cutoff, floor, maxSeq), maxRows);
+            }
+        }
+
+        if (keepRows !== undefined) {
+            const cutoff = cdcSeqLeavingRows(sql, keepRows);
+
+            if (cutoff !== undefined && cutoff > 0) {
+                trimCdcChanges(sql, Math.min(cutoff, floor, maxSeq), maxRows);
+            }
         }
     }
 
