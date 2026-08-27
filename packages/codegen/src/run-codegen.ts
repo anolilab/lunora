@@ -331,6 +331,18 @@ const syncProjectFile = (project: Project, filePath: string, content: string): v
     existing.replaceWithText(content);
 };
 
+/** Whether `project` already holds `filePath` with exactly `content`. */
+const projectFileMatches = (project: Project, filePath: string, content: string): boolean => project.getSourceFile(filePath)?.getFullText() === content;
+
+/**
+ * Ceiling on the infer → render → re-infer loop that bootstraps `api.ts` /
+ * `functions.ts` (issue #283). A cold 92-table backend was measured converging
+ * on the fourth pass, so the cap sits above that with room, and it exists only
+ * so a schema that would not converge ends the run with its last output instead
+ * of spinning.
+ */
+const MAX_INFERENCE_PASSES = 8;
+
 /**
  * Construct the ts-morph `Project` codegen discovers over. Prefers the user's
  * `tsconfig.json` (when one is found walking up from `lunoraDirectory`) so
@@ -497,6 +509,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const outputDirectory = join(lunoraDirectory, "_generated");
     const dataModelPath = join(outputDirectory, "dataModel.ts");
     const serverPath = join(outputDirectory, "server.ts");
+    const apiPath = join(outputDirectory, "api.ts");
+    const generatedFunctionsPath = join(outputDirectory, "functions.ts");
 
     // In MEMORY only — the disk write waits for the write phase with everything
     // else. `discoverFunctions` infers against the ts-morph `Project`, not the
@@ -512,7 +526,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     syncProjectFile(project, dataModelPath, dataModelContent);
     syncProjectFile(project, serverPath, serverContent);
 
-    const functions = discoverFunctions(project, lunoraDirectory);
     const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
     const migrations = discoverMigrations(project, lunoraDirectory);
 
@@ -523,7 +536,51 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `isCustomMutator` push-protocol override. Both return `[]` when their file
     // is absent, so a project without them emits byte-identical generated code.
     const shapes = discoverShapes(project, lunoraDirectory);
-    const mutators = discoverMutators(project, lunoraDirectory);
+
+    // Inference reads `api.ts`/`functions.ts` too: a handler doing
+    // `ctx.runQuery(api.messages.list)` gets its own return type FROM the
+    // `FunctionReference` those files declare. On a cold `_generated/` they do
+    // not exist, so `api` resolves to nothing, every return inferred through one
+    // collapses, and the collapse is written out — the tree only converges on a
+    // later run, which is what pushed projects into wrapping the CLI in a
+    // run-until-the-hash-stops-changing loop (issue #283). `dataModel.ts` and
+    // `server.ts` are seeded above precisely so they cannot do this; these two
+    // cannot be, because their content IS the inference result.
+    //
+    // So iterate instead: infer, render, feed the render back, re-infer. The
+    // loop exits as soon as a pass's output matches what inference already saw,
+    // which is the FIRST pass on any warm tree — `syncProjectFile` leaves an
+    // identical file alone, so nothing is re-inferred and a converged project
+    // costs exactly what it did before. The cap turns a hypothetical
+    // non-converging schema into a bounded run with the last output rather than
+    // a spin.
+    let functions = discoverFunctions(project, lunoraDirectory);
+    let mutators = discoverMutators(project, lunoraDirectory);
+
+    let converged = false;
+
+    for (let pass = 1; pass <= MAX_INFERENCE_PASSES && !converged; pass += 1) {
+        const previewApi = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
+        const previewFunctions = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
+
+        converged = projectFileMatches(project, apiPath, previewApi) && projectFileMatches(project, generatedFunctionsPath, previewFunctions);
+
+        if (!converged) {
+            syncProjectFile(project, apiPath, previewApi);
+            syncProjectFile(project, generatedFunctionsPath, previewFunctions);
+
+            functions = discoverFunctions(project, lunoraDirectory);
+            mutators = discoverMutators(project, lunoraDirectory);
+        }
+    }
+
+    if (!converged) {
+        throw new LunoraError(
+            "CODEGEN_DIAGNOSTIC",
+            `Codegen did not reach a stable api.ts/functions.ts within ${String(MAX_INFERENCE_PASSES)} inference passes. That is a generator bug, not a project one — please report it with your schema size and the handlers whose return types keep moving.`,
+            { status: 500 },
+        );
+    }
 
     const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
 

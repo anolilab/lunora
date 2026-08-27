@@ -70,6 +70,40 @@ describe("runCodegen — cold-start reproducibility (#283)", () => {
         expect(result.generated.api).toContain('getNote: FunctionReference<"query", {}, import("./dataModel.js").Doc_notes | null>;');
     });
 
+    it("does not collapse a return inferred THROUGH api.ts on the very first pass", () => {
+        expect.assertions(2);
+
+        // The other missing declaration. `dataModel.ts`/`server.ts` can be
+        // rendered before inference because nothing in them depends on it;
+        // `api.ts` cannot, because its content IS the inference result. So a
+        // handler whose own return type reads back through the api surface — the
+        // ordinary `ctx.runQuery(api.x.y)` shape — still collapsed on a cold run
+        // and was written out collapsed, which is the half of #283 that kept
+        // consumers looping the CLI until a hash of `_generated/` stopped moving.
+        //
+        // Indexed through `keyof` rather than a `FunctionReference` so the
+        // assertion holds in this suite's checker-degraded sandbox, where
+        // `@lunora/server` does not resolve: the dependency on `api.ts` EXISTING
+        // is the same either way.
+        writeFileSync(
+            join(workdir, "lunora", "relay.ts"),
+            `import type { ApiTypes } from "./_generated/api";
+import { query } from "@lunora/server";
+
+export const names = query({
+    args: {},
+    handler: async (): Promise<keyof ApiTypes["notes"]> => "getNote",
+});
+`,
+            "utf8",
+        );
+
+        const result = runCodegen({ lint: false, projectRoot: workdir });
+
+        expect(result.generated.api).not.toContain('names: FunctionReference<"query", {}, unknown>');
+        expect(result.generated.api).toContain('names: FunctionReference<"query", {}, "getNote">;');
+    });
+
     it("first-pass functions.ts/api.ts output equals a second pass's (fixpoint from pass 1)", () => {
         expect.assertions(2);
 
