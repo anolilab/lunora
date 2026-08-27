@@ -1,3 +1,15 @@
+## @lunora/sql-store [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.94...@lunora/sql-store@1.0.0-alpha.95) (2026-08-27)
+
+### Bug Fixes
+
+* **shard-engine:** reject cursors minted before the tiebreak changed direction ([#503](https://github.com/anolilab/lunora/issues/503)) ([fdc58bc](https://github.com/anolilab/lunora/commit/fdc58bc6acc6c4f794da42e038c6953d2554c0fe))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.43
+* **@lunora/do:** upgraded to 1.0.0-alpha.105
+
 ## @lunora/sql-store [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.93...@lunora/sql-store@1.0.0-alpha.94) (2026-08-27)
 
 ### Performance Improvements
