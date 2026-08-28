@@ -9,6 +9,11 @@
 > If any of those changed since this plan was written, compare the "Current
 > state" excerpts against the live code before proceeding; on a mismatch,
 > treat it as a STOP condition.
+>
+> **Layout note (2026-08-28)**: the feeders moved to `packages/codegen/src/discover/`
+> with the `discover-` prefix stripped, and the two largest were split into directories
+> (`discover/functions/`, `discover/schema/`). The blast-radius table below is updated;
+> locate call sites by symbol rather than by line number.
 
 ## Status
 
@@ -152,11 +157,11 @@ The install site, `packages/codegen/src/emit.ts:1594-1598`:
 
 | Call site                                  | What a dropped key costs                                  |
 | ------------------------------------------ | --------------------------------------------------------- |
-| `discover-functions.ts:333`, `:782`        | args field missing from IR → the soundness break above    |
-| `discover-schema.ts:802`                   | table column vanishes from `Doc_*` and the emitted schema |
-| `discover-http-routes.ts:51`               | route `searchParams`/`body`/`params` field unvalidated    |
-| `discover-mutators.ts:123`                 | mutator arg vanishes                                      |
-| `discover-shapes.ts:138`                   | shape field vanishes                                      |
+| `discover/functions/internal/expose.ts:128`, `internal/builder-chain.ts:68`| args field missing from IR → the soundness break above    |
+| `discover/schema/internal/table-builder.ts:749`| table column vanishes from `Doc_*` and the emitted schema |
+| `discover/http-routes.ts:51`| route `searchParams`/`body`/`params` field unvalidated    |
+| `discover/mutators.ts:123`                 | mutator arg vanishes                                      |
+| `discover/shapes.ts:138`                   | shape field vanishes                                      |
 | `parse-validator.ts:352` (`v.object(...)`) | nested object field vanishes at any depth                 |
 
 ## Existing seams (do not reinvent)
@@ -224,7 +229,7 @@ and HTTP-route call sites still broken. (Root cause, one place, all six call sit
 - `packages/codegen/src/parse-validator.ts`
 - `packages/codegen/__tests__/compile-validator.test.ts`
 - one new or extended test asserting the table-shape / unresolvable-key behaviour
-  (put it in `packages/codegen/__tests__/discover-schema.test.ts` if a table case fits
+  (put it in `packages/codegen/__tests__/discover/schema.test.ts` if a table case fits
   there; otherwise extend `compile-validator.test.ts`)
 
 **Out of scope**:
@@ -296,7 +301,7 @@ Add two tests:
    `it("declines to compile unions (returns undefined source)")` block.
 2. **Resolvable key survives into a table shape.** A `defineTable` with a
    `["email"]: v.string()` column yields an IR carrying `email`. Model on the existing
-   cases in `packages/codegen/__tests__/discover-schema.test.ts`.
+   cases in `packages/codegen/__tests__/discover/schema.test.ts`.
 
 **Verify**: `pnpm --filter "@lunora/codegen" run test` → all pass, including the 3 new cases.
 
