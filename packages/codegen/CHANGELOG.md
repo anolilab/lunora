@@ -1,3 +1,25 @@
+## @lunora/codegen [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.137...@lunora/codegen@1.0.0-alpha.138) (2026-08-28)
+
+### Bug Fixes
+
+* close nine copied-helper divergences across eight packages ([#522](https://github.com/anolilab/lunora/issues/522)) ([a2455bb](https://github.com/anolilab/lunora/commit/a2455bb0f58b9873633504c3f1e9bfeb44a5870e))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.98
+* **@lunora/agent:** upgraded to 1.0.0-alpha.73
+* **@lunora/container:** upgraded to 1.0.0-alpha.36
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/platform:** upgraded to 1.0.0-alpha.20
+* **@lunora/queue:** upgraded to 1.0.0-alpha.37
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.43
+* **@lunora/values:** upgraded to 1.0.0-alpha.32
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.36
+* **@lunora/do:** upgraded to 1.0.0-alpha.108
+* **@lunora/server:** upgraded to 1.0.0-alpha.92
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.46
+
 ## @lunora/codegen [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.136...@lunora/codegen@1.0.0-alpha.137) (2026-08-28)
 
 ### Bug Fixes
