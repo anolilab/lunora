@@ -183,6 +183,7 @@ interface DevCommandOptions {
     apiSpec?: ApiSpec;
     codegen?: boolean;
     cwd?: string;
+    emitBindings?: string;
     ensureEnv?: typeof ensureDevVariables;
     ensureExample?: typeof ensureDevVarsExample;
     fillSecrets?: typeof fillDevSecrets;

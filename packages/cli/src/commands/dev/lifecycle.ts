@@ -485,6 +485,13 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
         args.push("--worker-port", String(options.workerPort));
     }
 
+    // Forwarded, or a `--background` run would emit nothing: the daemon child is
+    // the process that knows the resolved origin, and the supervisor asking for
+    // the manifest is the same one that wanted the server detached.
+    if (options.emitBindings !== undefined) {
+        args.push("--emit-bindings", options.emitBindings);
+    }
+
     if (options.codegen === false) {
         args.push("--no-codegen");
     }

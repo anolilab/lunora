@@ -42,6 +42,38 @@ worker and Lunora keeps regenerating types and serving Studio:
 `--worker-port` still matters with `--no-worker`: Studio and the printed hints
 need to know where the externally-owned worker is listening.
 
+### Telling the supervisor what to provide
+
+A task runner starting seven Workers needs two things from Lunora before it can
+treat it as one node: what this Worker requires, and where it will serve.
+`lunora dev --emit-bindings <file>` writes both, as the same document
+`lunora build --emit-bindings` produces for a deployer, plus a `dev` section:
+
+```jsonc
+{
+    "version": 1,
+    "name": "app",
+    "bindings": [{ "type": "d1", "binding": "DB", "databaseName": "app" }],
+    "crons": ["0 9 * * *"],
+    "vars": ["PUBLIC_URL"],
+    "dev": {
+        "origin": "http://localhost:8787",
+        "studioUrl": "http://127.0.0.1:6173",
+        "statusFile": ".lunora/dev.json",
+    },
+}
+```
+
+It is written once, before the worker starts, so your runner can reserve the
+port and wire its proxy while Lunora is still booting. Readiness is deliberately
+**not** in it — that arrives later, so the manifest names the file carrying it
+rather than shipping a `ready: false` that never changes.
+
+One derivation feeds both commands, so the requirements a deployer provisions
+cannot drift from the ones your dev graph proxies. A project with no readable
+`wrangler.jsonc` fails the run rather than emitting an empty manifest: "this
+Worker needs nothing" is a claim a supervisor would act on.
+
 ### Waiting for readiness
 
 A supervisor that starts a dependent step — an integration suite, a second

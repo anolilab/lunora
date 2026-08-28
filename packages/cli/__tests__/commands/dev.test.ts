@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -895,6 +895,76 @@ describe("lunora dev", () => {
             expect(hintLogged).toBe(true);
             // The interactive path must not be blocked — worker still exited cleanly.
             expect(infos.some((line) => line.includes("hint:"))).toBe(true);
+        });
+    });
+
+    describe("--emit-bindings", () => {
+        /**
+         * The other half of "Lunora is one participant, not the session":
+         * `build --emit-bindings` tells a deployer what to provision, and this
+         * tells a task runner the same thing plus where the running server is,
+         * so a multi-worker repo stops restating both in a config that drifts.
+         */
+        const runWithManifest = async (destination: string): Promise<number | undefined> => {
+            const result = await runDevCommand({
+                cwd: workdir,
+                emitBindings: destination,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            return result.code;
+        };
+
+        it("writes the requirements plus where the dev server serves", async () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-01-01",
+                    d1_databases: [{ binding: "DB", database_name: "app" }],
+                    main: "src/index.ts",
+                    name: "app",
+                }),
+                "utf8",
+            );
+
+            const destination = join(workdir, "dev-manifest.json");
+
+            await runWithManifest(destination);
+
+            const manifest = JSON.parse(readFileSync(destination, "utf8")) as {
+                bindings: { binding: string }[];
+                dev?: { origin: string; statusFile: string };
+            };
+
+            expect(manifest.bindings.map((binding) => binding.binding)).toContain("DB");
+            expect(manifest.dev?.origin).toBe("http://localhost:8787");
+            // Named, not inlined: the manifest is written before readiness is
+            // known, so it points at the record that carries it.
+            expect(manifest.dev?.statusFile).toContain("dev.json");
+        });
+
+        it("fails the run when there is no wrangler config to derive from", async () => {
+            expect.assertions(2);
+
+            // An empty requirements document reads as "this Worker needs
+            // nothing", and a supervisor acting on it provisions nothing — worse
+            // than no file, because it looks authoritative.
+            const destination = join(workdir, "dev-manifest.json");
+            const code = await runWithManifest(destination);
+
+            expect(code).toBe(1);
+            expect(existsSync(destination)).toBe(false);
         });
     });
 

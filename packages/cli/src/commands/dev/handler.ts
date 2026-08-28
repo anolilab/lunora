@@ -16,6 +16,7 @@ import {
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE_ENV,
+    DEV_STATE_FILE,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
     discoverContainerInfo,
@@ -38,6 +39,7 @@ import { findWranglerFile, materializeRemoteWranglerConfig, readWranglerJsonc, r
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
+import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
@@ -102,6 +104,12 @@ interface DevCommandOptions {
     /** Disable the codegen watch loop. */
     codegen?: boolean;
     cwd?: string;
+
+    /**
+     * Write the binding manifest — what this Worker needs, plus where it serves
+     * — to this path, for a supervisor that owns the rest of the dev graph.
+     */
+    emitBindings?: string;
     /** Injection seam for tests — defaults to the real `.dev.vars` scaffolder. */
     ensureEnv?: typeof ensureDevVariables;
     /** Injection seam for tests — defaults to the real `.dev.vars.example` package-aware scaffolder. */
@@ -1083,6 +1091,35 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
         handles.studio = await startStudioBestEffort(options, plan, cwd, logger);
 
+        // Written before the worker starts, and before the readiness probe: a
+        // supervisor needs to know what to provision and where to point BEFORE
+        // the thing it is provisioning for is up. Readiness is deliberately not
+        // in here — the manifest is written once and readiness arrives later, so
+        // it names `.lunora/dev.json` rather than shipping a `ready: false` that
+        // never changes.
+        if (options.emitBindings !== undefined) {
+            const emitted = writeBindingManifestFile({
+                dev: {
+                    origin: plan.workerOrigin,
+                    statusFile: DEV_STATE_FILE,
+                    ...(handles.studio?.url === undefined ? {} : { studioUrl: handles.studio.url }),
+                },
+                destination: options.emitBindings,
+                logger,
+                projectRoot: cwd,
+            });
+
+            // Fatal, unlike most of dev's best-effort startup: the flag exists
+            // because something else is waiting on this file, and starting the
+            // server without it leaves that supervisor pointed at nothing while
+            // Lunora looks healthy.
+            if (emitted.error !== undefined) {
+                logger.error(emitted.error);
+
+                return { code: 1, plan };
+            }
+        }
+
         // After the studio start, so the two overlap, but before the worker below:
         // the startup `postcodegen` is what FINISHES generated output, and a
         // wrangler bundle taken while it is still running is the unfinished copy.
@@ -1236,6 +1273,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         // passed flag arrives as `false`, absent as `true` (the option default).
         codegen: options.codegen === false ? false : undefined,
         cwd,
+        emitBindings: options.emitBindings,
         jsonLogs,
         logger,
         port: options.port,
