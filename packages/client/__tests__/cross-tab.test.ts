@@ -369,6 +369,39 @@ describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", ()
 });
 
 describe("tabCoordinator — subscription-data/subscription-settled wire frames (CLIENT-01)", () => {
+    it("delivers a leader-broadcast subscription error to a follower's onSubscriptionError", async () => {
+        expect.assertions(2);
+
+        // `broadcastSubscriptionError` shipped with no caller, so this handler
+        // was unreachable: a `subscribe(..., { onError })` on a follower tab
+        // never fired for a server-side rejection (an RLS denial, a failed admin
+        // gate) and the query sat empty with nothing reported.
+        const channelName = `test-cross-tab-${crypto.randomUUID()}`;
+        const received: { error: SubscriptionError; key: string }[] = [];
+        const follower = new TabCoordinator({
+            channelName,
+            heartbeatInterval: HEARTBEAT_INTERVAL_MS,
+            leaderTimeout: LEADER_TIMEOUT_MS,
+            onSubscriptionError: (key, error) => {
+                received.push({ error, key });
+            },
+        });
+        const leader = new BroadcastChannel(channelName);
+
+        leader.postMessage({ error: { code: "FORBIDDEN", message: "rls denied" }, key: "posts:list|{}", type: "subscription-error" });
+        await vi.waitFor(() => {
+            if (received.length === 0) {
+                throw new Error("no subscription-error delivered yet");
+            }
+        });
+
+        expect(received).toHaveLength(1);
+        expect(received[0]?.error.code).toBe("FORBIDDEN");
+
+        leader.close();
+        follower.stop();
+    });
+
     it("broadcastSubscriptionData/broadcastSubscriptionSettled carry cursor/epoch on the wire when supplied, and omit them when not", async () => {
         expect.assertions(4);
 

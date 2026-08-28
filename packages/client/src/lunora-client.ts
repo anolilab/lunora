@@ -2103,7 +2103,18 @@ class LunoraClient {
     public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: ActionCallOptions = {}): Promise<ReturnOf<F>> {
         this.assertOpen();
 
-        return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey)) as ReturnOf<F>;
+        // Both flags, because an action is the one entry point that does both
+        // jobs: it reads through `ctx.runQuery` and writes through
+        // `ctx.runMutation`. `query()` attaches and `mutation()` captures; this
+        // passed neither, so an action writing through a `.global()` / D1 table
+        // left `this.bookmark` untouched and the very next `query()` attached a
+        // pre-action bookmark — answerable by a replica that predates the write.
+        // The worker forwards an inbound `x-d1-bookmark` and returns one on this
+        // route, so nothing upstream was compensating.
+        return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, {
+            attachBookmark: true,
+            captureBookmark: true,
+        })) as ReturnOf<F>;
     }
 
     /**
@@ -5251,7 +5262,20 @@ class LunoraClient {
         const state = id === undefined ? undefined : this.subscriptions.getById(id);
 
         if (state) {
-            fanSubscriptionError(state.errorCallbacks, buildSubscriptionError(message));
+            const subscriptionError = buildSubscriptionError(message);
+
+            fanSubscriptionError(state.errorCallbacks, subscriptionError);
+
+            // Fan it to follower tabs too. `broadcastSubscriptionError` existed
+            // with no caller, so the `onSubscriptionError` handler wired to it
+            // was unreachable: a `subscribe(..., { onError })` on a follower
+            // never fired for a server-side rejection (an RLS denial, a failed
+            // admin gate) and the query just sat empty. Guarded on leadership
+            // like its `data` and `settled` siblings — only the leader holds the
+            // socket that produced this frame.
+            if (this.tabCoordinator?.isLeader()) {
+                this.tabCoordinator.broadcastSubscriptionError(SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey), subscriptionError);
+            }
 
             return;
         }
