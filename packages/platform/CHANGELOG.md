@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.19...@lunora/platform@1.0.0-alpha.20) (2026-08-28)
+
+### Bug Fixes
+
+* close nine copied-helper divergences across eight packages ([#522](https://github.com/anolilab/lunora/issues/522)) ([a2455bb](https://github.com/anolilab/lunora/commit/a2455bb0f58b9873633504c3f1e9bfeb44a5870e))
+
 ## @lunora/platform [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.18...@lunora/platform@1.0.0-alpha.19) (2026-08-27)
 
 ### Features
