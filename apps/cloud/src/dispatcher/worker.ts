@@ -2,7 +2,7 @@ import { limitsForPlan } from "../billing/plans";
 import type { AnalyticsEngineDatasetLike } from "../metering/analytics";
 import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../metering/analytics";
 import { previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "./preview-auth";
-import type { CustomDomainRoute, ScriptFacts } from "./route";
+import type { AliasRoute, CustomDomainRoute, ScriptFacts } from "./route";
 import { createCustomDomainResolver, createPlanResolver, createRouteResolver, resolveTenant } from "./route";
 
 /**
@@ -237,7 +237,7 @@ const guardProtectedPreview = async (request: Request, url: URL, scriptName: str
 // Per-isolate plan + route resolvers, rebuilt only when the control-plane
 // config changes.
 let planResolver: ((scriptName: string) => Promise<ScriptFacts>) | undefined;
-let routeResolver: ((label: string) => Promise<null | string>) | undefined;
+let routeResolver: ((label: string) => Promise<AliasRoute | null>) | undefined;
 let customDomainResolver: ((hostname: string) => Promise<CustomDomainRoute | null>) | undefined;
 let resolverKey = "";
 
@@ -303,6 +303,10 @@ export default {
         const route = await resolveTenant(url.hostname, {
             appDomain,
             resolveAlias: routeResolver,
+            // Bucketing key for a staged rollout. The client IP keeps one caller on
+            // one version instead of flipping between two builds mid-session, and
+            // works for the non-browser callers a backend platform actually serves.
+            rolloutKey: request.headers.get("cf-connecting-ip") ?? undefined,
             resolveCustomDomain: async (hostname) => {
                 const custom = await customDomainResolver?.(hostname);
 

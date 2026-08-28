@@ -2408,6 +2408,76 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "mutation"
             }
         },
+        "/_lunora/rpc#deployments:abortRollout": {
+            "post": {
+                "description": "Invoke the `mutation` `deployments:abortRollout` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "deployments:abortRollout",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "projectId": {
+                                                "description": "Id<\"projects\">",
+                                                "type": "string",
+                                                "x-lunora-table": "projects"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId",
+                                            "projectId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "deployments:abortRollout",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: deployments:abortRollout",
+                "tags": [
+                    "deployments"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
         "/_lunora/rpc#deployments:activate": {
             "post": {
                 "description": "Invoke the `mutation` `deployments:activate` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -2788,6 +2858,76 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "query"
             }
         },
+        "/_lunora/rpc#deployments:promoteRollout": {
+            "post": {
+                "description": "Invoke the `mutation` `deployments:promoteRollout` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "deployments:promoteRollout",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "projectId": {
+                                                "description": "Id<\"projects\">",
+                                                "type": "string",
+                                                "x-lunora-table": "projects"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId",
+                                            "projectId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "deployments:promoteRollout",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: deployments:promoteRollout",
+                "tags": [
+                    "deployments"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
         "/_lunora/rpc#deployments:rollback": {
             "post": {
                 "description": "Invoke the `mutation` `deployments:rollback` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -2917,6 +3057,80 @@ export const openApiSpec: Record<string, unknown> = {
                     "deployments"
                 ],
                 "x-lunora-function-kind": "query"
+            }
+        },
+        "/_lunora/rpc#deployments:setRollout": {
+            "post": {
+                "description": "Invoke the `mutation` `deployments:setRollout` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "deployments:setRollout",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "id": {
+                                                "description": "Id<\"deployments\">",
+                                                "type": "string",
+                                                "x-lunora-table": "deployments"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "percent": {
+                                                "type": "number"
+                                            }
+                                        },
+                                        "required": [
+                                            "id",
+                                            "organizationId",
+                                            "percent"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "deployments:setRollout",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: deployments:setRollout",
+                "tags": [
+                    "deployments"
+                ],
+                "x-lunora-function-kind": "mutation"
             }
         },
         "/_lunora/rpc#deployments:updateStatus": {

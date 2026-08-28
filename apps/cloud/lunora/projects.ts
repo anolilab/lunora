@@ -21,6 +21,9 @@ interface ProjectRow {
     organizationId: Id<"organizations">;
     previewPasswordHash?: string;
     previewPasswordSalt?: string;
+    rolloutDeploymentId?: string;
+    rolloutPercent?: number;
+    rolloutScriptName?: string;
     slug: string;
 }
 
@@ -43,6 +46,12 @@ export interface ProjectView {
     organizationId: Id<"organizations">;
     /** Whether preview deployments for this project require a password. */
     previewProtected: boolean;
+    /** The deployment taking a share of traffic, when a staged rollout is in progress. */
+    rolloutDeploymentId?: string;
+    /** Share of traffic on the candidate, when a staged rollout is in progress. */
+    rolloutPercent?: number;
+    /** Script name of the rollout candidate, for the dashboard to name it. */
+    rolloutScriptName?: string;
     slug: string;
 }
 
@@ -57,6 +66,11 @@ export const toProjectView = (row: ProjectRow): ProjectView => {
         slug: row.slug,
         ...(row.framework === undefined ? {} : { framework: row.framework }),
         ...(row.githubRepo === undefined ? {} : { githubRepo: row.githubRepo }),
+        // Rollout state travels as a set — a percentage with no candidate would
+        // render a share of traffic going nowhere.
+        ...(row.rolloutScriptName !== undefined && row.rolloutPercent !== undefined
+            ? { rolloutDeploymentId: row.rolloutDeploymentId, rolloutPercent: row.rolloutPercent, rolloutScriptName: row.rolloutScriptName }
+            : {}),
     };
 };
 

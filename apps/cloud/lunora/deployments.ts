@@ -5,7 +5,7 @@ import { previewExpiry } from "../src/deploy/preview";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
-import { assertMember, authorizeDeployKey } from "./authz";
+import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -38,6 +38,9 @@ interface ProjectRow {
     _id: Id<"projects">;
     activeDeploymentId?: Id<"deployments">;
     activeScriptName?: string;
+    rolloutDeploymentId?: string;
+    rolloutPercent?: number;
+    rolloutScriptName?: string;
 }
 
 interface AliasOwnershipRow {
@@ -396,7 +399,7 @@ export const rollback = mutation
  */
 export const routeForAlias = query
     .input({ alias: boundedString(LIMITS.name) })
-    .query(async ({ ctx: context, args: { alias } }): Promise<{ scriptName: string } | null> => {
+    .query(async ({ ctx: context, args: { alias } }): Promise<null | { candidateScriptName?: string; percent?: number; scriptName: string }> => {
         const { page } = await context.db.deployments.findMany({ where: { alias } });
         const rows = page as unknown as DeploymentRow[];
         const first = rows[0];
@@ -405,15 +408,24 @@ export const routeForAlias = query
             return null;
         }
 
-        const project = (await context.db.get(first.projectId)) as ProjectRow | null;
+        const project = (await context.db.get(first.projectId)) as null | ProjectRow;
+
+        // A staged rollout rides on the same lookup the dispatcher already makes.
+        // Both names cross together or neither does: a candidate without a
+        // percentage would never be served, and a percentage without a candidate
+        // would split traffic toward nothing.
+        const rollout =
+            project?.rolloutScriptName && typeof project.rolloutPercent === "number"
+                ? { candidateScriptName: project.rolloutScriptName, percent: project.rolloutPercent }
+                : {};
 
         if (project?.activeScriptName) {
-            return { scriptName: project.activeScriptName };
+            return { scriptName: project.activeScriptName, ...rollout };
         }
 
         const live = rows.filter((d) => d.status === "live").toSorted((a, b) => b.createdAt - a.createdAt)[0];
 
-        return live ? { scriptName: live.scriptName } : null;
+        return live ? { scriptName: live.scriptName, ...rollout } : null;
     });
 
 /** Superseded production releases retained per project for rollback (GAPS.md A1). */
@@ -584,3 +596,159 @@ export const ejectTarget = internalQuery.input({ deploymentId: v.id("deployments
         };
     },
 );
+
+/** Percentages a rollout may sit at. Bounded so a typo cannot route 5000% of traffic anywhere. */
+const MIN_ROLLOUT_PERCENT = 1;
+const MAX_ROLLOUT_PERCENT = 99;
+
+/**
+ * Start or adjust a staged rollout: serve `percent` of traffic to a candidate
+ * release while the active one keeps the rest (GAPS.md A1 follow-on).
+ *
+ * Blue/green promotes all at once. A rollout is the same pointer swap performed
+ * gradually, so a regression is found by a fraction of users rather than
+ * everyone — and because the metering stream already records outcome per script,
+ * comparing the candidate's error rate against the active one is a read rather
+ * than new instrumentation.
+ *
+ * Capped at 99: reaching 100 is {@link promoteRollout}'s job, which also swaps
+ * the pointer and clears the rollout. Letting `percent` reach 100 would leave a
+ * project serving entirely from a candidate that is still not its active
+ * deployment — indistinguishable from promoted, but reverted by a single
+ * `abortRollout` nobody expected to be destructive.
+ *
+ * Owners/admins only, and audited: this shifts live traffic.
+ */
+export const setRollout = mutation
+    .use(rateLimit("machine"))
+    .input({
+        id: v.id("deployments"),
+        organizationId: v.id("organizations"),
+        percent: v.number(),
+    })
+    .mutation(async ({ ctx: context, args: { id, organizationId, percent } }): Promise<{ percent: number }> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+        const deployment = (await context.db.get(id)) as DeploymentRow | null;
+
+        if (deployment?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "deployment not found");
+        }
+
+        if (deployment.status !== "live") {
+            throw new LunoraError("CONFLICT", `cannot roll out a ${deployment.status} deployment`);
+        }
+
+        const project = (await context.db.get(deployment.projectId)) as null | ProjectRow;
+
+        if (project?.activeDeploymentId === id) {
+            throw new LunoraError("CONFLICT", "this deployment is already the active release");
+        }
+
+        const rounded = Math.round(percent);
+
+        if (!Number.isFinite(rounded) || rounded < MIN_ROLLOUT_PERCENT || rounded > MAX_ROLLOUT_PERCENT) {
+            throw new LunoraError("BAD_REQUEST", `rollout percent must be between ${String(MIN_ROLLOUT_PERCENT)} and ${String(MAX_ROLLOUT_PERCENT)}`);
+        }
+
+        await context.db.patch(deployment.projectId, {
+            rolloutDeploymentId: id,
+            rolloutPercent: rounded,
+            rolloutScriptName: deployment.scriptName,
+        });
+        await context.db.insert("auditLog", {
+            action: "deployment.rollout.set",
+            actorUserId: member.userId,
+            createdAt: context.now,
+            organizationId,
+            target: `${deployment.scriptName}@${String(rounded)}%`,
+        });
+
+        return { percent: rounded };
+    });
+
+/**
+ * Finish a rollout: the candidate becomes the active release and the rollout is
+ * cleared.
+ *
+ * Supersedes the previously-live releases exactly as {@link activate} does. That
+ * duplication is deliberate — the alternative is a shared helper called by both a
+ * machine-authorized deploy path and a member-authorized promote path with
+ * different authorization already applied, which is the shape that makes an auth
+ * check easy to lose.
+ */
+export const promoteRollout = mutation
+    .use(rateLimit("machine"))
+    .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
+    .mutation(async ({ ctx: context, args: { organizationId, projectId } }): Promise<void> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, projectId, organizationId, "project");
+
+        const project = (await context.db.get(projectId)) as null | ProjectRow;
+
+        if (!project?.rolloutDeploymentId) {
+            throw new LunoraError("CONFLICT", "no rollout in progress");
+        }
+
+        const candidateId = project.rolloutDeploymentId as Id<"deployments">;
+        const candidate = (await context.db.get(candidateId)) as DeploymentRow | null;
+
+        if (!candidate) {
+            throw new LunoraError("NOT_FOUND", "the rollout candidate no longer exists");
+        }
+
+        const { now } = context;
+        const { page } = await context.db.deployments.findMany({ where: { projectId } }); // secret-scanner:allow -- domain field name
+        const others = (page as unknown as DeploymentRow[]).filter((row) => row._id !== candidateId && row.kind === candidate.kind && row.status === "live");
+
+        for (const other of others) {
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
+        }
+
+        await context.db.patch(projectId, {
+            activeDeploymentId: candidateId,
+            activeScriptName: candidate.scriptName,
+            rolloutDeploymentId: undefined,
+            rolloutPercent: undefined,
+            rolloutScriptName: undefined,
+        });
+        await context.db.insert("auditLog", {
+            action: "deployment.rollout.promote",
+            actorUserId: member.userId,
+            createdAt: now,
+            organizationId,
+            target: candidate.scriptName,
+        });
+    });
+
+/**
+ * Abandon a rollout: all traffic returns to the active release.
+ *
+ * The candidate is left `live` rather than superseded — it is a deployment that
+ * still exists and may be rolled out again after a fix, and superseding it here
+ * would make "we aborted the canary" indistinguishable from "we replaced it".
+ */
+export const abortRollout = mutation
+    .use(rateLimit("machine"))
+    .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
+    .mutation(async ({ ctx: context, args: { organizationId, projectId } }): Promise<void> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, projectId, organizationId, "project");
+
+        const project = (await context.db.get(projectId)) as null | ProjectRow;
+
+        if (!project?.rolloutDeploymentId) {
+            throw new LunoraError("CONFLICT", "no rollout in progress");
+        }
+
+        await context.db.patch(projectId, { rolloutDeploymentId: undefined, rolloutPercent: undefined, rolloutScriptName: undefined });
+        await context.db.insert("auditLog", {
+            action: "deployment.rollout.abort",
+            actorUserId: member.userId,
+            createdAt: context.now,
+            organizationId,
+            target: project.rolloutScriptName ?? "",
+        });
+    });

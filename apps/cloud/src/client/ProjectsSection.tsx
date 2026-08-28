@@ -121,6 +121,8 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                 previewProtected={project?.previewProtected ?? false}
                 projectId={activeProject}
                 projectName={project?.name ?? "Project"}
+                rolloutPercent={project?.rolloutPercent}
+                rolloutScriptName={project?.rolloutScriptName}
             />
         );
     }

@@ -23,6 +23,7 @@ import { api } from "../../lunora/_generated/api.js";
 import { formatDateTime, formatTime } from "./format";
 import { PreviewProtectionCard } from "./PreviewProtectionCard";
 import { ProjectGraph } from "./ProjectGraph";
+import { RolloutCard } from "./RolloutCard";
 import { StatusBadge } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
 
@@ -35,6 +36,10 @@ interface DeploymentsSectionProps {
     previewProtected?: boolean;
     projectId: ProjectId; // secret-scanner:allow -- domain field name
     projectName: string;
+    /** Share of traffic on the rollout candidate, when one is in progress. */
+    rolloutPercent?: number;
+    /** Script name of the rollout candidate, when one is in progress. */
+    rolloutScriptName?: string;
 }
 
 type Deployment = ReturnOf<typeof api.deployments.listByProject>[number];
@@ -444,6 +449,8 @@ export const DeploymentsSection = ({
     previewProtected = false,
     projectId,
     projectName,
+    rolloutPercent,
+    rolloutScriptName,
 }: DeploymentsSectionProps): ReactElement => {
     const deployments = useQuery(api.deployments.listByProject, { organizationId, projectId });
     const builds = useQuery(api.builds.listByProject, { organizationId, projectId });
@@ -505,6 +512,13 @@ export const DeploymentsSection = ({
                 </Card>
             ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
+            <RolloutCard
+                candidateId={active?._id}
+                candidateScriptName={rolloutScriptName}
+                organizationId={organizationId}
+                percent={rolloutPercent}
+                projectId={projectId}
+            />
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
             <DeploymentsTable
                 activeId={active?._id}

@@ -1,4 +1,5 @@
 import readJson from "../read-json";
+import { rolloutKey, servesCandidate } from "./rollout";
 
 /**
  * Dispatcher routing (CLOUD-PLAN.md §2.1). Resolves an inbound hostname to the
@@ -16,6 +17,20 @@ export interface TenantRoute {
     scriptName: string;
 }
 
+/**
+ * What a stable alias resolves to: the active script, plus a rollout candidate
+ * when one is in progress.
+ *
+ * Both rollout fields travel together or not at all — a candidate with no
+ * percentage would never be served, and a percentage with no candidate would
+ * split traffic toward nothing.
+ */
+export interface AliasRoute {
+    candidateScriptName?: string;
+    percent?: number;
+    scriptName: string;
+}
+
 /** What the control plane answers for one script: its plan tier and whether it is a protected preview. */
 export interface ScriptFacts {
     plan?: string;
@@ -25,12 +40,14 @@ export interface ScriptFacts {
 export interface ResolveTenantOptions {
     /** The platform apex, e.g. `lunora.app`. */
     appDomain: string;
-    /** Resolve a stable alias to the active versioned script (blue/green pointer, GAPS.md A1); null falls back to the literal label (previews, legacy rows). */
-    resolveAlias?: (label: string) => Promise<null | string>;
+    /** Resolve a stable alias to its active script + any rollout (GAPS.md A1); null falls back to the literal label (previews, legacy rows). */
+    resolveAlias?: (label: string) => Promise<AliasRoute | null>;
     /** Resolve a custom (non-apex) hostname to a script id, or null if unknown. */
     resolveCustomDomain?: (hostname: string) => Promise<null | string>;
     /** Resolve a script id to its plan tier + protection state (one cached control-plane call). */
     resolvePlan?: (scriptName: string) => Promise<ScriptFacts>;
+    /** Bucketing key for a staged rollout — the client IP. Omitted → the stable release. */
+    rolloutKey?: string;
 }
 
 export const resolveTenant = async (hostname: string, options: ResolveTenantOptions): Promise<null | TenantRoute> => {
@@ -48,7 +65,24 @@ export const resolveTenant = async (hostname: string, options: ResolveTenantOpti
 
             // Stable alias → active versioned script; a miss means the label
             // is itself a script id (previews carry their own unique names).
-            return (await options.resolveAlias?.(label)) ?? label;
+            const alias = await options.resolveAlias?.(label);
+
+            if (!alias) {
+                return label;
+            }
+
+            // A staged rollout serves a deterministic slice of traffic from the
+            // candidate. The split is monotonic in the percentage, so raising it
+            // only adds clients — see `rollout.ts` for why that matters.
+            if (
+                alias.candidateScriptName !== undefined &&
+                alias.percent !== undefined &&
+                servesCandidate(rolloutKey(options.rolloutKey ?? null, label), alias.percent)
+            ) {
+                return alias.candidateScriptName;
+            }
+
+            return alias.scriptName;
         }
 
         return (await options.resolveCustomDomain?.(host)) ?? null;
@@ -84,17 +118,17 @@ export interface PlanResolverOptions {
  * Same TTL-cache + fail-open shape as {@link createPlanResolver}: a miss or
  * control-plane blip resolves to `null`, which falls back to the literal label.
  */
-export const createRouteResolver = (options: PlanResolverOptions): ((label: string) => Promise<null | string>) => {
+export const createRouteResolver = (options: PlanResolverOptions): ((label: string) => Promise<AliasRoute | null>) => {
     const fetchImpl = options.fetch ?? fetch;
     const now = options.now ?? Date.now;
     const ttl = options.ttlMs ?? 60_000;
-    const cache = new Map<string, { expires: number; scriptName: null | string }>();
+    const cache = new Map<string, { expires: number; route: AliasRoute | null }>();
 
-    return async (label: string): Promise<null | string> => {
+    return async (label: string): Promise<AliasRoute | null> => {
         const cached = cache.get(label);
 
         if (cached && cached.expires > now()) {
-            return cached.scriptName;
+            return cached.route;
         }
 
         try {
@@ -105,10 +139,18 @@ export const createRouteResolver = (options: PlanResolverOptions): ((label: stri
                 return null;
             }
 
-            const { scriptName } = await readJson<{ scriptName?: null | string }>(response);
-            const resolved = typeof scriptName === "string" ? scriptName : null;
+            const body = await readJson<{ candidateScriptName?: string; percent?: number; scriptName?: null | string }>(response);
+            const resolved: AliasRoute | null =
+                typeof body.scriptName === "string"
+                    ? {
+                          scriptName: body.scriptName,
+                          ...(typeof body.candidateScriptName === "string" && typeof body.percent === "number"
+                              ? { candidateScriptName: body.candidateScriptName, percent: body.percent }
+                              : {}),
+                      }
+                    : null;
 
-            cache.set(label, { expires: now() + ttl, scriptName: resolved });
+            cache.set(label, { expires: now() + ttl, route: resolved });
 
             return resolved;
         } catch {

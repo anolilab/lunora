@@ -165,7 +165,42 @@ describe("dispatcher alias routing", () => {
     it("resolves a stable alias to the active versioned script", async () => {
         const route = await resolveTenant("app.lunora.app", {
             appDomain: "lunora.app",
-            resolveAlias: (label) => Promise.resolve(label === "app" ? "app-v7" : null),
+            resolveAlias: (label) => Promise.resolve(label === "app" ? { scriptName: "app-v7" } : null),
+        });
+
+        expect(route?.scriptName).toBe("app-v7");
+    });
+
+    /**
+     * A staged rollout splits traffic between the active release and a candidate.
+     * At 100 the candidate takes everything; at 0 the split is off entirely and
+     * the active release keeps every request.
+     */
+    it("routes to the rollout candidate for the share it covers", async () => {
+        const alias = { candidateScriptName: "app-v8", percent: 100, scriptName: "app-v7" };
+        const all = await resolveTenant("app.lunora.app", {
+            appDomain: "lunora.app",
+            resolveAlias: () => Promise.resolve(alias),
+            rolloutKey: "203.0.113.7",
+        });
+
+        expect(all?.scriptName).toBe("app-v8");
+
+        const none = await resolveTenant("app.lunora.app", {
+            appDomain: "lunora.app",
+            resolveAlias: () => Promise.resolve({ ...alias, percent: 0 }),
+            rolloutKey: "203.0.113.7",
+        });
+
+        expect(none?.scriptName).toBe("app-v7");
+    });
+
+    /** A candidate with no percentage would never be served; both fields travel together. */
+    it("ignores a candidate that carries no percentage", async () => {
+        const route = await resolveTenant("app.lunora.app", {
+            appDomain: "lunora.app",
+            resolveAlias: () => Promise.resolve({ candidateScriptName: "app-v8", scriptName: "app-v7" }),
+            rolloutKey: "203.0.113.7",
         });
 
         expect(route?.scriptName).toBe("app-v7");
@@ -189,8 +224,8 @@ describe("dispatcher alias routing", () => {
             now: () => 0,
         });
 
-        await expect(resolve("app")).resolves.toBe("app-v3");
-        await expect(resolve("app")).resolves.toBe("app-v3");
+        await expect(resolve("app")).resolves.toStrictEqual({ scriptName: "app-v3" });
+        await expect(resolve("app")).resolves.toStrictEqual({ scriptName: "app-v3" });
         expect(fetchMock).toHaveBeenCalledTimes(1);
 
         const failing = createRouteResolver({

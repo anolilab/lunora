@@ -529,7 +529,9 @@ const handleTenantRouteRoute = async (request: Request, environment: RouterEnv):
         return jsonError(400, "alias is required");
     }
 
-    const result = await context.runQuery<null | { scriptName: string }>(api.deployments.routeForAlias, { alias });
+    const result = await context.runQuery<null | { candidateScriptName?: string; percent?: number; scriptName: string }>(api.deployments.routeForAlias, {
+        alias,
+    });
 
     return Response.json(result ?? { scriptName: null });
 };

@@ -150,6 +150,15 @@ export default defineSchema({
         // Denormalized script id of the active deployment, so the dispatcher's
         // route lookup resolves alias → script in one read.
         activeScriptName: v.optional(v.string()),
+        // Staged rollout in progress (GAPS.md A1 follow-on). Blue/green promotes
+        // all at once; a rollout keeps the candidate live alongside the active
+        // release and serves it to `rolloutPercent` of traffic, so a regression
+        // reaches a fraction of users instead of everyone. All three are set and
+        // cleared together — a percentage without a candidate would silently
+        // split traffic toward nothing.
+        rolloutDeploymentId: v.optional(v.string()),
+        rolloutPercent: v.optional(v.number()),
+        rolloutScriptName: v.optional(v.string()),
         createdAt: v.number(),
         // Optional meta-framework hint (tanstack-start, astro, …) for the build step.
         framework: v.optional(v.string()),

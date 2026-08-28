@@ -50,6 +50,17 @@ describe(toProjectView, () => {
         });
     });
 
+    /** A percentage with no candidate would render a share of traffic going nowhere. */
+    it("carries rollout state only when both halves are present", () => {
+        const rolling = toProjectView({ ...row, rolloutDeploymentId: "dep_9", rolloutPercent: 25, rolloutScriptName: "web-v9" });
+
+        expect(rolling.rolloutPercent).toBe(25);
+        expect(rolling.rolloutScriptName).toBe("web-v9");
+
+        // A percentage with no candidate script is dropped entirely.
+        expect(toProjectView({ ...row, rolloutPercent: 25 })).not.toHaveProperty("rolloutPercent");
+    });
+
     it("omits optional fields rather than emitting undefined", () => {
         const view = toProjectView({ ...row, framework: "astro", githubRepo: "acme/web" });
 

@@ -113,6 +113,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deploy_keys:revoke": lunora_deploy_keys_7.revoke as unknown as RegisteredLunoraFunction,
     "deploy_keys:roll": lunora_deploy_keys_7.roll as unknown as RegisteredLunoraFunction,
     "deploy_keys:verify": lunora_deploy_keys_7.verify as unknown as RegisteredLunoraFunction,
+    "deployments:abortRollout": lunora_deployments_8.abortRollout as unknown as RegisteredLunoraFunction,
     "deployments:activate": lunora_deployments_8.activate as unknown as RegisteredLunoraFunction,
     "deployments:adminTarget": lunora_deployments_8.adminTarget as unknown as RegisteredLunoraFunction,
     "deployments:cleanupExpiredPreviews": lunora_deployments_8.cleanupExpiredPreviews as unknown as RegisteredLunoraFunction,
@@ -120,9 +121,11 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deployments:ejectTarget": lunora_deployments_8.ejectTarget as unknown as RegisteredLunoraFunction,
     "deployments:listByProject": lunora_deployments_8.listByProject as unknown as RegisteredLunoraFunction,
     "deployments:planForScript": lunora_deployments_8.planForScript as unknown as RegisteredLunoraFunction,
+    "deployments:promoteRollout": lunora_deployments_8.promoteRollout as unknown as RegisteredLunoraFunction,
     "deployments:pruneSuperseded": lunora_deployments_8.pruneSuperseded as unknown as RegisteredLunoraFunction,
     "deployments:rollback": lunora_deployments_8.rollback as unknown as RegisteredLunoraFunction,
     "deployments:routeForAlias": lunora_deployments_8.routeForAlias as unknown as RegisteredLunoraFunction,
+    "deployments:setRollout": lunora_deployments_8.setRollout as unknown as RegisteredLunoraFunction,
     "deployments:updateStatus": lunora_deployments_8.updateStatus as unknown as RegisteredLunoraFunction,
     "domains:add": lunora_domains_9.add as unknown as RegisteredLunoraFunction,
     "domains:get": lunora_domains_9.get as unknown as RegisteredLunoraFunction,
@@ -374,6 +377,13 @@ if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
+installCompiledValidatorMap(lunora_deployments_8.abortRollout.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["projectId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
 installCompiledValidatorMap(lunora_deployments_8.adminTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -394,6 +404,21 @@ if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
+installCompiledValidatorMap(lunora_deployments_8.promoteRollout.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["projectId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
+installCompiledValidatorMap(lunora_deployments_8.setRollout.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["percent"] !== "number" || !Number.isFinite(source["percent"])) return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"], "percent": source["percent"] };
 });
 installCompiledValidatorMap(lunora_domains_9.get.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -773,6 +798,7 @@ export interface Caller {
         verify: (args: { key: unknown }) => Promise<{ deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
     };
     deployments: {
+        abortRollout: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<void>;
         activate: (args: { deployKey?: unknown; id: Id<"deployments"> }) => Promise<void>;
         adminTarget: (args: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
@@ -780,9 +806,11 @@ export interface Caller {
         ejectTarget: (args: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; projectSlug: string; scriptName: string; url: string; } | null>;
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"deployments">; adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; url?: string; version?: number }[]>;
         planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; protected?: boolean; }>;
+        promoteRollout: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<void>;
         pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
         rollback: (args: { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ scriptName: string; version?: number; }>;
-        routeForAlias: (args: { alias: unknown }) => Promise<{ scriptName: string; } | null>;
+        routeForAlias: (args: { alias: unknown }) => Promise<{ candidateScriptName?: string; percent?: number; scriptName: string; } | null>;
+        setRollout: (args: { id: Id<"deployments">; organizationId: Id<"organizations">; percent: number }) => Promise<{ percent: number; }>;
         updateStatus: (args: { bundleHash?: unknown; deployKey?: unknown; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: unknown }) => Promise<void>;
     };
     domains: {
@@ -853,7 +881,7 @@ export interface Caller {
     projects: {
         byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
-        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; slug: string }[]>;
+        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rolloutDeploymentId?: string; rolloutPercent?: number; rolloutScriptName?: string; slug: string }[]>;
         rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         setPreviewProtection: (args: { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }) => Promise<{ protected: boolean; }>;
         verifyPreviewPassword: (args: { password: unknown; scriptName: unknown }) => Promise<{ ok: boolean; }>;
@@ -970,6 +998,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         verify: (args) => callRegistered(context, "deploy_keys:verify", args),
     },
     deployments: {
+        abortRollout: (args) => callRegistered(context, "deployments:abortRollout", args),
         activate: (args) => callRegistered(context, "deployments:activate", args),
         adminTarget: (args) => callRegistered(context, "deployments:adminTarget", args),
         cleanupExpiredPreviews: (args) => callRegistered(context, "deployments:cleanupExpiredPreviews", args),
@@ -977,9 +1006,11 @@ export const createCaller = (context: CallerCtx): Caller => ({
         ejectTarget: (args) => callRegistered(context, "deployments:ejectTarget", args),
         listByProject: (args) => callRegistered(context, "deployments:listByProject", args),
         planForScript: (args) => callRegistered(context, "deployments:planForScript", args),
+        promoteRollout: (args) => callRegistered(context, "deployments:promoteRollout", args),
         pruneSuperseded: (args) => callRegistered(context, "deployments:pruneSuperseded", args),
         rollback: (args) => callRegistered(context, "deployments:rollback", args),
         routeForAlias: (args) => callRegistered(context, "deployments:routeForAlias", args),
+        setRollout: (args) => callRegistered(context, "deployments:setRollout", args),
         updateStatus: (args) => callRegistered(context, "deployments:updateStatus", args),
     },
     domains: {
