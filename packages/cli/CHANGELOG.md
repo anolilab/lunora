@@ -1,3 +1,20 @@
+## @lunora/cli [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.201...@lunora/cli@1.0.0-alpha.202) (2026-08-28)
+
+### Bug Fixes
+
+* **codegen:** close eight silent-drop gaps in procedure discovery ([#513](https://github.com/anolilab/lunora/issues/513)) ([e393e49](https://github.com/anolilab/lunora/commit/e393e494c0145ad78e0f2b1e27798ed96e7039a3))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.97
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.137
+* **@lunora/config:** upgraded to 1.0.0-alpha.169
+* **@lunora/d1:** upgraded to 1.0.0-alpha.95
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.94
+* **@lunora/seed:** upgraded to 1.0.0-alpha.91
+* **@lunora/testing:** upgraded to 1.0.0-alpha.131
+
 ## @lunora/cli [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.200...@lunora/cli@1.0.0-alpha.201) (2026-08-28)
 
 
