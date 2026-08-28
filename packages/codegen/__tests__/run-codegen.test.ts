@@ -2659,6 +2659,30 @@ export default schema;
             expect(message).toContain("Inline the fields into the defineTable(...) call");
         });
 
+        it("emits a hyphenated index name rather than refusing it", () => {
+            expect.assertions(2);
+
+            // `emitDataModel` quotes non-identifier index names into its union and
+            // its comment calls them legitimate; `.searchIndex("search-body")`
+            // ships today. The drizzle renderer nonetheless asserted the name was
+            // an identifier, so `.index("by-author")` died with an INTERNAL error
+            // naming no file and no line — while the sibling index kinds accepted
+            // the identical spelling.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+                 export default defineSchema({ posts: defineTable({ author: v.string() }).index("by-author", ["author"]) });`,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+
+            const drizzle = readFileSync(join(workdir, "lunora", "_generated", "drizzle.shard.ts"), "utf8");
+
+            // Quoted key, JSON-escaped literal — valid JS, and the same spelling
+            // `emitDataModel` already put in the index-name union.
+            expect(drizzle).toContain(`"by-author": index("by-author").on(t.author)`);
+        });
+
         it("names the constraint and the workaround for a nested index path", () => {
             expect.assertions(3);
 

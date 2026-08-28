@@ -5962,12 +5962,18 @@ const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: 
 };
 
 const renderIndexEntry = (index: IndexIR): string => {
-    // drizzle.*.ts is runtime-executed, so every slot here must be a valid JS
-    // identifier: `index.name` is both a bare object key and a string literal,
-    // and each field is a bare `t.<field>` column accessor. Reject anything
-    // outside the identifier allowlist rather than embed unescaped source.
-    assertIdentifier(index.name, "drizzle index name");
-
+    // An index NAME may legitimately be a non-identifier — `emitDataModel` says so
+    // and emits `"by-author"` into its union, and `.searchIndex("search-body")`
+    // ships today. This renderer used to `assertIdentifier` it, so `.index("by-author")`
+    // died with an INTERNAL error naming no file and no line while its sibling
+    // index kinds accepted the same spelling. Render it safely instead: a quoted
+    // object key and a JSON-escaped literal, which is what closes the injection
+    // vector without rejecting a hyphen.
+    //
+    // Each FIELD stays asserted — it is spliced as a bare `t.<field>` column
+    // accessor, where there is nothing to quote. `assertTopLevelIndexField` gives
+    // the nested-path case a located diagnostic upstream; this remains the
+    // backstop for anything that reaches here another way.
     const constructor = index.unique ? "uniqueIndex" : "index";
     const fields = index.fields
         .map((field) => {
@@ -5977,7 +5983,7 @@ const renderIndexEntry = (index: IndexIR): string => {
         })
         .join(", ");
 
-    return `    ${index.name}: ${constructor}("${index.name}").on(${fields}),`;
+    return `    ${renderPropertyKey(index.name)}: ${constructor}(${JSON.stringify(index.name)}).on(${fields}),`;
 };
 
 const renderDrizzleTable = (table: TableIR, knownTables: ReadonlySet<string>): string => {
