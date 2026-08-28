@@ -13,6 +13,7 @@ import { api } from "../../lunora/_generated/api.js";
 import { DeploymentsSection } from "./DeploymentsSection";
 import type { GitProvider } from "./ImportProjectDialog";
 import { ImportProjectDialog } from "./ImportProjectDialog";
+import { OnboardingChecklist } from "./OnboardingChecklist";
 import { interactiveRowClassName } from "./section-styles";
 import { Field, FieldForm, FormError, RowList } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
@@ -127,6 +128,9 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
 
     return (
         <div className="flex flex-col gap-6">
+            {/* Above the list until the org's first deployment is live, then gone. */}
+            <OnboardingChecklist organizationId={organizationId} />
+
             <Card>
                 <CardHeader>
                     <CardTitle>Projects</CardTitle>

@@ -2278,6 +2278,76 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "mutation"
             }
         },
+        "/_lunora/rpc#deploy_keys:roll": {
+            "post": {
+                "description": "Invoke the `mutation` `deploy_keys:roll` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "deploy_keys:roll",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "id": {
+                                                "description": "Id<\"deployKeys\">",
+                                                "type": "string",
+                                                "x-lunora-table": "deployKeys"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            }
+                                        },
+                                        "required": [
+                                            "id",
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "deploy_keys:roll",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: deploy_keys:roll",
+                "tags": [
+                    "deploy_keys"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
         "/_lunora/rpc#deploy_keys:verify": {
             "post": {
                 "description": "Invoke the `mutation` `deploy_keys:verify` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -5033,6 +5103,70 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "query"
             }
         },
+        "/_lunora/rpc#onboarding:checklist": {
+            "post": {
+                "description": "Invoke the `query` `onboarding:checklist` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "onboarding:checklist",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "onboarding:checklist",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "query: onboarding:checklist",
+                "tags": [
+                    "onboarding"
+                ],
+                "x-lunora-function-kind": "query"
+            }
+        },
         "/_lunora/rpc#organizations:cancelDeletion": {
             "post": {
                 "description": "Invoke the `mutation` `organizations:cancelDeletion` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -7388,6 +7522,10 @@ export const openApiSpec: Record<string, unknown> = {
         {
             "description": "Operations declared in `lunora/metrics`.",
             "name": "metrics"
+        },
+        {
+            "description": "Operations declared in `lunora/onboarding`.",
+            "name": "onboarding"
         },
         {
             "description": "Operations declared in `lunora/organizations`.",

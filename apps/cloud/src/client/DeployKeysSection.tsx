@@ -37,18 +37,42 @@ export const DeployKeysSection = ({ organizationId, preloaded }: SectionProps<Re
     const keys = usePreloadedQuery(preloaded);
     const issueKey = useMutation(api.deploy_keys.issue);
     const revokeKey = useMutation(api.deploy_keys.revoke);
+    const rollKey = useMutation(api.deploy_keys.roll);
 
     const [name, setName] = useState("");
     const [type, setType] = useState<KeyType>("production");
     const [issued, setIssued] = useState<null | string>(null);
     const [error, setError] = useState<null | string>(null);
 
+    /**
+     * Roll one key. The replacement's plaintext lands in the same shown-once panel
+     * an `issue` uses, because it is the same fact with the same one-chance-to-copy
+     * consequence — a second presentation would only invite treating one of them as
+     * recoverable.
+     */
+    const handleRoll = (id: (typeof keys)[number]["_id"]): void => {
+        setError(null);
+
+        void (async () => {
+            try {
+                const result = await rollKey.mutate({ id, organizationId });
+
+                setIssued(result.key);
+            } catch (error_: unknown) {
+                setError(error_ instanceof Error ? error_.message : "roll failed");
+            }
+        })();
+    };
+
     return (
         <div className="flex flex-col gap-6">
             <Card>
                 <CardHeader>
                     <CardTitle>Deploy keys</CardTitle>
-                    <CardDescription>Revoked keys stay listed for the audit trail — a revoked key fails verification immediately.</CardDescription>
+                    <CardDescription>
+                        Revoked keys stay listed for the audit trail — a revoked key fails verification immediately. <strong>Roll</strong> replaces a key and
+                        retires the old one in one step, so you are never left with two live keys or none.
+                    </CardDescription>
                 </CardHeader>
                 <CardContent>
                     <AsyncList
@@ -81,16 +105,32 @@ export const DeployKeysSection = ({ organizationId, preloaded }: SectionProps<Re
                                             </TableCell>
                                             <TableCell className="text-end">
                                                 {key.revokedAt == null ? (
-                                                    <Button
-                                                        className="text-destructive hover:text-destructive"
-                                                        onClick={() => {
-                                                            void revokeKey.mutate({ id: key._id, organizationId });
-                                                        }}
-                                                        size="sm"
-                                                        variant="ghost"
-                                                    >
-                                                        Revoke
-                                                    </Button>
+                                                    <div className="flex items-center justify-end gap-1">
+                                                        {/* Ingest keys are platform-managed; `roll` rejects them, so the
+                                                            control is not offered rather than offered and refused. */}
+                                                        {key.capability === "ingest" ? null : (
+                                                            <Button
+                                                                disabled={rollKey.pending}
+                                                                onClick={() => {
+                                                                    handleRoll(key._id);
+                                                                }}
+                                                                size="sm"
+                                                                variant="ghost"
+                                                            >
+                                                                {rollKey.pending ? "Rolling…" : "Roll"}
+                                                            </Button>
+                                                        )}
+                                                        <Button
+                                                            className="text-destructive hover:text-destructive"
+                                                            onClick={() => {
+                                                                void revokeKey.mutate({ id: key._id, organizationId });
+                                                            }}
+                                                            size="sm"
+                                                            variant="ghost"
+                                                        >
+                                                            Revoke
+                                                        </Button>
+                                                    </div>
                                                 ) : null}
                                             </TableCell>
                                         </TableRow>

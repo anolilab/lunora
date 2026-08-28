@@ -51,6 +51,7 @@ export interface ApiTypes {
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"deployKeys">; capability?: "ingest" | "deploy"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
         recordIngestKey: FunctionReference<"mutation", { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations"> }, { ciphertext: string; iv: string }>;
         revoke: FunctionReference<"mutation", { id: Id<"deployKeys">; organizationId: Id<"organizations"> }, void>;
+        roll: FunctionReference<"mutation", { id: Id<"deployKeys">; organizationId: Id<"organizations"> }, { id: Id<"deployKeys">; key: string; }>;
         verify: FunctionReference<"mutation", { key: unknown }, { deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
     };
     deployments: {
@@ -105,6 +106,9 @@ export interface ApiTypes {
         ingest: FunctionReference<"mutation", { deployKey: unknown; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; points: Array<{ at: number; functionPath?: string; kind: string; name: string; serviceName?: string; value: number }> }, { ingested: number; }>;
         list: FunctionReference<"action", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
         series: FunctionReference<"query", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
+    };
+    onboarding: {
+        checklist: FunctionReference<"query", { organizationId: Id<"organizations"> }, { complete: boolean; steps: { done: boolean; id: "live" | "deploy" | "key" | "project" }[] }>;
     };
     organizations: {
         cancelDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
