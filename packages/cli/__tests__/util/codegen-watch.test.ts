@@ -45,34 +45,36 @@ const projectWithPostCodegen = (script = "echo done"): string => {
     return workdir;
 };
 
-/** Let the chained (async) `runOnce` settle — `startCodegenWatch` returns before it does. */
-const settle = async (): Promise<void> => {
-    await new Promise((resolve) => {
-        setImmediate(resolve);
-    });
-    await new Promise((resolve) => {
-        setImmediate(resolve);
-    });
-};
-
 describe("startCodegenWatch", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        // Back to the REAL implementation between tests, not a bare stub: this
+        // file is the only place `startCodegenWatch` runs end to end against
+        // codegen, and the pre-existing `watchAvailable` cases below are what
+        // covers that. Only the hook cases opt into a stub.
+        const actual = await vi.importActual<typeof import("@lunora/codegen")>("@lunora/codegen");
+
         vi.mocked(runCodegen).mockReset();
-        vi.mocked(runCodegen).mockReturnValue({ platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>);
+        vi.mocked(runCodegen).mockImplementation(actual.runCodegen);
     });
+
+    /** Stub codegen to a clean run, so a test can reach the hook without a real project. */
+    const codegenSucceeds = (): void => {
+        vi.mocked(runCodegen).mockReturnValue({ platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>);
+    };
 
     describe("postcodegen hook", () => {
         it("runs the project's postcodegen after a successful generate", async () => {
             expect.assertions(2);
 
+            codegenSucceeds();
+
             const workdir = projectWithPostCodegen();
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const handle = startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
-
-            await settle();
-            handle.close();
+            // `close()` resolves once the in-flight run is done — the seam that
+            // makes this deterministic instead of a guessed number of ticks.
+            await startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir, spawner }).close();
 
             expect(calls).toHaveLength(1);
             expect(calls[0]?.descriptor.args).toContain("postcodegen");
@@ -83,10 +85,8 @@ describe("startCodegenWatch", () => {
         it("does NOT run postcodegen when codegen failed", async () => {
             expect.assertions(2);
 
-            // The whole point of the hook is to finish generated output. Running
-            // it over a tree codegen did not write is the one way to make a bad
-            // state worse — a post-step that rewrites `_generated/**` would be
-            // editing the PREVIOUS run's files and reporting success.
+            // A post-step that rewrites `_generated/**` would be editing the
+            // PREVIOUS run's files and reporting success.
             const workdir = projectWithPostCodegen();
             const { calls, spawner } = createRecordingSpawner();
             const { errors, logger } = silentLogger();
@@ -95,10 +95,7 @@ describe("startCodegenWatch", () => {
                 throw new Error("schema.ts is not parseable");
             });
 
-            const handle = startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
-
-            await settle();
-            handle.close();
+            await startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir, spawner }).close();
 
             expect(calls).toHaveLength(0);
             expect(errors.join(" ")).toContain("schema.ts is not parseable");
@@ -106,28 +103,85 @@ describe("startCodegenWatch", () => {
             rmSync(workdir, { force: true, recursive: true });
         });
 
-        it("reports a failing hook without taking the watch loop down", async () => {
-            expect.assertions(2);
+        it("reports a failing hook and still regenerates on the next change", async () => {
+            // `hasAssertions`, not a count: both assertions run inside
+            // `vi.waitFor`, which retries them an indeterminate number of times.
+            expect.hasAssertions();
+
+            codegenSucceeds();
 
             const workdir = projectWithPostCodegen();
-            const { spawner } = createRecordingSpawner(1);
+            const { calls, spawner } = createRecordingSpawner(1);
             const { errors, logger } = silentLogger();
 
-            const handle = startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
+            const handle = startCodegenWatch({ debounceMs: 0, logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
 
-            await settle();
+            await vi.waitFor(() => {
+                expect(errors.join(" ")).toContain("postcodegen");
+            });
 
-            // Still watching: unlike `prepare`/`deploy`, a dev loop that exited
-            // on a bad hook would take the next edit's chance to fix it with it.
-            expect(handle.watchAvailable).toBe(true);
-            expect(errors.join(" ")).toContain("postcodegen");
+            // The claim worth pinning: unlike `prepare`/`deploy`, a bad hook must
+            // not end the loop — the next edit is the chance to fix it. A
+            // `watchAvailable` assertion cannot see this; it is set
+            // synchronously, before the hook ever runs.
+            //
+            // Past HOOK_SETTLE_MS first, or the watcher would (correctly) treat
+            // this write as the hook's own.
+            await new Promise((resolve) => {
+                setTimeout(resolve, 350);
+            });
 
-            handle.close();
+            writeFileSync(join(workdir, "schema.ts"), "// edited", "utf8");
+            await vi.waitFor(() => {
+                expect(calls.length).toBeGreaterThan(1);
+            });
+
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        });
+
+        it("does not retrigger itself when the hook writes under the watched directory", async () => {
+            expect.assertions(1);
+
+            codegenSucceeds();
+
+            // The loop this guards: `runCodegen` only writes `_generated/`, which
+            // the watcher filters, but `postcodegen` is arbitrary project code at
+            // the project root. A hook that touches anything else under
+            // `lunora/` wakes the watcher, which regenerates, which runs the hook
+            // — a subprocess every ~100ms for as long as `lunora dev` is up.
+            const workdir = projectWithPostCodegen();
+            const calls: unknown[] = [];
+            const writingSpawner = (): Promise<{ code: number }> => {
+                calls.push(1);
+                writeFileSync(join(workdir, "touched-by-hook.ts"), `// ${String(calls.length)}`, "utf8");
+
+                return Promise.resolve({ code: 0 });
+            };
+
+            const handle = startCodegenWatch({
+                debounceMs: 0,
+                logger: silentLogger().logger,
+                lunoraDirectory: ".",
+                projectRoot: workdir,
+                spawner: writingSpawner,
+            });
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 400);
+            });
+
+            // Startup only. Without the settle window this climbs without bound.
+            expect(calls).toHaveLength(1);
+
+            await handle.close();
             rmSync(workdir, { force: true, recursive: true });
         });
 
         it("is a no-op for a project that declares no postcodegen script", async () => {
             expect.assertions(1);
+
+            codegenSucceeds();
 
             const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-nohook-"));
 
@@ -137,10 +191,7 @@ describe("startCodegenWatch", () => {
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const handle = startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
-
-            await settle();
-            handle.close();
+            await startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir, spawner }).close();
 
             expect(calls).toHaveLength(0);
 
@@ -149,7 +200,11 @@ describe("startCodegenWatch", () => {
     });
 
     describe("watchAvailable flag — degraded path (non-existent directory)", () => {
-        it("sets watchAvailable:false and emits an escalated warning naming the consequence", () => {
+        // `await handle.close()` rather than a bare call: the startup run is
+        // async now, and letting it float past the end of the test lands it in
+        // the next test's `beforeEach` — the shape that makes a different case
+        // fail on each run.
+        it("sets watchAvailable:false and emits an escalated warning naming the consequence", async () => {
             expect.assertions(3);
 
             // Watching a path that does not exist causes fs.watch to throw
@@ -169,12 +224,12 @@ describe("startCodegenWatch", () => {
             // "lunora codegen" must appear as the remediation action.
             expect(warns.some((w) => w.includes("lunora codegen"))).toBe(true);
 
-            handle.close();
+            await handle.close();
         });
     });
 
     describe("watchAvailable flag — happy path", () => {
-        it("sets watchAvailable:true on platforms that support recursive watch", () => {
+        it("sets watchAvailable:true on platforms that support recursive watch", async () => {
             // On platforms where recursive watch is not supported at all (some CI
             // Linux environments) this might be false; the key invariant is that the
             // property is a boolean in both cases.
@@ -194,7 +249,7 @@ describe("startCodegenWatch", () => {
 
                 expect(typeof handle.watchAvailable).toBe("boolean");
 
-                handle.close();
+                await handle.close();
             } finally {
                 rmSync(workdir, { force: true, recursive: true });
             }

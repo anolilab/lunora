@@ -110,7 +110,8 @@ export const getProfile = query
 <Callout type="warn">
     `v.object(...)` **strips** keys it does not declare rather than rejecting them, and `.output()` is enforced at runtime. So a column that exists in your
     schema but is missing from a hand-written output validator disappears from every response that function serves, with no error anywhere. Derive output
-    validators from the table shape where you can, or test them against it.
+    validators from the table shape where you can, or test them against it. (`.stream()` is the exception noted above — it never parses chunks, so nothing is
+    stripped there either.)
 </Callout>
 
 ## Return-type inference to the client
@@ -152,10 +153,16 @@ are worth knowing up front — three of the four below fail at runtime rather
 than at compile time.
 
 - **`v` has refinements.** `.check(predicate, { message, schema })` is the
-  general form, and `v.string()` / `v.number()` carry shortcuts over it
-  (`.min()`, `.max()`, `.length()`, `.email()`, `.url()`, `.pattern()`,
-  `.int()`, `.positive()`). They are enforced
-  at parse time and emitted into the JSON Schema.
+  general form, and three validators carry shortcuts over it. They are enforced
+  at parse time and emitted into the JSON Schema. The shortcuts are per-type —
+  `v.number().length(3)` and `v.string().positive()` do not exist:
+
+    | Validator    | Shortcuts                                                      |
+    | ------------ | -------------------------------------------------------------- |
+    | `v.string()` | `.min()` `.max()` `.length()` `.email()` `.url()` `.pattern()` |
+    | `v.number()` | `.min()` `.max()` `.int()` `.positive()`                       |
+    | `v.array()`  | `.min()` `.max()` (item count)                                 |
+
 - **`.safeParse()` returns a different shape.** `{ ok, value }` on success and
   `{ ok: false, error }` on failure — not zod's `{ success, data }`. `.parse()`
   matches zod. Code that reads `.success` compiles and is always `undefined`.
@@ -173,7 +180,8 @@ mode.
 
 ## ValidationError
 
-When a value fails to parse, `.validate(value)` throws `ValidationError`. It
+When a value fails to parse, `.parse(value)` throws `ValidationError` (and
+`.safeParse(value)` returns it as `{ ok: false, error }` instead). It
 carries the `path` to the offending field (rendered via `formatPath` as
 `args.<field>.<sub>`) plus a short `describeValue(value)` summary, so the
 boundary failure points at exactly which input was wrong. See

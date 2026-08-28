@@ -5,11 +5,20 @@
  * so `_generated/*` stays in sync with the schema and functions while you edit.
  *
  * Each successful run chains the project's `postcodegen` hook, the same one
- * `prepare` and `deploy` run — without it `lunora dev` was the one command that
- * regenerated and then left a project's post-step unapplied, so the dev server
- * compiled output the same project's build would have finished. The Vite and
- * framework-worker flavors don't reach here: their ongoing regeneration is owned
- * by `@lunora/vite`'s codegen plugin, which runs no hook of its own.
+ * `prepare` and `deploy` run — without it `lunora dev` regenerated and then left
+ * a project's post-step unapplied, so the dev server compiled output the same
+ * project's build would have finished.
+ *
+ * Two things that follow from running arbitrary project code inside a file
+ * watcher, both of which the hook-less version could not do: the loop can
+ * retrigger itself (see {@link HOOK_SETTLE_MS}) and it can outlive `close()`
+ * (see {@link CodegenWatcherHandle.close}).
+ *
+ * The Vite and framework-worker flavors don't reach here — their ongoing
+ * regeneration is owned by `@lunora/vite`'s codegen plugin, which runs no hook.
+ * Closing that gap means lifting the hook to a shared generate entry point both
+ * can call, which is a package move (`post-codegen-hook` depends on the CLI's
+ * package-manager detection and spawner), not a line here.
  */
 import type { FSWatcher } from "node:fs";
 import { existsSync, watch } from "node:fs";
@@ -26,6 +35,27 @@ import type { Spawner } from "./spawn";
 
 const DEFAULT_DEBOUNCE_MS = 100;
 
+/**
+ * How long after a `postcodegen` run the watcher ignores changes under
+ * `lunora/`.
+ *
+ * Without it the loop can drive itself forever. `runCodegen` only ever writes
+ * into `_generated/`, which the watcher already filters out, so before the hook
+ * existed self-triggering was structurally impossible. A `postcodegen` script is
+ * arbitrary project code run at the project root, though — `prettier --write .`,
+ * a codemod, anything that stamps a file under `lunora/` — and each of its
+ * writes wakes the watcher, which regenerates, which runs the hook again. That
+ * is a package-manager subprocess every ~100ms for as long as `lunora dev` is
+ * up.
+ *
+ * The known ceiling: this only covers writes the hook makes before it exits and
+ * within the window. A hook that writes from a detached background process, or
+ * later than this, still loops. Closing that properly means watching only the
+ * files codegen actually reads rather than the whole subtree — worth doing if
+ * anyone hits it, not worth pre-building.
+ */
+const HOOK_SETTLE_MS = 300;
+
 /** Splits a watch filename into path segments to detect `_generated` writes. */
 const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
 
@@ -40,11 +70,11 @@ const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
  * wrong.
  */
 const runOnce = async (
-    options: Pick<CodegenWatcherOptions, "apiSpec" | "logger" | "projectRoot" | "spawner" | "target">,
+    options: Pick<CodegenWatcherOptions, "apiSpec" | "jsonLogs" | "logger" | "projectRoot" | "spawner" | "target">,
     lunoraDirectory: string,
     reason: string,
-): Promise<void> => {
-    const { apiSpec, logger, projectRoot, target } = options;
+): Promise<boolean> => {
+    const { apiSpec, jsonLogs, logger, projectRoot, spawner, target } = options;
 
     try {
         const result = runCodegen({ apiSpec, lunoraDirectory, projectRoot, target });
@@ -60,10 +90,14 @@ const runOnce = async (
         // No hook on a failed run: `postcodegen` exists to finish generated
         // output, and running it over a tree codegen did not write is the one
         // way to make a bad state worse.
-        return;
+        return false;
     }
 
-    const hook = await runPostCodegenHook({ cwd: projectRoot, logger, spawner: options.spawner });
+    // `stdoutToStderr` for the same reason `deploy` passes it: `lunora dev`
+    // turns on JSON logging whenever an AI agent is detected, not only under an
+    // explicit flag, and the hook's stdout is otherwise inherited onto the same
+    // fd the NDJSON stream writes to — any script that prints corrupts it.
+    const hook = await runPostCodegenHook({ cwd: projectRoot, logger, spawner, stdoutToStderr: jsonLogs });
 
     // Non-fatal here, unlike `prepare`/`deploy`: the dev loop's job is to keep
     // running so the next edit gets another attempt. Reported so a hook that
@@ -72,6 +106,8 @@ const runOnce = async (
     if (hook.error !== undefined) {
         logger.error(hook.error);
     }
+
+    return hook.ran;
 };
 
 /**
@@ -87,13 +123,66 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
     // `runOnce` is async only because of the `postcodegen` hook, and two of them
     // overlapping would let a second hook read output the first is still
-    // rewriting. Chaining serializes them without a flag, and keeps
-    // `startCodegenWatch` synchronous for its callers. The `.catch` is
-    // belt-and-braces — `runOnce` reports rather than throws — but a rejection
-    // that escaped would poison every later link in the chain.
-    let inFlight: Promise<void> = Promise.resolve();
+    // rewriting.
+    //
+    // One in flight, at most one queued — NOT a promise chain. Chaining appends
+    // a link per debounce fire, so a `postcodegen` slower than the edit rate
+    // (a `tsc`, a patch script) builds an unbounded backlog of full
+    // regenerations that each recompute state the next one supersedes, and keeps
+    // spawning subprocesses long after typing stops. A later run subsumes every
+    // earlier queued one, so collapsing to a single pending reason is both
+    // correct and bounded. The synchronous `runOnce` this replaced got that
+    // coalescing for free from the event loop.
+    let closed = false;
+    let running = false;
+    let pending: string | undefined;
+    let settledAt = 0;
+    let idle: Promise<void> = Promise.resolve();
+
     const enqueue = (reason: string): void => {
-        inFlight = inFlight.then(async () => runOnce(options, lunoraDirectory, reason)).catch(() => {});
+        if (closed) {
+            return;
+        }
+
+        pending = reason;
+
+        if (running) {
+            return;
+        }
+
+        running = true;
+        idle = (async () => {
+            try {
+                // `close()` stops this by clearing `pending`, so the condition
+                // covers both "nothing queued" and "shut down" without a second
+                // flag to keep in step.
+                while (pending !== undefined) {
+                    const next = pending;
+
+                    pending = undefined;
+
+                    // Sequential on purpose — the whole point is that two hooks
+                    // never overlap, so the await belongs inside the loop.
+                    // eslint-disable-next-line no-await-in-loop -- serializing runs IS the invariant; a parallel version would let one hook read output another is mid-write
+                    const hookRan = await runOnce(options, lunoraDirectory, next);
+
+                    // Only arm the settle window when a hook actually ran —
+                    // otherwise every regeneration would deafen the watcher to
+                    // real edits for no reason.
+                    if (hookRan) {
+                        settledAt = Date.now();
+                    }
+                }
+            } catch (error: unknown) {
+                // `runOnce` reports rather than throws, so this is the
+                // unforeseen path — logged, not swallowed. An empty catch here
+                // would be the same silent-skip defect this change set exists to
+                // remove from `warnAboutExportGaps`.
+                options.logger.error(`codegen watch: ${error instanceof Error ? error.message : String(error)}`);
+            } finally {
+                running = false;
+            }
+        })();
     };
 
     enqueue("startup");
@@ -102,7 +191,12 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         options.logger.warn(`codegen watch unavailable (${cause}) — schema edits will NOT auto-regenerate. Run \`lunora codegen\` manually after each edit.`);
 
         return {
-            close: () => {},
+            close: () => {
+                closed = true;
+                pending = undefined;
+
+                return idle;
+            },
             watchAvailable: false,
         };
     };
@@ -125,6 +219,13 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 return;
             }
 
+            // …and skip the window after a `postcodegen` run, so a hook that
+            // writes anywhere else under `lunora/` doesn't retrigger it either.
+            // See HOOK_SETTLE_MS.
+            if (Date.now() - settledAt < HOOK_SETTLE_MS) {
+                return;
+            }
+
             if (timer) {
                 clearTimeout(timer);
             }
@@ -143,11 +244,21 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
     return {
         close: () => {
+            closed = true;
+            pending = undefined;
+
             if (timer) {
                 clearTimeout(timer);
             }
 
             liveWatcher.close();
+
+            // Clearing `pending` stops the loop before its next iteration, and
+            // the returned promise settles once the current one finishes. Nothing
+            // cancels a `postcodegen` child already spawned — a caller that
+            // exits the process without awaiting this leaves it orphaned,
+            // mid-write, on an inherited stdout.
+            return idle;
         },
         watchAvailable: true,
     };
@@ -158,6 +269,13 @@ export interface CodegenWatcherOptions {
     apiSpec?: CodegenOptions["apiSpec"];
     /** Debounce window for coalescing rapid edits. Defaults to 100ms. */
     debounceMs?: number;
+
+    /**
+     * The caller's logs are NDJSON on stdout, so the `postcodegen` hook's own
+     * stdout must be routed to stderr or it corrupts the stream. `lunora dev`
+     * turns this on for `--json` AND for a detected AI agent.
+     */
+    jsonLogs?: boolean;
     logger: Logger;
     /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
     lunoraDirectory?: string;
@@ -170,8 +288,15 @@ export interface CodegenWatcherOptions {
 }
 
 export interface CodegenWatcherHandle {
-    /** Stop watching and cancel any pending regeneration. */
-    close: () => void;
+    /**
+     * Stop watching, drop any queued regeneration, and resolve once the run
+     * already in flight has finished.
+     *
+     * Awaiting the result is what keeps a `postcodegen` child from being
+     * orphaned by the caller's `process.exit`; a caller that only needs the
+     * watcher detached can ignore it.
+     */
+    close: () => Promise<void>;
 
     /**
      * `true` when the platform supports recursive watch and the loop is active.
