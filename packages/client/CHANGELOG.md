@@ -1,3 +1,9 @@
+## @lunora/client [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.61...@lunora/client@1.0.0-alpha.62) (2026-08-28)
+
+### Bug Fixes
+
+* **client,codegen,sql-store:** address four review findings ([#524](https://github.com/anolilab/lunora/issues/524)) ([0a97170](https://github.com/anolilab/lunora/commit/0a971705b4b5dea84564acd8f44dd77b81b39040))
+
 ## @lunora/client [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.60...@lunora/client@1.0.0-alpha.61) (2026-08-28)
 
 ### Bug Fixes
