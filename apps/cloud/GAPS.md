@@ -63,8 +63,22 @@ percentiles. The AE data point gained `country`/`hostname`/`status` blobs and
 `durationMs`/`bytes` doubles, appended so the billing rollup's `blob1`/`blob2`
 positions never move.
 
+Shipped since (2026-08-28, same pass):
+
+| Item                                  | Now                                                                                                                                                                                                                                                                                             |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Deployment protection on previews** | ✅ A per-project password gates every PREVIEW deployment at the dispatcher, before dispatch. The salted hash stays in the control plane (`POST /v1/tenants/preview-auth`); the dispatcher mints a signed, script-scoped cookie so later requests cost no round trip. Production is never gated. |
+| **Staged rollouts (A1 follow-on)**    | ✅ `setRollout` / `promoteRollout` / `abortRollout` serve a candidate to a share of traffic alongside the active release. The split is deterministic per client and monotonic in the percentage, so advancing never moves anyone back. Error rate per script is already readable on Traffic.    |
+
 **Unchanged 🌐 set** still includes D1 backups/PITR, which remains the
 highest-risk item on this page and is still not built.
+
+**A3/A4 remain the largest gap and share one blocker.** Server-side builds,
+push-to-deploy, per-PR previews and dashboard deploys are all code-complete
+except for `BuildRunnerPorts.execute` (`src/builds/runner.ts`) — the one
+unimplemented port. It needs a container image running `lunora build` and
+speaking the `@lunora/container` exec protocol; no Dockerfile exists in the repo
+yet, so this is genuinely 🌐 rather than 🔨.
 
 **Confirmed still 🧩 (logic exists, no caller):** `applyCreditPurchase`
 (`src/billing/creem-credits.ts`) — unchanged, and genuinely gated on live Creem
