@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { calleeName } from "./callee";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
@@ -228,7 +228,7 @@ const isUserTableInsert = (call: CallExpression): boolean => {
     }
 
     const receiver = callee.getExpression();
-    const onDatabase = Node.isPropertyAccessExpression(receiver) ? receiver.getName() === "db" : Node.isIdentifier(receiver) && receiver.getText() === "db";
+    const onDatabase = isDatabaseAccessor(receiver);
 
     if (!onDatabase) {
         return false;
@@ -295,7 +295,7 @@ const isUnsafeInsert = (call: CallExpression): boolean => {
 
     const receiver = callee.getExpression();
 
-    return Node.isPropertyAccessExpression(receiver) ? receiver.getName() === "db" : Node.isIdentifier(receiver) && receiver.getText() === "db";
+    return isDatabaseAccessor(receiver);
 };
 
 /** AI SDK text/object generation helpers (re-exported from `@lunora/ai`) that accept a `maxOutputTokens` bound. */

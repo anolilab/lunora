@@ -55,6 +55,35 @@ describe("discoverStorageRulesMetadata", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
+    it("sees an aliased storageRules import and a cast mid-chain", () => {
+        expect.assertions(2);
+
+        // Storage rules was the last `.use(...)` policy family walking its own
+        // hand-written chain and matching the callee by text, so both of these
+        // read as "declares no rules" — silently — while RLS and mask handled
+        // them. It shares the walk now.
+        const aliased = `${PREAMBLE}
+            import { storageRules as rules } from "@lunora/server";
+            export const upload = c.action
+                .use(rules([{ bucket: "avatars", on: "read", when: () => true }]))
+                .action(() => null);
+        `;
+        const cast = `${PREAMBLE}
+            export const upload = (c.action
+                .use(storageRules([{ bucket: "avatars", on: "read", when: () => true }])) as typeof c.action)
+                .action(() => null);
+        `;
+
+        writeFileSync(join(workdir, "lunora", "avatars.ts"), aliased, "utf8");
+        const fromAlias = discoverStorageRulesMetadata(new Project({ skipAddingFilesFromTsConfig: true }), join(workdir, "lunora"));
+
+        writeFileSync(join(workdir, "lunora", "avatars.ts"), cast, "utf8");
+        const fromCast = discoverStorageRulesMetadata(new Project({ skipAddingFilesFromTsConfig: true }), join(workdir, "lunora"));
+
+        expect(fromAlias.rules).toHaveLength(1);
+        expect(fromCast.rules).toHaveLength(1);
+    });
+
     it("extracts each rule's bucket + operation + prefix and the declaring procedure", () => {
         expect.assertions(3);
 

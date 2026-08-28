@@ -5,8 +5,8 @@ import { enclosingExportName, isRequestInputDerived, referencesRequestInput, sin
 import type { HttpHeaderWriteIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { calleeName } from "./callee";
-import type { InspectableHandler } from "./functions/chain";
-import { inlineHandler } from "./functions/chain";
+import type { InspectableHandler } from "./functions/handler";
+import { inlineHandler } from "./functions/handler";
 
 /**
  * Neutralizers that strip or preclude CR/LF in a header value: the framework CR/LF

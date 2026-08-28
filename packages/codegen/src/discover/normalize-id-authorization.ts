@@ -2,10 +2,11 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { NormalizeIdAuthorizationIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import type { InspectableHandler } from "./functions/chain";
-import { chainUsesWrappedCall, isDatabaseAccessor, procedureHandler } from "./functions/chain";
+import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { chainUsesWrappedCall } from "./builder-chain";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
+import type { InspectableHandler } from "./functions/handler";
+import { procedureHandler } from "./functions/handler";
 
 /**
  * `ctx.db` id-first row operations that resolve a whole row by its primitive id:

@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { InsertWriteIR } from "../ir";
-import { enclosingExportName, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { enclosingExportName, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * True for a `ctx.db.insert(...)` (or bare `db.insert(...)`) call — the database
@@ -18,11 +18,7 @@ const isDatabaseInsertCall = (call: CallExpression): boolean => {
 
     const receiver = callee.getExpression();
 
-    if (Node.isPropertyAccessExpression(receiver)) {
-        return receiver.getName() === "db";
-    }
-
-    return Node.isIdentifier(receiver) && receiver.getText() === "db";
+    return isDatabaseAccessor(receiver);
 };
 
 /**

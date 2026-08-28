@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { QueryReadIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Chain methods that narrow a read so it is not a full scan.
@@ -46,11 +46,7 @@ const isDatabaseQueryCall = (call: CallExpression): boolean => {
 
     const receiver = callee.getExpression();
 
-    if (Node.isPropertyAccessExpression(receiver)) {
-        return receiver.getName() === "db";
-    }
-
-    return Node.isIdentifier(receiver) && receiver.getText() === "db";
+    return isDatabaseAccessor(receiver);
 };
 
 /**

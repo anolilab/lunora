@@ -148,6 +148,27 @@ describe("classifyProcedureCall", () => {
         expect(classify(`${builder}\ndeclare const u: unknown;\nexport const list = (u as B).query(h);`, ``)?.kind).toBe("query");
     });
 
+    it("does not let a cast downgrade an internal procedure to public", () => {
+        expect.assertions(3);
+
+        // Visibility is resolved across the wrapped AND unwrapped types with
+        // `internal` winning. Reading it off whichever type answered the brand
+        // let an assertion decide: `(internalBuilder as PublicBuilder)` came
+        // back public, which publishes the procedure into the client-facing
+        // `api` and opens it to client dispatch. A cast must not widen a
+        // security classification.
+        const builders = [
+            `interface Pub { __lunoraProcedure: "query"; query(h: unknown): unknown }`,
+            `interface Int { __lunoraProcedure: "query"; __lunoraVisibility: "internal"; query(h: unknown): unknown }`,
+            `declare const b: Int;`,
+        ].join("\n");
+
+        expect(classify(`${builders}\nexport const list = b.query(h);`, ``)?.visibility).toBe("internal");
+        expect(classify(`${builders}\nexport const list = (b as Pub).query(h);`, ``)?.visibility).toBe("internal");
+        // The narrowing case the wrapper-first lookup exists for still works.
+        expect(classify(`${builders}\ndeclare const m: Int | undefined;\nexport const list = m!.query(h);`, ``)?.visibility).toBe("internal");
+    });
+
     it("hands back an unwrapped receiver so chain walkers can descend it", () => {
         expect.assertions(1);
 

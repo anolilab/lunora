@@ -155,14 +155,14 @@ The install site, `packages/codegen/src/emit.ts:1594-1598`:
 
 ### Blast radius (every `parseObjectShape` caller)
 
-| Call site                                  | What a dropped key costs                                  |
-| ------------------------------------------ | --------------------------------------------------------- |
-| `discover/functions/internal/expose.ts:128`, `internal/builder-chain.ts:68`| args field missing from IR → the soundness break above    |
-| `discover/schema/internal/table-builder.ts:749`| table column vanishes from `Doc_*` and the emitted schema |
-| `discover/http-routes.ts:51`| route `searchParams`/`body`/`params` field unvalidated    |
-| `discover/mutators.ts:123`                 | mutator arg vanishes                                      |
-| `discover/shapes.ts:138`                   | shape field vanishes                                      |
-| `parse-validator.ts:352` (`v.object(...)`) | nested object field vanishes at any depth                 |
+| Call site                                                                   | What a dropped key costs                                  |
+| --------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `discover/functions/internal/expose.ts:128`, `internal/builder-chain.ts:68` | args field missing from IR → the soundness break above    |
+| `discover/schema/internal/table-builder.ts:749`                             | table column vanishes from `Doc_*` and the emitted schema |
+| `discover/http-routes.ts:51`                                                | route `searchParams`/`body`/`params` field unvalidated    |
+| `discover/mutators.ts:123`                                                  | mutator arg vanishes                                      |
+| `discover/shapes.ts:138`                                                    | shape field vanishes                                      |
+| `parse-validator.ts:352` (`v.object(...)`)                                  | nested object field vanishes at any depth                 |
 
 ## Existing seams (do not reinvent)
 

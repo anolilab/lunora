@@ -288,6 +288,32 @@ describe("containsUnencodableMember", () => {
         expect(unencodable(`declare const subject: import("./deep").L0;`, nestedModule(14, "Money"))).toBe(true);
     });
 
+    it("walks a shared subtype once, not once per path", () => {
+        expect.assertions(2);
+
+        // `seen` is per-PATH, so without a memo a shared subtype is re-walked
+        // once per path that reaches it — exponential in paths, not linear in
+        // types. This shape took 1.7s at 10 levels and did not finish at 12
+        // while the ceiling was 8 (the ceiling was capping the blowup, not the
+        // depth), so raising the ceiling exposed it.
+        const wide = (levels: number, properties: number): string => {
+            const declarations = Array.from({ length: levels }, (_unused, index) => {
+                const next = index + 1 < levels ? `L${String(index + 1)}` : "string";
+                const members = Array.from({ length: properties }, (_v, slot) => `p${String(slot)}: ${next}`).join("; ");
+
+                return `interface L${String(index)} { ${members} }`;
+            });
+
+            return `${declarations.join("\n")}\ndeclare const subject: L0;`;
+        };
+
+        const started = Date.now();
+
+        expect(unencodable(wide(12, 6))).toBe(false);
+        // Generous — the point is linear-vs-exponential, not a timing budget.
+        expect(Date.now() - started).toBeLessThan(10_000);
+    });
+
     it("does not refuse ordinary deep types", () => {
         expect.assertions(3);
 

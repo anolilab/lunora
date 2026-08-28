@@ -1,20 +1,16 @@
 /**
- * What a call's callee is called — and how much to trust the answer.
+ * What a call's callee is called. Three questions, kept together because they
+ * were three helpers in three files with no cross references, and the discovery
+ * feeders picked between them by accident:
  *
- * Three questions live here, deliberately together, because they were three
- * helpers in three files with three different trust models and no cross
- * references, and the discovery feeders picked between them by accident:
+ * - {@link calleeName} — how is it spelled? Makes no claim about origin.
+ * - {@link resolvesToImportedName} — does it name X, allowing an import alias?
+ * - {@link resolveCalleeKind} — which surface export is it, by import?
  *
- * | helper                    | question                                          | trusts                          |
- * | ------------------------- | ------------------------------------------------- | ------------------------------- |
- * | {@link calleeName}        | what is this callee spelled?                      | the source text, nothing else   |
- * | {@link resolvesToImportedName} | does it name X, allowing an alias?           | text, plus a surface-gated import |
- * | {@link resolveCalleeKind} | which surface export is this, really?             | only a surface-gated import     |
- *
- * They are ordered by how much they will believe. Pick the strictest one that
- * answers the question: `resolveCalleeKind` refuses a local `const query = …`,
- * `resolvesToImportedName` accepts anything spelled right, and `calleeName`
- * makes no claim about origin at all.
+ * They are not interchangeable (the signatures differ), so the question picks
+ * the function. The one asymmetry worth knowing: both of the latter two accept
+ * a plain matching name outright, and gate only the parts that need the type
+ * checker or the import table. Neither is a guarantee of origin.
  */
 import type { Identifier, Node, SourceFile } from "ts-morph";
 import { Node as TsNode } from "ts-morph";
@@ -48,10 +44,8 @@ const calleeName = (callee: Node): string | undefined => {
  * real type-checker work on a hot path. Scanning a file's import declarations
  * is a handful of syntactic children by comparison.
  *
- * Deliberately NOT cached per source file. ts-morph reuses the `SourceFile`
- * object when a file is overwritten or refreshed, so a cache keyed on it serves
- * the previous content's aliases — a wrong answer about whether a procedure
- * declares a policy, traded for a saving this scan does not need.
+ * Not cached: ts-morph reuses the `SourceFile` object when a file is
+ * overwritten, so a cache keyed on it serves the previous content's aliases.
  */
 const importAliases = (sourceFile: SourceFile, exportedName: string): Set<string> => {
     const aliases = new Set<string>();
@@ -88,12 +82,12 @@ const importAliases = (sourceFile: SourceFile, exportedName: string): Set<string
  * same file's procedure classified correctly while its policy evidence
  * vanished.
  *
- * The alias hop is additive (the text match answers first, so degraded type info
- * behaves exactly as before) but it DOES gate on the module specifier, unlike
- * the text match. These signals suppress lints as well as enable them —
- * `usesRls` short-circuits `rls-uncovered-table` and
- * `normalize-id-used-as-authorization` — so trusting an unrelated library's
- * `rls` would silence a real finding.
+ * Only the ALIAS branch is gated on the module specifier; a plainly-imported
+ * `rls` from any module still matches on text, as it always did. The gate is
+ * there because these signals suppress lints as well as enable them (`usesRls`
+ * short-circuits `rls-uncovered-table` and `normalize-id-used-as-authorization`),
+ * so the new hop should not widen what silences a finding — it is not a claim
+ * that this predicate proves origin.
  */
 const resolvesToImportedName = (callee: Node, expectedName: string): boolean => {
     if (TsNode.isPropertyAccessExpression(callee)) {
@@ -114,15 +108,16 @@ const resolvesToImportedName = (callee: Node, expectedName: string): boolean => 
  * name as EXPORTED from the Lunora surface — so `import { query as q }` used as
  * `q(...)` answers `"query"`.
  *
- * The strictest of the three: `undefined` when the identifier is not imported
- * from the surface, so a local `const query = …` is not mistaken for a
- * registration. That strictness is affordable here because a misidentified
- * registration invents a route no handler backs; the middleware detectors
- * cannot afford it, which is why {@link resolvesToImportedName} exists.
+ * `undefined` when the identifier resolves to something that is not a surface
+ * import, so a local `const query = …` is not mistaken for a registration —
+ * affordable here because a misidentified registration invents a route no
+ * handler backs, and not affordable for the middleware detectors, which is why
+ * {@link resolvesToImportedName} exists.
  *
- * The one concession: with no type-checker info at all (no tsconfig wired up)
- * there is no symbol to resolve, and it falls back to the surface text rather
- * than dropping every function in the project.
+ * That only holds WHEN THERE IS A SYMBOL. With no type-checker info at all (no
+ * tsconfig wired up) there is nothing to resolve and this falls back to the raw
+ * text — accepting the same local `const query = …` it otherwise refuses —
+ * because the alternative is dropping every function in the project.
  */
 const resolveCalleeKind = (identifier: Identifier): string | undefined => {
     const symbol = identifier.getSymbol();

@@ -10,7 +10,7 @@
 import { Node, Project, SyntaxKind } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import { chainHasStep, chainUsesWrappedCall } from "../../../src/discover/functions/chain";
+import { chainHasStep, chainUsesWrappedCall } from "../../../src/discover/builder-chain";
 
 /**
  * The receiver of the terminal call in `expression` — i.e. what a caller holds

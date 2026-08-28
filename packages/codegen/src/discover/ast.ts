@@ -155,6 +155,10 @@ const propertyInitializer = (object: Node | undefined, name: string): Node | und
     return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
 };
 
+/** True when `receiver` is the database accessor: `ctx.db` (property named `db`) or a bare `db`. */
+const isDatabaseAccessor = (receiver: Node): boolean =>
+    (Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") || (Node.isIdentifier(receiver) && receiver.getText() === "db");
+
 /**
  * List reads whose options object the `ctx.db` read feeders inspect. Only
  * `findMany` / `findFirst` / `findFirstOrThrow` take an options object — the
@@ -184,7 +188,7 @@ const readTargetOf = (call: CallExpression): { options: Node | undefined; table:
     const receiver = callee.getExpression();
 
     // Table-arg form: the receiver is `ctx.db` (property named `db`) or a bare `db`.
-    if ((Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") || (Node.isIdentifier(receiver) && receiver.getText() === "db")) {
+    if (isDatabaseAccessor(receiver)) {
         const first = call.getArguments()[0];
 
         return { options: call.getArguments()[1], table: first && Node.isStringLiteral(first) ? first.getLiteralText() : "" };
@@ -194,7 +198,7 @@ const readTargetOf = (call: CallExpression): { options: Node | undefined; table:
     // expression is the `db` accessor and its own name is the table.
     if (Node.isPropertyAccessExpression(receiver)) {
         const inner = receiver.getExpression();
-        const onDatabase = (Node.isPropertyAccessExpression(inner) && inner.getName() === "db") || (Node.isIdentifier(inner) && inner.getText() === "db");
+        const onDatabase = isDatabaseAccessor(inner);
 
         if (onDatabase) {
             return { options: call.getArguments()[0], table: receiver.getName() };
@@ -212,13 +216,7 @@ const isDatabaseCall = (call: CallExpression, methodSet: ReadonlySet<string>): b
         return false;
     }
 
-    const receiver = callee.getExpression();
-
-    if (Node.isPropertyAccessExpression(receiver)) {
-        return receiver.getName() === "db";
-    }
-
-    return Node.isIdentifier(receiver) && receiver.getText() === "db";
+    return isDatabaseAccessor(callee.getExpression());
 };
 
 /** String-literal first argument of a `ctx.db.<method>("table", ...)` call, or `""` when the argument is not a string literal (dynamic table — not lintable). */
@@ -370,6 +368,7 @@ export {
     enclosingExportName,
     handlerOf,
     isContextIdentifier,
+    isDatabaseAccessor,
     limitNameOf,
     listLunoraSourceFiles,
     lunoraRelativePath,

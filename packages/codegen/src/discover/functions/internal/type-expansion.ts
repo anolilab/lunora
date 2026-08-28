@@ -96,12 +96,7 @@ const isOptionalProperty = (property: TsSymbol, propertyType: Type): boolean => 
     return propertyType.isUnion() && propertyType.getUnionTypes().some((member) => member.isUndefined());
 };
 
-/**
- * Stack-insurance ceiling for the encodability walk. Cycles are terminated by
- * the `seen` set, not by this, so it only has to sit above any hand-written
- * type — and far enough above that the walk's two-units-per-nesting-level cost
- * never reaches it for real code. See `containsUnencodableMember`.
- */
+/** Ceiling for the encodability walk — see `containsUnencodableMember` for why it is not `MAX_EXPANSION_DEPTH`, and what it is still load-bearing for. */
 const ENCODABILITY_WALK_LIMIT = 32;
 
 /** Depth ceiling so a pathological nested type can't blow the stack — beyond it we bail to `unknown`. */
@@ -224,11 +219,28 @@ const isClassInstance = (type: Type): boolean =>
  * encodes fine, and declining one is the collapse-to-`unknown` this whole path
  * exists to avoid.
  */
-const containsUnencodableMember = (type: Type, node: Node, depth: number, seen: Set<Type>): boolean => {
+const containsUnencodableMember = (type: Type, node: Node, depth: number, seen: Set<Type>, encodable: Set<Type> = new Set<Type>()): boolean => {
     // Already on the stack: a cycle proves nothing either way, and the frame
     // that put it there is still deciding. Answering "not unencodable" here is
     // correct — it defers, it doesn't clear.
     if (seen.has(type)) {
+        return false;
+    }
+
+    // Memo of types already walked to completion and cleared. `seen` is
+    // per-PATH (it has to be — it answers "is this type on the current stack?"),
+    // so without this a shared subtype is re-walked once per path that reaches
+    // it, which is exponential in paths rather than linear in types. A 10-level
+    // type with 4 properties each took 1.7s; 12 levels with 6 did not finish.
+    // That went unnoticed while the ceiling was 8, because the ceiling was
+    // capping the blowup rather than the depth.
+    //
+    // Only NEGATIVE results are memoised, which makes this sound by
+    // construction: the depth bail below returns `true`, so a cached `false`
+    // can never be a ceiling-derived answer being reused at a shallower depth.
+    // A `true` short-circuits its `.some()` immediately anyway, so caching it
+    // would buy little.
+    if (encodable.has(type)) {
         return false;
     }
 
@@ -244,9 +256,17 @@ const containsUnencodableMember = (type: Type, node: Node, depth: number, seen: 
     // the `T | undefined` union or the array element — which put the real budget
     // at four. Refusing at that depth erased ordinary return types: a five-level
     // optional settings blob came back `unknown`, with no diagnostic, which is
-    // the same silent failure this check exists to prevent. `seen` is what
-    // terminates recursive types; this is only stack insurance, so it is set
-    // where no hand-written type reaches it.
+    // the same silent failure this check exists to prevent.
+    //
+    // `seen` terminates ORDINARY recursion (`interface Root { kids: Root[] }`,
+    // mutual references, recursive generics) because the checker hands back the
+    // same `Type` object each time. It does NOT terminate a recursive
+    // conditional or mapped type — `type Deep<D = []> = D["length"] extends 40
+    // ? string : { n: Deep<[...D, 0]> }` instantiates a distinct `Type` per
+    // level, so `seen` never matches and this ceiling is the only thing that
+    // stops it. So this is not purely stack insurance: it still carries
+    // correctness weight, and raising it further widens the window in which such
+    // a type collapses to `unknown` rather than closing it.
     if (depth > ENCODABILITY_WALK_LIMIT) {
         return true;
     }
@@ -256,14 +276,14 @@ const containsUnencodableMember = (type: Type, node: Node, depth: number, seen: 
     // Type arguments and union/intersection members first, so a supported
     // container carrying an unsupported payload (`Map<string, Money>`, an array
     // of them) is still caught — the container encodes, its contents do not.
-    if (childTypes(type).some((child) => containsUnencodableMember(child, node, depth + 1, nextSeen))) {
+    if (childTypes(type).some((child) => containsUnencodableMember(child, node, depth + 1, nextSeen, encodable))) {
         return true;
     }
 
     const element = type.getArrayElementType();
 
     if (element !== undefined) {
-        return containsUnencodableMember(element, node, depth + 1, nextSeen);
+        return containsUnencodableMember(element, node, depth + 1, nextSeen, encodable);
     }
 
     // A GLOBAL type is trusted and NOT descended into. The globals a return type
@@ -273,6 +293,8 @@ const containsUnencodableMember = (type: Type, node: Node, depth: number, seen: 
     // on the strength of `getTime()`. Same script-mode test as the bare-name
     // exemption uses, for the same reason.
     if (isGloballyDeclared(type)) {
+        encodable.add(type);
+
         return false;
     }
 
@@ -292,10 +314,15 @@ const containsUnencodableMember = (type: Type, node: Node, depth: number, seen: 
     // Members are walked only for shapes structural expansion would itself walk —
     // which excludes arrays, tuples, and anything carrying call or index
     // signatures, so a prototype method never reaches the callable test above.
-    return (
+    const unencodable =
         isExpandableObject(type) &&
-        type.getProperties().some((property) => containsUnencodableMember(property.getTypeAtLocation(node), node, depth + 1, nextSeen))
-    );
+        type.getProperties().some((property) => containsUnencodableMember(property.getTypeAtLocation(node), node, depth + 1, nextSeen, encodable));
+
+    if (!unencodable) {
+        encodable.add(type);
+    }
+
+    return unencodable;
 };
 
 /**

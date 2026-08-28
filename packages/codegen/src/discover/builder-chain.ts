@@ -66,4 +66,20 @@ const wrappedCallsInChain = (receiver: Node, method: string, callee: string): Ca
                 argument !== undefined && TsNode.isCallExpression(argument) && resolvesToImportedName(argument.getExpression(), callee),
         );
 
-export { builderChainSteps, walkBuilderChain, wrappedCallsInChain };
+/** True when the builder chain rooted at `receiver` carries a step whose method name is `method` (`.output(...)` / `.use(...)`). */
+const chainHasStep = (receiver: TsNode, method: string): boolean => builderChainSteps(receiver).some((step) => step.name === method);
+
+/**
+ * True when the builder chain rooted at `receiver` carries a
+ * `.<method>(<wrappedCallee>(...))` step — e.g. `.use(mask(...))` or `.use(rls(...))`.
+ *
+ * Shares `wrappedCallsInChain` with `rlsCallsInChain` / `maskCallsInChain` so all
+ * three answer the same question the same way. They had drifted: those two
+ * resolved an import alias and this one compared callee text, so under
+ * `import { rls as rowLevel }` a procedure read `usesRls: true` to
+ * `discoverRlsProcedures` and `usesRls: false` to the feeders built on this.
+ */
+const chainUsesWrappedCall = (receiver: TsNode, method: string, wrappedCallee: string): boolean =>
+    wrappedCallsInChain(receiver, method, wrappedCallee).length > 0;
+
+export { builderChainSteps, chainHasStep, chainUsesWrappedCall, walkBuilderChain, wrappedCallsInChain };

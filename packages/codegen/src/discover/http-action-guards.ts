@@ -4,8 +4,8 @@ import { Node, SyntaxKind } from "ts-morph";
 import { enclosingExportName } from "../argument-taint";
 import type { HttpActionGuardIR } from "../ir";
 import { collectCallRows } from "./ast";
-import type { InspectableHandler } from "./functions/chain";
-import { inlineHandler } from "./functions/chain";
+import type { InspectableHandler } from "./functions/handler";
+import { inlineHandler } from "./functions/handler";
 
 /** The `httpRoute.<verb>(...)` factory verbs — the root of a typed-REST-route builder chain. */
 const HTTP_VERBS = new Set(["delete", "get", "head", "options", "patch", "post", "put"]);

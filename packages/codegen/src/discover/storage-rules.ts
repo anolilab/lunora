@@ -11,51 +11,23 @@ import { Node } from "ts-morph";
 
 import type { StorageRuleIR, StorageRulesMetadataIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath, stringPropertyOf } from "./ast";
+import { wrappedCallsInChain } from "./builder-chain";
 import exportedProcedureChains from "./functions/exported-procedure-chains";
 
 /** The operations `defineStorageRule({ on })` accepts; anything else is ignored as malformed. */
 const STORAGE_OPERATIONS = new Set<StorageRuleIR["on"]>(["delete", "list", "read", "write"]);
 
-/** True when `node` is a `storageRules(...)` call (bare identifier or `mod.storageRules(...)`). */
-const isStorageRulesCall = (node: TsNode): boolean => {
-    if (!Node.isCallExpression(node)) {
-        return false;
-    }
-
-    const callee = node.getExpression();
-
-    if (Node.isIdentifier(callee)) {
-        return callee.getText() === "storageRules";
-    }
-
-    return Node.isPropertyAccessExpression(callee) && callee.getName() === "storageRules";
-};
-
-/** Walk a builder chain leftward from `receiver`, collecting every `storageRules(...)` call carried via `.use(...)`. */
-const storageRulesCallsInChain = (receiver: TsNode): CallExpression[] => {
-    const calls: CallExpression[] = [];
-    let node: TsNode = receiver;
-
-    while (Node.isCallExpression(node)) {
-        const chainCallee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(chainCallee)) {
-            break;
-        }
-
-        if (chainCallee.getName() === "use") {
-            const argument = node.getArguments()[0];
-
-            if (argument && isStorageRulesCall(argument)) {
-                calls.push(argument as CallExpression);
-            }
-        }
-
-        node = chainCallee.getExpression();
-    }
-
-    return calls;
-};
+/**
+ * Every `storageRules(...)` call carried through a `.use(...)` step of the chain
+ * rooted at `receiver`.
+ *
+ * Shares the walk with the RLS and mask twins. It used to be a fourth hand-written
+ * copy of both the walk and the name match, which left storage rules the one
+ * `.use(...)` policy family still blind to an aliased import
+ * (`import { storageRules as rules }`) and to a `(… as B)` cast mid-chain — both
+ * silent, both already fixed for the other two.
+ */
+const storageRulesCallsInChain = (receiver: TsNode): CallExpression[] => wrappedCallsInChain(receiver, "use", "storageRules");
 
 /** Extract `{ bucket, on, prefix }` from each object-literal element of a `storageRules(rules)` array literal. */
 const extractRules = (call: CallExpression, file: string, procedure: string): StorageRuleIR[] => {

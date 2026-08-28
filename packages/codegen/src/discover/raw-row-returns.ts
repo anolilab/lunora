@@ -3,10 +3,11 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { singleHopInitializer } from "../argument-taint";
 import type { RawRowReturnIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import type { InspectableHandler } from "./functions/chain";
-import { chainHasStep, chainUsesWrappedCall, isDatabaseAccessor, procedureHandler } from "./functions/chain";
+import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
+import { chainHasStep, chainUsesWrappedCall } from "./builder-chain";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
+import type { InspectableHandler } from "./functions/handler";
+import { procedureHandler } from "./functions/handler";
 
 /** `ctx.db` read methods that hand back a whole row (or array of rows): the by-id `get` and the `findFirst`/`findMany` family. */
 const ROW_READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"]);
@@ -70,12 +71,21 @@ const fluentReaderTable = (call: CallExpression): string | undefined => {
     return undefined;
 };
 
-/** Peel `await` / parentheses / non-null `!` / `as` casts off `node` to reach the underlying expression. */
-const unwrapExpression = (node: TsNode): TsNode => {
-    let current = node;
+/**
+ * Peel `await` off `node`, then everything the shared `unwrapExpression` peels.
+ *
+ * Composed rather than re-listed so this can only ever be the shared wrapper set
+ * PLUS `await`. Spelling the list out again had already let it drift: it was
+ * missing `satisfies`, so `(await ctx.db.findMany("x")) satisfies User[]` ended
+ * the raw-row walk here while every other discovery walker saw through it — a
+ * silent under-report on the path that decides whether an unmasked row reaches
+ * the client.
+ */
+const unwrapAwaited = (node: TsNode): TsNode => {
+    let current = unwrapExpression(node) ?? node;
 
-    while (Node.isAwaitExpression(current) || Node.isParenthesizedExpression(current) || Node.isNonNullExpression(current) || Node.isAsExpression(current)) {
-        current = current.getExpression();
+    while (Node.isAwaitExpression(current)) {
+        current = unwrapExpression(current.getExpression()) ?? current.getExpression();
     }
 
     return current;
@@ -90,7 +100,7 @@ const unwrapExpression = (node: TsNode): TsNode => {
  * quiet. `hopped` bounds the identifier follow to a single hop.
  */
 const rawRowReadTable = (expression: TsNode, hopped = false): string | undefined => {
-    const node = unwrapExpression(expression);
+    const node = unwrapAwaited(expression);
 
     if (Node.isIdentifier(node)) {
         if (hopped) {

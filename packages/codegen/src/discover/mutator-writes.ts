@@ -5,6 +5,7 @@ import type { CallExpression, Project, SourceFile, VariableDeclaration } from "t
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { MutatorWriteIR } from "../ir";
+import { isDatabaseAccessor } from "./ast";
 import { isDefineMutatorCallee, MUTATORS_FILENAME } from "./mutators";
 
 /**
@@ -22,11 +23,7 @@ const isDatabaseReplaceCall = (call: CallExpression): boolean => {
 
     const receiver = callee.getExpression();
 
-    if (Node.isPropertyAccessExpression(receiver)) {
-        return receiver.getName() === "db";
-    }
-
-    return Node.isIdentifier(receiver) && receiver.getText() === "db";
+    return isDatabaseAccessor(receiver);
 };
 
 /**

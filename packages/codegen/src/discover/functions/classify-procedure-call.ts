@@ -1,4 +1,4 @@
-import type { CallExpression, Identifier } from "ts-morph";
+import type { CallExpression, Identifier, PropertyAccessExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
 import { unwrapExpression } from "../ast";
@@ -119,6 +119,66 @@ interface ProcedureClassification {
 }
 
 /**
+ * Classify a builder-terminal call (`c.use(...).query(handler)`), or `undefined`
+ * when the receiver is not a Lunora builder.
+ */
+const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureClassification | undefined => {
+    const method = callee.getName();
+
+    if (!FUNCTION_KINDS.has(method)) {
+        return undefined;
+    }
+
+    // Callers get the UNWRAPPED receiver: every chain walker built on this
+    // (`rlsCallsInChain`, `maskCallsInChain`, `chainHasStep`, …) descends
+    // from a call expression, so a `(…)` / `as T` wrapper would stop them at
+    // the first hop.
+    const wrapped = callee.getExpression();
+    const receiver = unwrapExpression(wrapped) ?? wrapped;
+
+    // Fast path: the runtime `__lunoraProcedure` brand. Internal builders
+    // also carry `__lunoraVisibility: "internal"`, so its mere presence
+    // marks the procedure internal. Works when `@lunora/server` types resolve.
+    //
+    // Read the brand off the ORIGINAL node first. `as T` and `!` are exactly
+    // the operators that narrow, so the brand often lives only on the
+    // wrapped type: `(maybeBuilder as Builder)` erases to `Builder |
+    // undefined`, whose `getProperty` finds nothing because `undefined` has
+    // no members. Checking only the unwrapped node dropped those
+    // registrations from `LUNORA_FUNCTIONS` — silently, and only when the
+    // chain also failed to root at an imported factory.
+    // Only `wrapped === receiver` when there is no wrapper, which is the
+    // overwhelmingly common case — so resolve lazily rather than typing both.
+    const candidates = wrapped === receiver ? [receiver] : [wrapped, receiver];
+
+    if (candidates.some((node) => node.getType().getProperty("__lunoraProcedure"))) {
+        // Visibility is decided across BOTH types, with `internal` winning —
+        // NOT read off whichever one answered the brand. Reading it off the
+        // wrapper let an assertion downgrade the answer:
+        // `(internalBuilder as PublicBuilder).query(h)` classified public,
+        // which publishes the procedure into the client-facing `api` and
+        // opens it to client dispatch. A cast must not be able to widen a
+        // security classification, so the stricter of the two wins.
+        const internal = candidates.some((node) => node.getType().getProperty("__lunoraVisibility"));
+
+        return { kind: method, receiver, visibility: internal ? "internal" : "public" };
+    }
+
+    // Robust fallback: walk the builder chain (`.input()`/`.use()`/`.output()`)
+    // to its root identifier and resolve it by import name — exactly as the
+    // bare-factory path does. This keeps discovery working when dependency
+    // types aren't installed (e.g. a freshly-scaffolded project before
+    // `pnpm install`, where the `__lunoraProcedure` brand can't resolve).
+    const rootKind = resolveBuilderRootKind(receiver);
+
+    if (rootKind) {
+        return { kind: method, receiver, visibility: rootKind };
+    }
+
+    return undefined;
+};
+
+/**
  * Classify an `export const x = …` initializer call as a Lunora registration —
  * its kind and visibility — or `undefined` when it isn't one. Handles both the
  * builder terminal (`c.query(...)`, brand-checked via `__lunoraProcedure` so we
@@ -131,48 +191,7 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
     const callee = call.getExpression();
 
     if (Node.isPropertyAccessExpression(callee)) {
-        const method = callee.getName();
-
-        if (!FUNCTION_KINDS.has(method)) {
-            return undefined;
-        }
-
-        // Callers get the UNWRAPPED receiver: every chain walker built on this
-        // (`rlsCallsInChain`, `maskCallsInChain`, `chainHasStep`, …) descends
-        // from a call expression, so a `(…)` / `as T` wrapper would stop them at
-        // the first hop.
-        const wrapped = callee.getExpression();
-        const receiver = unwrapExpression(wrapped) ?? wrapped;
-
-        // Fast path: the runtime `__lunoraProcedure` brand. Internal builders
-        // also carry `__lunoraVisibility: "internal"`, so its mere presence
-        // marks the procedure internal. Works when `@lunora/server` types resolve.
-        //
-        // Read the brand off the ORIGINAL node first. `as T` and `!` are exactly
-        // the operators that narrow, so the brand often lives only on the
-        // wrapped type: `(maybeBuilder as Builder)` erases to `Builder |
-        // undefined`, whose `getProperty` finds nothing because `undefined` has
-        // no members. Checking only the unwrapped node dropped those
-        // registrations from `LUNORA_FUNCTIONS` — silently, and only when the
-        // chain also failed to root at an imported factory.
-        const brandedType = [wrapped, receiver].map((node) => node.getType()).find((type) => type.getProperty("__lunoraProcedure"));
-
-        if (brandedType) {
-            return { kind: method, receiver, visibility: brandedType.getProperty("__lunoraVisibility") ? "internal" : "public" };
-        }
-
-        // Robust fallback: walk the builder chain (`.input()`/`.use()`/`.output()`)
-        // to its root identifier and resolve it by import name — exactly as the
-        // bare-factory path does. This keeps discovery working when dependency
-        // types aren't installed (e.g. a freshly-scaffolded project before
-        // `pnpm install`, where the `__lunoraProcedure` brand can't resolve).
-        const rootKind = resolveBuilderRootKind(receiver);
-
-        if (rootKind) {
-            return { kind: method, receiver, visibility: rootKind };
-        }
-
-        return undefined;
+        return classifyBuilderTerminal(callee);
     }
 
     if (!Node.isIdentifier(callee)) {
