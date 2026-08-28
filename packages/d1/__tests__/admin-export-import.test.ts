@@ -176,6 +176,24 @@ describe("d1 admin export/import globals", () => {
             expect(result.conflicts).toBe(0);
         });
 
+        it("reports a row with no usable `table` as BAD_ROW rather than skipping it", async () => {
+            expect.assertions(3);
+
+            // The global/shard routing check ran first, so
+            // `schema.tables[undefined]?.shardMode?.kind !== "global"` bucketed a
+            // corrupt row as "shard-local, not mine". The import then reported
+            // success with zero errors and an operator could not tell a malformed
+            // line from a legitimately-elsewhere one. The shard-engine twin
+            // reports BAD_ROW for the identical input.
+            const result = await importGlobalRows(writer, schema, {
+                rows: [{ doc: { _id: "s1", name: "theme", value: "dark" } } as never, { doc: { _id: "s2" }, table: 123 } as never],
+            });
+
+            expect(result.errors).toHaveLength(2);
+            expect(result.errors[0]?.code).toBe("BAD_ROW");
+            expect(result.errors[0]?.message).toContain("missing `table`");
+        });
+
         it("skips non-global tables silently (someone else's responsibility)", async () => {
             expect.assertions(1);
 
