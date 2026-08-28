@@ -499,7 +499,7 @@ describe("discoverFunctions", () => {
 
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
-            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/mydoc").Doc<"posts">');
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/mydoc.js").Doc<"posts">');
         });
 
         it("qualifies a PACKAGE type the handler imports — a module `.d.ts` is no more reachable than a user's own file (#509)", () => {
@@ -584,7 +584,7 @@ describe("discoverFunctions", () => {
 
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
-            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/badges").Badges');
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/badges.js").Badges');
         });
 
         it("keeps an alias for a UNION, rather than flattening it to its members", () => {
@@ -605,7 +605,7 @@ describe("discoverFunctions", () => {
 
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
-            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/result").Outcome');
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/result.js").Outcome');
         });
 
         it("declines a return whose member the wire cannot encode, imported or not", () => {
@@ -683,7 +683,7 @@ describe("discoverFunctions", () => {
 
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
-            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/boxed").default');
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/boxed.js").default');
         });
 
         it("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {

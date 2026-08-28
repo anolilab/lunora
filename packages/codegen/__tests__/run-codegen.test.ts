@@ -2174,14 +2174,18 @@ export const get = query.input({}).query(async (): Promise<UIMessage> => ({ text
             }
         });
 
-        it("retargets a TypeScript-extension specifier onto the extension the generated file can name", () => {
-            expect.assertions(4);
+        it("retargets a TypeScript-extension specifier onto the extension its own family is emitted as", () => {
+            expect.assertions(6);
 
             // `./lib/shapes.ts` is legal in the app's own source, and illegal
             // wherever the flag permitting it is off — which includes a dedicated
             // strict config for generated output, the pattern this repo itself
             // ships. Written through verbatim it is a TS5097 in a file the user
-            // did not write; `.js` resolves under both.
+            // did not write.
+            //
+            // The replacement is per FAMILY, not a blanket `.js`: TypeScript
+            // substitutes `.js`→`.ts` and `.cjs`→`.cts` but never across the two,
+            // so a `.cts` module named `.js` is a TS2307 instead.
             writeFileSync(
                 join(workdir, "tsconfig.json"),
                 `{
@@ -2192,12 +2196,15 @@ export const get = query.input({}).query(async (): Promise<UIMessage> => ({ text
             );
             mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
             writeFileSync(join(workdir, "lunora", "lib", "shapes.ts"), `export interface Badge {\n    label: string;\n}\n`);
+            writeFileSync(join(workdir, "lunora", "lib", "legacy.cts"), `export interface Stamp {\n    at: number;\n}\n`);
             writeFileSync(
                 join(workdir, "lunora", "badges.ts"),
                 `import { query } from "./_generated/server.js";
 import type { Badge } from "./lib/shapes.ts";
+import type { Stamp } from "./lib/legacy.cts";
 
 export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "x" }));
+export const stamp = query.input({}).query(async (): Promise<Stamp> => ({ at: 1 }));
 `,
             );
 
@@ -2205,7 +2212,8 @@ export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "
 
             for (const rendered of [api, functions]) {
                 expect(rendered).toContain('import("../lib/shapes.js").Badge');
-                expect(rendered).not.toContain('import("../lib/shapes.ts")');
+                expect(rendered).toContain('import("../lib/legacy.cjs").Stamp');
+                expect(rendered).not.toMatch(/import\("\.\.\/lib\/(?:shapes|legacy)\.[cm]?ts"\)/u);
             }
         });
 

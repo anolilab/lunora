@@ -509,71 +509,85 @@ const matchesNamedImport = (importDeclaration: ImportDeclaration, declaration: N
 /** A specifier resolved from the handler's own directory rather than from a package name. */
 const RELATIVE_SPECIFIER_RE = /^\.\.?(?:$|\/)/u;
 
-/** A specifier whose final segment already names the directory's index module, with or without an extension. */
-const INDEX_SEGMENT_RE = /(?:^|\/)index(?:\.\w+)?$/u;
-
 /** A written-out trailing slash, dropped so the appended `/index` does not double it. */
 const TRAILING_SLASH_RE = /\/$/u;
 
-/** A TypeScript source extension written into an import specifier — legal in the app's own source, not in generated output (see {@link resolveEmittedSpecifier}). */
-const TS_EXTENSION_RE = /\.(?<extension>[cm]?tsx?)$/u;
+/**
+ * A module extension written into an import specifier, in either family — the
+ * source one the app may name under `allowImportingTsExtensions`, or the emitted
+ * one NodeNext requires. Matched as a closed list so a dotted DIRECTORY name
+ * (`./lib/utils.core`) is not mistaken for an extension and truncated.
+ */
+const MODULE_EXTENSION_RE = /\.[cm]?[jt]sx?$/u;
 
-/** What each TypeScript source extension is written as once emitted. */
+/**
+ * The extension a module is written as once emitted, keyed by the extension its
+ * file has on disk. TypeScript's own resolution substitutes in this direction —
+ * `.js` finds `.ts`, `.mjs` finds `.mts` — and only within a family, which is
+ * why `.mts` and `.cts` cannot borrow the plain `.js` the other four use.
+ */
 const EMITTED_EXTENSIONS = new Map([
-    ["cts", "cjs"],
-    ["mts", "mjs"],
-    ["ts", "js"],
-    ["tsx", "js"],
+    [".cjs", "cjs"],
+    [".cts", "cjs"],
+    [".js", "js"],
+    [".jsx", "jsx"],
+    [".mjs", "mjs"],
+    [".mts", "mjs"],
+    [".ts", "js"],
+    [".tsx", "js"],
 ]);
 
 /**
- * Rewrite the specifier a handler wrote into one that also resolves from
- * `_generated/`.
+ * Name the module a handler imported from by the file it RESOLVED to, with the
+ * extension that file is emitted as.
  *
- * The qualifier is the user's own import text, and there are two spellings that
- * resolve where they were written and nowhere else. Both are TS2307/TS5097 in a
- * file nobody wrote and nothing can repair from outside: `paths` does not apply
- * to a relative specifier, and no ambient declaration satisfies a qualified
- * `import("…").T`.
+ * The qualifier `_generated/` gets is the user's own import text, and several
+ * spellings of it resolve where they were written and nowhere else — each a
+ * TS2307/TS5097 in a file nobody wrote and nothing can repair from outside:
+ * `paths` does not apply to a relative specifier, and no ambient declaration
+ * satisfies a qualified `import("…").T`.
  *
- * A DIRECTORY module (`./agent/client` → `agent/client/index.ts`) is the first.
- * `emit.ts` appends `.js` to a rebased relative qualifier, because the generated
- * files are consumed under NodeNext where the extension is mandatory. Extension
- * substitution answers that for a file — `./lib/types.js` finds `lib/types.ts` —
- * but a directory has no extension to substitute, so `../agent/client.js`
- * resolves to nothing. Naming the index module explicitly gives the suffix
- * something to attach to. Asked of the RESOLVED source file rather than guessed
- * from the shape of the string: `./agent/client` is spelled the same whether it
- * is a file or a directory, and only the checker knows which one it found.
+ * `emit.ts` rebases a relative qualifier out of `_generated/` and appends `.js`
+ * when it carries no extension, because the generated files are consumed under
+ * NodeNext where the extension is mandatory. That single suffix is right for
+ * exactly one case — a `.ts` file named without an extension — and wrong for the
+ * rest.
  *
- * A TS EXTENSION (`./lib/types.ts`) is the second. It is legal in the app's own
- * source under `allowImportingTsExtensions`, and illegal everywhere that flag is
- * off — which includes a dedicated strict config for generated output, the
- * pattern this repo itself ships. The emitted extension resolves under both.
+ * A DIRECTORY (`./agent/client` → `agent/client/index.ts`) has no extension to
+ * substitute, so `../agent/client.js` resolves to nothing. A `.mts`/`.cts` file
+ * is emitted as `.mjs`/`.cjs`, and substitution does not cross families, so
+ * `.js` misses it. A TS extension the app wrote itself (`./lib/types.ts`, legal
+ * under `allowImportingTsExtensions`) is kept verbatim and is illegal everywhere
+ * that flag is off — including a dedicated strict config for generated output,
+ * the pattern this repo itself ships.
+ *
+ * Rather than special-case each, name the resolved file: `./agent/client` is
+ * spelled the same whether it is a file or a directory, and only the checker
+ * knows which one it found. An unresolved import, or a file in no family we
+ * emit (a `.json` module), is left exactly as written.
  */
 const resolveEmittedSpecifier = (importDeclaration: ImportDeclaration, matched: QualifiedImport): QualifiedImport => {
     if (!RELATIVE_SPECIFIER_RE.test(matched.specifier)) {
         return matched;
     }
 
-    const written = TS_EXTENSION_RE.exec(matched.specifier)?.groups?.extension;
-    const emitted = written === undefined ? undefined : EMITTED_EXTENSIONS.get(written);
+    const moduleFile = importDeclaration.getModuleSpecifierSourceFile();
+    const extension = moduleFile === undefined ? undefined : EMITTED_EXTENSIONS.get(moduleFile.getExtension());
 
-    // An extension means the specifier already names a file, so the directory
-    // question below is answered and `emit.ts` appends nothing either.
-    if (written !== undefined && emitted !== undefined) {
-        return { ...matched, specifier: `${matched.specifier.slice(0, -written.length)}${emitted}` };
-    }
-
-    if (INDEX_SEGMENT_RE.test(matched.specifier)) {
+    if (moduleFile === undefined || extension === undefined) {
         return matched;
     }
 
-    const moduleFile = importDeclaration.getModuleSpecifierSourceFile();
+    const written = matched.specifier.replace(TRAILING_SLASH_RE, "");
 
-    return moduleFile?.getBaseNameWithoutExtension() === "index"
-        ? { ...matched, specifier: `${matched.specifier.replace(TRAILING_SLASH_RE, "")}/index` }
-        : matched;
+    // A directory names its index module explicitly; anything else replaces
+    // whichever extension the app wrote — including none — with the emitted one.
+    const base =
+        moduleFile.getBaseNameWithoutExtension() === "index" && !MODULE_EXTENSION_RE.test(written) && !written.endsWith("/index")
+            ? `${written}/index`
+            : written.replace(MODULE_EXTENSION_RE, "");
+
+    return { ...matched, specifier: `${base}.${extension}` };
 };
 
 /**
