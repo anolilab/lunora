@@ -272,7 +272,18 @@ const assertBatchLimit = (count: number, limit: number | undefined, op: string):
     const cap = limit ?? DEFAULT_BATCH_LIMIT;
 
     if (count > cap) {
-        throw new LunoraError("BAD_REQUEST", `${op}: batch of ${String(count)} exceeds the limit of ${String(cap)} (raise options.limit or chunk the call)`);
+        // `BATCH_LIMIT_EXCEEDED`, matching the writer's own cap in
+        // `@lunora/shard-engine`'s `ctx-db.ts`. This threw `BAD_REQUEST` while the
+        // message and the cap were byte-identical, so a client catching
+        // `err.code === "BATCH_LIMIT_EXCEEDED"` to chunk-and-retry worked against
+        // a plain table and silently failed to match under a `.rls("required")`
+        // schema — same status, same text, different code. `@lunora/server`'s own
+        // types document that code as the one a caller reasons about.
+        throw new LunoraError(
+            "BATCH_LIMIT_EXCEEDED",
+            `${op}: batch of ${String(count)} exceeds the limit of ${String(cap)} (raise options.limit or chunk the call)`,
+            { status: 400 },
+        );
     }
 };
 
