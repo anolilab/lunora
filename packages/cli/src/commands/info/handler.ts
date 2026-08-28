@@ -9,6 +9,7 @@ import { findWranglerFile } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
+import { deriveBindingManifest } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -26,11 +27,16 @@ interface LunoraPackageInfo {
 }
 
 interface WranglerSummary {
-    bindings: {
-        d1: ReadonlyArray<string>;
-        durableObjects: ReadonlyArray<string>;
-        vectorize: ReadonlyArray<string>;
-    };
+    /**
+     * Every binding the config declares, as `type:name`.
+     *
+     * Derived by the same function `lunora bindings` and `--emit-bindings` use.
+     * This used to hand-roll its own read of three sections — d1, durable
+     * objects, vectorize — so a project with R2, KV, queues, AI or any of the
+     * other nine types was told it had none of them. A summary that silently
+     * omits two thirds of the answer is worse than no summary.
+     */
+    bindings: ReadonlyArray<string>;
     compatibilityDate: string | undefined;
     compatibilityFlags: ReadonlyArray<string>;
     main: string | undefined;
@@ -77,17 +83,11 @@ const arrayField = (record: unknown, key: string): ReadonlyArray<unknown> => {
     return Array.isArray(value) ? value : [];
 };
 
-const summariseWrangler = (raw: unknown): WranglerSummary => {
-    const durableObjectBindings = arrayField((raw as Record<string, unknown>).durable_objects ?? {}, "bindings");
-    const d1 = arrayField(raw, "d1_databases");
-    const vectorize = arrayField(raw, "vectorize");
+const summariseWrangler = (raw: unknown, projectRoot: string): WranglerSummary => {
+    const { manifest } = deriveBindingManifest(projectRoot);
 
     return {
-        bindings: {
-            d1: d1.map((entry) => stringField(entry, "binding") ?? "<unnamed>"),
-            durableObjects: durableObjectBindings.map((entry) => stringField(entry, "name") ?? "<unnamed>"),
-            vectorize: vectorize.map((entry) => stringField(entry, "binding") ?? "<unnamed>"),
-        },
+        bindings: (manifest?.bindings ?? []).map((requirement) => `${requirement.type}:${requirement.binding}`),
         compatibilityDate: stringField(raw, "compatibility_date"),
         compatibilityFlags: arrayField(raw, "compatibility_flags").filter((entry): entry is string => typeof entry === "string"),
         main: stringField(raw, "main"),
@@ -170,7 +170,7 @@ const collectInfo = (projectRoot: string): InfoSnapshot => {
 
     if (wranglerPath) {
         try {
-            wrangler = summariseWrangler(parseJsonc(readFileSync(wranglerPath, "utf8")));
+            wrangler = summariseWrangler(parseJsonc(readFileSync(wranglerPath, "utf8")), projectRoot);
         } catch {
             wrangler = undefined;
         }
@@ -223,9 +223,7 @@ const renderText = (snapshot: InfoSnapshot, logger: Logger): void => {
         logger.info(`  main:               ${snapshot.wrangler.main ?? "<unset>"}`);
         logger.info(`  compatibility_date: ${snapshot.wrangler.compatibilityDate ?? "<unset>"}`);
         logger.info(`  compatibility_flags: ${snapshot.wrangler.compatibilityFlags.join(", ") || "<none>"}`);
-        logger.info(`  durable objects:    ${snapshot.wrangler.bindings.durableObjects.join(", ") || "<none>"}`);
-        logger.info(`  d1 databases:       ${snapshot.wrangler.bindings.d1.join(", ") || "<none>"}`);
-        logger.info(`  vectorize indexes:  ${snapshot.wrangler.bindings.vectorize.join(", ") || "<none>"}`);
+        logger.info(`  bindings:           ${snapshot.wrangler.bindings.join(", ") || "<none>"}`);
     } else {
         logger.info("wrangler: (not found)");
     }

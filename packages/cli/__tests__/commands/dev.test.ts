@@ -1028,6 +1028,54 @@ describe("lunora dev", () => {
             expect(manifest.dev?.origin).toBe("http://localhost:8787");
         });
 
+        it("advertises the manifest in the banner only when one was written", async () => {
+            expect.assertions(2);
+
+            // A default nobody is told about helps nobody — that was the whole
+            // reason for defaulting it. But naming a path that does not exist is
+            // worse than saying nothing, so a project with no wrangler config
+            // must not get the line.
+            const withConfig: string[] = [];
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), info: (message: string) => withConfig.push(message) },
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(withConfig.join("\n")).toContain("dev-bindings.json");
+
+            rmSync(join(workdir, "wrangler.jsonc"));
+            rmSync(join(workdir, ".lunora"), { force: true, recursive: true });
+
+            const withoutConfig: string[] = [];
+
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), info: (message: string) => withoutConfig.push(message) },
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(withoutConfig.join("\n")).not.toContain("dev-bindings.json");
+        });
+
         it("does not fail a project that has no wrangler config when nobody asked", async () => {
             expect.assertions(2);
 

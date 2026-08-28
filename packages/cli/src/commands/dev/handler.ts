@@ -561,17 +561,31 @@ const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
 };
 
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
-const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined): void => {
+const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined, manifestPath: string | undefined): void => {
     logger.info("");
     logger.success("Lunora dev");
     logger.info(`  ➜  Worker:     ${plan.workerOrigin}`);
 
     if (studioUrl !== undefined) {
-        logger.info(`  ➜  Studio:  ${studioUrl}`);
+        // Five spaces, like every other row: this one had two, so the value
+        // column stepped left for exactly one line.
+        logger.info(`  ➜  Studio:     ${studioUrl}`);
     }
 
     if (plan.runsCodegenWatch) {
         logger.info("  ➜  Codegen:    watching lunora/");
+    }
+
+    // The two files a task runner reads. The manifest is written whether or not
+    // anyone asked, which is the point — but a file nobody knows about helps
+    // nobody, and the flag it replaced had to be discovered before it could help.
+    // One line, once, is the difference between "defaulted on" and "adopted".
+    //
+    // Only when one was actually written: a project with no wrangler config skips
+    // the manifest, and pointing at a path that does not exist is worse than
+    // saying nothing.
+    if (manifestPath !== undefined) {
+        logger.info(`  ➜  Supervisor: ${manifestPath} (needs) · ${DEV_STATE_FILE} (status)`);
     }
 
     if (plan.remote.enabled) {
@@ -752,7 +766,13 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
  * earlier, before any sibling starts — see the claim in {@link runDevCommand}.)
  * Returns the container-log disposer for the caller's teardown set.
  */
-const afterWorkerSpawn = (plan: DevCommandPlan, cwd: string, logger: Logger, studioUrl: string | undefined): ContainerLogStreamHandle | undefined => {
+const afterWorkerSpawn = (
+    plan: DevCommandPlan,
+    cwd: string,
+    logger: Logger,
+    studioUrl: string | undefined,
+    manifestPath: string | undefined,
+): ContainerLogStreamHandle | undefined => {
     if (plan.flavor !== "wrangler") {
         return undefined;
     }
@@ -773,7 +793,7 @@ const afterWorkerSpawn = (plan: DevCommandPlan, cwd: string, logger: Logger, stu
         /* never fatal */
     }
 
-    printBanner(logger, plan, studioUrl);
+    printBanner(logger, plan, studioUrl, manifestPath);
 
     return containerLogs;
 };
@@ -828,11 +848,17 @@ const claimStartRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url
  * Extracted from `runDevCommand` because that function is at the repo's
  * cognitive-complexity ceiling, and startup orchestration keeps being added.
  */
-const emitDevBindingManifest = (options: { cwd: string; destination: string | undefined; logger: Logger; plan: DevCommandPlan }): { error?: string } => {
+const emitDevBindingManifest = (options: {
+    cwd: string;
+    destination: string | undefined;
+    logger: Logger;
+    plan: DevCommandPlan;
+}): { error?: string; written?: string } => {
     const { cwd, destination, logger, plan } = options;
     const requested = destination !== undefined;
+    const target = destination ?? DEV_BINDINGS_FILE;
     const result = writeBindingManifestFile({
-        destination: destination ?? DEV_BINDINGS_FILE,
+        destination: target,
         dev: {
             // Only where the CLI owns the port. On the Vite flavors
             // `workerOrigin` is a pre-listen guess — Vite resolves its own,
@@ -849,13 +875,17 @@ const emitDevBindingManifest = (options: { cwd: string; destination: string | un
         projectRoot: cwd,
     });
 
-    if (result.error !== undefined && !requested) {
+    if (result.error !== undefined) {
+        if (requested) {
+            return result;
+        }
+
         logger.debug?.(`skipped the default binding manifest: ${result.error}`);
 
         return {};
     }
 
-    return result;
+    return { written: target };
 };
 
 /**
@@ -1234,7 +1264,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // above: there the worker is someone else's by definition.)
         startReadyProbe();
 
-        handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl);
+        handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl, emitted.written);
 
         printAgentRulesHint(logger, cwd);
 

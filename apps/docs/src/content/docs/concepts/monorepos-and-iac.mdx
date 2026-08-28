@@ -73,7 +73,8 @@ lunora bindings --out reqs.json
 }
 ```
 
-`--emit-bindings <file>` moves it elsewhere. Naming a path also changes the
+`lunora dev` names both files in its startup banner, so you do not have to know
+they exist. `--emit-bindings <file>` moves the manifest elsewhere. Naming a path also changes the
 failure policy: a project with no readable `wrangler.jsonc` then fails the run,
 because a named path means something is waiting on that file. The default write
 stays a courtesy and simply skips.

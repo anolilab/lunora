@@ -88,8 +88,11 @@ describe("lunora info", () => {
             expect(lunoraNames).not.toContain("lodash");
 
             expect(result.snapshot.wrangler?.name).toBe("demo-worker");
-            expect(result.snapshot.wrangler?.bindings.durableObjects).toContain("SHARD");
-            expect(result.snapshot.wrangler?.bindings.d1).toContain("DB");
+            // `type:name`, from the same derivation `lunora bindings` uses — the
+            // hand-rolled summary this replaced read three wrangler sections, so
+            // R2, KV, queues and the rest were reported as absent.
+            expect(result.snapshot.wrangler?.bindings).toContain("durable_object:SHARD");
+            expect(result.snapshot.wrangler?.bindings).toContain("d1:DB");
 
             expect(result.snapshot.schema?.tables.length).toBeGreaterThan(0);
         });
