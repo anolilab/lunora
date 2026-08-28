@@ -1640,6 +1640,31 @@ const buildReader = (
          */
         // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
         async *[Symbol.asyncIterator]() {
+            // A SEARCH stage is read unbounded, exactly as `collect()` reads it,
+            // rather than paged.
+            //
+            // Paging cannot terminate honestly here: a page is capped at
+            // `MAX_SEARCH_SCAN` and a page sized to the cap cannot fetch the
+            // probe row that tells "exactly that many matches" from "ten times
+            // as many", so `planSearchPage` refuses it rather than report a
+            // false `isDone`. With `ITERATOR_PAGE_SIZE` dividing the cap exactly
+            // (1024 / 128 = 8), a walk of 897–1023 matches landed on the cap
+            // every time and died with a `BAD_REQUEST` naming a `numItems` the
+            // caller never passed — while `.collect()` on the same query
+            // returned every row. The D1 twin moved its iterator off paging for
+            // this reason and documented it; the shard reader was never given
+            // the same treatment.
+            //
+            // Nothing is given up: the page size was the cap, so the loop
+            // already read the whole window in one query and a `break` saved
+            // nothing. A scored search has to rank its whole window before it
+            // knows which row is first.
+            if (stage.search) {
+                yield* runFetch(undefined);
+
+                return;
+            }
+
             const predicates = [...stage.inMemoryFilters];
             let cursor: string | undefined;
 
@@ -4513,6 +4538,7 @@ export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } fr
 export { runShardMigrations } from "./ctx-db-migrations";
 export { SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { ShapeRow } from "./ctx-db-shapes";
+export { assertNoExplicitUndefined };
 export { selectShapeMembers, selectShapeRows } from "./ctx-db-shapes";
 export {
     type BroadcastDelta,

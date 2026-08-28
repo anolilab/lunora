@@ -10,9 +10,38 @@
  * MySQL `JSON`/`TINYINT`) would find them silently unused. Do not rely on that
  * seam without first routing the core through it.
  */
+import { LunoraError } from "@lunora/errors";
 import type { ValidatorLike } from "@lunora/shard-engine";
 
 import { effectiveKind } from "../../../shared/effective-kind";
+import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "../../../shared/wire-codec";
+
+/**
+ * Marks a stored column as wire-encoded. Reuses {@link WIRE_TAG} rather than
+ * minting a second sentinel — as a *prefix* it cannot be confused with the tag
+ * appearing *inside* a value, because `JSON.stringify` output always starts with
+ * `{`, `[`, `"`, a digit, `-`, `t`, `f`, or `n`, never `$`.
+ */
+const WIRE_PREFIX = WIRE_TAG;
+
+/**
+ * Decode a stored JSON column, honouring the wire marker written by
+ * {@link sqliteEncode}.
+ *
+ * Testing an explicit prefix rather than sniffing for the tag anywhere in the
+ * text is what makes this unambiguous: a legacy row that merely *contains* an
+ * array shaped like a wire payload is ordinary data and is returned as parsed,
+ * where a content sniff would decode it and the next write would persist the
+ * corruption.
+ *
+ * It is also the cheaper test. `decodeWire` is identity for pure JSON but still
+ * walks and rebuilds the whole structure to prove it — pure overhead on the
+ * per-column path of every global read, measuring ~1.3x on an object column and
+ * ~1.25x on a 100-row page. A `startsWith` is O(1) against the O(n) scan a
+ * content sniff needs.
+ */
+const decodeJsonColumn = (raw: string, parse: (text: string) => unknown): unknown =>
+    raw.startsWith(WIRE_PREFIX) ? decodeWire(parse(raw.slice(WIRE_PREFIX.length))) : parse(raw);
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown): unknown => {
@@ -39,7 +68,30 @@ export const sqliteEncode = (value: unknown): unknown => {
         return new Uint8Array(value);
     }
 
-    return JSON.stringify(value);
+    // Wire-encode a composite so a nested `bigint`/bytes leaf survives. A bare
+    // `JSON.stringify` threw an untyped `TypeError` on `{ n: 1n }` (surfacing as
+    // an opaque 500) and silently flattened `{ b: <ArrayBuffer> }` to `{"b":{}}`
+    // — data destroyed with no error at all.
+    //
+    // Only a value that actually needs it is wire-encoded, and that form is
+    // marked with a leading `WIRE_PREFIX` so the reader can tell it apart from
+    // ordinary JSON with certainty rather than by sniffing the content. Without
+    // the marker, a row already holding the array `["$lunora.wire$","bigint","42"]`
+    // — legitimate app data, written before this path existed and so never passed
+    // through `encodeWire`'s `"arr"` escape — decodes as `42n`, and the next
+    // `patch`/`replace` persists that corruption. `encodeWire` escapes such an
+    // array on the way in, so only pre-existing rows are exposed; the marker
+    // closes them too.
+    //
+    // An ordinary document is untouched: no prefix, byte-identical to before.
+    try {
+        return needsWireEncoding(value) ? WIRE_PREFIX + JSON.stringify(encodeWire(value)) : JSON.stringify(value);
+    } catch (error: unknown) {
+        // `encodeWire` throws a bare `TypeError` for a non-plain object and a
+        // `RangeError` past its depth cap; re-thrown typed so the writer names
+        // what it could not store, matching the shard twin.
+        throw new LunoraError("BAD_REQUEST", `this value cannot be stored: ${error instanceof Error ? error.message : String(error)}`);
+    }
 };
 
 /** Parse `raw` as JSON, returning `raw` unchanged when it is not valid JSON. */
@@ -111,12 +163,17 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
         case "any":
         case "from":
         case "union": {
-            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[")) ? tryJsonParse(raw) : raw;
+            // The wire marker joins `{`/`[` as a shape this branch must decode —
+            // a marked value is not raw JSON, so it would otherwise fall through
+            // and be returned as its own storage string.
+            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[") || raw.startsWith(WIRE_PREFIX))
+                ? decodeJsonColumn(raw, tryJsonParse)
+                : raw;
         }
         case "array":
         case "object":
         case "record": {
-            return typeof raw === "string" ? tryJsonParse(raw) : raw;
+            return typeof raw === "string" ? decodeJsonColumn(raw, tryJsonParse) : raw;
         }
         case "bigint": {
             return decodeBigint(raw);

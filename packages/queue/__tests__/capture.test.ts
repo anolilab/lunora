@@ -29,6 +29,23 @@ const namespace = () => {
 };
 
 describe("shouldCaptureQueue", () => {
+    it("falls back to environment detection for a value that is not an explicit override", () => {
+        expect.assertions(3);
+
+        // The empty string is what wrangler supplies for a declared-but-unset
+        // var, and it used to return `false` here — dev capture off, silently,
+        // with the studio's Queues panel showing nothing consumed. `@lunora/mail`
+        // warns and falls through for exactly these inputs, which this docblock
+        // already claimed to mirror.
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        expect(shouldCaptureQueue({ LUNORA_QUEUE_CAPTURE: "", WORKER_ENV: "development" })).toBe(true);
+        expect(shouldCaptureQueue({ LUNORA_QUEUE_CAPTURE: "yes", WORKER_ENV: "production" })).toBe(false);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("unrecognized LUNORA_QUEUE_CAPTURE"));
+
+        warn.mockRestore();
+    });
+
     it("honours the explicit LUNORA_QUEUE_CAPTURE flag over the environment", () => {
         expect.assertions(4);
 

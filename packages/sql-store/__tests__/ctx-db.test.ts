@@ -187,6 +187,26 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
         expect(doc).toMatchObject({ archived: false, body: "patched", priority: 1, slug: "c" });
     });
 
+    it("refuses an explicit undefined on patch and replace instead of NULLing the column", async () => {
+        expect.assertions(3);
+
+        // `runRowValidators` skips a present-but-undefined key
+        // (`v.optional(x).parse(undefined)` is fine) and the serializer then wrote
+        // `?? null`, so this silently cleared the column. The shard twin has
+        // refused it since the footgun was found there; this side shares that
+        // guard now rather than restating it.
+        const writer = makeWriter();
+        const id = await writer.insert("notes", { archived: false, body: "keep-me", priority: 1, slug: "u" });
+
+        await expect(writer.patch(id, { body: undefined })).rejects.toThrow(/Cannot patch field 'body' to undefined/u);
+        await expect(writer.replace(id, { archived: false, body: undefined, priority: 1, slug: "u" })).rejects.toThrow(
+            /Cannot replace field 'body' to undefined/u,
+        );
+
+        // …and the stored value is untouched by the refused write.
+        await expect(writer.get(id)).resolves.toMatchObject({ body: "keep-me" });
+    });
+
     it("delete removes the row", async () => {
         expect.assertions(1);
 

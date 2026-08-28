@@ -632,6 +632,40 @@ describe.each(ENGINES)("ctx-db search — $label", (engine) => {
      * unreachable and the guard dead, and 1024 rows come back looking complete.
      */
     describe("the over-cap probe", () => {
+        it("walks a match set that lands on the cap boundary with `for await`", async () => {
+            expect.assertions(2);
+
+            // The iterator paged at `ITERATOR_PAGE_SIZE`, which divides the cap
+            // exactly (1024 / 128 = 8), so a walk of 897-1023 matches landed on
+            // the cap every time and died with a `BAD_REQUEST` naming a
+            // `numItems` the caller never passed — while `.collect()` on the same
+            // query returned every row. A search stage is read unbounded now, as
+            // the D1 twin already did.
+            const writer = setupWriter();
+            const total = MAX_SEARCH_SCAN - 124;
+
+            for (let index = 0; index < total; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic ids require sequential inserts
+                await writer.insert("docs", { body: "needle", channel: "x", title: `t${String(index)}` });
+            }
+
+            const seen: unknown[] = [];
+
+            for await (const row of writer.query("docs").withSearchIndex("by_body", (q) => q.search("body", "needle"))) {
+                seen.push(row);
+            }
+
+            expect(seen).toHaveLength(total);
+
+            // …and it agrees with the terminal that was already correct.
+            await expect(
+                writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "needle"))
+                    .collect(),
+            ).resolves.toHaveLength(total);
+        });
+
         it("refuses an unbounded read whose match set exceeds the cap", async () => {
             expect.assertions(2);
 

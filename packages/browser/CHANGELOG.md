@@ -1,3 +1,14 @@
+## @lunora/browser [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.31...@lunora/browser@1.0.0-alpha.32) (2026-08-28)
+
+### Documentation
+
+* repair 404 package links, and document .source() in the hyperdrive readme ([#501](https://github.com/anolilab/lunora/issues/501)) ([d519ac2](https://github.com/anolilab/lunora/commit/d519ac23f2bd8ddf5a10af5db11f141e8728babf))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+
 ## @lunora/browser [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.30...@lunora/browser@1.0.0-alpha.31) (2026-08-26)
 
 

@@ -448,6 +448,10 @@ const ERROR_CATALOG: {
         readonly status: 403;
         readonly title: "Fan-out forbidden";
     };
+    readonly GLOBAL_SEARCH_SCORES_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "collectWithScores() is unsupported on a global table";
+    };
     readonly FORBIDDEN_ORIGIN: {
         readonly status: 403;
         readonly title: "Origin forbidden";

@@ -1,3 +1,16 @@
+## @lunora/shard-engine [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.45...@lunora/shard-engine@1.0.0-alpha.46) (2026-08-28)
+
+### Bug Fixes
+
+* close nine copied-helper divergences across eight packages ([#522](https://github.com/anolilab/lunora/issues/522)) ([a2455bb](https://github.com/anolilab/lunora/commit/a2455bb0f58b9873633504c3f1e9bfeb44a5870e))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/platform:** upgraded to 1.0.0-alpha.20
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.41
+
 ## @lunora/shard-engine [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.44...@lunora/shard-engine@1.0.0-alpha.45) (2026-08-28)
 
 ### Bug Fixes

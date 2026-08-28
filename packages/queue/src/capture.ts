@@ -70,7 +70,27 @@ const shouldCaptureQueue = (env: QueueEnv): boolean => {
     const flag = env["LUNORA_QUEUE_CAPTURE"];
 
     if (typeof flag === "string") {
-        return flag === "1" || flag.toLowerCase() === "true";
+        const normalized = flag.toLowerCase();
+
+        if (normalized === "1" || normalized === "true") {
+            return true;
+        }
+
+        if (normalized === "0" || normalized === "false") {
+            return false;
+        }
+
+        // Any other value (e.g. "yes", "on", a typo, or the EMPTY STRING that
+        // wrangler supplies for a declared-but-unset var) is NOT an explicit
+        // override — fall through to environment detection rather than silently
+        // forcing capture off. This branch is the whole difference the docblock
+        // above claimed and did not have: mail warns and falls back, while queue
+        // returned false, so dev capture went quietly dark and the studio's
+        // Queues panel showed nothing consumed with no reason given.
+        // eslint-disable-next-line no-console -- surface a likely-misconfigured flag rather than swallowing it
+        console.warn(
+            `@lunora/queue: unrecognized LUNORA_QUEUE_CAPTURE value "${flag}" — expected "1"/"true" or "0"/"false"; falling back to environment detection.`,
+        );
     }
 
     return ENVIRONMENT_VARS.some((key) => {

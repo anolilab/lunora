@@ -1,3 +1,15 @@
+## @lunora/queue [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.36...@lunora/queue@1.0.0-alpha.37) (2026-08-28)
+
+### Bug Fixes
+
+* close nine copied-helper divergences across eight packages ([#522](https://github.com/anolilab/lunora/issues/522)) ([a2455bb](https://github.com/anolilab/lunora/commit/a2455bb0f58b9873633504c3f1e9bfeb44a5870e))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/platform:** upgraded to 1.0.0-alpha.20
+
 ## @lunora/queue [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.35...@lunora/queue@1.0.0-alpha.36) (2026-08-27)
 
 
