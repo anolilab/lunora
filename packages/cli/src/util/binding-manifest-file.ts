@@ -23,8 +23,17 @@ import type { Logger } from "./logger";
 
 /** Where a running dev server can be reached, added by `lunora dev`. */
 interface DevManifestSection {
-    /** The origin the worker serves on — what a sibling worker or proxy points at. */
-    origin: string;
+    /**
+     * The origin the worker serves on — what a sibling worker or proxy points at.
+     *
+     * Absent on the Vite flavors, where the CLI does not own the port: Vite
+     * resolves its own, possibly after this file is written, so the value the
+     * plan carries there is a pre-listen guess. Publishing the guess would point
+     * a supervisor's proxy at a port nothing is listening on, which is worse than
+     * making it read {@link DevManifestSection.statusFile} — the record Vite
+     * writes with its real URL once it is up.
+     */
+    origin?: string;
 
     /**
      * The file carrying live status, including the `readyAt` stamp.

@@ -806,6 +806,44 @@ const claimStartRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url
 };
 
 /**
+ * Write the binding manifest `--emit-bindings` asked for, when it asked.
+ *
+ * A no-op without the flag. Extracted from `runDevCommand` because that function
+ * is already at the repo's cognitive-complexity ceiling, and readiness/manifest
+ * orchestration is the kind of thing that keeps getting added to it.
+ */
+const emitDevBindingManifest = (options: {
+    cwd: string;
+    destination: string | undefined;
+    logger: Logger;
+    plan: DevCommandPlan;
+    studioUrl: string | undefined;
+}): { error?: string } => {
+    const { cwd, destination, logger, plan, studioUrl } = options;
+
+    if (destination === undefined) {
+        return {};
+    }
+
+    return writeBindingManifestFile({
+        destination,
+        dev: {
+            // Only where the CLI owns the port. On the Vite flavors
+            // `workerOrigin` is a pre-listen guess — Vite resolves its own,
+            // possibly after this file is written — so publishing it would aim a
+            // supervisor's proxy at a port nothing is listening on. `statusFile`
+            // carries the real URL there, from the record `@lunora/vite` writes
+            // once it is up.
+            ...(plan.flavor === "wrangler" ? { origin: plan.workerOrigin } : {}),
+            statusFile: DEV_STATE_FILE,
+            ...(studioUrl === undefined ? {} : { studioUrl }),
+        },
+        logger,
+        projectRoot: cwd,
+    });
+};
+
+/**
  * Resolve the worker port (a free-port probe for the wrangler flavor, so the
  * origin stays deterministic without pinning a busy 8787) and build the dev
  * plan. Extracted from {@link runDevCommand} so its startup orchestration stays
@@ -1097,27 +1135,16 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // in here — the manifest is written once and readiness arrives later, so
         // it names `.lunora/dev.json` rather than shipping a `ready: false` that
         // never changes.
-        if (options.emitBindings !== undefined) {
-            const emitted = writeBindingManifestFile({
-                dev: {
-                    origin: plan.workerOrigin,
-                    statusFile: DEV_STATE_FILE,
-                    ...(handles.studio?.url === undefined ? {} : { studioUrl: handles.studio.url }),
-                },
-                destination: options.emitBindings,
-                logger,
-                projectRoot: cwd,
-            });
+        const emitted = emitDevBindingManifest({ cwd, destination: options.emitBindings, logger, plan, studioUrl: handles.studio?.url });
 
-            // Fatal, unlike most of dev's best-effort startup: the flag exists
-            // because something else is waiting on this file, and starting the
-            // server without it leaves that supervisor pointed at nothing while
-            // Lunora looks healthy.
-            if (emitted.error !== undefined) {
-                logger.error(emitted.error);
+        // Fatal, unlike most of dev's best-effort startup: the flag exists
+        // because something else is waiting on this file, and starting the server
+        // without it leaves that supervisor pointed at nothing while Lunora looks
+        // healthy.
+        if (emitted.error !== undefined) {
+            logger.error(emitted.error);
 
-                return { code: 1, plan };
-            }
+            return { code: 1, plan };
         }
 
         // After the studio start, so the two overlap, but before the worker below:

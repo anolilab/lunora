@@ -954,6 +954,37 @@ describe("lunora dev", () => {
             expect(manifest.dev?.statusFile).toContain("dev.json");
         });
 
+        it("omits the origin on the vite flavor rather than publishing a guess", async () => {
+            expect.assertions(2);
+
+            // Vite resolves its own port, possibly after this file is written, so
+            // the plan's `workerOrigin` is a pre-listen default there. Emitting it
+            // would aim a supervisor's proxy at a port nothing is listening on —
+            // `statusFile` carries the real URL once Vite records it.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
+
+            const destination = join(workdir, "dev-manifest.json");
+
+            await runDevCommand({
+                cwd: workdir,
+                emitBindings: destination,
+                flavor: "vite",
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            const manifest = JSON.parse(readFileSync(destination, "utf8")) as { dev?: { origin?: string; statusFile: string } };
+
+            expect(manifest.dev?.origin).toBeUndefined();
+            expect(manifest.dev?.statusFile).toContain("dev.json");
+        });
+
         it("fails the run when there is no wrangler config to derive from", async () => {
             expect.assertions(2);
 

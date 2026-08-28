@@ -69,6 +69,12 @@ port and wire its proxy while Lunora is still booting. Readiness is deliberately
 **not** in it — that arrives later, so the manifest names the file carrying it
 rather than shipping a `ready: false` that never changes.
 
+`dev.origin` is present only on the wrangler flavor, where the CLI owns the port.
+On the Vite flavors Vite resolves its own — possibly after this file is written —
+so the manifest omits `origin` rather than publish a guess that would aim your
+proxy at a port nothing is listening on. Read `statusFile` for the real URL
+there; `@lunora/vite` writes it once the server is up.
+
 One derivation feeds both commands, so the requirements a deployer provisions
 cannot drift from the ones your dev graph proxies. A project with no readable
 `wrangler.jsonc` fails the run rather than emitting an empty manifest: "this
