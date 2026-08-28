@@ -89,6 +89,11 @@ const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                         logFile: process.env[DEV_LOG_FILE_ENV],
                         mode: "vite",
                         pid: process.pid,
+                        // Truthful at claim time here, unlike the CLI's wrangler
+                        // flavor, which claims before spawning and has to probe:
+                        // this only runs once Vite has resolved its URLs, i.e.
+                        // the server is already listening.
+                        readyAt: new Date().toISOString(),
                         startedAt: new Date().toISOString(),
                         url,
                     },

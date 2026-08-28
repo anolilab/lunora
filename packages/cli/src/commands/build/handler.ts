@@ -1,11 +1,8 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
-
-import type { ManifestConfigShape } from "@lunora/config/cloudflare";
-import { buildBindingManifest, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { resolve } from "node:path";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
+import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -77,41 +74,9 @@ const kib = (bytes: number): string => `${(bytes / 1024).toFixed(1)} KiB`;
  * is only the resolved answer once it has finished. Reading it earlier would
  * describe the requirements the project happened to have written down, not the
  * ones the bundle actually has.
- *
- * A project with no `wrangler.jsonc` at all is a hard error rather than an empty
- * manifest: an empty requirements document reads as "this Worker needs nothing",
- * which an IaC program would act on by provisioning nothing.
  */
-const writeBindingManifest = (projectRoot: string, target: string, logger: Logger): { error?: string } => {
-    const wranglerPath = findWranglerFile(projectRoot);
-    const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<ManifestConfigShape>(wranglerPath).parsed;
-
-    if (parsed === undefined) {
-        return {
-            error: `--emit-bindings found no readable wrangler config in ${projectRoot}. The manifest is derived from it, and an empty one would tell a deployer this Worker needs nothing.`,
-        };
-    }
-
-    const manifest = buildBindingManifest(parsed);
-    const destination = isAbsolute(target) ? target : resolve(projectRoot, target);
-
-    mkdirSync(dirname(destination), { recursive: true });
-    writeFileSync(destination, `${JSON.stringify(manifest, undefined, 2)}\n`, "utf8");
-
-    logger.success(`binding manifest written to ${destination} (${manifest.bindings.length.toString()} bindings, ${manifest.crons.length.toString()} crons)`);
-
-    // Not an error: the bundle is fine and the manifest is still usable. But a
-    // consumer acting on it would silently under-provision, so say which section
-    // was not carried rather than leaving them to notice at runtime.
-    if (manifest.unknown.length > 0) {
-        logger.warn(
-            `binding manifest does not model these wrangler sections: ${manifest.unknown.join(", ")}. ` +
-                `Anything they bind must be provisioned by hand — please report them so the manifest can cover them.`,
-        );
-    }
-
-    return {};
-};
+const writeBindingManifest = (projectRoot: string, target: string, logger: Logger): { error?: string } =>
+    writeBindingManifestFile({ destination: target, logger, projectRoot });
 
 /**
  * Build the Worker without deploying: this is `deploy` in its dry-run +

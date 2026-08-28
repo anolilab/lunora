@@ -235,6 +235,12 @@ interface ContainerLogStreamOptions {
 const DEFAULT_DEPLOY_TARGET = "cloudflare";
 ```
 
+### `DEV_BINDINGS_FILE` (const)
+
+```ts
+const DEV_BINDINGS_FILE: string;
+```
+
 ### `DEV_DAEMON_ENV` (const)
 
 ```ts
@@ -376,6 +382,7 @@ interface DevServerState {
     logFile?: string;
     mode: DevServerMode;
     pid: number;
+    readyAt?: string;
     startedAt?: string;
     studioUrl?: string;
     url: string;
@@ -1263,6 +1270,12 @@ const interpretRemote: (value: unknown) => RemotePreference;
 const isCodegenDisabled: (value: string | undefined) => boolean;
 ```
 
+### `isDevServerReady` (const)
+
+```ts
+const isDevServerReady: (state: Pick<DevServerState, "readyAt"> | undefined) => boolean;
+```
+
 ### `isInteractive` (const)
 
 ```ts
@@ -1506,7 +1519,9 @@ const streamContainerLogs: (options: ContainerLogStreamOptions) => ContainerLogS
 ### `updateDevServerState` (const)
 
 ```ts
-const updateDevServerState: (projectRoot: string, patch: Partial<DevServerState>) => DevServerState | undefined;
+const updateDevServerState: (projectRoot: string, patch: Partial<DevServerState>, options?: {
+    expectedPid?: number;
+}) => DevServerState | undefined;
 ```
 
 ### `upsertDevVariableLine` (const)

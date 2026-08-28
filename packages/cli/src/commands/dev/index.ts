@@ -14,9 +14,11 @@ const devCommand: Command = {
         ["lunora dev", "Run the worker + studio + codegen watch"],
         ["lunora dev --background", "Run detached: blocks until ready, prints URL + PID, then returns"],
         ["lunora dev stop", "Stop the background/tracked dev server (idempotent)"],
-        ["lunora dev status", "Report the running dev server (URL, PID, uptime)"],
+        ["lunora dev status", "Report the running dev server (URL, PID, uptime, ready/starting)"],
+        ["lunora dev status --json", "Same as JSON — poll `.ready` to gate a dependent step in a task graph"],
         ["lunora dev logs", "Print the captured dev-server log (background runs)"],
         ["lunora dev --json", "Machine-readable JSON log lines (also LUNORA_LOG_JSON=1)"],
+        ["lunora dev --emit-bindings dev-manifest.json", "Write what this worker needs + where it serves, for a task runner"],
         ["lunora dev --no-studio", "Skip the embedded studio server"],
         ["lunora dev --worker-port 8080", "Use a custom wrangler dev port"],
         ["lunora dev --remote", "Proxy D1/KV/R2 to the deployed worker (also LUNORA_REMOTE=1)"],
@@ -31,6 +33,11 @@ const devCommand: Command = {
     // must reach a `--background` daemon has to be forwarded there explicitly.
     options: [
         { description: `Which API spec(s) codegen emits: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        {
+            description: "Write the binding manifest (plus the dev origin) to <file>, for a supervisor that owns the rest of the graph",
+            name: "emit-bindings",
+            type: String,
+        },
         { description: "Studio server port (default 6173)", name: "port", type: Number },
         TARGET_OPTION,
         { description: "wrangler dev port (default 8787)", name: "worker-port", type: Number },
@@ -60,6 +67,7 @@ export type DevOptions = CreateOptions<{
     // The `--no-codegen` / `--no-studio` / `--no-worker` flags are declared as `no-*` options but
     // cerebro exposes them under the negated positive key at runtime.
     codegen: boolean | undefined;
+    "emit-bindings": string | undefined;
     json: boolean | undefined;
     lines: number | undefined;
     port: number | undefined;

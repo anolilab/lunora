@@ -183,6 +183,7 @@ interface DevCommandOptions {
     apiSpec?: ApiSpec;
     codegen?: boolean;
     cwd?: string;
+    emitBindings?: string;
     ensureEnv?: typeof ensureDevVariables;
     ensureExample?: typeof ensureDevVarsExample;
     fillSecrets?: typeof fillDevSecrets;
@@ -193,12 +194,14 @@ interface DevCommandOptions {
     logger: Logger;
     materializeRemote?: typeof materializeRemoteWranglerConfig;
     port?: number;
+    probeReady?: ReadinessProbe;
     remote?: boolean;
     startCodegen?: typeof startCodegenWatch;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;
     target?: string;
+    waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;
 }
