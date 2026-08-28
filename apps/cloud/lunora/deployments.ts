@@ -4,7 +4,7 @@ import { highestPlan } from "../src/billing/plans";
 import { previewExpiry } from "../src/deploy/preview";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { internalMutation, mutation, query, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -517,3 +517,55 @@ export const updateStatus = mutation
             updatedAt: now,
         });
     });
+
+/**
+ * Resolve everything `lunora cloud eject` needs to package a deployment: the
+ * tenant URL, its *sealed* admin token, and the identity the scaffolded config
+ * is named after.
+ *
+ * An `internalQuery` rather than a widening of {@link adminTarget}: that one is
+ * session-authorized for the hosted studio's browser proxy, while eject arrives
+ * over a deploy key from a terminal. The edge route authorizes the key, resolves
+ * the org from it, and passes BOTH ids here — so this can be scoped without a
+ * session while still refusing a deployment belonging to a different org.
+ *
+ * The admin token is returned sealed. The edge decrypts it with
+ * `SECRET_ENCRYPTION_KEY` exactly as the studio proxy does, so the plaintext
+ * bearer never crosses the RPC boundary. SYSTEM only.
+ */
+export const ejectTarget = internalQuery
+    .input({ deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
+    .query(
+        async ({
+            ctx: context,
+            args: { deploymentId, organizationId },
+        }): Promise<null | {
+            adminToken?: string;
+            adminTokenCiphertext?: string;
+            adminTokenIv?: string;
+            projectSlug: string;
+            scriptName: string;
+            url: string;
+        }> => {
+            const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
+            const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
+
+            // The org check is the tenant boundary — the caller's org comes from the
+            // deploy key the edge already verified, never from the request body.
+            if (deployment?.organizationId !== organizationId || !hasToken || !deployment.url) {
+                return null;
+            }
+
+            const project = (await context.db.get(deployment.projectId)) as { slug?: string } | null;
+
+            return {
+                ...(deployment.adminToken ? { adminToken: deployment.adminToken } : {}),
+                ...(deployment.adminTokenCiphertext && deployment.adminTokenIv
+                    ? { adminTokenCiphertext: deployment.adminTokenCiphertext, adminTokenIv: deployment.adminTokenIv }
+                    : {}),
+                projectSlug: project?.slug ?? deployment.scriptName,
+                scriptName: deployment.scriptName,
+                url: deployment.url,
+            };
+        },
+    );

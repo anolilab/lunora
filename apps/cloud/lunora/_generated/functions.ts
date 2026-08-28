@@ -115,6 +115,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deployments:adminTarget": lunora_deployments_8.adminTarget as unknown as RegisteredLunoraFunction,
     "deployments:cleanupExpiredPreviews": lunora_deployments_8.cleanupExpiredPreviews as unknown as RegisteredLunoraFunction,
     "deployments:create": lunora_deployments_8.create as unknown as RegisteredLunoraFunction,
+    "deployments:ejectTarget": lunora_deployments_8.ejectTarget as unknown as RegisteredLunoraFunction,
     "deployments:listByProject": lunora_deployments_8.listByProject as unknown as RegisteredLunoraFunction,
     "deployments:planForScript": lunora_deployments_8.planForScript as unknown as RegisteredLunoraFunction,
     "deployments:pruneSuperseded": lunora_deployments_8.pruneSuperseded as unknown as RegisteredLunoraFunction,
@@ -362,6 +363,13 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_deployments_8.adminTarget.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["deploymentId"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_deployments_8.ejectTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
@@ -750,6 +758,7 @@ export interface Caller {
         adminTarget: (args: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
+        ejectTarget: (args: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; projectSlug: string; scriptName: string; url: string; } | null>;
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"deployments">; adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; url?: string; version?: number }[]>;
         planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; }>;
         pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
@@ -940,6 +949,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         adminTarget: (args) => callRegistered(context, "deployments:adminTarget", args),
         cleanupExpiredPreviews: (args) => callRegistered(context, "deployments:cleanupExpiredPreviews", args),
         create: (args) => callRegistered(context, "deployments:create", args),
+        ejectTarget: (args) => callRegistered(context, "deployments:ejectTarget", args),
         listByProject: (args) => callRegistered(context, "deployments:listByProject", args),
         planForScript: (args) => callRegistered(context, "deployments:planForScript", args),
         pruneSuperseded: (args) => callRegistered(context, "deployments:pruneSuperseded", args),

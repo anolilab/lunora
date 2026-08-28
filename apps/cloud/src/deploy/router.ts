@@ -6,7 +6,7 @@ import type { ExecutionContextLike } from "@lunora/runtime";
 
 import { api, internal } from "../../lunora/_generated/api.js";
 import type { AlertDelivery } from "../../lunora/telemetry";
-import { proxyAdminRequest } from "../admin/proxy";
+import { proxyAdminRequest, stripTrailingSlashes } from "../admin/proxy";
 import type { UsageMeter as UsageKind } from "../billing/spend";
 import { createHttpCloudflareApi } from "../cloudflare/api";
 import { createDohResolver, verifyDomain } from "../domains/verify";
@@ -706,6 +706,88 @@ const bearerToken = (request: Request): string | undefined => {
     return header.startsWith("Bearer ") ? header.slice(7) : header;
 };
 
+/** The `POST /v1/eject` body — which deployment to package. */
+interface EjectBody {
+    deploymentId?: string;
+}
+
+/**
+ * `POST /v1/eject` — the no-lock-in exit hatch, over a deploy key (GAPS.md D2).
+ *
+ * Returns the deployment's data snapshot together with the identity the BYO
+ * `wrangler.jsonc` is named after, so `lunora cloud eject` can write a complete,
+ * runnable package from one round trip. The CLI does the scaffolding: the files
+ * land on the user's disk, so the templates belong on the user's side.
+ *
+ * Deploy-key authorized, unlike the studio's session-gated `/v1/admin` proxy —
+ * ejecting is something you do from a terminal, and requiring a browser session
+ * for the exit hatch would undercut the promise it exists to keep. The org comes
+ * from the verified key, never from the body, so a caller cannot name another
+ * org's deployment.
+ *
+ * The snapshot is buffered into the JSON response. That bounds this to exports
+ * that fit in a Worker's memory; a streaming form (or a signed R2 hand-off) is
+ * the upgrade if real snapshots outgrow it.
+ */
+const handleEjectRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const key = bearerToken(request);
+
+    if (key === undefined) {
+        return jsonError(401, "missing Authorization: Bearer <deploy key>");
+    }
+
+    const body = (await request.json().catch(() => null)) as EjectBody | null;
+
+    if (!body?.deploymentId) {
+        return jsonError(400, "deploymentId is required");
+    }
+
+    const org = await context.runQuery<{ organizationId: string } | null>(internal.telemetry.orgForDeployKey, { deployKey: key });
+
+    if (!org) {
+        return jsonError(401, "invalid or revoked deploy key");
+    }
+
+    const target = await context.runQuery<(StoredAdminToken & { projectSlug: string; scriptName: string; url: string }) | null>(
+        internal.deployments.ejectTarget,
+        { deploymentId: body.deploymentId, organizationId: org.organizationId },
+    );
+
+    if (!target) {
+        return jsonError(404, "deployment not found");
+    }
+
+    // Decrypt the sealed admin token at the edge, exactly as the studio proxy does.
+    const adminToken = await resolveAdminToken(target, environment.SECRET_ENCRYPTION_KEY);
+
+    if (!adminToken) {
+        return jsonError(409, "deployment has no usable admin token");
+    }
+
+    const exported = await fetch(`${stripTrailingSlashes(target.url)}/_lunora/admin/export`, {
+        headers: { authorization: `Bearer ${adminToken}` },
+    });
+
+    if (!exported.ok) {
+        return jsonError(502, `tenant export failed (${String(exported.status)})`);
+    }
+
+    const snapshot = await exported.text();
+
+    await context.runMutation(internal.audit_log.record, { action: "deployment.eject", organizationId: org.organizationId });
+
+    return Response.json(
+        { projectSlug: target.projectSlug, scriptName: target.scriptName, snapshot, url: target.url },
+        { headers: { "content-type": "application/json" }, status: 200 },
+    );
+};
+
 /**
  * Decompressed-size ceiling for an OTLP body. Bounds a `Content-Encoding: gzip`
  * "bomb" (a tiny body that inflates to GBs) — reading the stream in chunks and
@@ -1326,6 +1408,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleUsageRoute, method: "POST", path: "/v1/usage", spec: { auth: "deployKey" } },
         // session — dashboard callers; the delegated mutation `assertMember`s.
         { handler: handleAdminRoute, method: "POST", path: "/v1/admin", spec: { auth: "session" } },
+        { handler: handleEjectRoute, method: "POST", path: "/v1/eject", spec: { auth: "deployKey" } },
         { handler: handleDomainAddRoute, method: "POST", path: "/v1/domains", spec: { auth: "session" } },
         { handler: handleDomainVerifyRoute, method: "POST", path: "/v1/domains/verify", spec: { auth: "session" } },
         { handler: handleInviteRoute, method: "POST", path: "/v1/invitations/send", spec: { auth: "session" } },

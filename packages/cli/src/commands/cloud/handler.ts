@@ -1,11 +1,13 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import type { DeployEvent, WranglerConfig } from "../../util/cloud-client";
-import { deployToCloud, parseWranglerManifest, rollbackDeployment } from "../../util/cloud-client";
+import { deployToCloud, fetchEjectPackage, parseWranglerManifest, rollbackDeployment } from "../../util/cloud-client";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { runEject } from "../../util/eject";
 import type { Logger } from "../../util/logger";
 import type { CloudOptions } from "./index";
 
@@ -16,6 +18,8 @@ const DEPLOY_KINDS = new Set<DeployKind>(["dev", "preview", "production"]);
 interface CloudCommandDeps {
     /** Deploy client (injected for tests). */
     deployFn: typeof deployToCloud;
+    /** Eject client (injected for tests). */
+    ejectFn: typeof fetchEjectPackage;
     /** Env source for the URL + secret key (injected for tests). */
     env: Record<string, string | undefined>;
     /** Read a bundle file and return it base64-encoded (injected for tests). */
@@ -24,6 +28,8 @@ interface CloudCommandDeps {
     readWrangler: (cwd: string) => undefined | WranglerConfig;
     /** Rollback client (injected for tests). */
     rollbackFn: typeof rollbackDeployment;
+    /** Write one eject output file under `<cwd>/<dir>` (injected for tests). */
+    writeEjectFile: (directory: string, name: string, content: string) => Promise<void>;
 }
 
 interface CloudCommandOptions {
@@ -33,6 +39,8 @@ interface CloudCommandOptions {
     bundlePath?: string;
     cwd: string;
     deps?: Partial<CloudCommandDeps>;
+    /** Output directory for `eject`, relative to `cwd` (defaults to `eject`). */
+    ejectOut?: string;
     kind?: string;
     logger: Logger;
     org?: string;
@@ -58,7 +66,14 @@ const defaultDeps = (): CloudCommandDeps => {
 
             return wranglerPath ? readWranglerJsonc<WranglerConfig>(wranglerPath).parsed : undefined;
         },
+        ejectFn: fetchEjectPackage,
         rollbackFn: rollbackDeployment,
+        writeEjectFile: (directory, name, content) => {
+            mkdirSync(directory, { recursive: true });
+            writeFileSync(join(directory, name), content);
+
+            return Promise.resolve();
+        },
     };
 };
 
@@ -194,14 +209,60 @@ const runRollback = async (options: CloudCommandOptions, deps: CloudCommandDeps,
     return { code: 0, outcome: result.scriptName };
 };
 
-/** `lunora cloud <deploy|rollback>` — testable body over injected client/env/fs. */
+/**
+ * `lunora cloud eject <deployment-id>` — the no-lock-in exit hatch (GAPS.md D2).
+ *
+ * Writes `export.ndjson`, a BYO `wrangler.jsonc` and a restore README into
+ * `./eject` (or `--out`). Read-only against the platform: the managed deployment
+ * keeps serving afterwards, which is the point — ejecting is something you should
+ * be able to do at any time, including just to check that you can.
+ */
+const runEjectCommand = async (
+    options: CloudCommandOptions,
+    deps: CloudCommandDeps,
+    auth: { apiUrl: string; deployKey: string },
+): Promise<CloudCommandResult> => {
+    const { logger } = options;
+    const deploymentId = options.argument[1];
+
+    if (!deploymentId) {
+        logger.error("cloud eject requires a deployment id. Usage: lunora cloud eject <deployment-id> [--out <dir>]");
+
+        return { code: 1 };
+    }
+
+    const outputDirectory = join(options.cwd, options.ejectOut ?? "eject");
+
+    let result;
+
+    try {
+        result = await runEject({
+            fetchPackage: () => deps.ejectFn({ apiUrl: auth.apiUrl, deployKey: auth.deployKey, deploymentId }),
+            writeFile: (name, content) => deps.writeEjectFile(outputDirectory, name, content),
+        });
+    } catch (error) {
+        logger.error(`cloud eject: ${error instanceof Error ? error.message : String(error)}`);
+
+        return { code: 1 };
+    }
+
+    for (const file of result.files) {
+        logger.info(`  ${join(outputDirectory, file)}`);
+    }
+
+    logger.success(`cloud eject: wrote ${String(result.files.length)} files — your deployment keeps serving.`);
+
+    return { code: 0, outcome: outputDirectory };
+};
+
+/** `lunora cloud <deploy|eject|rollback>` — testable body over injected client/env/fs. */
 const runCloudCommand = async (options: CloudCommandOptions): Promise<CloudCommandResult> => {
     const { logger } = options;
     const deps = { ...defaultDeps(), ...options.deps };
     const subcommand = options.argument[0];
 
-    if (subcommand !== "deploy" && subcommand !== "rollback") {
-        logger.error(`cloud: unknown subcommand "${subcommand ?? ""}". Usage: lunora cloud <deploy|rollback>`);
+    if (subcommand !== "deploy" && subcommand !== "eject" && subcommand !== "rollback") {
+        logger.error(`cloud: unknown subcommand "${subcommand ?? ""}". Usage: lunora cloud <deploy|eject|rollback>`);
 
         return { code: 1 };
     }
@@ -212,7 +273,11 @@ const runCloudCommand = async (options: CloudCommandOptions): Promise<CloudComma
         return { code: 1 };
     }
 
-    return subcommand === "deploy" ? runDeploy(options, deps, auth) : runRollback(options, deps, auth);
+    if (subcommand === "deploy") {
+        return runDeploy(options, deps, auth);
+    }
+
+    return subcommand === "eject" ? runEjectCommand(options, deps, auth) : runRollback(options, deps, auth);
 };
 
 /** `lunora cloud` handler (lazy-loaded via the command's `loader`). */
@@ -222,6 +287,7 @@ const execute: CommandHandler<CloudOptions> = defineHandler<CloudOptions>(({ arg
         branch: options.branch,
         bundlePath: options.bundle,
         cwd,
+        ejectOut: options.out,
         kind: options.kind,
         logger,
         org: options.org,

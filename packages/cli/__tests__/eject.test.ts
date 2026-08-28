@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildByoWrangler, runEject } from "../src/cli/eject";
+import { buildByoWrangler, runEject } from "../src/util/eject";
 
-/** `lunora eject` — the no-lock-in exit hatch (GAPS.md D2). */
+/** `lunora cloud eject` — the no-lock-in exit hatch (GAPS.md D2). */
 
 const target = {
-    adminToken: "tok",
-    appDomain: "lunora.app",
     projectSlug: "acme-app",
     scriptName: "acme-app",
     url: "https://acme-app.lunora.app",
@@ -14,6 +12,8 @@ const target = {
 
 describe(buildByoWrangler, () => {
     it("scaffolds a parseable BYO config with the DO bindings and D1 placeholder", () => {
+        expect.assertions(4);
+
         const config = JSON.parse(buildByoWrangler(target)) as Record<string, unknown>;
 
         expect(config["name"]).toBe("acme-app");
@@ -29,16 +29,13 @@ describe(buildByoWrangler, () => {
 });
 
 describe(runEject, () => {
-    it("pulls the snapshot through the admin API and writes all three files", async () => {
+    it("writes all three files from the control plane's package", async () => {
+        expect.assertions(4);
+
         const written = new Map<string, string>();
-        const calls: string[] = [];
 
-        const result = await runEject(target, {
-            fetchAdmin: (url, path, adminToken) => {
-                calls.push(`${url}${path}|${adminToken}`);
-
-                return Promise.resolve('{"table":"users","row":{}}\n');
-            },
+        const result = await runEject({
+            fetchPackage: () => Promise.resolve({ ...target, snapshot: '{"table":"users","row":{}}\n' }),
             writeFile: (name, content) => {
                 written.set(name, content);
 
@@ -46,18 +43,24 @@ describe(runEject, () => {
             },
         });
 
-        expect(calls).toStrictEqual(["https://acme-app.lunora.app/_lunora/admin/export|tok"]);
         expect(result.files).toStrictEqual(["export.ndjson", "wrangler.jsonc", "README.md"]);
         expect(written.get("export.ndjson")).toContain('"table":"users"');
         expect(written.get("README.md")).toContain("wrangler d1 create acme-app");
+        expect(written.get("README.md")).toContain("https://acme-app.lunora.app");
     });
 
-    it("propagates a snapshot failure without writing anything", async () => {
+    /**
+     * A half-written eject directory is worse than none: it looks like a backup
+     * and is not one. The fetch therefore has to complete before the first write.
+     */
+    it("writes nothing when the export fails", async () => {
+        expect.assertions(2);
+
         const written = new Map<string, string>();
 
         await expect(
-            runEject(target, {
-                fetchAdmin: () => Promise.reject(new Error("export failed")),
+            runEject({
+                fetchPackage: () => Promise.reject(new Error("export failed")),
                 writeFile: (name, content) => {
                     written.set(name, content);
 
