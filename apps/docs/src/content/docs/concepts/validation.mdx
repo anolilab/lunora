@@ -107,6 +107,12 @@ export const getProfile = query
     `action`.
 </Callout>
 
+<Callout type="warn">
+    `v.object(...)` **strips** keys it does not declare rather than rejecting them, and `.output()` is enforced at runtime. So a column that exists in your
+    schema but is missing from a hand-written output validator disappears from every response that function serves, with no error anywhere. Derive output
+    validators from the table shape where you can, or test them against it.
+</Callout>
+
 ## Return-type inference to the client
 
 Codegen emits a typed `api` object from your function exports. The client's
@@ -129,7 +135,7 @@ second schema to keep in sync: the validator is the contract on both ends.
 | `v.id(table)`          | `Id<table>`                   | Branded foreign-key id                   |
 | `v.literal(value)`     | exact `value`                 | String / number / boolean / null literal |
 | `v.array(inner)`       | `Array<Infer<inner>>`         | Homogeneous array                        |
-| `v.object(shape)`      | `{ ...shape }`                | Extra keys throw                         |
+| `v.object(shape)`      | `{ ...shape }`                | Undeclared keys are **stripped**         |
 | `v.union(a, b, ...)`   | any member                    | Discriminated by `kind` when present     |
 | `v.record(key, value)` | `Record<key, value>`          | Map-style object                         |
 | `v.optional(inner)`    | `Infer<inner>` \| `undefined` | Makes a field optional                   |
@@ -138,6 +144,32 @@ second schema to keep in sync: the validator is the contract on both ends.
 Compose them freely for both columns and function contracts:
 `v.array(v.object({ ... }))`, `v.union(v.literal("a"),
 v.literal("b"))`, `v.optional(v.id("users"))`.
+
+## Coming from zod
+
+`v` reads like zod and most of it behaves like zod, so the places it does not
+are worth knowing up front — three of the four below fail at runtime rather
+than at compile time.
+
+- **`v` has refinements.** `.check(predicate, { message, schema })` is the
+  general form, and `v.string()` / `v.number()` carry shortcuts over it
+  (`.min()`, `.max()`, `.length()`, `.email()`, `.url()`, `.pattern()`,
+  `.int()`, `.positive()`). They are enforced
+  at parse time and emitted into the JSON Schema.
+- **`.safeParse()` returns a different shape.** `{ ok, value }` on success and
+  `{ ok: false, error }` on failure — not zod's `{ success, data }`. `.parse()`
+  matches zod. Code that reads `.success` compiles and is always `undefined`.
+- **`.default(x)` is a column default, not an argument coercion.** It declares
+  what the database writes when a field is absent on insert; it does **not**
+  fill a missing value in during `parse`. Reading a defaulted field out of
+  `args` gives `undefined`.
+- **`v.object` strips undeclared keys.** There is no `.strict()`, and a
+  `.check()` cannot restore rejection because the predicate receives the
+  already-stripped value.
+
+Genuinely absent: there is no `v.enum` (spell it as
+`v.union(v.literal("a"), v.literal("b"))`), no `.extend()`, and no loose-object
+mode.
 
 ## ValidationError
 
