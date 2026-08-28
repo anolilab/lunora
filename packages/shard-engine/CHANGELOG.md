@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.44...@lunora/shard-engine@1.0.0-alpha.45) (2026-08-28)
+
+### Bug Fixes
+
+* **codegen:** close eight silent-drop gaps in procedure discovery ([#513](https://github.com/anolilab/lunora/issues/513)) ([e393e49](https://github.com/anolilab/lunora/commit/e393e494c0145ad78e0f2b1e27798ed96e7039a3))
+
 ## @lunora/shard-engine [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.43...@lunora/shard-engine@1.0.0-alpha.44) (2026-08-27)
 
 ### Features
