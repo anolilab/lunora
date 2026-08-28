@@ -57,6 +57,8 @@ export const projects = sqliteTable("projects", {
     githubRepo: text("githubRepo"),
     name: text("name").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    previewPasswordHash: text("previewPasswordHash"),
+    previewPasswordSalt: text("previewPasswordSalt"),
     slug: text("slug").notNull(),
 }, (t) => ({
     by_org_slug: uniqueIndex("by_org_slug").on(t.organizationId, t.slug),

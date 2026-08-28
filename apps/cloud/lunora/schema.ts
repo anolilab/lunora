@@ -157,6 +157,14 @@ export default defineSchema({
         githubRepo: v.optional(v.string()),
         name: v.string(),
         organizationId: v.id("organizations"),
+        // Deployment protection for this project's PREVIEW deployments. A preview
+        // URL is publicly addressable the moment it exists, which is the point —
+        // you paste it to a colleague — but it also serves unreleased work to
+        // anyone who is forwarded the link. Presence of a hash turns the gate on.
+        // Salted SHA-256; the plaintext is never stored and never leaves the
+        // browser that set it.
+        previewPasswordHash: v.optional(v.string()),
+        previewPasswordSalt: v.optional(v.string()),
         slug: v.string(),
     })
         .global()

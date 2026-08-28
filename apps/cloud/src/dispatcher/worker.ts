@@ -1,7 +1,8 @@
 import { limitsForPlan } from "../billing/plans";
 import type { AnalyticsEngineDatasetLike } from "../metering/analytics";
 import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../metering/analytics";
-import type { CustomDomainRoute } from "./route";
+import { previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "./preview-auth";
+import type { CustomDomainRoute, ScriptFacts } from "./route";
 import { createCustomDomainResolver, createPlanResolver, createRouteResolver, resolveTenant } from "./route";
 
 /**
@@ -37,6 +38,25 @@ interface DispatcherEnv {
 }
 
 const NOT_FOUND = (message: string): Response => new Response(message, { status: 404 });
+
+/**
+ * Trim trailing slashes before joining a path onto a base URL.
+ *
+ * A loop rather than a `/\/+$/` replace: a greedy trailing quantifier over a
+ * configured value is the classic backtracking shape, and the dispatcher is the
+ * request path. `admin/proxy.ts` has the same helper for the same reason; the
+ * dispatcher keeps its own copy because it is a separate bundle that deliberately
+ * imports nothing from the control plane.
+ */
+const stripTrailingSlashes = (value: string): string => {
+    let result = value;
+
+    while (result.endsWith("/")) {
+        result = result.slice(0, -1);
+    }
+
+    return result;
+};
 
 /**
  * Response size in bytes for the metering data point, from `content-length` only.
@@ -111,9 +131,112 @@ const meterRequest = (
     }
 };
 
+/** Path the protection login form posts to. Owned by the dispatcher, never forwarded to the tenant. */
+const PREVIEW_AUTH_PATH = "/__lunora/preview-auth";
+
+/**
+ * The password prompt. Deliberately a plain, dependency-free document: it is
+ * served in front of someone else's application, so it must not assume a
+ * framework, a stylesheet or a build step, and it must render identically
+ * whatever the tenant happens to be.
+ */
+const PREVIEW_LOGIN_STYLE =
+    "body{font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0d1117;color:#e3e8ef}" +
+    "form{display:grid;gap:12px;width:min(320px,90vw)}h1{font-size:19px;margin:0}p{margin:0;color:#97a2b0;font-size:14px}" +
+    "input,button{font:inherit;padding:9px 12px;border-radius:6px;border:1px solid #28313c}" +
+    "input{background:#161c24;color:inherit}button{background:#e3e8ef;color:#0d1117;border:0;cursor:pointer;font-weight:600}" +
+    ".e{color:#de7a70;font-size:14px}";
+
+const previewLoginPage = (failed: boolean): Response =>
+    new Response(
+        `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Protected preview</title>
+<style>${PREVIEW_LOGIN_STYLE}</style></head><body>
+<form method="POST" action="${PREVIEW_AUTH_PATH}">
+<h1>This preview is protected</h1>
+<p>Enter the password shared by the project's team.</p>
+<input type="password" name="password" aria-label="Preview password" autocomplete="current-password" autofocus required>
+${failed ? `<p class="e">That password did not match.</p>` : ""}
+<button type="submit">View preview</button>
+</form></body></html>`,
+        // 401 rather than 200: this is an authentication challenge, and a crawler
+        // or an uptime check must not record a protected preview as healthy
+        // content. `no-store` because a cached prompt would survive the login.
+        { headers: { "cache-control": "no-store", "content-type": "text/html; charset=utf-8" }, status: 401 },
+    );
+
+/**
+ * Enforce deployment protection for one request, or return `undefined` to let it
+ * through.
+ *
+ * Handles the login POST itself so the tenant never sees the password: a form
+ * submission to {@link PREVIEW_AUTH_PATH} is verified against the control plane,
+ * and on success the dispatcher mints its own signed cookie and redirects back.
+ */
+/** Ask the control plane whether a submitted password is the project's. Never throws. */
+const passwordAccepted = async (password: string, scriptName: string, env: DispatcherEnv): Promise<boolean> => {
+    if (!env.CONTROL_PLANE_URL) {
+        return false;
+    }
+
+    try {
+        const response = await fetch(`${stripTrailingSlashes(env.CONTROL_PLANE_URL)}/v1/tenants/preview-auth`, {
+            body: JSON.stringify({ password, scriptName }),
+            headers: { authorization: `Bearer ${env.CONTROL_PLANE_TOKEN ?? ""}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+        if (!response.ok) {
+            return false;
+        }
+
+        const body: { ok?: boolean } = await response.json();
+
+        return body.ok === true;
+    } catch {
+        // A control-plane blip must not accept a password it never verified.
+        return false;
+    }
+};
+
+/** Handle the login form POST: verify, then mint the cookie. */
+const handlePreviewLogin = async (request: Request, scriptName: string, env: DispatcherEnv): Promise<Response> => {
+    const form = await request.formData().catch(() => undefined);
+    const password = form?.get("password");
+
+    if (typeof password !== "string" || password === "" || !(await passwordAccepted(password, scriptName, env))) {
+        return previewLoginPage(true);
+    }
+
+    // 303 so the browser follows with GET — a 302 would replay the POST.
+    return new Response(null, {
+        headers: {
+            location: "/",
+            "set-cookie": previewCookieHeader(await signPreviewToken(scriptName, env.CONTROL_PLANE_TOKEN ?? "")),
+        },
+        status: 303,
+    });
+};
+
+const guardProtectedPreview = async (request: Request, url: URL, scriptName: string, env: DispatcherEnv): Promise<Response | undefined> => {
+    if (request.method === "POST" && url.pathname === PREVIEW_AUTH_PATH) {
+        return handlePreviewLogin(request, scriptName, env);
+    }
+
+    const cookie = readCookie(request.headers.get("cookie"));
+
+    if (cookie !== undefined && (await verifyPreviewToken(cookie, scriptName, env.CONTROL_PLANE_TOKEN ?? ""))) {
+        return undefined;
+    }
+
+    return previewLoginPage(false);
+};
+
 // Per-isolate plan + route resolvers, rebuilt only when the control-plane
 // config changes.
-let planResolver: ((scriptName: string) => Promise<string | undefined>) | undefined;
+let planResolver: ((scriptName: string) => Promise<ScriptFacts>) | undefined;
 let routeResolver: ((label: string) => Promise<null | string>) | undefined;
 let customDomainResolver: ((hostname: string) => Promise<CustomDomainRoute | null>) | undefined;
 let resolverKey = "";
@@ -139,6 +262,31 @@ const buildResolvers = (env: DispatcherEnv): void => {
     }
 };
 
+/**
+ * Answer a redirect-only custom domain (GAPS.md B1), or `undefined` to route
+ * normally.
+ *
+ * `redirectTo`/`redirectStatusCode` come from a tenant-editable control-plane
+ * row, and `Response.redirect` THROWS on a malformed URL or an out-of-range
+ * status — this runs before the dispatch try/catch, so an invalid row would
+ * otherwise 500 every request for that hostname instead of falling through.
+ */
+const redirectOnlyDomain = async (url: URL, appDomain: string): Promise<Response | undefined> => {
+    if (!customDomainResolver || url.hostname.toLowerCase().endsWith(`.${appDomain}`)) {
+        return undefined;
+    }
+
+    const custom = await customDomainResolver(url.hostname.toLowerCase());
+
+    if (!custom?.redirectTo) {
+        return undefined;
+    }
+
+    const status = custom.redirectStatusCode ?? 308;
+
+    return URL.canParse(custom.redirectTo) && status >= 300 && status <= 399 ? Response.redirect(custom.redirectTo, status) : undefined;
+};
+
 export default {
     async fetch(request: Request, env: DispatcherEnv): Promise<Response> {
         buildResolvers(env);
@@ -146,23 +294,10 @@ export default {
         const url = new URL(request.url);
         const appDomain = env.LUNORA_APP_DOMAIN ?? "lunora.app";
 
-        // Custom domains (GAPS.md B1): a non-apex hostname resolves through the
-        // verified-domains lookup; redirect-only rows answer here directly.
-        if (customDomainResolver && !url.hostname.toLowerCase().endsWith(`.${appDomain}`)) {
-            const custom = await customDomainResolver(url.hostname.toLowerCase());
+        const redirect = await redirectOnlyDomain(url, appDomain);
 
-            if (custom?.redirectTo) {
-                // `redirectTo`/`redirectStatusCode` come from a tenant-editable
-                // control-plane row, and `Response.redirect` THROWS on a malformed URL
-                // or an out-of-range status. This branch runs before the try/catch
-                // below, so an invalid row would 500 every request for that hostname
-                // instead of falling through to normal routing.
-                const status = custom.redirectStatusCode ?? 308;
-
-                if (URL.canParse(custom.redirectTo) && status >= 300 && status <= 399) {
-                    return Response.redirect(custom.redirectTo, status);
-                }
-            }
+        if (redirect) {
+            return redirect;
         }
 
         const route = await resolveTenant(url.hostname, {
@@ -184,6 +319,21 @@ export default {
         // a suspended org as the sentinel plan "suspended".
         if (route.plan === "suspended") {
             return new Response("this deployment is suspended — see your billing page", { status: 503 });
+        }
+
+        // Deployment protection. A preview URL is publicly addressable the moment
+        // it exists — that is what makes it shareable, and also what serves
+        // unreleased work to anyone forwarded the link. When the project has a
+        // password, nothing reaches the tenant until a valid signed cookie does.
+        //
+        // Gated BEFORE dispatch, deliberately: a check inside the tenant would run
+        // the tenant's own code (and bill for it) on every unauthenticated probe.
+        if (route.protected === true && env.CONTROL_PLANE_TOKEN) {
+            const gate = await guardProtectedPreview(request, url, route.scriptName, env);
+
+            if (gate) {
+                return gate;
+            }
         }
 
         try {

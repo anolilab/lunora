@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/server";
 import { highestPlan } from "../src/billing/plans";
 import { previewExpiry } from "../src/deploy/preview";
 import type { Id } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext } from "./_generated/server.js";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
@@ -140,6 +140,13 @@ export const adminTarget = query
         },
     );
 
+/** Whether a project has a preview password set. Read as part of {@link planForScript}. */
+const previewProtectionEnabled = async (context: QueryContext, projectId: Id<"projects">): Promise<boolean> => {
+    const project = (await context.db.get(projectId)) as null | { previewPasswordHash?: string };
+
+    return Boolean(project?.previewPasswordHash);
+};
+
 /**
  * Resolve a dispatch-namespace script id to its org's plan name, for the
  * dispatcher's per-plan runtime limits (§4). Public + unauthenticated by design
@@ -148,7 +155,7 @@ export const adminTarget = query
  */
 export const planForScript = query
     .input({ scriptName: boundedString(LIMITS.name) })
-    .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string }> => {
+    .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string; protected?: boolean }> => {
         const { page } = await context.db.deployments.findMany({ where: { scriptName } });
         const deployment = (page as unknown as DeploymentRow[])[0];
 
@@ -167,7 +174,17 @@ export const planForScript = query
 
         const entitlements = await orgEntitlements(context, deployment.organizationId);
 
-        return { plan: highestPlan(entitlements.plans) };
+        // Deployment protection rides along on the plan lookup rather than getting
+        // its own endpoint: this is the dispatcher's ONE cached control-plane call
+        // on the request path, and a second resolver would double that traffic to
+        // answer a question the same row already knows. Only the boolean crosses —
+        // the password hash stays in the control plane (`verifyPreviewPassword`).
+        //
+        // Protection applies to PREVIEW deployments only. Production is public by
+        // definition, and gating it here would be a foot-gun with no undo.
+        const isProtectedPreview = deployment.kind === "preview" && (await previewProtectionEnabled(context, deployment.projectId));
+
+        return { plan: highestPlan(entitlements.plans), ...(isProtectedPreview ? { protected: true } : {}) };
     });
 
 /** A project's deployments, newest first. Caller must be a member of the org. */

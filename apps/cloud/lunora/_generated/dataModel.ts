@@ -69,6 +69,8 @@ export interface Doc_projects {
     githubRepo?: string;
     name: string;
     organizationId: Id<"organizations">;
+    previewPasswordHash?: string;
+    previewPasswordSalt?: string;
     slug: string;
 }
 
@@ -753,6 +755,8 @@ export interface Insert_projects {
     githubRepo?: string;
     name: string;
     organizationId: Id<"organizations">;
+    previewPasswordHash?: string;
+    previewPasswordSalt?: string;
     slug: string;
 }
 

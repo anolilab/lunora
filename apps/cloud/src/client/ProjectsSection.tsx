@@ -118,6 +118,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                     setActiveProject(null);
                 }}
                 organizationId={organizationId}
+                previewProtected={project?.previewProtected ?? false}
                 projectId={activeProject}
                 projectName={project?.name ?? "Project"}
             />

@@ -11,7 +11,15 @@ import readJson from "../read-json";
 export interface TenantRoute {
     /** Plan name (free/pro/enterprise) the tenant is on, for runtime limits. */
     plan?: string;
+    /** True when this is a PREVIEW deployment whose project has a password set (deployment protection). */
+    protected?: boolean;
     scriptName: string;
+}
+
+/** What the control plane answers for one script: its plan tier and whether it is a protected preview. */
+export interface ScriptFacts {
+    plan?: string;
+    protected?: boolean;
 }
 
 export interface ResolveTenantOptions {
@@ -21,8 +29,8 @@ export interface ResolveTenantOptions {
     resolveAlias?: (label: string) => Promise<null | string>;
     /** Resolve a custom (non-apex) hostname to a script id, or null if unknown. */
     resolveCustomDomain?: (hostname: string) => Promise<null | string>;
-    /** Resolve a script id to its org's plan name (for per-plan runtime limits). */
-    resolvePlan?: (scriptName: string) => Promise<string | undefined>;
+    /** Resolve a script id to its plan tier + protection state (one cached control-plane call). */
+    resolvePlan?: (scriptName: string) => Promise<ScriptFacts>;
 }
 
 export const resolveTenant = async (hostname: string, options: ResolveTenantOptions): Promise<null | TenantRoute> => {
@@ -52,9 +60,9 @@ export const resolveTenant = async (hostname: string, options: ResolveTenantOpti
         return null;
     }
 
-    const plan = await options.resolvePlan?.(scriptName);
+    const facts = (await options.resolvePlan?.(scriptName)) ?? {};
 
-    return { plan, scriptName };
+    return { plan: facts.plan, scriptName, ...(facts.protected === true ? { protected: true } : {}) };
 };
 
 export interface PlanResolverOptions {
@@ -160,17 +168,17 @@ export const createCustomDomainResolver = (options: PlanResolverOptions): ((host
  * round-trip on every request; failures resolve to `undefined` (→ free tier),
  * so a control-plane blip never takes the data plane down.
  */
-export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: string) => Promise<string | undefined>) => {
+export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: string) => Promise<ScriptFacts>) => {
     const fetchImpl = options.fetch ?? fetch;
     const now = options.now ?? Date.now;
     const ttl = options.ttlMs ?? 60_000;
-    const cache = new Map<string, { expires: number; plan: string }>();
+    const cache = new Map<string, { expires: number; facts: ScriptFacts }>();
 
-    return async (scriptName: string): Promise<string | undefined> => {
+    return async (scriptName: string): Promise<ScriptFacts> => {
         const cached = cache.get(scriptName);
 
         if (cached && cached.expires > now()) {
-            return cached.plan;
+            return cached.facts;
         }
 
         try {
@@ -178,20 +186,28 @@ export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: 
             const response = await fetchImpl(url, { headers: { authorization: `Bearer ${options.controlPlaneToken}` } });
 
             if (!response.ok) {
-                return undefined;
+                return {};
             }
 
-            const { plan } = await readJson<{ plan?: string }>(response);
+            const body = await readJson<{ plan?: string; protected?: boolean }>(response);
 
-            if (typeof plan === "string") {
-                cache.set(scriptName, { expires: now() + ttl, plan });
+            if (typeof body.plan === "string") {
+                const facts: ScriptFacts = { plan: body.plan, ...(body.protected === true ? { protected: true } : {}) };
 
-                return plan;
+                cache.set(scriptName, { expires: now() + ttl, facts });
+
+                return facts;
             }
 
-            return undefined;
+            return {};
         } catch {
-            return undefined;
+            // A control-plane blip must never take the data plane down, so this
+            // fails OPEN on the plan (→ free tier) — but note it also fails open on
+            // protection. That is the right trade for a gate whose job is keeping
+            // casual visitors out of a preview, not defending a secret: a platform
+            // outage that also 503s every protected preview would be worse. The
+            // password itself is never bypassed, only the decision to ask for it.
+            return {};
         }
     };
 };

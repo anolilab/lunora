@@ -171,6 +171,8 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "projects:create": lunora_projects_20.create as unknown as RegisteredLunoraFunction,
     "projects:listByOrg": lunora_projects_20.listByOrg as unknown as RegisteredLunoraFunction,
     "projects:rename": lunora_projects_20.rename as unknown as RegisteredLunoraFunction,
+    "projects:setPreviewProtection": lunora_projects_20.setPreviewProtection as unknown as RegisteredLunoraFunction,
+    "projects:verifyPreviewPassword": lunora_projects_20.verifyPreviewPassword as unknown as RegisteredLunoraFunction,
     "secrets:list": lunora_secrets_21.list as unknown as RegisteredLunoraFunction,
     "secrets:listEncrypted": lunora_secrets_21.listEncrypted as unknown as RegisteredLunoraFunction,
     "secrets:remove": lunora_secrets_21.remove as unknown as RegisteredLunoraFunction,
@@ -777,7 +779,7 @@ export interface Caller {
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
         ejectTarget: (args: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; projectSlug: string; scriptName: string; url: string; } | null>;
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"deployments">; adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; url?: string; version?: number }[]>;
-        planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; }>;
+        planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; protected?: boolean; }>;
         pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
         rollback: (args: { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ scriptName: string; version?: number; }>;
         routeForAlias: (args: { alias: unknown }) => Promise<{ scriptName: string; } | null>;
@@ -851,8 +853,10 @@ export interface Caller {
     projects: {
         byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
-        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; slug: string }[]>;
+        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; slug: string }[]>;
         rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
+        setPreviewProtection: (args: { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }) => Promise<{ protected: boolean; }>;
+        verifyPreviewPassword: (args: { password: unknown; scriptName: unknown }) => Promise<{ ok: boolean; }>;
     };
     secrets: {
         list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
@@ -1048,6 +1052,8 @@ export const createCaller = (context: CallerCtx): Caller => ({
         create: (args) => callRegistered(context, "projects:create", args),
         listByOrg: (args) => callRegistered(context, "projects:listByOrg", args),
         rename: (args) => callRegistered(context, "projects:rename", args),
+        setPreviewProtection: (args) => callRegistered(context, "projects:setPreviewProtection", args),
+        verifyPreviewPassword: (args) => callRegistered(context, "projects:verifyPreviewPassword", args),
     },
     secrets: {
         list: (args) => callRegistered(context, "secrets:list", args),

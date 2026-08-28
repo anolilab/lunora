@@ -460,7 +460,46 @@ const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): 
         return jsonError(400, "script is required");
     }
 
-    const result = await context.runQuery<{ plan: string }>(api.deployments.planForScript, { scriptName });
+    const result = await context.runQuery<{ plan: string; protected?: boolean }>(api.deployments.planForScript, { scriptName });
+
+    return Response.json(result);
+};
+
+/** The `POST /v1/tenants/preview-auth` body — which preview, and the password being tried. */
+interface PreviewAuthBody {
+    password?: string;
+    scriptName?: string;
+}
+
+/**
+ * `POST /v1/tenants/preview-auth` — verify a submitted preview password.
+ *
+ * The dispatcher owns the cookie; the control plane owns the secret. This route
+ * is the seam between them: it answers yes or no and nothing else, so the salted
+ * hash never reaches the data plane and a compromised dispatcher isolate has
+ * nothing it could attack offline.
+ *
+ * Admin-token gated like the rest of `/v1/tenants/*` — the caller is the
+ * platform's own dispatcher, never an end user. An end user's password reaches
+ * this only as the body of a request the dispatcher makes on their behalf.
+ */
+const handlePreviewAuthRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const body = (await request.json().catch(() => null)) as null | PreviewAuthBody;
+
+    if (!body?.scriptName || !body.password) {
+        return jsonError(400, "scriptName and password are required");
+    }
+
+    const result = await context.runQuery<{ ok: boolean }>(internal.projects.verifyPreviewPassword, {
+        password: body.password,
+        scriptName: body.scriptName,
+    });
 
     return Response.json(result);
 };
@@ -1421,6 +1460,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleLogsTailRoute, method: "POST", path: "/v1/logs/tail", spec: { auth: "tailSecret" } },
         // adminToken — the dispatcher/platform trust boundary (LUNORA_ADMIN_TOKEN).
         { handler: handleTenantPlanRoute, method: "GET", path: "/v1/tenants/plan", spec: { auth: "adminToken" } },
+        { handler: handlePreviewAuthRoute, method: "POST", path: "/v1/tenants/preview-auth", spec: { auth: "adminToken" } },
         { handler: handleTenantRouteRoute, method: "GET", path: "/v1/tenants/route", spec: { auth: "adminToken" } },
         { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
         { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },

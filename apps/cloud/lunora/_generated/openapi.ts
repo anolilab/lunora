@@ -5827,6 +5827,85 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "mutation"
             }
         },
+        "/_lunora/rpc#projects:setPreviewProtection": {
+            "post": {
+                "description": "Invoke the `mutation` `projects:setPreviewProtection` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "projects:setPreviewProtection",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "id": {
+                                                "description": "Id<\"projects\">",
+                                                "type": "string",
+                                                "x-lunora-table": "projects"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "password": {
+                                                "anyOf": [
+                                                    {
+                                                        "type": "null"
+                                                    },
+                                                    {}
+                                                ]
+                                            }
+                                        },
+                                        "required": [
+                                            "id",
+                                            "organizationId",
+                                            "password"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "projects:setPreviewProtection",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: projects:setPreviewProtection",
+                "tags": [
+                    "projects"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
         "/_lunora/rpc#secrets:list": {
             "post": {
                 "description": "Invoke the `query` `secrets:list` over the Lunora RPC envelope (POST /_lunora/rpc).",

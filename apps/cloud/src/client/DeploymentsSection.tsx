@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
 import { formatDateTime, formatTime } from "./format";
+import { PreviewProtectionCard } from "./PreviewProtectionCard";
 import { ProjectGraph } from "./ProjectGraph";
 import { StatusBadge } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
@@ -30,6 +31,8 @@ interface DeploymentsSectionProps {
     gitProvider?: string;
     onBack: () => void;
     organizationId: OrgId;
+    /** Whether preview deployments for this project currently require a password. */
+    previewProtected?: boolean;
     projectId: ProjectId; // secret-scanner:allow -- domain field name
     projectName: string;
 }
@@ -433,7 +436,15 @@ const DeploymentsTable = ({
  * created out-of-band (the CLI or the GitHub push webhook), so this is read-only
  * apart from rollback.
  */
-export const DeploymentsSection = ({ gitProvider, githubRepo, onBack, organizationId, projectId, projectName }: DeploymentsSectionProps): ReactElement => {
+export const DeploymentsSection = ({
+    gitProvider,
+    githubRepo,
+    onBack,
+    organizationId,
+    previewProtected = false,
+    projectId,
+    projectName,
+}: DeploymentsSectionProps): ReactElement => {
     const deployments = useQuery(api.deployments.listByProject, { organizationId, projectId });
     const builds = useQuery(api.builds.listByProject, { organizationId, projectId });
     const domains = useQuery(api.domains.list, { organizationId, projectId });
@@ -494,6 +505,7 @@ export const DeploymentsSection = ({ gitProvider, githubRepo, onBack, organizati
                 </Card>
             ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
+            <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
             <DeploymentsTable
                 activeId={active?._id}
                 deployments={deployments ?? EMPTY}
