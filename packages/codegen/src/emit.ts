@@ -2017,6 +2017,7 @@ export type Env = CloudflareBindings;`;
     // `key: CapabilityKey` (not `string`) so a mistyped capability id is a compile
     // error, not a silent `?? ""` drop of the ctx field. The `?? ""` remains only
     // for the legitimate case of a key with no `serverCtxField` in the map.
+
     /**
      * The ctx-interface fragment for a capability, checked against the determinism
      * tier the table declares for it.
