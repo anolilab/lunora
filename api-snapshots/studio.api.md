@@ -603,7 +603,7 @@ interface Insight {
 ### `InsightKind` (type)
 
 ```ts
-type InsightKind = "high-error-rate" | "high-evictions" | "high-write-contention" | "low-cache-hit-rate" | "missing-index" | "slow-function";
+type InsightKind = "high-error-rate" | "high-evictions" | "high-write-contention" | "low-cache-hit-rate" | "missing-index" | "slow-function" | "storage-headroom";
 ```
 
 ### `InsightSeverity` (type)
@@ -623,6 +623,8 @@ interface InsightThresholds {
     minConflictCalls: number;
     minErrorCalls: number;
     slowFunctionMs: number;
+    storageCriticalBytes: number;
+    storageWarnBytes: number;
 }
 ```
 

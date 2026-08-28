@@ -31,7 +31,7 @@ deduplicates itself with a static flag, so it shows up at most once per DO
 instance. Non-`__root__` DOs are never affected, even when they exceed
 1 GB on their own.
 
-Sharding is a single edit:
+On an empty table, sharding is a single edit:
 
 ```ts
 messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId");
@@ -40,6 +40,68 @@ messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy
 After codegen, every call to `ctx.db.messages.*` routes by `channelId`. A
 chat with 5 000 active channels now spreads across 5 000 DOs, each with its
 own SQLite, CPU budget, and hibernation timer.
+
+## Migrating a populated table
+
+The edit above only moves _future_ rows. Rows written before it stay physically
+in `__root__`'s SQLite, and once the table routes by `channelId` your app never
+reads them again — they are invisible to `ctx.db` and still occupying the bytes
+you sharded to reclaim. Since the 1 GB warning fires precisely when the table is
+already full, that is the case you will actually be in.
+
+Move them with an **export/import round trip**. `lunora import` resolves each
+row's shard key from the deployed schema and fans the batches out per shard, so
+a dump taken before the edit lands on the right DOs after it.
+
+<Callout type="warn">
+    This is not an online migration. The table is unavailable between step 2 and step 4, so take the write window deliberately — a maintenance flag, or a quiet
+    hour. Snapshot first: [Backups](/docs/concepts/backups) covers point-in-time recovery, and a sharding migration is exactly the change you want it for.
+</Callout>
+
+1. **Dump the table while it still lives in the root DO.** `_id` and
+   `_creationTime` survive the round trip, so relations and
+   `_creationTime`-ordered pagination are preserved.
+
+    ```bash
+    lunora export --tables messages --out messages.ndjson --prod --url <url>
+    ```
+
+2. **Stop writes to the table**, then add `.shardBy()` and deploy. The
+   schema-drift gate blocks this deploy on purpose — a shard-mode change is
+   breaking — so pass `--allow-schema-drift` once you are running these steps
+   deliberately.
+
+    ```bash
+    lunora codegen && lunora deploy --allow-schema-drift
+    ```
+
+3. **Load the dump back.** `--verify` checks row parity and fails non-zero on a
+   mismatch, so a partial import is loud.
+
+    ```bash
+    lunora import messages.ndjson --prod --url <url> --yes --verify
+    ```
+
+4. **Resume writes.** Confirm placement in the Studio's **Data** page — its
+   shard picker shows what actually landed where.
+
+5. **Reclaim the root DO's copies.** They are still there, and they are what you
+   sharded to get rid of. In the Studio's **Data** page set the shard key to
+   `__root__`, open the table, and use **Clear table**; it deletes through the
+   schema-aware writer in bounded batches, so search/aggregate/rank companions
+   stay consistent. This step is off the critical path — do it after writes
+   resume, not during the window.
+
+<Callout type="info">
+    Admin reads and writes are addressed to a **shard**, not routed by the schema, which is why step 5 still reaches rows your application can no longer see.
+    `lunora migrate` is the exception and cannot help here: a `defineMigration` transform runs inside one shard's Durable Object and can only `replace` the row
+    it was handed, so it can neither write to another shard nor delete a row. It is the right tool for a backfill within a shard, and the wrong one for moving
+    rows between shards.
+</Callout>
+
+Deleting rows returns their pages to that DO's SQLite freelist for reuse rather
+than shrinking the file, so the size the runtime reports may not fall right
+away. The headroom is real either way.
 
 ## What stays in the root DO
 
