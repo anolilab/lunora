@@ -56,13 +56,19 @@ interface TrafficSnapshotView {
 
 /** Project reader rows onto the wire view (identity projection, kept so the wire shape is explicit). */
 const toBreakdownView = (rows: TrafficBreakdownRow[]): TrafficSnapshotView["countries"] =>
-    rows.map((row) => {return { key: row.key, requests: row.requests, share: row.share }});
+    rows.map((row) => {
+        return { key: row.key, requests: row.requests, share: row.share };
+    });
 
 const toSeriesView = (points: TrafficSeriesPoint[]): TrafficSnapshotView["series"] =>
-    points.map((point) => {return { avgDurationMs: point.avgDurationMs, bytes: point.bytes, requests: point.requests, t: point.t }});
+    points.map((point) => {
+        return { avgDurationMs: point.avgDurationMs, bytes: point.bytes, requests: point.requests, t: point.t };
+    });
 
 const toStatusView = (classes: TrafficStatusClass[]): TrafficSnapshotView["statuses"] =>
-    classes.map((group) => {return { class: group.class, codes: group.codes, requests: group.requests }});
+    classes.map((group) => {
+        return { class: group.class, codes: group.codes, requests: group.requests };
+    });
 
 /** The empty view every degraded path returns — no credentials, no deployments, or a failed read. */
 const EMPTY_VIEW: TrafficSnapshotView = { countries: [], hostnames: [], routes: [], series: [], statuses: [], totalRequests: 0 };
@@ -260,14 +266,16 @@ export const live = query
                 p95: percentile(ascending, 0.95),
                 p99: percentile(ascending, 0.99),
             },
-            requests: roots.slice(0, limit).map((row) => {return {
-                durationMs: row.durationMs,
-                level: row.level,
-                name: row.name,
-                startedAt: row.startedAt,
-                traceId: row.traceId,
-                ...(row.serviceName === undefined ? {} : { serviceName: row.serviceName }),
-                ...(row.statusMessage === undefined ? {} : { statusMessage: row.statusMessage }),
-            }}),
+            requests: roots.slice(0, limit).map((row) => {
+                return {
+                    durationMs: row.durationMs,
+                    level: row.level,
+                    name: row.name,
+                    startedAt: row.startedAt,
+                    traceId: row.traceId,
+                    ...(row.serviceName === undefined ? {} : { serviceName: row.serviceName }),
+                    ...(row.statusMessage === undefined ? {} : { statusMessage: row.statusMessage }),
+                };
+            }),
         };
     });

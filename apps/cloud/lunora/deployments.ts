@@ -533,39 +533,37 @@ export const updateStatus = mutation
  * `SECRET_ENCRYPTION_KEY` exactly as the studio proxy does, so the plaintext
  * bearer never crosses the RPC boundary. SYSTEM only.
  */
-export const ejectTarget = internalQuery
-    .input({ deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
-    .query(
-        async ({
-            ctx: context,
-            args: { deploymentId, organizationId },
-        }): Promise<null | {
-            adminToken?: string;
-            adminTokenCiphertext?: string;
-            adminTokenIv?: string;
-            projectSlug: string;
-            scriptName: string;
-            url: string;
-        }> => {
-            const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
-            const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
+export const ejectTarget = internalQuery.input({ deploymentId: v.id("deployments"), organizationId: v.id("organizations") }).query(
+    async ({
+        ctx: context,
+        args: { deploymentId, organizationId },
+    }): Promise<null | {
+        adminToken?: string;
+        adminTokenCiphertext?: string;
+        adminTokenIv?: string;
+        projectSlug: string;
+        scriptName: string;
+        url: string;
+    }> => {
+        const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
+        const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
 
-            // The org check is the tenant boundary — the caller's org comes from the
-            // deploy key the edge already verified, never from the request body.
-            if (deployment?.organizationId !== organizationId || !hasToken || !deployment.url) {
-                return null;
-            }
+        // The org check is the tenant boundary — the caller's org comes from the
+        // deploy key the edge already verified, never from the request body.
+        if (deployment?.organizationId !== organizationId || !hasToken || !deployment.url) {
+            return null;
+        }
 
-            const project = (await context.db.get(deployment.projectId)) as { slug?: string } | null;
+        const project = (await context.db.get(deployment.projectId)) as { slug?: string } | null;
 
-            return {
-                ...(deployment.adminToken ? { adminToken: deployment.adminToken } : {}),
-                ...(deployment.adminTokenCiphertext && deployment.adminTokenIv
-                    ? { adminTokenCiphertext: deployment.adminTokenCiphertext, adminTokenIv: deployment.adminTokenIv }
-                    : {}),
-                projectSlug: project?.slug ?? deployment.scriptName,
-                scriptName: deployment.scriptName,
-                url: deployment.url,
-            };
-        },
-    );
+        return {
+            ...(deployment.adminToken ? { adminToken: deployment.adminToken } : {}),
+            ...(deployment.adminTokenCiphertext && deployment.adminTokenIv
+                ? { adminTokenCiphertext: deployment.adminTokenCiphertext, adminTokenIv: deployment.adminTokenIv }
+                : {}),
+            projectSlug: project?.slug ?? deployment.scriptName,
+            scriptName: deployment.scriptName,
+            url: deployment.url,
+        };
+    },
+);
