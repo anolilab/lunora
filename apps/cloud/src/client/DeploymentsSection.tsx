@@ -28,6 +28,8 @@ import { StatusBadge } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
 
 interface DeploymentsSectionProps {
+    /** The deployment currently serving the stable URL — never a rollout candidate. */
+    activeDeploymentId?: string;
     githubRepo?: string;
     gitProvider?: string;
     onBack: () => void;
@@ -36,10 +38,8 @@ interface DeploymentsSectionProps {
     previewProtected?: boolean;
     projectId: ProjectId; // secret-scanner:allow -- domain field name
     projectName: string;
-    /** Share of traffic on the rollout candidate, when one is in progress. */
-    rolloutPercent?: number;
-    /** Script name of the rollout candidate, when one is in progress. */
-    rolloutScriptName?: string;
+    /** The staged rollout in progress, if any. */
+    rollout?: { percent: number; scriptName: string };
 }
 
 type Deployment = ReturnOf<typeof api.deployments.listByProject>[number];
@@ -442,6 +442,7 @@ const DeploymentsTable = ({
  * apart from rollback.
  */
 export const DeploymentsSection = ({
+    activeDeploymentId,
     gitProvider,
     githubRepo,
     onBack,
@@ -449,8 +450,7 @@ export const DeploymentsSection = ({
     previewProtected = false,
     projectId,
     projectName,
-    rolloutPercent,
-    rolloutScriptName,
+    rollout,
 }: DeploymentsSectionProps): ReactElement => {
     const deployments = useQuery(api.deployments.listByProject, { organizationId, projectId });
     const builds = useQuery(api.builds.listByProject, { organizationId, projectId });
@@ -512,12 +512,15 @@ export const DeploymentsSection = ({
                 </Card>
             ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
+            {/* Only a NON-active deployment can be a rollout candidate — `setRollout`
+                rejects the active release, and `active` here defaults to the newest
+                deployment, which right after a deploy IS the active one. Passing it
+                would offer percentage buttons that always error. */}
             <RolloutCard
-                candidateId={active?._id}
-                candidateScriptName={rolloutScriptName}
+                candidateId={active && active._id !== activeDeploymentId ? active._id : undefined}
                 organizationId={organizationId}
-                percent={rolloutPercent}
                 projectId={projectId}
+                rollout={rollout}
             />
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
             <DeploymentsTable

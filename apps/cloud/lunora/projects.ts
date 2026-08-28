@@ -14,6 +14,7 @@ const MIN_PREVIEW_PASSWORD_LENGTH = 8;
 
 interface ProjectRow {
     _id: Id<"projects">;
+    activeDeploymentId?: string;
     createdAt: number;
     framework?: string;
     githubRepo?: string;
@@ -21,9 +22,7 @@ interface ProjectRow {
     organizationId: Id<"organizations">;
     previewPasswordHash?: string;
     previewPasswordSalt?: string;
-    rolloutDeploymentId?: string;
-    rolloutPercent?: number;
-    rolloutScriptName?: string;
+    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
     slug: string;
 }
 
@@ -39,6 +38,8 @@ interface ProjectRow {
  */
 export interface ProjectView {
     _id: Id<"projects">;
+    /** The deployment currently serving the stable URL, when one has been activated. */
+    activeDeploymentId?: string;
     createdAt: number;
     framework?: string;
     githubRepo?: string;
@@ -46,12 +47,8 @@ export interface ProjectView {
     organizationId: Id<"organizations">;
     /** Whether preview deployments for this project require a password. */
     previewProtected: boolean;
-    /** The deployment taking a share of traffic, when a staged rollout is in progress. */
-    rolloutDeploymentId?: string;
-    /** Share of traffic on the candidate, when a staged rollout is in progress. */
-    rolloutPercent?: number;
-    /** Script name of the rollout candidate, for the dashboard to name it. */
-    rolloutScriptName?: string;
+    /** The staged rollout in progress, if any — candidate and share travel together by construction. */
+    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
     slug: string;
 }
 
@@ -66,11 +63,8 @@ export const toProjectView = (row: ProjectRow): ProjectView => {
         slug: row.slug,
         ...(row.framework === undefined ? {} : { framework: row.framework }),
         ...(row.githubRepo === undefined ? {} : { githubRepo: row.githubRepo }),
-        // Rollout state travels as a set — a percentage with no candidate would
-        // render a share of traffic going nowhere.
-        ...(row.rolloutScriptName !== undefined && row.rolloutPercent !== undefined
-            ? { rolloutDeploymentId: row.rolloutDeploymentId, rolloutPercent: row.rolloutPercent, rolloutScriptName: row.rolloutScriptName }
-            : {}),
+        ...(row.activeDeploymentId === undefined ? {} : { activeDeploymentId: row.activeDeploymentId }),
+        ...(row.rollout === undefined ? {} : { rollout: row.rollout }),
     };
 };
 
@@ -210,6 +204,12 @@ export const setPreviewProtection = mutation
  * password, gets back a yes or no, and mints its own signed cookie from that. So
  * a compromised dispatcher isolate cannot walk away with anything it could
  * attack offline.
+ *
+ * Attempts are throttled at the edge route instead of here (the `previewAuth`
+ * bucket, keyed on the END USER's forwarded IP). A `rateLimit` middleware on this
+ * query would key on its caller — the dispatcher — putting every user of every
+ * protected preview into one shared bucket, which both fails to isolate an
+ * attacker and lets one throttle everybody.
  *
  * Returns `false` for an unknown script or an unprotected project rather than
  * distinguishing them — a caller learning "this preview exists but is not

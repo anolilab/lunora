@@ -38,9 +38,7 @@ interface ProjectRow {
     _id: Id<"projects">;
     activeDeploymentId?: Id<"deployments">;
     activeScriptName?: string;
-    rolloutDeploymentId?: string;
-    rolloutPercent?: number;
-    rolloutScriptName?: string;
+    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
 }
 
 interface AliasOwnershipRow {
@@ -191,14 +189,53 @@ export const planForScript = query
     });
 
 /** A project's deployments, newest first. Caller must be a member of the org. */
+
+/**
+ * A deployment as the dashboard sees it — the stored row minus its admin token.
+ *
+ * The projection is the whole point. `deployments` stores the tenant admin bearer
+ * (sealed as `adminTokenCiphertext`/`adminTokenIv`, and in plaintext on a
+ * deployment with no master key configured), and this query is authorized for any
+ * org MEMBER. Returning the row verbatim — which it did — handed every member a
+ * credential that proxies into that tenant's `/_lunora/admin/*` API. Nothing
+ * failed and nothing logged it: the `Promise&lt;DeploymentRow[]>` annotation is
+ * compile-time only and strips nothing at the wire.
+ */
+type DeploymentView = Omit<DeploymentRow, "adminToken" | "adminTokenCiphertext" | "adminTokenIv">;
+
+/** Drop the admin-token fields from a stored row. */
+export const toDeploymentView = (row: DeploymentRow): DeploymentView => {
+    // Built by naming what is KEPT rather than destructuring away what is dropped:
+    // a rest-spread would silently carry any future column, which is precisely how
+    // the admin token reached the wire in the first place.
+    return {
+        _id: row._id,
+        createdAt: row.createdAt,
+        createdBy: row.createdBy,
+        kind: row.kind,
+        organizationId: row.organizationId,
+        projectId: row.projectId,
+        scriptName: row.scriptName,
+        status: row.status,
+        updatedAt: row.updatedAt,
+        ...(row.alias === undefined ? {} : { alias: row.alias }),
+        ...(row.bindings === undefined ? {} : { bindings: row.bindings }),
+        ...(row.branch === undefined ? {} : { branch: row.branch }),
+        ...(row.bundleHash === undefined ? {} : { bundleHash: row.bundleHash }),
+        ...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+        ...(row.url === undefined ? {} : { url: row.url }),
+        ...(row.version === undefined ? {} : { version: row.version }),
+    };
+};
+
 export const listByProject = query
     .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
-    .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<DeploymentRow[]> => {
+    .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<DeploymentView[]> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.deployments.findMany({ where: { organizationId, projectId } });
 
-        return (page as unknown as DeploymentRow[]).toSorted((a, b) => b.createdAt - a.createdAt);
+        return (page as unknown as DeploymentRow[]).map((row) => toDeploymentView(row)).toSorted((a, b) => b.createdAt - a.createdAt);
     });
 
 /**
@@ -335,7 +372,13 @@ export const activate = mutation
             await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
         }
 
-        await context.db.patch(deployment.projectId, { activeDeploymentId: id, activeScriptName: deployment.scriptName });
+        // Clearing the rollout is not optional here. `activate` is the path CI takes
+        // on every deploy, and it supersedes the previously-live releases above —
+        // which includes a rollout candidate. Leaving the rollout set would point a
+        // share of production traffic at a script this very mutation just marked
+        // superseded, indefinitely and with nothing reporting it. A new release ends
+        // any rollout in progress, by definition.
+        await context.db.patch(deployment.projectId, { activeDeploymentId: id, activeScriptName: deployment.scriptName, rollout: undefined });
     });
 
 /**
@@ -378,7 +421,12 @@ export const rollback = mutation
         }
 
         await context.db.patch(id, { liveAt: now, status: "live", updatedAt: now });
-        await context.db.patch(target.projectId, { activeDeploymentId: id, activeScriptName: target.scriptName });
+        // Rolling back ends any rollout in progress. This is the control an operator
+        // reaches for when a release is misbehaving, and a staged rollout is a
+        // release — leaving it set would swap the pointer, report success, and keep
+        // serving the candidate to its share of traffic. Rollback and Abort being
+        // separate buttons is not a reason for Rollback to half-work.
+        await context.db.patch(target.projectId, { activeDeploymentId: id, activeScriptName: target.scriptName, rollout: undefined });
         await context.db.insert("auditLog", {
             action: "deployment.rollback",
             actorUserId: deployKey ? "deploy-key" : (context.auth.userId ?? "unknown"),
@@ -414,10 +462,7 @@ export const routeForAlias = query
         // Both names cross together or neither does: a candidate without a
         // percentage would never be served, and a percentage without a candidate
         // would split traffic toward nothing.
-        const rollout =
-            project?.rolloutScriptName && typeof project.rolloutPercent === "number"
-                ? { candidateScriptName: project.rolloutScriptName, percent: project.rolloutPercent }
-                : {};
+        const rollout = project?.rollout ? { candidateScriptName: project.rollout.scriptName, percent: project.rollout.percent } : {};
 
         if (project?.activeScriptName) {
             return { scriptName: project.activeScriptName, ...rollout };
@@ -554,32 +599,49 @@ export const updateStatus = mutation
  *
  * An `internalQuery` rather than a widening of {@link adminTarget}: that one is
  * session-authorized for the hosted studio's browser proxy, while eject arrives
- * over a deploy key from a terminal. The edge route authorizes the key, resolves
- * the org from it, and passes BOTH ids here — so this can be scoped without a
- * session while still refusing a deployment belonging to a different org.
+ * over a deploy key from a terminal.
+ *
+ * **The key is authorized HERE, not at the edge.** An earlier cut resolved the
+ * org from the key with `orgForDeployKey` — the helper the OTLP endpoints use,
+ * which deliberately accepts ANY non-revoked key and checks neither capability
+ * nor project scope. That made a full tenant data export reachable from a
+ * telemetry `ingest` token: the lowest-privilege credential on the platform, and
+ * one the platform itself injects into every tenant Worker as an env secret. So
+ * `authorizeDeployKey` runs inside this query, against the deployment's own org
+ * and project, exactly as {@link rollback} does — a route cannot forget to do
+ * what it does not perform.
  *
  * The admin token is returned sealed. The edge decrypts it with
  * `SECRET_ENCRYPTION_KEY` exactly as the studio proxy does, so the plaintext
  * bearer never crosses the RPC boundary. SYSTEM only.
  */
-export const ejectTarget = internalQuery.input({ deploymentId: v.id("deployments"), organizationId: v.id("organizations") }).query(
+export const ejectTarget = internalQuery.input({ deployKey: boundedString(LIMITS.token), deploymentId: v.id("deployments") }).query(
     async ({
         ctx: context,
-        args: { deploymentId, organizationId },
+        args: { deployKey, deploymentId },
     }): Promise<null | {
         adminToken?: string;
         adminTokenCiphertext?: string;
         adminTokenIv?: string;
+        organizationId: Id<"organizations">;
         projectSlug: string;
         scriptName: string;
         url: string;
     }> => {
         const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
-        const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
 
-        // The org check is the tenant boundary — the caller's org comes from the
-        // deploy key the edge already verified, never from the request body.
-        if (deployment?.organizationId !== organizationId || !hasToken || !deployment.url) {
+        if (!deployment) {
+            return null;
+        }
+
+        // Throws for a revoked key, a telemetry-only ingest key, or a key scoped to
+        // another project — the tenant boundary, enforced before anything about the
+        // deployment is read out.
+        await authorizeDeployKey(context, deployment.organizationId, deployKey, deployment.projectId);
+
+        const hasToken = deployment.adminToken ?? (deployment.adminTokenCiphertext && deployment.adminTokenIv);
+
+        if (!hasToken || !deployment.url) {
             return null;
         }
 
@@ -590,6 +652,7 @@ export const ejectTarget = internalQuery.input({ deploymentId: v.id("deployments
             ...(deployment.adminTokenCiphertext && deployment.adminTokenIv
                 ? { adminTokenCiphertext: deployment.adminTokenCiphertext, adminTokenIv: deployment.adminTokenIv }
                 : {}),
+            organizationId: deployment.organizationId,
             projectSlug: project?.slug ?? deployment.scriptName,
             scriptName: deployment.scriptName,
             url: deployment.url,
@@ -644,17 +707,25 @@ export const setRollout = mutation
             throw new LunoraError("CONFLICT", "this deployment is already the active release");
         }
 
+        // The candidate must be the same KIND as the release it splits traffic with.
+        // A preview carries a TTL and is destroyed by the cleanup sweep, so pointing
+        // production traffic at one would strand that share on a deployment already
+        // scheduled for deletion — and `promoteRollout` supersedes only same-kind
+        // siblings, so promoting it would leave the real production release live
+        // alongside a preview holding the pointer.
+        const activeKind = project?.activeDeploymentId ? ((await context.db.get(project.activeDeploymentId)) as DeploymentRow | null)?.kind : undefined;
+
+        if (activeKind !== undefined && deployment.kind !== activeKind) {
+            throw new LunoraError("CONFLICT", `cannot roll out a ${deployment.kind} deployment against a ${activeKind} release`);
+        }
+
         const rounded = Math.round(percent);
 
         if (!Number.isFinite(rounded) || rounded < MIN_ROLLOUT_PERCENT || rounded > MAX_ROLLOUT_PERCENT) {
             throw new LunoraError("BAD_REQUEST", `rollout percent must be between ${String(MIN_ROLLOUT_PERCENT)} and ${String(MAX_ROLLOUT_PERCENT)}`);
         }
 
-        await context.db.patch(deployment.projectId, {
-            rolloutDeploymentId: id,
-            rolloutPercent: rounded,
-            rolloutScriptName: deployment.scriptName,
-        });
+        await context.db.patch(deployment.projectId, { rollout: { deploymentId: id, percent: rounded, scriptName: deployment.scriptName } });
         await context.db.insert("auditLog", {
             action: "deployment.rollout.set",
             actorUserId: member.userId,
@@ -686,15 +757,23 @@ export const promoteRollout = mutation
 
         const project = (await context.db.get(projectId)) as null | ProjectRow;
 
-        if (!project?.rolloutDeploymentId) {
+        if (!project?.rollout) {
             throw new LunoraError("CONFLICT", "no rollout in progress");
         }
 
-        const candidateId = project.rolloutDeploymentId as Id<"deployments">;
+        const candidateId = project.rollout.deploymentId;
         const candidate = (await context.db.get(candidateId)) as DeploymentRow | null;
 
         if (!candidate) {
             throw new LunoraError("NOT_FOUND", "the rollout candidate no longer exists");
+        }
+
+        // Re-checked at promote time, not only at `setRollout`. A rollout stays open
+        // for as long as an operator leaves it, and in that window the candidate can
+        // be superseded by another deploy or destroyed by a sweep — promoting then
+        // would point the project's stable URL at a dead script.
+        if (candidate.status !== "live") {
+            throw new LunoraError("CONFLICT", `the rollout candidate is ${candidate.status} — start a new rollout rather than promoting this one`);
         }
 
         const { now } = context;
@@ -709,9 +788,7 @@ export const promoteRollout = mutation
         await context.db.patch(projectId, {
             activeDeploymentId: candidateId,
             activeScriptName: candidate.scriptName,
-            rolloutDeploymentId: undefined,
-            rolloutPercent: undefined,
-            rolloutScriptName: undefined,
+            rollout: undefined,
         });
         await context.db.insert("auditLog", {
             action: "deployment.rollout.promote",
@@ -739,16 +816,16 @@ export const abortRollout = mutation
 
         const project = (await context.db.get(projectId)) as null | ProjectRow;
 
-        if (!project?.rolloutDeploymentId) {
+        if (!project?.rollout) {
             throw new LunoraError("CONFLICT", "no rollout in progress");
         }
 
-        await context.db.patch(projectId, { rolloutDeploymentId: undefined, rolloutPercent: undefined, rolloutScriptName: undefined });
+        await context.db.patch(projectId, { rollout: undefined });
         await context.db.insert("auditLog", {
             action: "deployment.rollout.abort",
             actorUserId: member.userId,
             createdAt: context.now,
             organizationId,
-            target: project.rolloutScriptName ?? "",
+            target: project.rollout.scriptName,
         });
     });

@@ -64,9 +64,7 @@ export interface Doc_projects {
     _creationTime: number;
     activeDeploymentId?: string;
     activeScriptName?: string;
-    rolloutDeploymentId?: string;
-    rolloutPercent?: number;
-    rolloutScriptName?: string;
+    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
     createdAt: number;
     framework?: string;
     githubRepo?: string;
@@ -753,9 +751,7 @@ export interface Insert_projects {
     _creationTime?: number;
     activeDeploymentId?: string;
     activeScriptName?: string;
-    rolloutDeploymentId?: string;
-    rolloutPercent?: number;
-    rolloutScriptName?: string;
+    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
     createdAt: number;
     framework?: string;
     githubRepo?: string;

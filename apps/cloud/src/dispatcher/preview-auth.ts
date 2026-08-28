@@ -25,6 +25,7 @@
  * Signing, verification and cookie parsing are pure and unit-tested; only the
  * WebCrypto calls are async.
  */
+import { fromBase64Url, toBase64Url } from "../../../../shared/base64";
 import { constantTimeEqual } from "../security/constant-time-equal";
 
 /** Cookie the dispatcher sets once a preview password has been accepted. */
@@ -35,38 +36,6 @@ const SIGNING_LABEL = "lunora-preview-auth-v1";
 
 /** How long a preview session lasts before the password is asked for again (12 h). */
 const PREVIEW_SESSION_MS = 12 * 60 * 60 * 1000;
-
-/**
- * Base64url without padding — cookie-safe, and what the token halves are encoded
- * in.
- *
- * `fromCharCode`, not `fromCodePoint`: this walks BYTES (0–255) on their way into
- * `btoa`, which is defined over a binary string. Code points are the wrong unit
- * here — anything above 0xFF is not a byte, and treating it as one would corrupt
- * the signature rather than merely mis-render it.
- */
-const toBase64Url = (bytes: Uint8Array): string => {
-    let binary = "";
-
-    for (const byte of bytes) {
-        // eslint-disable-next-line unicorn/prefer-code-point -- binary string for `btoa`: the unit is a byte, not a code point
-        binary += String.fromCharCode(byte);
-    }
-
-    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-};
-
-/** Inverse of {@link toBase64Url}; throws on input that is not valid base64url. */
-const fromBase64Url = (value: string): Uint8Array => {
-    const padded = value
-        .replaceAll("-", "+")
-        .replaceAll("_", "/")
-        .padEnd(Math.ceil(value.length / 4) * 4, "=");
-    const binary = atob(padded);
-
-    // eslint-disable-next-line unicorn/prefer-code-point -- `atob` yields a binary string; each unit is a byte
-    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-};
 
 /** Derive the HMAC key for cookie signing from the control-plane token. */
 const signingKey = async (controlPlaneToken: string): Promise<CryptoKey> => {
@@ -151,12 +120,12 @@ export const verifyPreviewToken = async (token: string, script: string, controlP
  * itself contain no `=` but the joined token can — a naive `split("=")` would
  * truncate the value.
  */
-export const readCookie = (header: null | string, name: string = PREVIEW_COOKIE_NAME): string | undefined => {
+export const readCookie = (header: null | string): string | undefined => {
     for (const part of (header ?? "").split(";")) {
         const trimmed = part.trim();
         const equals = trimmed.indexOf("=");
 
-        if (equals > 0 && trimmed.slice(0, equals) === name) {
+        if (equals > 0 && trimmed.slice(0, equals) === PREVIEW_COOKIE_NAME) {
             return trimmed.slice(equals + 1);
         }
     }

@@ -112,6 +112,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
 
         return (
             <DeploymentsSection
+                activeDeploymentId={project?.activeDeploymentId}
                 githubRepo={project?.githubRepo}
                 gitProvider={gitProviderOf(project?.githubRepo)}
                 onBack={() => {
@@ -121,8 +122,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                 previewProtected={project?.previewProtected ?? false}
                 projectId={activeProject}
                 projectName={project?.name ?? "Project"}
-                rolloutPercent={project?.rolloutPercent}
-                rolloutScriptName={project?.rolloutScriptName}
+                rollout={project?.rollout}
             />
         );
     }

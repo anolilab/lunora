@@ -391,13 +391,6 @@ if (typeof source["deploymentId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_deployments_8.ejectTarget.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["deploymentId"] !== "string") return DEFER;
-if (typeof source["organizationId"] !== "string") return DEFER;
-return { "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
-});
 installCompiledValidatorMap(lunora_deployments_8.listByProject.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -803,8 +796,8 @@ export interface Caller {
         adminTarget: (args: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
-        ejectTarget: (args: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; projectSlug: string; scriptName: string; url: string; } | null>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"deployments">; adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; url?: string; version?: number }[]>;
+        ejectTarget: (args: { deployKey: unknown; deploymentId: Id<"deployments"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; branch?: string; bundleHash?: string; projectId: Id<"projects">; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; expiresAt?: number; url?: string; version?: number }[]>;
         planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; protected?: boolean; }>;
         promoteRollout: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<void>;
         pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
@@ -881,7 +874,7 @@ export interface Caller {
     projects: {
         byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
-        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rolloutDeploymentId?: string; rolloutPercent?: number; rolloutScriptName?: string; slug: string }[]>;
+        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string; }; slug: string }[]>;
         rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         setPreviewProtection: (args: { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }) => Promise<{ protected: boolean; }>;
         verifyPreviewPassword: (args: { password: unknown; scriptName: unknown }) => Promise<{ ok: boolean; }>;

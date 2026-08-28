@@ -24,35 +24,26 @@
  * browsers — a Lunora app's callers are frequently other programs.
  */
 
+import { fnv1aHex } from "../../../../shared/fnv1a";
+
 /** Buckets a rollout splits traffic into. 100 so the percentage IS the bucket count. */
 const ROLLOUT_BUCKETS = 100;
-
-/** FNV-1a offset basis / prime — a small, fast, sync hash with good spread over short keys. */
-const FNV_OFFSET = 2_166_136_261;
-const FNV_PRIME = 16_777_619;
 
 /**
  * Map a stable key to a bucket in `[0, 100)`.
  *
- * FNV-1a rather than a crypto digest: this runs on every request to a project
- * mid-rollout, and `crypto.subtle` is async — awaiting a hash to pick a backend
- * would add a microtask to the hot path to answer a question with no security
- * property. Bucketing is a load-splitting decision, not an authorization one.
+ * Uses the repo's canonical `shared/fnv1a.ts` rather than a second copy of the
+ * algorithm. An earlier cut inlined FNV-1a here and had already drifted from the
+ * shared one (`charCodeAt` vs `codePointAt`), which is exactly the divergence
+ * that file exists to prevent — and `shared/` is how a bundle that must not take
+ * a runtime dependency edge still shares source.
+ *
+ * A non-cryptographic hash is the right tool: bucketing is a load-splitting
+ * decision with no security property, and `crypto.subtle` is async — awaiting a
+ * digest to choose a backend would put a microtask on every request to a project
+ * mid-rollout.
  */
-export const rolloutBucket = (key: string): number => {
-    let hash = FNV_OFFSET;
-
-    for (let index = 0; index < key.length; index += 1) {
-        // eslint-disable-next-line no-bitwise, unicorn/prefer-code-point -- FNV-1a is defined over 32-bit XOR/multiply of code UNITS
-        hash ^= key.charCodeAt(index);
-        // `Math.imul` keeps the multiply in 32-bit space; a plain `*` would lose
-        // precision past 2^53 and collapse the spread.
-        hash = Math.imul(hash, FNV_PRIME);
-    }
-
-    // eslint-disable-next-line no-bitwise -- coerce the signed 32-bit result to unsigned
-    return (hash >>> 0) % ROLLOUT_BUCKETS;
-};
+export const rolloutBucket = (key: string): number => Number.parseInt(fnv1aHex(key), 16) % ROLLOUT_BUCKETS;
 
 /**
  * Should this key be served the candidate release?

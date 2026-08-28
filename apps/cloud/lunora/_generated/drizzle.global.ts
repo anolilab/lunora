@@ -3,6 +3,7 @@
 
 import { blob, index, integer, real, sqliteTable, text, uniqueIndex } from "@lunora/server/drizzle";
 import type { AnySQLiteColumn } from "@lunora/server/drizzle";
+import type { Id } from "./dataModel.js";
 
 export const cells = sqliteTable("cells", {
     _id: text("_id").primaryKey(),
@@ -52,9 +53,7 @@ export const projects = sqliteTable("projects", {
     _creationTime: integer("_creationTime").notNull(),
     activeDeploymentId: text("activeDeploymentId"),
     activeScriptName: text("activeScriptName"),
-    rolloutDeploymentId: text("rolloutDeploymentId"),
-    rolloutPercent: real("rolloutPercent"),
-    rolloutScriptName: text("rolloutScriptName"),
+    rollout: text("rollout", { mode: "json" }).$type<{ deploymentId: Id<"deployments">; percent: number; scriptName: string }>(),
     createdAt: real("createdAt").notNull(),
     framework: text("framework"),
     githubRepo: text("githubRepo"),

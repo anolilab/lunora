@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { isRequestSpan } from "../lunora/traffic";
+import { isRequestSpan, percentile } from "../lunora/traffic";
 import type { TrafficFilter } from "../src/telemetry/traffic-read";
 import {
     buildTrafficDimensionQuery,
@@ -283,5 +283,42 @@ describe(isRequestSpan, () => {
 
     it("excludes work nested inside a request", () => {
         expect(isRequestSpan({ parentSpanId: "a1b2c3" })).toBe(false);
+    });
+});
+
+/**
+ * Nearest-rank percentiles over the unsampled span window.
+ *
+ * Untested until a review pointed out that a statistic can silently become a
+ * different statistic — nothing errors when a p95 quietly turns into a p50, and
+ * an operator comparing it against a trace in the list below has no way to tell.
+ */
+describe(percentile, () => {
+    const ascending = Array.from({ length: 100 }, (_, index) => index + 1);
+
+    it("returns nearest-rank values, so every answer is a duration some request took", () => {
+        expect(percentile(ascending, 0.5)).toBe(50);
+        expect(percentile(ascending, 0.95)).toBe(95);
+        expect(percentile(ascending, 0.99)).toBe(99);
+    });
+
+    /** Interpolation would produce a p95 that appears nowhere in the data. */
+    it("never invents a value between two samples", () => {
+        expect(percentile([10, 20], 0.5)).toBe(10);
+        expect(percentile([10, 20], 0.75)).toBe(20);
+    });
+
+    it("answers the ends without running off the array", () => {
+        expect(percentile(ascending, 0)).toBe(1);
+        expect(percentile(ascending, 1)).toBe(100);
+    });
+
+    it("answers zero for an empty window rather than NaN", () => {
+        expect(percentile([], 0.95)).toBe(0);
+    });
+
+    it("reads a single-sample window as that sample at every rank", () => {
+        expect(percentile([42], 0.5)).toBe(42);
+        expect(percentile([42], 0.99)).toBe(42);
     });
 });

@@ -152,13 +152,16 @@ export default defineSchema({
         activeScriptName: v.optional(v.string()),
         // Staged rollout in progress (GAPS.md A1 follow-on). Blue/green promotes
         // all at once; a rollout keeps the candidate live alongside the active
-        // release and serves it to `rolloutPercent` of traffic, so a regression
-        // reaches a fraction of users instead of everyone. All three are set and
-        // cleared together — a percentage without a candidate would silently
-        // split traffic toward nothing.
-        rolloutDeploymentId: v.optional(v.string()),
-        rolloutPercent: v.optional(v.number()),
-        rolloutScriptName: v.optional(v.string()),
+        // release and serves it `percent` of traffic, so a regression reaches a
+        // fraction of users instead of everyone.
+        //
+        // ONE nested column, not three flat ones. The fields are meaningless
+        // apart — a percentage with no candidate splits traffic toward nothing —
+        // and as three optional columns that invariant could only be restated in
+        // every reader and writer. Nested, "a rollout is running" is a single
+        // presence check and clearing it is a single assignment, which is what
+        // makes it impossible for a code path to clear two of three.
+        rollout: v.optional(v.object({ deploymentId: v.id("deployments"), percent: v.number(), scriptName: v.string() })),
         createdAt: v.number(),
         // Optional meta-framework hint (tanstack-start, astro, …) for the build step.
         framework: v.optional(v.string()),

@@ -1,4 +1,3 @@
-import type { TrafficBreakdownRow, TrafficSeriesPoint, TrafficStatusClass } from "../src/telemetry/traffic-read";
 import { createTrafficReader, DEFAULT_TRAFFIC_WINDOW_MS, MAX_TRAFFIC_SCRIPTS } from "../src/telemetry/traffic-read";
 import type { Id } from "./_generated/dataModel.js";
 import { action, query, v } from "./_generated/server.js";
@@ -53,22 +52,6 @@ interface TrafficSnapshotView {
     /** Total requests across the returned country rows. */
     totalRequests: number;
 }
-
-/** Project reader rows onto the wire view (identity projection, kept so the wire shape is explicit). */
-const toBreakdownView = (rows: TrafficBreakdownRow[]): TrafficSnapshotView["countries"] =>
-    rows.map((row) => {
-        return { key: row.key, requests: row.requests, share: row.share };
-    });
-
-const toSeriesView = (points: TrafficSeriesPoint[]): TrafficSnapshotView["series"] =>
-    points.map((point) => {
-        return { avgDurationMs: point.avgDurationMs, bytes: point.bytes, requests: point.requests, t: point.t };
-    });
-
-const toStatusView = (classes: TrafficStatusClass[]): TrafficSnapshotView["statuses"] =>
-    classes.map((group) => {
-        return { class: group.class, codes: group.codes, requests: group.requests };
-    });
 
 /** The empty view every degraded path returns — no credentials, no deployments, or a failed read. */
 const EMPTY_VIEW: TrafficSnapshotView = { countries: [], hostnames: [], routes: [], series: [], statuses: [], totalRequests: 0 };
@@ -145,14 +128,10 @@ export const snapshot = action
                 ...(args.hostname === undefined ? {} : { hostname: args.hostname }),
             });
 
-            return {
-                countries: toBreakdownView(result.countries),
-                hostnames: toBreakdownView(result.hostnames),
-                routes: toBreakdownView(result.routes),
-                series: toSeriesView(result.series),
-                statuses: toStatusView(result.statuses),
-                totalRequests: result.totalRequests,
-            };
+            // Returned directly: the reader's snapshot and this action's wire view are
+            // the same shape, and the return annotation is what codegen reads — three
+            // field-for-field `map`s in between were indirection, not a boundary.
+            return result;
         } catch {
             // AE SQL unreachable / dataset absent — degrade to an empty view.
             return EMPTY_VIEW;
@@ -231,7 +210,7 @@ export const isRequestSpan = (span: { parentSpanId?: null | string }): boolean =
  * trace in the list below expects to be able to find. Interpolation would produce
  * a p95 that appears nowhere in the data.
  */
-const percentile = (ascending: ReadonlyArray<number>, fraction: number): number => {
+export const percentile = (ascending: ReadonlyArray<number>, fraction: number): number => {
     if (ascending.length === 0) {
         return 0;
     }

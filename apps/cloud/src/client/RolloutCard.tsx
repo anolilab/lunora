@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { api } from "../../lunora/_generated/api.js";
 import { COLUMN_LABEL } from "./section-styles";
 import { FormError, StatusBadge } from "./section-ui";
-import type { OrgId, ProjectId } from "./types";
+import type { DeploymentId, OrgId, ProjectId } from "./types";
 
 /**
  * Staged rollout control for a project.
@@ -26,27 +26,24 @@ import type { OrgId, ProjectId } from "./types";
 const STEPS = [5, 10, 25, 50, 75] as const;
 
 export const RolloutCard = ({
-    candidateScriptName,
     candidateId,
     organizationId,
-    percent,
     projectId,
+    rollout,
 }: {
-    /** The deployment being rolled out, when one is selected in the table. */
-    candidateId?: string;
-    /** Script name of the release currently taking a share, when a rollout is live. */
-    candidateScriptName?: string;
+    /** The deployment selected in the table — the one a new rollout would start on. */
+    candidateId?: DeploymentId;
     organizationId: OrgId;
-    /** Current share, when a rollout is in progress. */
-    percent?: number;
     projectId: ProjectId;
+    /** The rollout in progress, if any. Candidate and share arrive together by construction. */
+    rollout?: { percent: number; scriptName: string };
 }): ReactElement | null => {
     const setRollout = useMutation(api.deployments.setRollout);
     const promote = useMutation(api.deployments.promoteRollout);
     const abort = useMutation(api.deployments.abortRollout);
     const [error, setError] = useState<null | string>(null);
 
-    const active = candidateScriptName !== undefined && percent !== undefined;
+    const active = rollout !== undefined;
 
     // Nothing to offer: no rollout running and no candidate selected to start one.
     if (!active && candidateId === undefined) {
@@ -72,18 +69,22 @@ export const RolloutCard = ({
             <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                     Staged rollout
-                    {active ? <StatusBadge tone="warning">{percent}% live</StatusBadge> : <StatusBadge tone="neutral">off</StatusBadge>}
+                    {rollout ? <StatusBadge tone="warning">{rollout.percent}% live</StatusBadge> : <StatusBadge tone="neutral">off</StatusBadge>}
                 </CardTitle>
                 <CardDescription>
-                    {active
-                        ? `${candidateScriptName} is serving ${String(percent)}% of traffic. Watch its error rate on the Traffic tab, then promote or abort.`
+                    {rollout
+                        ? `${rollout.scriptName} is serving ${String(rollout.percent)}% of traffic. Watch its error rate on the Traffic tab, then promote or abort.`
                         : "Serve the selected release to a share of traffic before it takes over. Raising the share never moves anyone back."}
                 </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-                {active ? (
-                    <div aria-label={`${String(percent)} percent of traffic on the candidate`} className="bg-muted h-1.5 w-full overflow-hidden" role="img">
-                        <div className="bg-foreground h-full" style={{ width: `${String(percent)}%` }} />
+                {rollout ? (
+                    <div
+                        aria-label={`${String(rollout.percent)} percent of traffic on the candidate`}
+                        className="bg-muted h-1.5 w-full overflow-hidden"
+                        role="img"
+                    >
+                        <div className="bg-foreground h-full" style={{ width: `${String(rollout.percent)}%` }} />
                     </div>
                 ) : null}
 
@@ -92,15 +93,15 @@ export const RolloutCard = ({
                     <div className="flex flex-wrap gap-2">
                         {STEPS.map((step) => (
                             <Button
-                                disabled={pending || candidateId === undefined || step === percent}
+                                disabled={pending || candidateId === undefined || step === rollout?.percent}
                                 key={step}
                                 onClick={() => {
                                     if (candidateId !== undefined) {
-                                        run(() => setRollout.mutate({ id: candidateId as never, organizationId, percent: step }));
+                                        run(() => setRollout.mutate({ id: candidateId, organizationId, percent: step }));
                                     }
                                 }}
                                 size="sm"
-                                variant={step === percent ? "default" : "outline"}
+                                variant={step === rollout?.percent ? "default" : "outline"}
                             >
                                 {step}%
                             </Button>

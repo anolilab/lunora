@@ -789,16 +789,19 @@ const handleEjectRoute = async (request: Request, environment: RouterEnv): Promi
         return jsonError(400, "deploymentId is required");
     }
 
-    const org = await context.runQuery<{ organizationId: string } | null>(internal.telemetry.orgForDeployKey, { deployKey: key });
+    // The key is authorized INSIDE `ejectTarget`, against the deployment's own org
+    // and project — it rejects a revoked key, a telemetry-only ingest key, and a
+    // key scoped to another project. Resolving the org here first would repeat the
+    // mistake this route shipped with: `orgForDeployKey` exists for the OTLP
+    // endpoints and deliberately accepts ANY live key, which made a full tenant
+    // export reachable from an ingest token.
+    let target: (StoredAdminToken & { organizationId: string; projectSlug: string; scriptName: string; url: string }) | null;
 
-    if (!org) {
-        return jsonError(401, "invalid or revoked deploy key");
+    try {
+        target = await context.runQuery(internal.deployments.ejectTarget, { deployKey: key, deploymentId: body.deploymentId });
+    } catch (error) {
+        return rejected(error, "eject denied");
     }
-
-    const target = await context.runQuery<(StoredAdminToken & { projectSlug: string; scriptName: string; url: string }) | null>(
-        internal.deployments.ejectTarget,
-        { deploymentId: body.deploymentId, organizationId: org.organizationId },
-    );
 
     if (!target) {
         return jsonError(404, "deployment not found");
@@ -821,7 +824,7 @@ const handleEjectRoute = async (request: Request, environment: RouterEnv): Promi
 
     const snapshot = await exported.text();
 
-    await context.runMutation(internal.audit_log.record, { action: "deployment.eject", organizationId: org.organizationId });
+    await context.runMutation(internal.audit_log.record, { action: "deployment.eject", organizationId: target.organizationId });
 
     return Response.json(
         { projectSlug: target.projectSlug, scriptName: target.scriptName, snapshot, url: target.url },
@@ -1279,6 +1282,11 @@ export const createDeployRouter = (): HttpRouterLike => {
     const limiter = new RateLimiter({
         config: {
             api: { capacity: 120, kind: "token bucket", period: 60_000, rate: 120 },
+            // Preview-password attempts, keyed on the END USER's IP forwarded by the
+            // dispatcher — not the caller's, which is the dispatcher itself and would
+            // put every user of every protected preview in one bucket. Tight on
+            // purpose: this guards an 8-character password behind a URL people share.
+            previewAuth: { capacity: 10, kind: "token bucket", period: 60_000, rate: 10 },
             // Telemetry ingest is high-volume by nature — give it a generous bucket
             // keyed on the ingest token (per org), so a busy exporter isn't throttled
             // by the shared per-IP `api` limit and one noisy tenant can't starve others.
@@ -1509,7 +1517,14 @@ export const createDeployRouter = (): HttpRouterLike => {
         // starving others. Non-telemetry paths use the shared per-IP `api` limit.
         let verdict;
 
-        if (telemetryPaths.has(pathname)) {
+        if (pathname === "/v1/tenants/preview-auth") {
+            // Keyed on the END USER's address, forwarded by the dispatcher. `ip` here
+            // is the dispatcher itself, so keying on it would put every user of every
+            // protected preview into one bucket — no isolation of a grinder, and one
+            // grinder throttles everybody. This is the only thing standing between an
+            // 8-character password and unlimited guesses by anyone holding the URL.
+            verdict = await limiter.limit("previewAuth", { key: request.headers.get("x-lunora-client-ip") ?? ip });
+        } else if (telemetryPaths.has(pathname)) {
             const ipVerdict = await limiter.limit("telemetryIp", { key: ip });
 
             verdict = ipVerdict.ok ? await limiter.limit("telemetry", { key: bearerToken(request) ?? ip }) : ipVerdict;

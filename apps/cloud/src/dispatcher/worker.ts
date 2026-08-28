@@ -175,8 +175,15 @@ ${failed ? `<p class="e">That password did not match.</p>` : ""}
  * submission to {@link PREVIEW_AUTH_PATH} is verified against the control plane,
  * and on success the dispatcher mints its own signed cookie and redirects back.
  */
-/** Ask the control plane whether a submitted password is the project's. Never throws. */
-const passwordAccepted = async (password: string, scriptName: string, env: DispatcherEnv): Promise<boolean> => {
+
+/**
+ * Ask the control plane whether a submitted password is the project's. Never throws.
+ *
+ * Forwards the END USER's address so the control plane can throttle guesses per
+ * attacker. Without it every attempt keys on the dispatcher, which neither
+ * isolates one grinder nor stops them throttling everybody else.
+ */
+const passwordAccepted = async (password: string, scriptName: string, env: DispatcherEnv, clientIp: null | string): Promise<boolean> => {
     if (!env.CONTROL_PLANE_URL) {
         return false;
     }
@@ -184,7 +191,11 @@ const passwordAccepted = async (password: string, scriptName: string, env: Dispa
     try {
         const response = await fetch(`${stripTrailingSlashes(env.CONTROL_PLANE_URL)}/v1/tenants/preview-auth`, {
             body: JSON.stringify({ password, scriptName }),
-            headers: { authorization: `Bearer ${env.CONTROL_PLANE_TOKEN ?? ""}`, "content-type": "application/json" },
+            headers: {
+                authorization: `Bearer ${env.CONTROL_PLANE_TOKEN ?? ""}`,
+                "content-type": "application/json",
+                "x-lunora-client-ip": clientIp ?? "unknown",
+            },
             method: "POST",
         });
 
@@ -206,7 +217,7 @@ const handlePreviewLogin = async (request: Request, scriptName: string, env: Dis
     const form = await request.formData().catch(() => undefined);
     const password = form?.get("password");
 
-    if (typeof password !== "string" || password === "" || !(await passwordAccepted(password, scriptName, env))) {
+    if (typeof password !== "string" || password === "" || !(await passwordAccepted(password, scriptName, env, request.headers.get("cf-connecting-ip")))) {
         return previewLoginPage(true);
     }
 

@@ -109,6 +109,12 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argum
     // needs no deploy, and so the one the inner loop actually reaches for. Checked
     // first only because it is the cheaper, more common case; the three sources are
     // independent and never combine.
+    if (options.local === true && options.durable === true) {
+        logger.error("logs: --local and --durable are different sources — pass one, not both");
+
+        return Promise.resolve({ code: 1 });
+    }
+
     if (options.local === true) {
         return runLocalLogsCommand({
             level: options.level,

@@ -44,8 +44,19 @@ export const MAX_TRAFFIC_ROWS = 40;
 /** Ceiling on script names accepted in one read — bounds the generated `IN (…)` list. */
 export const MAX_TRAFFIC_SCRIPTS = 200;
 
-/** Escape a string for single-quoted SQL — the AE SQL API takes raw text, no bound params. */
-const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+/**
+ * Escape a string for single-quoted SQL — the AE SQL API takes raw text, no bound
+ * params.
+ *
+ * Backslash first, then the quote. The AE SQL API is ClickHouse, which honours
+ * backslash escapes inside string literals, so doubling the quote alone leaves a
+ * value ending in a backslash able to escape its own closing quote. That is not
+ * reachable today — the only caller-supplied term (`hostname`) is last in the
+ * WHERE clause, with no following quote to break into — but that is an accident
+ * of clause order, not a property, and the next predicate appended here would
+ * turn it into a real injection.
+ */
+const quote = (value: string): string => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`;
 
 /**
  * The dimension a breakdown groups on, mapped to its blob position.
