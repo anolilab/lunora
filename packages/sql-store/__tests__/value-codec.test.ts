@@ -27,6 +27,38 @@ describe("nested wire-typed values", () => {
         // stored form and still read back unchanged.
         expect(sqliteEncode({ a: 1, b: [true, "x"], c: null })).toBe(JSON.stringify({ a: 1, b: [true, "x"], c: null }));
     });
+
+    it.each(["array", "object", "record", "any", "union"])("returns a legacy %s row that looks wire-encoded unchanged", (kind) => {
+        expect.assertions(1);
+
+        // Legitimate app data that happens to be shaped like a wire payload, and
+        // written before this path existed — so it never passed through
+        // `encodeWire`'s `"arr"` escape. Sniffing the content for the tag decodes
+        // it as `42n`, and the next patch/replace persists that corruption. Only
+        // the explicit prefix that `sqliteEncode` writes marks a wire value.
+        const legacy = ["$lunora.wire$", "bigint", "42"];
+
+        expect(sqliteDecode(JSON.stringify(legacy), kind)).toStrictEqual(legacy);
+    });
+
+    it("still round-trips that same array when it is written through the encoder", () => {
+        expect.assertions(2);
+
+        // The escape hatch has to keep working: written through `sqliteEncode` the
+        // array is escaped, marked, and must come back as itself — not as `42n`.
+        const hostile = ["$lunora.wire$", "bigint", "42"];
+        const stored = sqliteEncode(hostile) as string;
+
+        expect(stored.startsWith("$lunora.wire$")).toBe(true);
+        expect(sqliteDecode(stored, "array")).toStrictEqual(hostile);
+    });
+
+    it("marks a genuinely wire-encoded value and leaves ordinary JSON unmarked", () => {
+        expect.assertions(2);
+
+        expect(sqliteEncode({ n: 1n }) as string).toMatch(/^\$lunora\.wire\$/);
+        expect(sqliteEncode({ n: 1 }) as string).not.toMatch(/^\$lunora\.wire\$/);
+    });
 });
 
 describe("sqliteEncode", () => {

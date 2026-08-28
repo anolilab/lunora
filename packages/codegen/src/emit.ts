@@ -961,7 +961,7 @@ export interface WorkflowReference<Params = Record<string, unknown>> {
         const objectMembers = sorted
             .map(
                 (workflow) =>
-                    `    ${workflow.exportName}: { isLunoraWorkflow: true, binding: ${JSON.stringify(workflow.bindingName)}, name: ${JSON.stringify(workflow.exportName)} },`,
+                    `    ${renderObjectKey(workflow.exportName)}: { isLunoraWorkflow: true, binding: ${JSON.stringify(workflow.bindingName)}, name: ${JSON.stringify(workflow.exportName)} },`,
             )
             .join("\n");
 
@@ -984,7 +984,7 @@ ${objectMembers}
         const objectMembers = sorted
             .map(
                 (agent) =>
-                    `    ${agent.exportName}: { isLunoraWorkflow: true, binding: ${JSON.stringify(agent.bindingName)}, name: ${JSON.stringify(agent.name)} },`,
+                    `    ${renderObjectKey(agent.exportName)}: { isLunoraWorkflow: true, binding: ${JSON.stringify(agent.bindingName)}, name: ${JSON.stringify(agent.name)} },`,
             )
             .join("\n");
 
@@ -1769,7 +1769,10 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
         .map(([file, list]) => {
             const namespace = sanitizeNamespace(file);
             const leaves = list
-                .map((definition) => `        ${definition.exportName}: (args) => callRegistered(context, "${namespace}:${definition.exportName}", args),`)
+                .map(
+                    (definition) =>
+                        `        ${renderObjectKey(definition.exportName)}: (args) => callRegistered(context, "${namespace}:${definition.exportName}", args),`,
+                )
                 .join("\n");
 
             // The object key is quoted when `namespace` isn't a bare identifier
