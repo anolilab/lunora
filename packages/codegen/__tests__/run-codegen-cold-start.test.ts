@@ -108,7 +108,7 @@ export const names = query({
         expect.assertions(2);
 
         // `route.chunkType` goes through the same `unwrapHandlerReturn` as a
-        // function return (`discover-http-routes.ts`), so `discoverHttpRoutes` has
+        // function return (`discover/http-routes.ts`), so `discoverHttpRoutes` has
         // to sit inside the fixpoint alongside `discoverFunctions` and
         // `discoverMutators`. Left outside it, a streaming route was discovered
         // once against a cold project and never re-inferred — #283 with a smaller

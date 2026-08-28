@@ -100,7 +100,7 @@ const baseSpecifiers = (useUmbrella = false): BaseSpecifiers =>
  * generated TS — anything outside the allowlist throws (E1) so we never
  * embed unescaped source from a `schema.ts`. Table names are additionally
  * gated earlier, at discovery, by `TABLE_NAME_IDENTIFIER_RE` in
- * `discover-schema.ts` — that is the user-facing boundary (a pinpointed
+ * `discover/schema.ts` — that is the user-facing boundary (a pinpointed
  * `file:line:column` diagnostic on the schema); this E1 throw is
  * defense-in-depth behind it and should never fire for table names in
  * practice. Must stay in sync with the discovery-side copy.
@@ -1016,7 +1016,7 @@ const takenAgentFunctionNames = (functions: ReadonlyArray<FunctionIR>): Readonly
  * (`agentMessages`/`agentState`/`agentThread`/`agentRun`/`agentResolveApproval`),
  * which an app is allowed to shadow (the app's own definition silently wins).
  * Derived from the runtime component's own `visibility: "internal"` marker
- * (mirroring the drift test in `discover-agents.test.ts`) rather than a
+ * (mirroring the drift test in `discover/agents.test.ts`) rather than a
  * hand-maintained list, so a newly added internal function is protected
  * automatically.
  */
@@ -1127,7 +1127,7 @@ const renderSandboxFunctionRegistry = (usesSandbox: boolean, functions: Readonly
  * `agentState` / `agentThread` / `agentResolveApproval` / `agentRun` inputs +
  * return shapes) — codegen cannot statically discover a
  * published package's function types, so these are pinned by hand. The drift
- * test in `discover-agents.test.ts` reduces each runtime arg validator to a
+ * test in `discover/agents.test.ts` reduces each runtime arg validator to a
  * `{kind, optional, literals}` descriptor and asserts it against these shapes,
  * so an added/removed arg, an optionality flip, a scalar-kind change, or a
  * `decision` union-member change fails there. Only the RETURN types stay

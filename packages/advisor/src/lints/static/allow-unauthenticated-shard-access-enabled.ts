@@ -16,7 +16,7 @@ import type { Lint } from "../../types";
  * and read another tenant's rows with no row-security guard behind the door.
  *
  * **Evidence and coverage gap**: this reads `context.configCalls`, fed by the
- * codegen `discover-config-calls.ts` feeder's `.extend(fn)` callback-shape
+ * codegen `discover/config-calls.ts` feeder's `.extend(fn)` callback-shape
  * support — it only sees the setting when a `lunora/`-local file calls the
  * generated `defineApp()...extend(() => ({ allowUnauthenticatedShardAccess:
  * true }))` escape hatch (the pattern the `nuxt` / `analog` templates use in

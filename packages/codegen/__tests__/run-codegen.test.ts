@@ -245,7 +245,7 @@ export default defineSchema({
         it("rejects a defineShape whose table isn't a string literal when the project masks a column (fail closed on a non-literal shape table)", () => {
             expect.assertions(1);
 
-            // `tableLiteralFrom` (discover-shapes.ts) returns `undefined` for any
+            // `tableLiteralFrom` (discover/shapes.ts) returns `undefined` for any
             // `table` that isn't a plain string-literal AST node — a hoisted `const
             // t = "users"` passed as `table: t` is exactly that case. Without this
             // guard the shape would silently skip the mask collision check and ship
@@ -290,7 +290,7 @@ export default defineSchema({
         it("rejects a shape when a mask() policies argument is a hoisted reference (fail closed on a non-literal mask policy)", () => {
             expect.assertions(1);
 
-            // `extractMaskColumns`/`extractMaskColumnMetadata` (discover-mask-procedures.ts)
+            // `extractMaskColumns`/`extractMaskColumnMetadata` (discover/mask-procedures.ts)
             // both return `[]` when `mask(...)`'s first argument isn't an object
             // literal, so `mask(sharedPolicies)` contributes ZERO masked columns to
             // `maskMetadata` — a shape over "users" then collides with nothing and
@@ -313,6 +313,34 @@ export default defineSchema({
             );
 
             expect(() => runCodegen({ projectRoot: workdir })).toThrow(/mask\(\.\.\.\)` policy whose argument isn't a plain object literal/u);
+        });
+
+        it("rejects a shape when the mask() policy names its table with a quoted key", () => {
+            expect.assertions(1);
+
+            // A quoted key is ordinary TypeScript and fully enumerable, so neither
+            // non-literal guard fires. `memberName` used to hand back the name
+            // node's SOURCE TEXT, recording the table as `"users"` — quotes and all
+            // — while `ShapeIR.table` is the unquoted `users`. The masked-column map
+            // lookup missed, `assertNoMaskedShapeTable` cleared the shape, and the
+            // masked column shipped raw to every subscriber. Both names must
+            // normalize to the same string for the guard to see the collision.
+            writeFileSync(
+                join(workdir, "lunora", "userMask.ts"),
+                `
+                import { mask, query } from "@lunora/server";
+                export const listUsers = query.use(mask({ "users": { "email": "redact" } })).query(async ({ ctx }) => ctx.db.findMany("users"));
+            `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                export const allUsers = defineShape({ table: "users", where: () => ({}) });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/replicates table "users", which masks column\(s\) "email"/u);
         });
 
         it("rejects a shape when a mask() policies object literal spreads a variable (fail closed on spread/computed mask keys, plan 257)", () => {

@@ -15,7 +15,7 @@ interface MiddlewareNext<ContextIn> {
 
 /**
  * Decide whether a `ctx.authApi.*` call carried `headers`. Mirrors the static
- * advisor's `hasHeaders` rule (`@lunora/codegen`'s `discover-authapi-calls`) so
+ * advisor's `hasHeaders` rule (`@lunora/codegen`'s `discover/authapi-calls`) so
  * the runtime guard and the lint agree on what counts as a header-bearing call:
  *
  * - **No argument at all** → no headers (the lint flags `method()`).

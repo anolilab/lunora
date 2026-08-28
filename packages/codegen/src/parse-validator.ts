@@ -14,10 +14,10 @@ type StandardTypeResolver = (node: Node) => string | undefined;
 /**
  * Registered by the codegen run, because recovering the type needs the type
  * checker AND the same "is this renderable in a generated file?" guards the
- * handler-return path uses — both of which live in `discover-functions`. A
+ * handler-return path uses — both of which live in `discover/functions`. A
  * module-level hook rather than a threaded parameter keeps the recursive
  * parse functions' signatures unchanged, and importing it the other way would
- * make a cycle (`discover-functions` already imports this module).
+ * make a cycle (`discover/functions` already imports this module).
  *
  * Unset (a bare parser, a test) simply means `v.from()` stays `unknown`, which
  * is the behaviour that predates the recovery.

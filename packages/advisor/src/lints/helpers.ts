@@ -73,7 +73,7 @@ const PII_TOKENS: ReadonlySet<string> = new Set(PII_FIELD_NAME_LIST.filter((name
  * Ownership / tenancy columns whose presence marks a table as holding user- or
  * tenant-scoped rows. Mirrors (does not import — `@lunora/codegen` depends on
  * `@lunora/advisor`, not the reverse) `@lunora/codegen`'s
- * `discover-owner-field-writes.ts` `IDENTITY_FIELDS` list, so the two
+ * `discover/owner-field-writes.ts` `IDENTITY_FIELDS` list, so the two
  * heuristics stay in lockstep. Kept deliberately tight to identity/tenancy
  * columns (not arbitrary foreign keys) to hold the false-positive rate down.
  */

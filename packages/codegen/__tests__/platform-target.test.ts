@@ -7,7 +7,7 @@ import type { PlatformCapabilities } from "@lunora/platform";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { CapabilityKey } from "../src/capabilities";
-import type { FeatureUsage } from "../src/discover-feature-usage";
+import type { FeatureUsage } from "../src/discover/feature-usage";
 import { readProjectTarget, resolveCodegenTarget } from "../src/platform-target";
 import { runCodegen } from "../src/run-codegen";
 
