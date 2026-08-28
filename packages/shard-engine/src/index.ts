@@ -52,6 +52,7 @@ export type {
 } from "./ctx-db";
 export {
     applyCdcChanges,
+    assertNoExplicitUndefined,
     assertValidClientId,
     backfillAggregateIndexes,
     backfillRankIndexes,

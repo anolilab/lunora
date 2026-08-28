@@ -4513,6 +4513,7 @@ export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } fr
 export { runShardMigrations } from "./ctx-db-migrations";
 export { SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { ShapeRow } from "./ctx-db-shapes";
+export { assertNoExplicitUndefined };
 export { selectShapeMembers, selectShapeRows } from "./ctx-db-shapes";
 export {
     type BroadcastDelta,

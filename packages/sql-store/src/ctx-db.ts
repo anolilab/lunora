@@ -58,6 +58,7 @@ import {
     applyOnDelete,
     applySelect,
     assertFlatPredicate,
+    assertNoExplicitUndefined,
     assertValidClientId,
     buildSeekWhere,
     CDC_LOG_TABLE,
@@ -106,6 +107,7 @@ import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { decodeWire } from "../../../shared/wire-codec";
 import type { SearchStage } from "./ctx-db-search";
 import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
 import { migrateSearchState } from "./ctx-db-search-state";
@@ -2227,7 +2229,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const typed = row as { count: number; key: string; value: null | number };
 
             return {
-                key: JSON.parse(typed.key) as Record<string, unknown>,
+                // `encodeAggregateKey` writes `JSON.stringify(encodeWire(ordered))`,
+                // so a bare `JSON.parse` hands back the wire-tagged ARRAY rather
+                // than the value — a `v.bigint()` group key came out as
+                // `["$lunora.wire$","bigint","42"]`. The shard twin decodes it;
+                // this side did not, so one query returned different key shapes
+                // depending on backend and index materialisation.
+                key: decodeWire(JSON.parse(typed.key)) as Record<string, unknown>,
                 value: readAggregateValue(agg.op, { count: typed.count, value: aggregateScalar(typed.value) }),
             };
         });
@@ -3034,6 +3042,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async patch(id, patch, expectedTable) {
+            // A key present with value `undefined` is a silent-data-loss footgun:
+            // `runRowValidators` skips it (`v.optional(x).parse(undefined)` is
+            // fine) and `serializeColumnValue(merged[field] ?? null)` then wrote
+            // SQL NULL, so `patch(id, { bio: undefined })` cleared the column with
+            // no error. The shard twin has refused this since it was found there;
+            // sharing its guard rather than restating it is what keeps the two
+            // from drifting again.
+            assertNoExplicitUndefined("patch", patch);
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
@@ -3532,6 +3548,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async replace(id, document, expectedTable, replaceOptions) {
+            assertNoExplicitUndefined("replace", document);
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
