@@ -16,7 +16,7 @@ import type {
 
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
-import type { CapabilityKey } from "./capabilities";
+import type { CapabilityKey, CapabilityTier } from "./capabilities";
 import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
 import type {
@@ -2017,14 +2017,37 @@ export type Env = CloudflareBindings;`;
     // `key: CapabilityKey` (not `string`) so a mistyped capability id is a compile
     // error, not a silent `?? ""` drop of the ctx field. The `?? ""` remains only
     // for the legitimate case of a key with no `serverCtxField` in the map.
-    const serverCapabilityField = (key: CapabilityKey, enabled: boolean): string => (enabled ? (SERVER_CTX_FIELDS.get(key)?.field ?? "") : "");
-    const kvContextField = serverCapabilityField("kv", hasKv);
-    const analyticsContextField = serverCapabilityField("analytics", hasAnalytics);
-    const hyperdriveActionField = serverCapabilityField("hyperdrive", hasHyperdrive);
-    const browserActionField = serverCapabilityField("browser", hasBrowser);
-    const imagesActionField = serverCapabilityField("images", hasImages);
-    const pipelinesActionField = serverCapabilityField("pipelines", hasPipelines);
-    const r2sqlActionField = serverCapabilityField("r2sql", hasR2sql);
+    /**
+     * The ctx-interface fragment for a capability, checked against the determinism
+     * tier the table declares for it.
+     *
+     * `tier` was written seven times and read zero: which interface a fragment
+     * landed in was decided purely by which of the three templates below its
+     * placeholder appeared in, and nothing compared that against the table. A
+     * capability declared `tier: "action"` could be spliced onto `QueryCtx` — and
+     * the table exists precisely to stop four parallel lists drifting. `usedAt`
+     * is the tier the binding is about to be used at, so a mismatch is a build
+     * failure rather than a silently wrong `_generated/server.ts`.
+     */
+    const serverCapabilityField = (key: CapabilityKey, enabled: boolean, usedAt: CapabilityTier): string => {
+        const facet = SERVER_CTX_FIELDS.get(key);
+
+        if (facet !== undefined && facet.tier !== usedAt) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/codegen: capability "${key}" declares tier "${facet.tier}" in SERVER_CTX_FIELDS but is emitted onto the "${usedAt}" context — update whichever is wrong.`,
+            );
+        }
+
+        return enabled ? (facet?.field ?? "") : "";
+    };
+    const kvContextField = serverCapabilityField("kv", hasKv, "every");
+    const analyticsContextField = serverCapabilityField("analytics", hasAnalytics, "every");
+    const hyperdriveActionField = serverCapabilityField("hyperdrive", hasHyperdrive, "action");
+    const browserActionField = serverCapabilityField("browser", hasBrowser, "action");
+    const imagesActionField = serverCapabilityField("images", hasImages, "action");
+    const pipelinesActionField = serverCapabilityField("pipelines", hasPipelines, "action");
+    const r2sqlActionField = serverCapabilityField("r2sql", hasR2sql, "action");
     // `ctx.vectors` — narrowed to the schema's declared vector indexes, so a
     // typo'd index name is a compile error rather than a runtime "unknown
     // index" throw from the binding facade. The base surface stays `string`
