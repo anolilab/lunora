@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { isRequestSpan } from "../lunora/traffic";
 import type { TrafficFilter } from "../src/telemetry/traffic-read";
 import {
     buildTrafficDimensionQuery,
@@ -262,5 +263,25 @@ describe(createTrafficReader, () => {
         expect(fetchMock).not.toHaveBeenCalled();
         expect(snapshot.totalRequests).toBe(0);
         expect(snapshot.countries).toStrictEqual([]);
+    });
+});
+
+/**
+ * The live stream's root-span predicate. This is a regression test with a story:
+ * the first cut used `=== undefined`, which reads as obviously correct and made
+ * the entire panel render permanently empty against real seeded data — an absent
+ * optional column comes back from the store as `null`. Nothing errored and no test
+ * failed; the rows were simply invisible, which is the worst shape a bug can take
+ * on a dashboard whose whole job is telling you what is happening.
+ */
+describe(isRequestSpan, () => {
+    it("treats a span with no parent as a request, however absence is represented", () => {
+        expect(isRequestSpan({})).toBe(true);
+        expect(isRequestSpan({ parentSpanId: undefined })).toBe(true);
+        expect(isRequestSpan({ parentSpanId: null })).toBe(true);
+    });
+
+    it("excludes work nested inside a request", () => {
+        expect(isRequestSpan({ parentSpanId: "a1b2c3" })).toBe(false);
     });
 });

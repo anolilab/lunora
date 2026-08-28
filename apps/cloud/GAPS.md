@@ -40,17 +40,31 @@ document, which had drifted). Findings:
 
 **Confirmed still open (code-tractable, no infra needed):**
 
-| Item                             | Blocker                                                     |
-| -------------------------------- | ----------------------------------------------------------- |
-| D2 `lunora eject` CLI subcommand | Core exists (`src/cli/eject.ts`); no `lunora eject` command |
-| R3#2 deployment health charts    | Needs `outcome` on the AE data point first                  |
-| R3#5 onboarding checklist        | Not started                                                 |
-| R3#7 deploy-key roll UX          | Not started                                                 |
-| R3#9 integrations hub            | Not started                                                 |
+| Item                  | Blocker     |
+| --------------------- | ----------- |
+| R3#9 integrations hub | Not started |
 
-`D2` is the notable one: the packaging core is written and tested, but nothing
-in `packages/cli` invokes it, so the no-lock-in exit hatch is unreachable by a
-user. That is a small wiring job, not a build.
+The rest of this list has since shipped — see the status pass below.
+
+### Status pass — 2026-08-28
+
+| Item                             | Now                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D2 `lunora eject` CLI subcommand | ✅ **Shipped** as `lunora cloud eject <deployment-id> [--out]`. The packaging core moved to `packages/cli/src/util/eject.ts` (its output is files on the user's disk) and is fed by a new deploy-key-authorized `POST /v1/eject`, which unseals the tenant admin token at the edge and returns only the snapshot — so the CLI never holds a tenant bearer. |
+| R3#2 deployment health charts    | ✅ **Shipped.** The blocker row above was stale: `outcome` (blob3) landed 2026-08-13. `src/telemetry/traffic-read.ts` reads the metering stream per script, so passing a single script name gives one deployment's volume, error rate and latency.                                                                                                         |
+| R3#5 onboarding checklist        | ✅ **Shipped** — `lunora/onboarding.ts` + `src/client/OnboardingChecklist.tsx`, on the Projects tab until the org's first deployment is live. Derived from real rows, never stored.                                                                                                                                                                        |
+| R3#7 deploy-key roll UX          | ✅ **Shipped** — `deploy_keys.roll` does issue+revoke in one transactional mutation, so neither the two-live-keys nor the no-keys window exists. Ingest keys are refused (their stored cipher would point at a revoked secret).                                                                                                                            |
+| R3#9 integrations hub            | 🔨 Still open — nothing in `src/client/`.                                                                                                                                                                                                                                                                                                                  |
+
+Also shipped in that pass: a **Traffic tab** (`lunora/traffic.ts`,
+`src/client/TrafficSection.tsx`) — visitors by country, top paths, response-code
+breakdown, volume/bytes over time, a live request stream and true latency
+percentiles. The AE data point gained `country`/`hostname`/`status` blobs and
+`durationMs`/`bytes` doubles, appended so the billing rollup's `blob1`/`blob2`
+positions never move.
+
+**Unchanged 🌐 set** still includes D1 backups/PITR, which remains the
+highest-risk item on this page and is still not built.
 
 **Confirmed still 🧩 (logic exists, no caller):** `applyCreditPurchase`
 (`src/billing/creem-credits.ts`) — unchanged, and genuinely gated on live Creem
@@ -360,11 +374,13 @@ D1 Time Travel export to platform R2 in a _different_ cell, on a cron; tested
 restore runbook. The single most-critical 🌐 item — the control-plane DB is the
 crown jewel.
 
-### D2. `lunora eject` — self-serve full export (✅ packaging core shipped)
+### D2. `lunora eject` — self-serve full export (✅ shipped end to end)
 
-Data-plane export/import RPCs already exist in the framework; the missing part
-is the one-command CLI packaging (export all shards + D1 + R2 + scaffold a BYO
-`wrangler.jsonc`). Portability is the trust feature that eases adoption.
+Data-plane export/import RPCs already existed in the framework; the missing part
+was the one-command CLI packaging. Now `lunora cloud eject <deployment-id>`,
+writing `export.ndjson`, a BYO `wrangler.jsonc` and a restore README into
+`./eject` (or `--out`). Portability is the trust feature that eases adoption, and
+it is only a feature once a user can actually run it.
 
 ### D3. Right-to-erasure / org offboarding (✅ shipped)
 

@@ -85,6 +85,29 @@ exactly the lines for one dispatch and link a line back to its trace.
 dataset, queryable over its SQL API. Keep attributes low-cardinality; see the
 [metrics guidance](/docs/concepts/observability#application-metrics-with-ctxmetrics).
 
+## Traffic
+
+The **Traffic** tab answers what your deployed apps actually served: requests by
+country, top paths, a response-code breakdown, and request volume with bytes over
+time. Nothing to enable — the dispatcher already meters every request it routes.
+
+Two sources, deliberately, and the tab labels which is which:
+
+- **Breakdowns and the volume chart** come from the metering stream. Analytics
+  Engine samples at high write rates, so these are exact counts (each retained row
+  carries the interval it stands in for) with approximate averages.
+- **The live request stream and the p50/p95/p99 latencies** come from the span
+  store, which is unsampled and reactive — so the stream fills in as requests
+  complete, with no polling, and the percentiles are real values some request
+  actually took.
+
+Paths are shown as route labels with record ids collapsed (`/orders/:id`), so an
+endpoint reads as one row rather than thousands. If you serve several domains, the
+domain filter narrows every panel except the domain breakdown itself.
+
+Passing a single deployment scopes the same reads to one release, which is how the
+per-deployment health view works.
+
 ## Scoped ingest keys
 
 Deploy keys have a **capability**:

@@ -1,5 +1,6 @@
 import { useLunora, useQuery } from "@lunora/react";
-import type { ReactElement } from "react";
+import { ClientOnly } from "@tanstack/react-router";
+import type { ReactElement, ReactNode } from "react";
 import { useEffect, useState } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -95,11 +96,81 @@ const useTrafficSnapshot = (organizationId: OrgId, from: number, to: number, hos
 };
 
 /** A headline figure: a large mono number with its label beneath, in the label voice. */
-const Stat = ({ label, value }: { label: string; value: string }): ReactElement => (
+const Stat = ({ label, value }: { label: string; value: ReactNode }): ReactElement => (
     <div className="flex flex-col gap-1">
         <span className="font-mono text-2xl leading-none tabular-nums">{value}</span>
         <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>{label}</span>
     </div>
+);
+
+/** `traffic.live` as the panel consumes it. */
+type LiveTraffic = ReturnType<typeof useQuery<typeof api.traffic.live>>;
+
+/** The loading placeholder, shared by the server pass and the pre-resolution client pass. */
+const LiveLoading = (): ReactElement => (
+    <CardContent>
+        <p className="text-muted-foreground py-6 text-center font-mono text-xs tracking-[0.09em] uppercase">[Loading…]</p>
+    </CardContent>
+);
+
+/**
+ * The live request stream.
+ *
+ * Wrapped in `ClientOnly` in its entirety, because it reads a REACTIVE query on a
+ * route with no loader: the server can never have resolved `traffic.live`, while
+ * the browser often already has by the time it hydrates. Every branch on it
+ * therefore diverges, and patching them one at a time is whack-a-mole — fix the
+ * text and the structure moves, fix the structure and the list appears.
+ * `ClientOnly` renders its fallback on the server AND on the first client pass, so
+ * both sides agree by construction and the live content arrives on the next paint.
+ */
+const LiveRequests = ({ live }: { live: LiveTraffic }): ReactElement => (
+    <Card>
+        <CardHeader>
+            <CardTitle>Live requests</CardTitle>
+            <CardDescription>
+                Every request as it completes, pushed live from the span store — exact timings, no sampling.{" "}
+                <ClientOnly fallback="">{live === undefined ? "" : `${formatNumber(live.latency.count)} in the retained window.`}</ClientOnly>
+            </CardDescription>
+        </CardHeader>
+        <ClientOnly fallback={<LiveLoading />}>
+            {live === undefined ? <LiveLoading /> : null}
+
+            {live?.requests.length === 0 ? (
+                <CardContent>
+                    <p className="text-muted-foreground py-6 text-center text-sm">No requests yet. This list fills in as your apps serve traffic.</p>
+                </CardContent>
+            ) : null}
+
+            {live !== undefined && live.requests.length > 0 ? (
+                <CardContent>
+                    <ul className="m-0 grid list-none gap-0 p-0">
+                        {live.requests.map((request) => (
+                            <li
+                                className="border-border flex items-baseline gap-3 border-b px-1 py-2 text-sm last:border-b-0"
+                                key={`${request.traceId}:${String(request.startedAt)}`}
+                            >
+                                <span className="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">{formatTime(request.startedAt)}</span>
+                                <span
+                                    className={cn(
+                                        "shrink-0 font-mono text-[10px] tracking-[0.09em] uppercase",
+                                        request.level === "error" ? "text-red-600 dark:text-red-400" : "text-muted-foreground",
+                                    )}
+                                >
+                                    {request.level}
+                                </span>
+                                <span className="min-w-0 flex-1 truncate font-mono text-xs">{request.name}</span>
+                                {request.serviceName === undefined ? null : (
+                                    <span className="text-muted-foreground hidden shrink-0 truncate font-mono text-[11px] sm:block">{request.serviceName}</span>
+                                )}
+                                <span className="shrink-0 font-mono text-xs tabular-nums">{formatMs(request.durationMs)}</span>
+                            </li>
+                        ))}
+                    </ul>
+                </CardContent>
+            ) : null}
+        </ClientOnly>
+    </Card>
 );
 
 interface TrafficSectionProps {
@@ -117,6 +188,12 @@ export const TrafficSection = ({ organizationId }: TrafficSectionProps): ReactEl
     // unfiltered by design (see `createTrafficReader`), so the option list stays
     // complete even while a domain is selected and there is nothing to keep in sync.
     const domainOptions = snapshot?.hostnames.map((row) => row.key) ?? [];
+
+    // The two halves populate independently — the metering stream needs
+    // Analytics-Engine credentials, the span store does not — so each gates its own
+    // panels rather than one hiding the other.
+    const snapshotHasData = snapshot !== undefined && snapshot.totalRequests > 0;
+    const liveHasData = live !== undefined && live.latency.count > 0;
 
     return (
         <div className="flex flex-col gap-6">
@@ -172,23 +249,38 @@ export const TrafficSection = ({ organizationId }: TrafficSectionProps): ReactEl
             {snapshot?.totalRequests === 0 ? (
                 <Card>
                     <CardContent className="text-muted-foreground py-8 text-center text-sm">
-                        No traffic in this window. Once a deployment serves requests they appear here — nothing needs to be enabled.
+                        No request breakdowns for this window. They come from the metering stream, which fills in once a deployment serves traffic — the live
+                        stream below is independent of it.
                     </CardContent>
                 </Card>
             ) : null}
 
-            {snapshot !== undefined && snapshot.totalRequests > 0 ? (
-                <>
-                    <Card>
-                        <CardContent className="grid gap-6 pt-6 sm:grid-cols-2 xl:grid-cols-5">
-                            <Stat label="Requests" value={formatNumber(snapshot.totalRequests)} />
-                            <Stat label="Countries" value={formatNumber(snapshot.countries.length)} />
-                            <Stat label="p50 latency" value={formatMs(live?.latency.p50 ?? 0)} />
-                            <Stat label="p95 latency" value={formatMs(live?.latency.p95 ?? 0)} />
-                            <Stat label="p99 latency" value={formatMs(live?.latency.p99 ?? 0)} />
-                        </CardContent>
-                    </Card>
+            {/* Always rendered, for two reasons.
 
+                Latency is NOT gated on the snapshot: it comes from the span store,
+                which is populated whenever an app has served anything, while the
+                breakdowns need Analytics-Engine credentials a cell may not have
+                provisioned yet. Gating them together hid the exact half of the page
+                behind the sampled half, which is backwards.
+
+                And the card itself is unconditional so that no STRUCTURAL choice
+                depends on an async read. `traffic.live` is a reactive query that can
+                already be resolved when the client hydrates but not when the server
+                rendered, so a conditional wrapper around it shifts every sibling and
+                fails hydration. Each cell fills in on its own; the frame does not
+                move. */}
+            <Card>
+                <CardContent className="grid gap-6 pt-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                    <Stat label="Requests" value={snapshotHasData ? formatNumber(snapshot.totalRequests) : "—"} />
+                    <Stat label="Countries" value={snapshotHasData ? formatNumber(snapshot.countries.length) : "—"} />
+                    <Stat label="p50 latency" value={<ClientOnly fallback="—">{liveHasData ? formatMs(live.latency.p50) : "—"}</ClientOnly>} />
+                    <Stat label="p95 latency" value={<ClientOnly fallback="—">{liveHasData ? formatMs(live.latency.p95) : "—"}</ClientOnly>} />
+                    <Stat label="p99 latency" value={<ClientOnly fallback="—">{liveHasData ? formatMs(live.latency.p99) : "—"}</ClientOnly>} />
+                </CardContent>
+            </Card>
+
+            {snapshotHasData ? (
+                <>
                     <div className="grid gap-6 xl:grid-cols-2">
                         <Card>
                             <CardHeader>
@@ -245,52 +337,7 @@ export const TrafficSection = ({ organizationId }: TrafficSectionProps): ReactEl
                 </>
             ) : null}
 
-            <Card>
-                <CardHeader>
-                    <CardTitle>Live requests</CardTitle>
-                    <CardDescription>
-                        Every request as it completes, pushed live from the span store — exact timings, no sampling.{" "}
-                        {live === undefined ? null : `${formatNumber(live.latency.count)} in the retained window.`}
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    {live === undefined ? (
-                        <p className="text-muted-foreground py-6 text-center font-mono text-xs tracking-[0.09em] uppercase">[Loading…]</p>
-                    ) : null}
-
-                    {live?.requests.length === 0 ? (
-                        <p className="text-muted-foreground py-6 text-center text-sm">No requests yet. This list fills in as your apps serve traffic.</p>
-                    ) : null}
-
-                    {live !== undefined && live.requests.length > 0 ? (
-                        <ul className="m-0 grid list-none gap-0 p-0">
-                            {live.requests.map((request) => (
-                                <li
-                                    className="border-border flex items-baseline gap-3 border-b px-1 py-2 text-sm last:border-b-0"
-                                    key={`${request.traceId}:${String(request.startedAt)}`}
-                                >
-                                    <span className="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">{formatTime(request.startedAt)}</span>
-                                    <span
-                                        className={cn(
-                                            "shrink-0 font-mono text-[10px] tracking-[0.09em] uppercase",
-                                            request.level === "error" ? "text-red-600 dark:text-red-400" : "text-muted-foreground",
-                                        )}
-                                    >
-                                        {request.level}
-                                    </span>
-                                    <span className="min-w-0 flex-1 truncate font-mono text-xs">{request.name}</span>
-                                    {request.serviceName === undefined ? null : (
-                                        <span className="text-muted-foreground hidden shrink-0 truncate font-mono text-[11px] sm:block">
-                                            {request.serviceName}
-                                        </span>
-                                    )}
-                                    <span className="shrink-0 font-mono text-xs tabular-nums">{formatMs(request.durationMs)}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    ) : null}
-                </CardContent>
-            </Card>
+            <LiveRequests live={live} />
         </div>
     );
 };

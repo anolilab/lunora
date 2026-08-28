@@ -208,6 +208,22 @@ interface ObservationRow {
 }
 
 /**
+ * Is this span a request, rather than work inside one?
+ *
+ * `== null` is load-bearing. An absent optional column reads back from the store
+ * as `null`, not `undefined`, so a strict `=== undefined` here drops every root
+ * span and the live stream renders permanently empty while the rows sit in the
+ * table — a failure with no error anywhere, which is why it gets its own named
+ * predicate and its own test. The rest of the control plane checks absent
+ * optionals the same loose way (`deploy_keys.verify`, `findActiveIngestKey`).
+ *
+ * Only ROOT spans count. A span with a parent is work inside a request, and
+ * counting it would inflate the request rate by the app's internal fan-out and
+ * drag the percentiles toward whatever the smallest inner span is.
+ */
+export const isRequestSpan = (span: { parentSpanId?: null | string }): boolean => span.parentSpanId == null;
+
+/**
  * Nearest-rank percentile over an ascending array of durations.
  *
  * Nearest-rank rather than interpolated: every value returned is a duration some
@@ -253,7 +269,7 @@ export const live = query
             where: { organizationId: args.organizationId },
         });
 
-        const roots = (page as unknown as ObservationRow[]).filter((row) => row.parentSpanId === undefined);
+        const roots = (page as unknown as ObservationRow[]).filter((row) => isRequestSpan(row));
         // Percentiles come from the whole scanned window, not the truncated list —
         // a p99 over the 50 rows the pane happens to show is a different statistic
         // from a p99 over the window, and the smaller one is the misleading one.
@@ -273,8 +289,11 @@ export const live = query
                     name: row.name,
                     startedAt: row.startedAt,
                     traceId: row.traceId,
-                    ...(row.serviceName === undefined ? {} : { serviceName: row.serviceName }),
-                    ...(row.statusMessage === undefined ? {} : { statusMessage: row.statusMessage }),
+                    // Same `== null` reasoning as the root filter above: a strict
+                    // check here would spread `serviceName: null` onto a field the
+                    // wire view declares as `string | undefined`.
+                    ...(row.serviceName == null ? {} : { serviceName: row.serviceName }),
+                    ...(row.statusMessage == null ? {} : { statusMessage: row.statusMessage }),
                 };
             }),
         };
