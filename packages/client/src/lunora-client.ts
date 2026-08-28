@@ -2103,7 +2103,18 @@ class LunoraClient {
     public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: ActionCallOptions = {}): Promise<ReturnOf<F>> {
         this.assertOpen();
 
-        return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey)) as ReturnOf<F>;
+        // Both flags, because an action is the one entry point that does both
+        // jobs: it reads through `ctx.runQuery` and writes through
+        // `ctx.runMutation`. `query()` attaches and `mutation()` captures; this
+        // passed neither, so an action writing through a `.global()` / D1 table
+        // left `this.bookmark` untouched and the very next `query()` attached a
+        // pre-action bookmark — answerable by a replica that predates the write.
+        // The worker forwards an inbound `x-d1-bookmark` and returns one on this
+        // route, so nothing upstream was compensating.
+        return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, {
+            attachBookmark: true,
+            captureBookmark: true,
+        })) as ReturnOf<F>;
     }
 
     /**
@@ -3359,6 +3370,16 @@ class LunoraClient {
                 const conn = this.getConnection(shardKey);
 
                 if (conn) {
+                    // Drop a start frame still waiting on the socket. Without
+                    // this the cancelled stream was sent anyway on the next open:
+                    // the server opened an iterator nobody consumes, its chunks
+                    // arrived for an id no longer in `this.streams` (a silent
+                    // no-op), and no `unsubscribe` ever followed because the
+                    // consumer had already gone. `handleDisconnect` knows to
+                    // filter `pendingStreams` by id; that knowledge just never
+                    // reached the cancel path.
+                    conn.pendingStreams = conn.pendingStreams?.filter((pending) => (pending as { id?: string }).id !== id);
+
                     sendOn(conn, { id, type: "unsubscribe" });
                 }
 
@@ -3398,7 +3419,33 @@ class LunoraClient {
         // rides the next reconnect instead of leaking a forever-hanging consumer.
         const sentImmediately = conn?.wsState === "open" && sendOn(conn, message);
 
-        if (!sentImmediately && conn) {
+        if (!sentImmediately && conn === undefined) {
+            // No connection at all, so there is nothing to send on AND nothing to
+            // queue against. `ensureSocket` returns before creating one whenever
+            // this tab is not the cross-tab leader — which includes the window
+            // every `crossTabSync` client spends as a follower before it
+            // self-promotes — and cross-tab relays only subscription frames, so a
+            // follower has no stream path.
+            //
+            // Both branches below used to be guarded on `conn`, so this case fell
+            // off the end: the stream was recorded and its iterable returned
+            // having sent nothing and queued nothing, and the consumer's
+            // `for await` hung forever with no error and no completion. Failing
+            // it names the limitation instead.
+            this.streams.delete(id);
+            handle.fail(
+                new LunoraError(
+                    "STREAM_DISCONNECTED",
+                    "stream unavailable: this tab is not the cross-tab WebSocket leader, so it holds no socket to stream over",
+                ),
+            );
+
+            return iterable;
+        }
+
+        // `conn` is provably present here — the branch above returned for its
+        // absence, which is the case that used to fall through both guards.
+        if (!sentImmediately) {
             // Defer the send to the open handler — the existing pending logic
             // is for unsubscribes, so stash the stream-start frame separately.
             conn.pendingStreams = conn.pendingStreams ?? [];
@@ -3696,7 +3743,26 @@ class LunoraClient {
 
                 notifySubscription(state, foldOptimistic(data, state.optimisticLayers));
             },
-            onSubscriptionError: (key, error) => {
+            onLeaderClaimAnswered: () => {
+                // A new tab just announced itself. Re-state our status directly:
+                // `emitConnectionStatus` short-circuits when nothing changed, so
+                // a stable leader never re-broadcasts and a late-joining follower
+                // would otherwise sit on `leaderStatus === undefined` — reporting
+                // `"idle"` while the app is live, and never seeing the
+                // transitioned-to-connected edge that flushes its offline queue.
+                if (this.tabCoordinator?.isLeader()) {
+                    this.tabCoordinator.broadcastConnectionStatus(this.computeStatus(), this.identityFingerprint());
+                }
+            },
+            onSubscriptionError: (key, error, identity) => {
+                // Belt-and-braces identity check — see `onConnectionStatus`'s
+                // comment for the full rationale (identical here). This was the
+                // one of the four callbacks without it, which only went unnoticed
+                // because nothing broadcast to it.
+                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                    return;
+                }
+
                 const state = this.subscriptions.get(key);
 
                 if (state) {
@@ -5251,7 +5317,24 @@ class LunoraClient {
         const state = id === undefined ? undefined : this.subscriptions.getById(id);
 
         if (state) {
-            fanSubscriptionError(state.errorCallbacks, buildSubscriptionError(message));
+            const subscriptionError = buildSubscriptionError(message);
+
+            fanSubscriptionError(state.errorCallbacks, subscriptionError);
+
+            // Fan it to follower tabs too. `broadcastSubscriptionError` existed
+            // with no caller, so the `onSubscriptionError` handler wired to it
+            // was unreachable: a `subscribe(..., { onError })` on a follower
+            // never fired for a server-side rejection (an RLS denial, a failed
+            // admin gate) and the query just sat empty. Guarded on leadership
+            // like its `data` and `settled` siblings — only the leader holds the
+            // socket that produced this frame.
+            if (this.tabCoordinator?.isLeader()) {
+                this.tabCoordinator.broadcastSubscriptionError(
+                    SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey),
+                    subscriptionError,
+                    this.identityFingerprint(),
+                );
+            }
 
             return;
         }

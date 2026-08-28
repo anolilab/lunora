@@ -16,7 +16,7 @@ import type {
 
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
-import type { CapabilityKey } from "./capabilities";
+import type { CapabilityKey, CapabilityTier } from "./capabilities";
 import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
 import type {
@@ -125,6 +125,19 @@ const pascalCase = (value: string): string => value.charAt(0).toUpperCase() + va
  * are valid TS interface members, so callers don't have to filter upstream.
  */
 const renderPropertyKey = (fieldName: string): string => (IDENTIFIER_RE.test(fieldName) ? fieldName : JSON.stringify(fieldName));
+
+/**
+ * Emit a key for a runtime OBJECT LITERAL — bare when it is a JS identifier,
+ * otherwise quoted, and `__proto__` as a computed key.
+ *
+ * `__proto__` passes {@link IDENTIFIER_RE} and even survives quoting, but in a
+ * value position `{ __proto__: x }` and `{ "__proto__": x }` are both the
+ * prototype SETTER: neither creates an own property, so the entry silently
+ * vanishes from the emitted object. `{ ["__proto__"]: x }` is an ordinary own
+ * property. {@link renderPropertyKey} stays correct for TYPE positions, where
+ * `__proto__` is just a member name and a computed key would not even parse.
+ */
+const renderObjectKey = (fieldName: string): string => (fieldName === "__proto__" ? `[${JSON.stringify(fieldName)}]` : renderPropertyKey(fieldName));
 
 /** Scalar `ValidatorIR` kinds whose TS type is a fixed string with no recursion. */
 const SCALAR_TYPE_BY_KIND: Record<string, string> = {
@@ -1293,11 +1306,11 @@ const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: 
             const members = list
                 .map(
                     (route) =>
-                        `        ${renderPropertyKey(route.exportName)}: { method: ${JSON.stringify(route.method)}, path: ${JSON.stringify(route.path)} },`,
+                        `        ${renderObjectKey(route.exportName)}: { method: ${JSON.stringify(route.method)}, path: ${JSON.stringify(route.path)} },`,
                 )
                 .join("\n");
 
-            return `    ${renderPropertyKey(sanitizeNamespace(file))}: {\n${members}\n    },`;
+            return `    ${renderObjectKey(sanitizeNamespace(file))}: {\n${members}\n    },`;
         })
         .join("\n");
 
@@ -1762,7 +1775,7 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
             // The object key is quoted when `namespace` isn't a bare identifier
             // (leading-digit filename); the `"${namespace}:..."` dispatch ref
             // strings above already embed the raw value, so both still agree.
-            return `    ${renderPropertyKey(namespace)}: {\n${leaves}\n    },`;
+            return `    ${renderObjectKey(namespace)}: {\n${leaves}\n    },`;
         })
         .join("\n");
 
@@ -2004,14 +2017,38 @@ export type Env = CloudflareBindings;`;
     // `key: CapabilityKey` (not `string`) so a mistyped capability id is a compile
     // error, not a silent `?? ""` drop of the ctx field. The `?? ""` remains only
     // for the legitimate case of a key with no `serverCtxField` in the map.
-    const serverCapabilityField = (key: CapabilityKey, enabled: boolean): string => (enabled ? (SERVER_CTX_FIELDS.get(key)?.field ?? "") : "");
-    const kvContextField = serverCapabilityField("kv", hasKv);
-    const analyticsContextField = serverCapabilityField("analytics", hasAnalytics);
-    const hyperdriveActionField = serverCapabilityField("hyperdrive", hasHyperdrive);
-    const browserActionField = serverCapabilityField("browser", hasBrowser);
-    const imagesActionField = serverCapabilityField("images", hasImages);
-    const pipelinesActionField = serverCapabilityField("pipelines", hasPipelines);
-    const r2sqlActionField = serverCapabilityField("r2sql", hasR2sql);
+
+    /**
+     * The ctx-interface fragment for a capability, checked against the determinism
+     * tier the table declares for it.
+     *
+     * `tier` was written seven times and read zero: which interface a fragment
+     * landed in was decided purely by which of the three templates below its
+     * placeholder appeared in, and nothing compared that against the table. A
+     * capability declared `tier: "action"` could be spliced onto `QueryCtx` — and
+     * the table exists precisely to stop four parallel lists drifting. `usedAt`
+     * is the tier the binding is about to be used at, so a mismatch is a build
+     * failure rather than a silently wrong `_generated/server.ts`.
+     */
+    const serverCapabilityField = (key: CapabilityKey, enabled: boolean, usedAt: CapabilityTier): string => {
+        const facet = SERVER_CTX_FIELDS.get(key);
+
+        if (facet !== undefined && facet.tier !== usedAt) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/codegen: capability "${key}" declares tier "${facet.tier}" in SERVER_CTX_FIELDS but is emitted onto the "${usedAt}" context — update whichever is wrong.`,
+            );
+        }
+
+        return enabled ? (facet?.field ?? "") : "";
+    };
+    const kvContextField = serverCapabilityField("kv", hasKv, "every");
+    const analyticsContextField = serverCapabilityField("analytics", hasAnalytics, "every");
+    const hyperdriveActionField = serverCapabilityField("hyperdrive", hasHyperdrive, "action");
+    const browserActionField = serverCapabilityField("browser", hasBrowser, "action");
+    const imagesActionField = serverCapabilityField("images", hasImages, "action");
+    const pipelinesActionField = serverCapabilityField("pipelines", hasPipelines, "action");
+    const r2sqlActionField = serverCapabilityField("r2sql", hasR2sql, "action");
     // `ctx.vectors` — narrowed to the schema's declared vector indexes, so a
     // typo'd index name is a compile error rather than a runtime "unknown
     // index" throw from the binding facade. The base surface stays `string`
@@ -5962,12 +5999,18 @@ const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: 
 };
 
 const renderIndexEntry = (index: IndexIR): string => {
-    // drizzle.*.ts is runtime-executed, so every slot here must be a valid JS
-    // identifier: `index.name` is both a bare object key and a string literal,
-    // and each field is a bare `t.<field>` column accessor. Reject anything
-    // outside the identifier allowlist rather than embed unescaped source.
-    assertIdentifier(index.name, "drizzle index name");
-
+    // An index NAME may legitimately be a non-identifier — `emitDataModel` says so
+    // and emits `"by-author"` into its union, and `.searchIndex("search-body")`
+    // ships today. This renderer used to `assertIdentifier` it, so `.index("by-author")`
+    // died with an INTERNAL error naming no file and no line while its sibling
+    // index kinds accepted the same spelling. Render it safely instead: a quoted
+    // object key and a JSON-escaped literal, which is what closes the injection
+    // vector without rejecting a hyphen.
+    //
+    // Each FIELD stays asserted — it is spliced as a bare `t.<field>` column
+    // accessor, where there is nothing to quote. `assertTopLevelIndexField` gives
+    // the nested-path case a located diagnostic upstream; this remains the
+    // backstop for anything that reaches here another way.
     const constructor = index.unique ? "uniqueIndex" : "index";
     const fields = index.fields
         .map((field) => {
@@ -5977,7 +6020,7 @@ const renderIndexEntry = (index: IndexIR): string => {
         })
         .join(", ");
 
-    return `    ${index.name}: ${constructor}("${index.name}").on(${fields}),`;
+    return `    ${renderObjectKey(index.name)}: ${constructor}(${JSON.stringify(index.name)}).on(${fields}),`;
 };
 
 const renderDrizzleTable = (table: TableIR, knownTables: ReadonlySet<string>): string => {

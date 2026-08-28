@@ -311,6 +311,41 @@ describe("lunoraClient", () => {
             expect(headers["x-d1-bookmark"]).toBe("bm-123");
         });
 
+        it("action captures x-d1-bookmark and replays it on the next query", async () => {
+            expect.assertions(1);
+
+            // An action is the one entry point that both reads (`ctx.runQuery`)
+            // and writes (`ctx.runMutation`). It passed neither bookmark flag, so
+            // an action writing through a `.global()` / D1 table left the bookmark
+            // untouched and the next query could be answered by a replica that
+            // predated the write.
+            let call = 0;
+            let queryHeaders: Record<string, string> = {};
+
+            const fetchMock = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async (_url: string, init: RequestInit) => {
+                call += 1;
+
+                if (call === 1) {
+                    return Response.json({ result: { ok: true } }, { headers: { "content-type": "application/json", "x-d1-bookmark": "bm-act" }, status: 200 });
+                }
+
+                queryHeaders = (init.headers ?? {}) as Record<string, string>;
+
+                return jsonResponse({ result: { rows: [] } });
+            });
+
+            const client = new LunoraClient({
+                fetch: fetchMock as unknown as typeof fetch,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.action(fnRef("posts:sync"), {});
+            await client.query(fnRef("posts:list"), {});
+
+            expect(queryHeaders["x-d1-bookmark"]).toBe("bm-act");
+        });
+
         it("authorization header is attached when token is set", async () => {
             expect.assertions(2);
 
