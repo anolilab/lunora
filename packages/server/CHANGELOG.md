@@ -1,3 +1,16 @@
+## @lunora/server [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.91...@lunora/server@1.0.0-alpha.92) (2026-08-28)
+
+### Bug Fixes
+
+* close nine copied-helper divergences across eight packages ([#522](https://github.com/anolilab/lunora/issues/522)) ([a2455bb](https://github.com/anolilab/lunora/commit/a2455bb0f58b9873633504c3f1e9bfeb44a5870e))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.43
+* **@lunora/values:** upgraded to 1.0.0-alpha.32
+
 ## @lunora/server [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.90...@lunora/server@1.0.0-alpha.91) (2026-08-28)
 
 
