@@ -1,3 +1,15 @@
+## @lunora/storage [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.41...@lunora/storage@1.0.0-alpha.42) (2026-08-28)
+
+### Bug Fixes
+
+* close nine copied-helper divergences across eight packages ([#522](https://github.com/anolilab/lunora/issues/522)) ([a2455bb](https://github.com/anolilab/lunora/commit/a2455bb0f58b9873633504c3f1e9bfeb44a5870e))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/platform:** upgraded to 1.0.0-alpha.20
+
 ## @lunora/storage [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.40...@lunora/storage@1.0.0-alpha.41) (2026-08-27)
 
 ### Documentation
