@@ -1,3 +1,9 @@
+## @lunora/scheduler [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.41...@lunora/scheduler@1.0.0-alpha.42) (2026-08-28)
+
+### Bug Fixes
+
+* **codegen:** close eight silent-drop gaps in procedure discovery ([#513](https://github.com/anolilab/lunora/issues/513)) ([e393e49](https://github.com/anolilab/lunora/commit/e393e494c0145ad78e0f2b1e27798ed96e7039a3))
+
 ## @lunora/scheduler [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.40...@lunora/scheduler@1.0.0-alpha.41) (2026-08-27)
 
 ### Documentation
