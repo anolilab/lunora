@@ -1,17 +1,17 @@
 /**
- * Write the declarative description of what this Worker needs, for whoever is
- * going to provide it.
+ * The declarative description of what this Worker needs, for whoever is going to
+ * provide it.
  *
- * Two commands emit it, for the two halves of "Lunora is one participant, not
- * the session". `lunora build --emit-bindings` hands a deployer — Terraform,
- * Pulumi, Alchemy — the requirements it must provision. `lunora dev
- * --emit-bindings` hands a task runner the same document plus where the running
- * server is, so it can proxy to it and reserve its port instead of restating
- * both in a config that drifts.
+ * Three entry points, one derivation. `lunora bindings` answers the question
+ * without running anything, for a supervisor planning its graph before it starts
+ * a single process. `lunora build --emit-bindings` hands a deployer — Terraform,
+ * Pulumi, Alchemy — the requirements it must provision. `lunora dev` writes the
+ * same document plus where the running server is, so a task runner can proxy to
+ * it and reserve its port instead of restating both in a config that drifts.
  *
- * Same file for both on purpose: a supervisor that reads one has already learned
- * how to read the other, and the requirements cannot disagree between them
- * because there is one derivation.
+ * One derivation on purpose: the requirements a deployer provisions cannot
+ * disagree with the ones a dev graph proxies, and a supervisor that has learned
+ * to read one of these has learned to read all of them.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 
@@ -43,8 +43,6 @@ interface DevManifestSection {
      * document honest instead of shipping a `ready: false` that never updates.
      */
     statusFile: string;
-    /** The embedded studio's URL, when it runs. */
-    studioUrl?: string;
 }
 
 /** The emitted document: the deploy-time requirements, plus dev-time reachability when `lunora dev` wrote it. */
@@ -53,12 +51,30 @@ interface EmittedBindingManifest extends BindingManifest {
 }
 
 /**
- * Derive the manifest from the project's wrangler config and write it to
- * `destination` (relative paths resolve against `projectRoot`).
+ * Derive the manifest from the project's wrangler config.
  *
- * A project with no readable `wrangler.jsonc` is a hard error rather than an
- * empty manifest: an empty requirements document reads as "this Worker needs
- * nothing", which a deployer would act on by provisioning nothing.
+ * No readable `wrangler.jsonc` is an ERROR rather than an empty manifest: an
+ * empty requirements document reads as "this Worker needs nothing", which a
+ * deployer acts on by provisioning nothing. Callers decide whether that is fatal
+ * — it is when someone asked for the file, and it is not when we are writing one
+ * unasked.
+ */
+const deriveBindingManifest = (projectRoot: string): { error?: string; manifest?: BindingManifest } => {
+    const wranglerPath = findWranglerFile(projectRoot);
+    const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<ManifestConfigShape>(wranglerPath).parsed;
+
+    if (parsed === undefined) {
+        return {
+            error: `no readable wrangler config in ${projectRoot}. The binding manifest is derived from it, and an empty one would tell a deployer this Worker needs nothing.`,
+        };
+    }
+
+    return { manifest: buildBindingManifest(parsed) };
+};
+
+/**
+ * Derive the manifest and write it to `destination` (relative paths resolve
+ * against `projectRoot`).
  */
 const writeBindingManifestFile = (options: {
     destination: string;
@@ -68,16 +84,13 @@ const writeBindingManifestFile = (options: {
     projectRoot: string;
 }): { error?: string } => {
     const { destination, dev, logger, projectRoot } = options;
-    const wranglerPath = findWranglerFile(projectRoot);
-    const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<ManifestConfigShape>(wranglerPath).parsed;
+    const derived = deriveBindingManifest(projectRoot);
 
-    if (parsed === undefined) {
-        return {
-            error: `--emit-bindings found no readable wrangler config in ${projectRoot}. The manifest is derived from it, and an empty one would tell a deployer this Worker needs nothing.`,
-        };
+    if (derived.manifest === undefined) {
+        return { error: derived.error };
     }
 
-    const manifest: EmittedBindingManifest = { ...buildBindingManifest(parsed), ...(dev === undefined ? {} : { dev }) };
+    const manifest: EmittedBindingManifest = { ...derived.manifest, ...(dev === undefined ? {} : { dev }) };
     const target = isAbsolute(destination) ? destination : resolve(projectRoot, destination);
 
     mkdirSync(dirname(target), { recursive: true });
@@ -99,4 +112,4 @@ const writeBindingManifestFile = (options: {
 };
 
 export type { DevManifestSection, EmittedBindingManifest };
-export { writeBindingManifestFile };
+export { deriveBindingManifest, writeBindingManifestFile };

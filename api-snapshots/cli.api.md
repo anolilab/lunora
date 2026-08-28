@@ -71,6 +71,7 @@ const COMMANDS: readonly [
     "eval",
     "verify",
     "info",
+    "bindings",
     "doctor",
     "env",
     "analyze",

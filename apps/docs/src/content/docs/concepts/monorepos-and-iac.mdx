@@ -46,8 +46,18 @@ need to know where the externally-owned worker is listening.
 
 A task runner starting seven Workers needs two things from Lunora before it can
 treat it as one node: what this Worker requires, and where it will serve.
-`lunora dev --emit-bindings <file>` writes both, as the same document
-`lunora build --emit-bindings` produces for a deployer, plus a `dev` section:
+
+`lunora bindings` answers the first without running anything, which is what a
+supervisor wants while it is still planning the graph:
+
+```bash
+lunora bindings          # human-readable
+lunora bindings --json   # the manifest a deployer or task runner consumes
+lunora bindings --out reqs.json
+```
+
+`lunora dev` writes the same document plus a `dev` section, to
+`.lunora/dev-bindings.json`, on every start — no flag required:
 
 ```jsonc
 {
@@ -58,11 +68,15 @@ treat it as one node: what this Worker requires, and where it will serve.
     "vars": ["PUBLIC_URL"],
     "dev": {
         "origin": "http://localhost:8787",
-        "studioUrl": "http://127.0.0.1:6173",
         "statusFile": ".lunora/dev.json",
     },
 }
 ```
+
+`--emit-bindings <file>` moves it elsewhere. Naming a path also changes the
+failure policy: a project with no readable `wrangler.jsonc` then fails the run,
+because a named path means something is waiting on that file. The default write
+stays a courtesy and simply skips.
 
 It is written once, before the worker starts, so your runner can reserve the
 port and wire its proxy while Lunora is still booting. Readiness is deliberately
@@ -75,10 +89,10 @@ so the manifest omits `origin` rather than publish a guess that would aim your
 proxy at a port nothing is listening on. Read `statusFile` for the real URL
 there; `@lunora/vite` writes it once the server is up.
 
-One derivation feeds both commands, so the requirements a deployer provisions
-cannot drift from the ones your dev graph proxies. A project with no readable
-`wrangler.jsonc` fails the run rather than emitting an empty manifest: "this
-Worker needs nothing" is a claim a supervisor would act on.
+One derivation feeds all three entry points, so the requirements a deployer
+provisions cannot drift from the ones your dev graph proxies. The manifest never
+carries values — `vars` is key names only — which is what makes it safe to write
+into a working tree unasked.
 
 ### Waiting for readiness
 

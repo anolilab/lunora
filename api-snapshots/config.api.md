@@ -235,6 +235,12 @@ interface ContainerLogStreamOptions {
 const DEFAULT_DEPLOY_TARGET = "cloudflare";
 ```
 
+### `DEV_BINDINGS_FILE` (const)
+
+```ts
+const DEV_BINDINGS_FILE: string;
+```
+
 ### `DEV_DAEMON_ENV` (const)
 
 ```ts

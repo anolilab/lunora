@@ -13,6 +13,7 @@ import {
     detectAgentRules,
     detectAiAgent,
     detectFramework,
+    DEV_BINDINGS_FILE,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE_ENV,
@@ -106,8 +107,9 @@ interface DevCommandOptions {
     cwd?: string;
 
     /**
-     * Write the binding manifest — what this Worker needs, plus where it serves
-     * — to this path, for a supervisor that owns the rest of the dev graph.
+     * Override where the binding manifest is written. One is always produced at
+     * {@link DEV_BINDINGS_FILE}; naming a path also makes a derivation failure
+     * fatal, since a named path means something is waiting on it.
      */
     emitBindings?: string;
     /** Injection seam for tests — defaults to the real `.dev.vars` scaffolder. */
@@ -806,27 +808,31 @@ const claimStartRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url
 };
 
 /**
- * Write the binding manifest `--emit-bindings` asked for, when it asked.
+ * Write the binding manifest describing what this Worker needs and where it
+ * serves.
  *
- * A no-op without the flag. Extracted from `runDevCommand` because that function
- * is already at the repo's cognitive-complexity ceiling, and readiness/manifest
- * orchestration is the kind of thing that keeps getting added to it.
+ * Written on EVERY dev start, not only when asked. `.lunora/dev.json` is already
+ * produced unconditionally into the same gitignored directory and the manifest
+ * carries no secrets — `vars` is key names only — so the cost is one small JSON
+ * write against a real gain: the flag it replaces had to be discovered before it
+ * could help, and a supervisor that does not know it exists hand-maintains a
+ * second copy of these bindings until it finds out.
+ *
+ * The failure policy differs by who asked, deliberately. An explicit
+ * `--emit-bindings` means something is WAITING on that file, so a project with no
+ * readable `wrangler.jsonc` fails the run rather than starting a server whose
+ * supervisor is pointed at nothing. The default write is a courtesy, so the same
+ * condition is a debug line — defaulting a hard error would break every project
+ * that has no wrangler config at all.
+ *
+ * Extracted from `runDevCommand` because that function is at the repo's
+ * cognitive-complexity ceiling, and startup orchestration keeps being added.
  */
-const emitDevBindingManifest = (options: {
-    cwd: string;
-    destination: string | undefined;
-    logger: Logger;
-    plan: DevCommandPlan;
-    studioUrl: string | undefined;
-}): { error?: string } => {
-    const { cwd, destination, logger, plan, studioUrl } = options;
-
-    if (destination === undefined) {
-        return {};
-    }
-
-    return writeBindingManifestFile({
-        destination,
+const emitDevBindingManifest = (options: { cwd: string; destination: string | undefined; logger: Logger; plan: DevCommandPlan }): { error?: string } => {
+    const { cwd, destination, logger, plan } = options;
+    const requested = destination !== undefined;
+    const result = writeBindingManifestFile({
+        destination: destination ?? DEV_BINDINGS_FILE,
         dev: {
             // Only where the CLI owns the port. On the Vite flavors
             // `workerOrigin` is a pre-listen guess — Vite resolves its own,
@@ -836,11 +842,20 @@ const emitDevBindingManifest = (options: {
             // once it is up.
             ...(plan.flavor === "wrangler" ? { origin: plan.workerOrigin } : {}),
             statusFile: DEV_STATE_FILE,
-            ...(studioUrl === undefined ? {} : { studioUrl }),
         },
-        logger,
+        // The default write must not announce itself on every `lunora dev`; the
+        // requested one should say where it put the file.
+        logger: requested ? logger : { ...logger, success: () => {}, warn: () => {} },
         projectRoot: cwd,
     });
+
+    if (result.error !== undefined && !requested) {
+        logger.debug?.(`skipped the default binding manifest: ${result.error}`);
+
+        return {};
+    }
+
+    return result;
 };
 
 /**
@@ -1135,7 +1150,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // in here — the manifest is written once and readiness arrives later, so
         // it names `.lunora/dev.json` rather than shipping a `ready: false` that
         // never changes.
-        const emitted = emitDevBindingManifest({ cwd, destination: options.emitBindings, logger, plan, studioUrl: handles.studio?.url });
+        const emitted = emitDevBindingManifest({ cwd, destination: options.emitBindings, logger, plan });
 
         // Fatal, unlike most of dev's best-effort startup: the flag exists
         // because something else is waiting on this file, and starting the server

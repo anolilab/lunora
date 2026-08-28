@@ -44,6 +44,7 @@ export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from ".
 export {
     claimDevServerState,
     clearDevServerState,
+    DEV_BINDINGS_FILE,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE,

@@ -32,6 +32,16 @@ const DEV_STATE_FILE: string = join(DEV_STATE_DIR, "dev.json");
 const DEV_LOG_FILE: string = join(DEV_STATE_DIR, "dev.log");
 
 /**
+ * Where `lunora dev` writes the binding manifest by default, relative to the
+ * project root.
+ *
+ * A fixed path so a supervisor can read it without being told one, and next to
+ * the state record because the two are read together: this says what the Worker
+ * needs and where it will serve, `dev.json` says whether it is serving yet.
+ */
+const DEV_BINDINGS_FILE: string = join(DEV_STATE_DIR, "dev-bindings.json");
+
+/**
  * Marker env `lunora dev --background` sets on the detached server process
  * (the daemon `lunora dev` or `vite dev`), so it records itself as
  * `background: true` — and, for the CLI daemon, never re-detects an agent and
@@ -419,6 +429,7 @@ export type { ClaimDevServerStateResult, DevServerMode, DevServerState };
 export {
     claimDevServerState,
     clearDevServerState,
+    DEV_BINDINGS_FILE,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE,

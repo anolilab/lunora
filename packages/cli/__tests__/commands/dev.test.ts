@@ -905,10 +905,10 @@ describe("lunora dev", () => {
          * tells a task runner the same thing plus where the running server is,
          * so a multi-worker repo stops restating both in a config that drifts.
          */
-        const runWithManifest = async (destination: string): Promise<number | undefined> => {
+        const runWithManifest = async (destination: string | undefined): Promise<number | undefined> => {
             const result = await runDevCommand({
                 cwd: workdir,
-                emitBindings: destination,
+                ...(destination === undefined ? {} : { emitBindings: destination }),
                 findFreePort: async () => 8787,
                 logger: silentLogger(),
                 probeReady: async () => true,
@@ -985,17 +985,58 @@ describe("lunora dev", () => {
             expect(manifest.dev?.statusFile).toContain("dev.json");
         });
 
-        it("fails the run when there is no wrangler config to derive from", async () => {
+        it("fails the run when a NAMED destination cannot be derived", async () => {
             expect.assertions(2);
 
             // An empty requirements document reads as "this Worker needs
             // nothing", and a supervisor acting on it provisions nothing — worse
-            // than no file, because it looks authoritative.
+            // than no file, because it looks authoritative. Naming a path means
+            // something is waiting on it, so this is fatal.
             const destination = join(workdir, "dev-manifest.json");
             const code = await runWithManifest(destination);
 
             expect(code).toBe(1);
             expect(existsSync(destination)).toBe(false);
+        });
+
+        it("writes the manifest with no flag at all", async () => {
+            expect.assertions(2);
+
+            // The flag had to be discovered before it could help, and a
+            // supervisor that never finds it hand-maintains a second copy of
+            // these bindings. The file carries no secrets (vars are key names)
+            // and lands in the already-gitignored `.lunora/`, same as dev.json.
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-01-01",
+                    d1_databases: [{ binding: "DB", database_name: "app" }],
+                    main: "src/index.ts",
+                    name: "app",
+                }),
+                "utf8",
+            );
+
+            await runWithManifest(undefined);
+
+            const manifest = JSON.parse(readFileSync(join(workdir, ".lunora", "dev-bindings.json"), "utf8")) as {
+                bindings: { binding: string }[];
+                dev?: { origin?: string };
+            };
+
+            expect(manifest.bindings.map((binding) => binding.binding)).toContain("DB");
+            expect(manifest.dev?.origin).toBe("http://localhost:8787");
+        });
+
+        it("does not fail a project that has no wrangler config when nobody asked", async () => {
+            expect.assertions(2);
+
+            // Defaulting the hard error would break every project without a
+            // wrangler config. Unasked, the manifest is a courtesy.
+            const code = await runWithManifest(undefined);
+
+            expect(code).toBe(0);
+            expect(existsSync(join(workdir, ".lunora", "dev-bindings.json"))).toBe(false);
         });
     });
 
