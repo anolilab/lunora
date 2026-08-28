@@ -1,3 +1,10 @@
+## @lunora/cloudflare-access [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.88...@lunora/cloudflare-access@1.0.0-alpha.89) (2026-08-28)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.91
+
 ## @lunora/cloudflare-access [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.87...@lunora/cloudflare-access@1.0.0-alpha.88) (2026-08-27)
 
 
