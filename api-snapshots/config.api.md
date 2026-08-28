@@ -376,6 +376,7 @@ interface DevServerState {
     logFile?: string;
     mode: DevServerMode;
     pid: number;
+    readyAt?: string;
     startedAt?: string;
     studioUrl?: string;
     url: string;

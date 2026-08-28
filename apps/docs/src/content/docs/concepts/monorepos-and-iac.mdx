@@ -42,6 +42,34 @@ worker and Lunora keeps regenerating types and serving Studio:
 `--worker-port` still matters with `--no-worker`: Studio and the printed hints
 need to know where the externally-owned worker is listening.
 
+### Waiting for readiness
+
+A supervisor that starts a dependent step — an integration suite, a second
+worker that calls this one — needs to know when the worker is actually serving,
+not merely that the process exists. Sleeping a guessed interval is the usual
+workaround and it races on a cold cache.
+
+`lunora dev` records its state in `.lunora/dev.json` as soon as it starts, and
+adds a `readyAt` stamp the moment the worker first answers on its origin. The
+two are deliberately separate: `url` and `pid` are written _before_ anything is
+listening, which is enough to find and stop a server and not enough to gate on.
+
+```bash
+# Wait for the worker to serve, then run whatever depends on it.
+until [ "$(lunora dev status --json | jq -r .ready)" = "true" ]; do sleep 0.5; done
+pnpm run test:integration
+```
+
+`lunora dev status` shows the same thing for a human, as `ready` or `starting`
+in its detail line. On the Vite flavors `@lunora/vite` writes the record itself,
+once Vite has resolved its URLs — so there the record appearing at all already
+means ready.
+
+<Callout type="warn">
+    A missing `readyAt` means *not ready yet*, never *never*. A worker that takes longer than the probe waits keeps running with the field absent, so poll for
+    it with your own timeout rather than treating one absent read as failure.
+</Callout>
+
 <Callout type="info">
     Studio is single-app. With several Lunora-touching Workers, run it against one of them rather than expecting a combined view, and mind that `/__lunora` is
     mounted on the worker's own routes.

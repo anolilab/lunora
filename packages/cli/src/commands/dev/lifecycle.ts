@@ -835,6 +835,11 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
             logFile: state.logFile,
             mode: state.mode,
             pid: state.pid,
+            // `running` is "a process exists"; `ready` is "it answered". A
+            // supervisor composing Lunora with other workers wants the second —
+            // gate on this, not on `running`, before starting a dependent step.
+            ready: state.readyAt !== undefined,
+            readyAt: state.readyAt,
             running: true,
             startedAt: state.startedAt,
             studioUrl: state.studioUrl,
@@ -849,6 +854,10 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
         `pid ${String(state.pid)}`,
         ...(uptimeSeconds === undefined ? [] : [`uptime ${String(uptimeSeconds)}s`]),
         state.background === true ? "background" : "foreground",
+        // Distinguishes "the process is up" from "the worker answers" — the
+        // record exists from the moment the server starts, so without this the
+        // status line reads identically either side of the port opening.
+        state.readyAt === undefined ? "starting" : "ready",
     ];
 
     logger.success(`Dev server running at ${state.url} (${details.join(", ")})`);

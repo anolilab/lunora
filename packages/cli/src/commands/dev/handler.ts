@@ -52,6 +52,7 @@ import { spawnShellCompat } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
 import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
+import { markWorkerReadyWhenServing } from "../../util/worker-ready";
 import type { DevOptions } from "./index";
 import type { DevFlavor } from "./lifecycle";
 import {
@@ -577,6 +578,8 @@ interface Teardown {
     codegen?: CodegenWatcherHandle;
     /** Disposer for the dev container log stream (stops polling Docker + detaches). */
     containerLogs?: ContainerLogStreamHandle;
+    /** Cancels the worker readiness probe, so it stops with the server instead of on its own timeout. */
+    readyProbe?: AbortController;
     /** Disposer for the materialized remote wrangler temp config (idempotent, never throws). */
     remoteCleanup?: () => void;
     studio?: StudioServerHandle;
@@ -624,6 +627,11 @@ const startContainerLogStreaming = (cwd: string, logger: Logger): ContainerLogSt
 
 /** Best-effort shutdown of the studio server, codegen watcher, container logs, and remote temp config. */
 const teardown = async (handles: Teardown): Promise<void> => {
+    // First, so the readiness probe stops before anything it observes goes away
+    // — otherwise it keeps polling an origin that is being torn down and only
+    // stops on its own timeout.
+    handles.readyProbe?.abort();
+
     // Awaited: `close()` stops the watch loop immediately but resolves only once
     // a regeneration already in flight is done, and that run may have spawned
     // the project's `postcodegen`. `defineHandler` calls `process.exit` right
@@ -1092,6 +1100,22 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         const sidecar = plan.sidecar === undefined ? undefined : spawn(plan.sidecar, logger);
 
         handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl);
+
+        // Stamp `readyAt` on `.lunora/dev.json` once the worker actually answers,
+        // so a task runner supervising Lunora alongside other workers can wait on
+        // a fact instead of a guessed sleep. Deliberately not awaited: readiness
+        // is metadata FOR someone else, and blocking the banner and the supervise
+        // loop on it would delay the very server it is reporting. Only for the
+        // flavor whose record this process owns — the Vite plugin writes its own.
+        // `--no-worker` needs no check: attached mode returned above, and the
+        // worker it would probe is someone else's to report on anyway.
+        if (plan.flavor === "wrangler") {
+            handles.readyProbe = new AbortController();
+
+            // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction: the probe reports rather than throws, and teardown aborts it
+            markWorkerReadyWhenServing({ cwd, logger, origin: plan.workerOrigin, signal: handles.readyProbe.signal });
+        }
+
         printAgentRulesHint(logger, cwd);
 
         const code = await superviseWorkers(worker, sidecar, logger);

@@ -3,7 +3,8 @@
  *
  * Written when a dev server starts (by `lunora dev` for the wrangler
  * orchestration, or by `@lunora/vite`'s dev-state plugin when the project runs
- * through Vite) and removed on shutdown. It doubles as a lockfile: a second
+ * through Vite) and removed on shutdown. `readyAt` lands separately, once the
+ * server actually answers — see {@link DevServerState.readyAt}. It doubles as a lockfile: a second
  * `lunora dev` finds a live record and reports the existing instance instead of
  * spawning a conflicting server, and `lunora dev stop|status|logs` resolve the
  * running instance from it. This is what lets AI agents manage a long-running
@@ -65,6 +66,23 @@ interface DevServerState {
     mode: DevServerMode;
     /** PID of the process to signal for shutdown (the orchestrating CLI or the Vite process). */
     pid: number;
+
+    /**
+     * ISO-8601 stamp written when the server first answered a request on
+     * {@link DevServerState.url} — absent until then.
+     *
+     * The rest of this record exists as soon as the server is STARTING: `url` is
+     * the origin it intends to serve on and `pid` is a process that exists, both
+     * written before anything is listening. That is enough to find and stop a
+     * server, and not enough for a task runner that has to decide when to start
+     * the next thing — which is what this field is for. Poll for it (or for the
+     * record itself, for the Vite mode) rather than sleeping.
+     *
+     * Absent forever is a legitimate outcome: a worker that never binds, or one
+     * that took longer than the probe was willing to wait. Treat missing as "not
+     * ready yet", never as "will never be ready".
+     */
+    readyAt?: string;
     /** ISO-8601 stamp written at startup, purely informational (drives `status` uptime). */
     startedAt?: string;
     /** The embedded studio server's URL, when it runs. */
@@ -208,6 +226,7 @@ const readDevServerState = (projectRoot: string): DevServerState | undefined => 
         logFile: stringField(parsed, "logFile"),
         mode: parsed["mode"] === "vite" ? "vite" : "cli",
         pid: parsed["pid"],
+        readyAt: stringField(parsed, "readyAt"),
         startedAt: stringField(parsed, "startedAt"),
         studioUrl: stringField(parsed, "studioUrl"),
         url,
