@@ -79,7 +79,7 @@ describe("lunora info", () => {
 
             expect(result.code).toBe(0);
 
-            const lunoraNames = result.snapshot.lunoraPackages.map((p) => p.name);
+            const lunoraNames = result.snapshot?.lunoraPackages.map((p) => p.name);
 
             expect(lunoraNames).toContain("@lunora/server");
             expect(lunoraNames).toContain("@lunora/runtime");
@@ -87,14 +87,14 @@ describe("lunora info", () => {
             // Non-lunora deps are excluded.
             expect(lunoraNames).not.toContain("lodash");
 
-            expect(result.snapshot.wrangler?.name).toBe("demo-worker");
+            expect(result.snapshot?.wrangler?.name).toBe("demo-worker");
             // `type:name`, from the same derivation `lunora bindings` uses — the
             // hand-rolled summary this replaced read three wrangler sections, so
             // R2, KV, queues and the rest were reported as absent.
-            expect(result.snapshot.wrangler?.bindings).toContain("durable_object:SHARD");
-            expect(result.snapshot.wrangler?.bindings).toContain("d1:DB");
+            expect(result.snapshot?.wrangler?.bindings).toContain("durable_object:SHARD");
+            expect(result.snapshot?.wrangler?.bindings).toContain("d1:DB");
 
-            expect(result.snapshot.schema?.tables.length).toBeGreaterThan(0);
+            expect(result.snapshot?.schema?.tables.length).toBeGreaterThan(0);
         });
 
         it("--json emits a machine-readable snapshot on stdout (jq-pipeable)", () => {
@@ -143,7 +143,7 @@ describe("lunora info", () => {
             const result = runInfoCommand({ cwd: workdir, logger });
 
             expect(result.code).toBe(0);
-            expect(result.snapshot.wrangler).toBeUndefined();
+            expect(result.snapshot?.wrangler).toBeUndefined();
             expect(recorded.infos.join("\n")).toContain("wrangler: (not found)");
         });
     });

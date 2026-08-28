@@ -12,7 +12,6 @@ import { addCommand } from "./commands/add";
 import { advisorCommand } from "./commands/advisor";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
-import { bindingsCommand } from "./commands/bindings";
 import { buildCommand } from "./commands/build";
 import { codegenCommand } from "./commands/codegen";
 import { containersCommand } from "./commands/containers";
@@ -72,7 +71,6 @@ const COMMANDS = [
     "eval",
     "verify",
     "info",
-    "bindings",
     "doctor",
     "env",
     "analyze",
@@ -166,7 +164,6 @@ const CLI_COMMANDS = [
     evalCommand,
     verifyCommand,
     infoCommand,
-    bindingsCommand,
     doctorCommand,
     envCommand,
     analyzeCommand,

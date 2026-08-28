@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runBindingsCommand } from "../../src/commands/bindings/handler";
+import { runInfoCommand } from "../../src/commands/info/handler";
 import type { Logger } from "../../src/util/logger";
 
 const recordingLogger = (): { errors: string[]; lines: string[]; logger: Logger; warns: string[] } => {
@@ -31,7 +31,7 @@ const writeWrangler = (config: Record<string, unknown>): void => {
     writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app", ...config }), "utf8");
 };
 
-describe("lunora bindings", () => {
+describe("lunora info --bindings", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-bindings-"));
     });
@@ -53,7 +53,7 @@ describe("lunora bindings", () => {
         });
 
         const { lines, logger } = recordingLogger();
-        const { code } = runBindingsCommand({ cwd: workdir, logger });
+        const { code } = runInfoCommand({ bindings: true, cwd: workdir, logger });
         const output = lines.join("\n");
 
         expect(code).toBe(0);
@@ -70,7 +70,7 @@ describe("lunora bindings", () => {
 
         const { lines, logger } = recordingLogger();
 
-        runBindingsCommand({ cwd: workdir, logger });
+        runInfoCommand({ bindings: true, cwd: workdir, logger });
 
         const output = lines.join("\n");
 
@@ -92,7 +92,7 @@ describe("lunora bindings", () => {
         });
 
         try {
-            runBindingsCommand({ cwd: workdir, json: true, logger });
+            runInfoCommand({ bindings: true, cwd: workdir, json: true, logger });
         } finally {
             spy.mockRestore();
         }
@@ -110,11 +110,25 @@ describe("lunora bindings", () => {
 
         const destination = join(workdir, "nested", "reqs.json");
         const { logger } = recordingLogger();
-        const { code } = runBindingsCommand({ cwd: workdir, logger, out: destination });
+        const { code } = runInfoCommand({ bindings: true, cwd: workdir, logger, out: destination });
         const manifest = JSON.parse(readFileSync(destination, "utf8")) as { bindings: { binding: string }[] };
 
         expect(code).toBe(0);
         expect(manifest.bindings.map((binding) => binding.binding)).toStrictEqual(["DB"]);
+    });
+
+    it("rejects --out without --bindings instead of silently ignoring it", () => {
+        expect.assertions(2);
+
+        // `--out` only means anything for the manifest; accepting it on the full
+        // snapshot would write nothing and report success.
+        writeWrangler({});
+
+        const { errors, logger } = recordingLogger();
+        const { code } = runInfoCommand({ cwd: workdir, logger, out: join(workdir, "x.json") });
+
+        expect(code).toBe(1);
+        expect(errors.join(" ")).toContain("--bindings");
     });
 
     it("fails rather than reporting a project with no wrangler config needs nothing", () => {
@@ -123,7 +137,7 @@ describe("lunora bindings", () => {
         // "No bindings" and "I could not tell" must not look the same: a
         // deployer acts on the first by provisioning nothing.
         const { errors, logger } = recordingLogger();
-        const { code } = runBindingsCommand({ cwd: workdir, logger });
+        const { code } = runInfoCommand({ bindings: true, cwd: workdir, logger });
 
         expect(code).toBe(1);
         expect(errors.join(" ")).toContain("no readable wrangler config");

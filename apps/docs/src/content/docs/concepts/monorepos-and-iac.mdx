@@ -47,13 +47,13 @@ need to know where the externally-owned worker is listening.
 A task runner starting seven Workers needs two things from Lunora before it can
 treat it as one node: what this Worker requires, and where it will serve.
 
-`lunora bindings` answers the first without running anything, which is what a
-supervisor wants while it is still planning the graph:
+`lunora info --bindings` answers the first without running anything, which is
+what a supervisor wants while it is still planning the graph:
 
 ```bash
-lunora bindings          # human-readable
-lunora bindings --json   # the manifest a deployer or task runner consumes
-lunora bindings --out reqs.json
+lunora info --bindings                  # human-readable
+lunora info --bindings --json           # the manifest a deployer or runner consumes
+lunora info --bindings --out reqs.json
 ```
 
 `lunora dev` writes the same document plus a `dev` section, to
