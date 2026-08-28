@@ -41,7 +41,7 @@ describe("shouldCaptureQueue", () => {
 
         expect(shouldCaptureQueue({ LUNORA_QUEUE_CAPTURE: "", WORKER_ENV: "development" })).toBe(true);
         expect(shouldCaptureQueue({ LUNORA_QUEUE_CAPTURE: "yes", WORKER_ENV: "production" })).toBe(false);
-        expect(warn).toHaveBeenCalledWith();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("unrecognized LUNORA_QUEUE_CAPTURE"));
 
         warn.mockRestore();
     });
