@@ -3252,7 +3252,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         // `withGeoIndex()` below — this fails closed with a clear
                         // error instead of a confusing "not a function" for now.
                         throw new LunoraError(
-                            "INTERNAL",
+                            // A backend limitation the caller can act on, not a
+                            // fault in Lunora. `INTERNAL` made it a 500 that read
+                            // as a bug and could not be branched on; the
+                            // `*_UNSUPPORTED` codes are how every other
+                            // topology limit in the catalogue is expressed.
+                            "GLOBAL_SEARCH_SCORES_UNSUPPORTED",
                             `collectWithScores() is not supported on \`.global()\` tables (table "${tableName}") — relevance scores are not yet surfaced on this backend; use .collect() instead`,
                         );
                     },
