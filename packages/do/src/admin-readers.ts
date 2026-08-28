@@ -278,20 +278,20 @@ const readAdminStorageOrphans = (
  * @returns the read result and its table-dependency set, or `undefined` when the path is not owned by this resolver
  */
 const readAdminDurableSignal = (functionPath: string, sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } | undefined => {
-        if (functionPath === ADMIN_FUNCTIONS.getAuthMetrics) {
-            return readAdminAuthMetrics(sql);
-        }
+    if (functionPath === ADMIN_FUNCTIONS.getAuthMetrics) {
+        return readAdminAuthMetrics(sql);
+    }
 
-        if (functionPath === ADMIN_FUNCTIONS.getCapturedMail) {
-            return readAdminCapturedMail(sql, args);
-        }
+    if (functionPath === ADMIN_FUNCTIONS.getCapturedMail) {
+        return readAdminCapturedMail(sql, args);
+    }
 
-        if (functionPath === ADMIN_FUNCTIONS.getQueueMessages) {
-            return readAdminQueueMessages(sql, args);
-        }
+    if (functionPath === ADMIN_FUNCTIONS.getQueueMessages) {
+        return readAdminQueueMessages(sql, args);
+    }
 
-        return undefined;
-    };
+    return undefined;
+};
 
 export {
     batchedTableLookup,
