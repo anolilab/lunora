@@ -167,8 +167,13 @@ describe("expandUnreachableType", () => {
     it("qualifies a type the handler imports, keeping the alias rather than flattening it", () => {
         expect.assertions(1);
 
+        // The qualifier names the file the specifier RESOLVED to, carrying the
+        // extension that file is emitted as — `./types` resolves to `types.ts`,
+        // emitted as `.js`. `_generated/` output is consumed under NodeNext,
+        // where the extension is mandatory, so the written spelling would not
+        // resolve there.
         expect(expand(`import type { Post } from "./types";\ndeclare const subject: Post;`, { "/app/types.ts": `export interface Post { id: string }` })).toBe(
-            `import("./types").Post`,
+            `import("./types.js").Post`,
         );
     });
 
