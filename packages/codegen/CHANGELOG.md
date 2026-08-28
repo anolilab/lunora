@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.135...@lunora/codegen@1.0.0-alpha.136) (2026-08-28)
+
+### Bug Fixes
+
+* **codegen:** retarget an emitted qualifier onto a specifier that resolves ([#514](https://github.com/anolilab/lunora/issues/514)) ([420f17c](https://github.com/anolilab/lunora/commit/420f17c3bec4bd3744e0ace2eb79a4ff87eb2f0d))
+
 ## @lunora/codegen [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.134...@lunora/codegen@1.0.0-alpha.135) (2026-08-27)
 
 ### Bug Fixes
