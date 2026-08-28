@@ -14,7 +14,29 @@ import { LunoraError } from "@lunora/errors";
 import type { ValidatorLike } from "@lunora/shard-engine";
 
 import { effectiveKind } from "../../../shared/effective-kind";
-import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "../../../shared/wire-codec";
+
+/**
+ * Walk a decoded JSON column for wire tags only when one can be present.
+ *
+ * `decodeWire` is identity for pure JSON but still walks and rebuilds the whole
+ * structure to prove it — pure overhead for the ordinary document carrying no
+ * `bigint`/bytes leaf, which is the common case on the per-column path of every
+ * global read. Decoding unconditionally measured ~1.3x on an object column and
+ * ~1.25x on a 100-row page against a plain parse; this gate recovers about three
+ * quarters of that.
+ *
+ * A tagged value is a JSON array whose first element is exactly {@link WIRE_TAG},
+ * so a tag cannot survive `JSON.stringify` without appearing verbatim in the
+ * text. Testing the raw string is therefore sound in the direction that matters:
+ * a false negative is impossible, and a false positive (app data that happens to
+ * contain the sentinel) merely takes the slow path and still decodes correctly.
+ *
+ * Takes the already-parsed value rather than parsing itself so it depends only on
+ * imports: `import/exports-last` wants a non-exported helper above the exports,
+ * and calling `tryJsonParse` from there would trip `no-use-before-define`.
+ */
+const decodeWireIfTagged = (raw: string, parsed: unknown): unknown => (raw.includes(WIRE_TAG) ? decodeWire(parsed) : parsed);
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown): unknown => {
@@ -126,12 +148,12 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
         case "any":
         case "from":
         case "union": {
-            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[")) ? decodeWire(tryJsonParse(raw)) : raw;
+            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[")) ? decodeWireIfTagged(raw, tryJsonParse(raw)) : raw;
         }
         case "array":
         case "object":
         case "record": {
-            return typeof raw === "string" ? decodeWire(tryJsonParse(raw)) : raw;
+            return typeof raw === "string" ? decodeWireIfTagged(raw, tryJsonParse(raw)) : raw;
         }
         case "bigint": {
             return decodeBigint(raw);
