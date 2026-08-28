@@ -2683,6 +2683,26 @@ export default schema;
             expect(drizzle).toContain(`"by-author": index("by-author").on(t.author)`);
         });
 
+        it("emits a `__proto__` index name as a computed key so the entry survives", () => {
+            expect.assertions(2);
+
+            // `__proto__` passes the identifier test AND survives quoting, but in
+            // a VALUE position both `{ __proto__: x }` and `{ "__proto__": x }`
+            // are the prototype setter — neither creates an own property, so the
+            // index entry silently vanished from the emitted object.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+                 export default defineSchema({ posts: defineTable({ author: v.string() }).index("__proto__", ["author"]) });`,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+
+            const drizzle = readFileSync(join(workdir, "lunora", "_generated", "drizzle.shard.ts"), "utf8");
+
+            expect(drizzle).toContain(`["__proto__"]: index("__proto__").on(t.author)`);
+        });
+
         it("names the constraint and the workaround for a nested index path", () => {
             expect.assertions(3);
 

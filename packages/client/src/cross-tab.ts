@@ -80,7 +80,7 @@ interface TabCoordinatorOptions {
     /**
      * Called when the leader broadcasts a subscription error.
      */
-    onSubscriptionError?: (key: string, error: SubscriptionError) => void;
+    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
 
     /**
      * Called when the leader broadcasts a `settled` frame's checkpoint advance
@@ -113,7 +113,7 @@ type WsFollowerMessage =
 
 type WsLeaderMessage =
     | { cursor?: number; data: unknown; epoch?: string; identity?: string | null; key: string; tabId: string; type: "subscription-data" }
-    | { error: SubscriptionError; key: string; tabId: string; type: "subscription-error" }
+    | { error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
     | {
           clientId?: string;
           cursor?: number;
@@ -171,7 +171,7 @@ class TabCoordinator {
     private readonly onStopBeingLeader: (() => void) | undefined;
     private readonly onConnectionStatus: ((status: ConnectionStatus, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void) | undefined;
-    private readonly onSubscriptionError: ((key: string, error: SubscriptionError) => void) | undefined;
+    private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionSettled:
         ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void) | undefined;
 
@@ -364,13 +364,21 @@ class TabCoordinator {
     /**
      * Broadcast a subscription error to all follower tabs. Only the leader
      * should call this.
+     *
+     * `identity` is this tab's own `identityFingerprint()`, stamped so a
+     * follower can drop a frame minted under a different credential — the same
+     * guard `broadcastSubscriptionData` and `broadcastSubscriptionSettled`
+     * carry. This one lacked it, which was harmless only because nothing called
+     * it; once the leader started fanning errors, an unstamped frame could
+     * deliver one caller's rejection to a tab that had since signed in as
+     * someone else.
      */
-    public broadcastSubscriptionError(key: string, error: SubscriptionError): void {
+    public broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void {
         if (!this.leader) {
             return;
         }
 
-        this.broadcast({ type: "subscription-error", tabId: this.tabId, key, error });
+        this.broadcast({ type: "subscription-error", tabId: this.tabId, key, error, ...(identity === undefined ? {} : { identity }) });
     }
 
     /**
@@ -471,7 +479,7 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onSubscriptionError?.(message.key, message.error);
+                this.onSubscriptionError?.(message.key, message.error, message.identity);
 
                 break;
             }

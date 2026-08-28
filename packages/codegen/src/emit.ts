@@ -126,6 +126,19 @@ const pascalCase = (value: string): string => value.charAt(0).toUpperCase() + va
  */
 const renderPropertyKey = (fieldName: string): string => (IDENTIFIER_RE.test(fieldName) ? fieldName : JSON.stringify(fieldName));
 
+/**
+ * Emit a key for a runtime OBJECT LITERAL — bare when it is a JS identifier,
+ * otherwise quoted, and `__proto__` as a computed key.
+ *
+ * `__proto__` passes {@link IDENTIFIER_RE} and even survives quoting, but in a
+ * value position `{ __proto__: x }` and `{ "__proto__": x }` are both the
+ * prototype SETTER: neither creates an own property, so the entry silently
+ * vanishes from the emitted object. `{ ["__proto__"]: x }` is an ordinary own
+ * property. {@link renderPropertyKey} stays correct for TYPE positions, where
+ * `__proto__` is just a member name and a computed key would not even parse.
+ */
+const renderObjectKey = (fieldName: string): string => (fieldName === "__proto__" ? `[${JSON.stringify(fieldName)}]` : renderPropertyKey(fieldName));
+
 /** Scalar `ValidatorIR` kinds whose TS type is a fixed string with no recursion. */
 const SCALAR_TYPE_BY_KIND: Record<string, string> = {
     any: "unknown",
@@ -1293,11 +1306,11 @@ const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: 
             const members = list
                 .map(
                     (route) =>
-                        `        ${renderPropertyKey(route.exportName)}: { method: ${JSON.stringify(route.method)}, path: ${JSON.stringify(route.path)} },`,
+                        `        ${renderObjectKey(route.exportName)}: { method: ${JSON.stringify(route.method)}, path: ${JSON.stringify(route.path)} },`,
                 )
                 .join("\n");
 
-            return `    ${renderPropertyKey(sanitizeNamespace(file))}: {\n${members}\n    },`;
+            return `    ${renderObjectKey(sanitizeNamespace(file))}: {\n${members}\n    },`;
         })
         .join("\n");
 
@@ -1762,7 +1775,7 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
             // The object key is quoted when `namespace` isn't a bare identifier
             // (leading-digit filename); the `"${namespace}:..."` dispatch ref
             // strings above already embed the raw value, so both still agree.
-            return `    ${renderPropertyKey(namespace)}: {\n${leaves}\n    },`;
+            return `    ${renderObjectKey(namespace)}: {\n${leaves}\n    },`;
         })
         .join("\n");
 
@@ -5983,7 +5996,7 @@ const renderIndexEntry = (index: IndexIR): string => {
         })
         .join(", ");
 
-    return `    ${renderPropertyKey(index.name)}: ${constructor}(${JSON.stringify(index.name)}).on(${fields}),`;
+    return `    ${renderObjectKey(index.name)}: ${constructor}(${JSON.stringify(index.name)}).on(${fields}),`;
 };
 
 const renderDrizzleTable = (table: TableIR, knownTables: ReadonlySet<string>): string => {

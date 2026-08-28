@@ -3707,7 +3707,15 @@ class LunoraClient {
 
                 notifySubscription(state, foldOptimistic(data, state.optimisticLayers));
             },
-            onSubscriptionError: (key, error) => {
+            onSubscriptionError: (key, error, identity) => {
+                // Belt-and-braces identity check — see `onConnectionStatus`'s
+                // comment for the full rationale (identical here). This was the
+                // one of the four callbacks without it, which only went unnoticed
+                // because nothing broadcast to it.
+                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                    return;
+                }
+
                 const state = this.subscriptions.get(key);
 
                 if (state) {
@@ -5274,7 +5282,11 @@ class LunoraClient {
             // like its `data` and `settled` siblings — only the leader holds the
             // socket that produced this frame.
             if (this.tabCoordinator?.isLeader()) {
-                this.tabCoordinator.broadcastSubscriptionError(SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey), subscriptionError);
+                this.tabCoordinator.broadcastSubscriptionError(
+                    SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey),
+                    subscriptionError,
+                    this.identityFingerprint(),
+                );
             }
 
             return;
