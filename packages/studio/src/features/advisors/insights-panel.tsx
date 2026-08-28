@@ -23,7 +23,7 @@ import type {
     TablesIndexesResult,
 } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
+import { adminRef, callOptions, fireAndForget, formatBytes } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import type { AdvisorRow } from "./advisor-view";
 import { AdvisorView, advisoryRow } from "./advisor-view";
@@ -79,6 +79,7 @@ const insightTitle = (t: TFunction, insight: Insight): string =>
         "low-cache-hit-rate": t("Low cache hit rate"),
         "missing-index": t("Missing index"),
         "slow-function": t("Slow function"),
+        "storage-headroom": t("Storage headroom"),
     })[insight.kind];
 
 /**
@@ -100,6 +101,9 @@ const insightDetail = (t: TFunction, insight: Insight): string =>
             tables: tableList(insight.tables ?? []),
         }),
         "slow-function": t("Slowest call took {duration}.", { duration: seconds(insight.value) }),
+        "storage-headroom": t("{size} of the 10 GiB per-shard ceiling — plan a .shardBy() migration while it still has runway.", {
+            size: formatBytes(insight.value),
+        }),
     })[insight.kind];
 
 interface AddIndexButtonProps {
@@ -132,9 +136,10 @@ const AddIndexButton = ({ onJump, table }: AddIndexButtonProps): ReactElement =>
  * tabs over a findings table (via {@link AdvisorView}). It pulls the `getMetrics`
  * health snapshot and `getFunctionStats` per-function table for one shard, then
  * maps the issues {@link deriveInsights} detects (low cache hit rate, high
- * eviction, slow functions, missing indexes, error spikes) into rows. A
- * `missing-index` row carries an inline "add the index" jump to the Schema tab.
- * Both reads are best-effort — one failing still yields the other's insights.
+ * eviction, slow functions, missing indexes, error spikes, storage headroom)
+ * into rows. A `missing-index` row carries an inline "add the index" jump to the
+ * Schema tab. Both reads are best-effort — one failing still yields the other's
+ * insights.
  */
 export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPanelProps): ReactElement => {
     const client = useLunora();
