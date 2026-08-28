@@ -230,6 +230,27 @@ describe("stream", () => {
     // --- LunoraClient.stream() integration tests --------------------------------
 
     describe("lunoraClient.stream()", () => {
+        it("fails fast on a tab that holds no socket instead of hanging forever", async () => {
+            expect.assertions(1);
+
+            // `ensureSocket` returns before creating a connection whenever this
+            // tab is not the cross-tab leader — which includes the window every
+            // `crossTabSync` client spends as a follower before it self-promotes.
+            // Both send branches were guarded on a connection existing, so this
+            // case fell off the end: the stream was recorded and its iterable
+            // returned having sent nothing and queued nothing, and the consumer
+            // never yielded, never errored and never completed. Cross-tab relays
+            // only subscription frames, so a follower genuinely has no stream
+            // path — the honest answer is a named failure, not a hang.
+            const client = new LunoraClient({ crossTabSync: true, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const iterable = client.stream(fnRef<number>("metrics:tick"), {});
+
+            await expect(iterable[Symbol.asyncIterator]().next()).rejects.toMatchObject({ code: "STREAM_DISCONNECTED" });
+
+            client.close();
+        });
+
         it("opens a WS, sends a stream frame, and yields chunks until complete", async () => {
             expect.assertions(3);
 

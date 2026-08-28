@@ -3409,7 +3409,33 @@ class LunoraClient {
         // rides the next reconnect instead of leaking a forever-hanging consumer.
         const sentImmediately = conn?.wsState === "open" && sendOn(conn, message);
 
-        if (!sentImmediately && conn) {
+        if (!sentImmediately && conn === undefined) {
+            // No connection at all, so there is nothing to send on AND nothing to
+            // queue against. `ensureSocket` returns before creating one whenever
+            // this tab is not the cross-tab leader — which includes the window
+            // every `crossTabSync` client spends as a follower before it
+            // self-promotes — and cross-tab relays only subscription frames, so a
+            // follower has no stream path.
+            //
+            // Both branches below used to be guarded on `conn`, so this case fell
+            // off the end: the stream was recorded and its iterable returned
+            // having sent nothing and queued nothing, and the consumer's
+            // `for await` hung forever with no error and no completion. Failing
+            // it names the limitation instead.
+            this.streams.delete(id);
+            handle.fail(
+                new LunoraError(
+                    "STREAM_DISCONNECTED",
+                    "stream unavailable: this tab is not the cross-tab WebSocket leader, so it holds no socket to stream over",
+                ),
+            );
+
+            return iterable;
+        }
+
+        // `conn` is provably present here — the branch above returned for its
+        // absence, which is the case that used to fall through both guards.
+        if (!sentImmediately) {
             // Defer the send to the open handler — the existing pending logic
             // is for unsubscribes, so stash the stream-start frame separately.
             conn.pendingStreams = conn.pendingStreams ?? [];
