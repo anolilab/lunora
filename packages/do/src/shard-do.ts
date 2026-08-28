@@ -10853,10 +10853,12 @@ abstract class ShardDO {
                 return false;
             }
 
-            const list = new Set(allowedOrigins
-                .split(",")
-                .map((entry) => entry.trim())
-                .filter((entry) => entry.length > 0));
+            const list = new Set(
+                allowedOrigins
+                    .split(",")
+                    .map((entry) => entry.trim())
+                    .filter((entry) => entry.length > 0),
+            );
 
             if (!list.has("*") && !list.has(origin)) {
                 return false;

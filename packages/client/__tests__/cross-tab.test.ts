@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { TabCoordinator } from "../src/cross-tab";
 import { LunoraClient } from "../src/lunora-client";
+import type { SubscriptionError } from "../src/subscription";
 import { SubscriptionRegistry } from "../src/subscription";
 import type { FunctionReference } from "../src/types";
 
