@@ -1,6 +1,6 @@
 {
     "name": "@lunora/d1",
-    "version": "1.0.0-alpha.96",
+    "version": "1.0.0-alpha.97",
     "description": "D1 adapter for Lunora .global() tables, wrapping the Sessions API for read-your-writes",
     "keywords": [
         "cloudflare",
@@ -68,7 +68,7 @@
         "@lunora/errors": "1.0.0-alpha.25",
         "@lunora/platform": "1.0.0-alpha.20",
         "@lunora/shard-engine": "1.0.0-alpha.46",
-        "@lunora/sql-store": "1.0.0-alpha.98",
+        "@lunora/sql-store": "1.0.0-alpha.99",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
