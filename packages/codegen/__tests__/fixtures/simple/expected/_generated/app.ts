@@ -306,6 +306,8 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.listSchemaTables = () => ["messages", "users", "places", "sessions", "attachments"];
+
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);
 

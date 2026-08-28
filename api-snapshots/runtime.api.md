@@ -643,6 +643,7 @@ interface ExportCursorStore {
 ```ts
 interface ExportFanOutRequest {
     args?: Record<string, unknown>;
+    defaultShardKey?: string;
     headers?: Record<string, string>;
     tables: ReadonlyArray<string>;
 }
@@ -2205,6 +2206,7 @@ interface WorkerOptions {
     importGlobals?: GlobalImportFunction;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
+    listSchemaTables?: () => ReadonlyArray<string>;
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;
     observability?: ObservabilitySink;

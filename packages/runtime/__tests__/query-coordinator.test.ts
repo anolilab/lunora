@@ -683,3 +683,58 @@ describe("concurrency", () => {
         expect(result.ok).toBe(2);
     });
 });
+
+describe("orchestrateExport shard discovery", () => {
+    // Discovery is registry-driven, and a registry only ever knows the shard keys
+    // an app registers for its `.shardBy(...)` tables. A root-DO table has no entry
+    // and never will — so without a fallback the fan-out reached zero shards and
+    // the export streamed an empty body that reads exactly like "this table has no
+    // rows". `orchestrateImport` has always resolved this case to the default
+    // shard; these pin export to the same answer.
+    it("falls back to the default shard when the registry knows no keys", async () => {
+        expect.assertions(2);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({}) });
+        const spy = createShardSpy(() => json({ ok: true, rows: [{ doc: { _id: "m1" }, table: "messages" }] }));
+
+        const result = await coordinator.orchestrateExport(spy.namespace, { args: {}, defaultShardKey: "__root__", headers: {}, tables: ["messages"] });
+
+        expect(spy.calls.map((call) => call.shardKey)).toEqual(["__root__"]);
+        expect(result.shards.flatMap((shard) => shard.rows ?? [])).toHaveLength(1);
+    });
+
+    it("reaches the default shard when no tables were named at all", async () => {
+        expect.assertions(1);
+
+        // What the worker passes when the caller sends no `tables` and codegen
+        // supplied no `listSchemaTables` — the union of zero tables is zero keys.
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ messages: ["chan-1"] }) });
+        const spy = createShardSpy(() => json({ ok: true, rows: [] }));
+
+        await coordinator.orchestrateExport(spy.namespace, { args: {}, defaultShardKey: "__root__", headers: {}, tables: [] });
+
+        expect(spy.calls.map((call) => call.shardKey)).toEqual(["__root__"]);
+    });
+
+    it("prefers real registry keys over the fallback", async () => {
+        expect.assertions(1);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ messages: ["chan-1", "chan-2"] }) });
+        const spy = createShardSpy(() => json({ ok: true, rows: [] }));
+
+        await coordinator.orchestrateExport(spy.namespace, { args: {}, defaultShardKey: "__root__", headers: {}, tables: ["messages"] });
+
+        expect(spy.calls.map((call) => call.shardKey).toSorted((a, b) => a.localeCompare(b))).toEqual(["chan-1", "chan-2"]);
+    });
+
+    it("contacts nothing when no default shard is supplied", async () => {
+        expect.assertions(1);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({}) });
+        const spy = createShardSpy(() => json({ ok: true, rows: [] }));
+
+        await coordinator.orchestrateExport(spy.namespace, { args: {}, headers: {}, tables: ["messages"] });
+
+        expect(spy.calls).toEqual([]);
+    });
+});
