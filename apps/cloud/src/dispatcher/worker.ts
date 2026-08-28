@@ -1,6 +1,6 @@
 import { limitsForPlan } from "../billing/plans";
 import type { AnalyticsEngineDatasetLike } from "../metering/analytics";
-import { normalizeRoutePath, recordRequestUsage, statusClass } from "../metering/analytics";
+import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../metering/analytics";
 import type { CustomDomainRoute } from "./route";
 import { createCustomDomainResolver, createPlanResolver, createRouteResolver, resolveTenant } from "./route";
 
@@ -37,6 +37,79 @@ interface DispatcherEnv {
 }
 
 const NOT_FOUND = (message: string): Response => new Response(message, { status: 404 });
+
+/**
+ * Response size in bytes for the metering data point, from `content-length` only.
+ *
+ * Reading the body to measure it would consume the stream the eyeball is waiting
+ * on, so a chunked or streamed response reports `0` rather than being buffered —
+ * an instrumentation read must never change what is served, and a byte total that
+ * under-counts streams is a better failure than a dispatcher that stalls them.
+ *
+ * `headers` is read optionally because a WebSocket upgrade is not an ordinary
+ * response: it carries a live socket and the dispatcher returns it verbatim,
+ * so this must tolerate the shape rather than assume a full `Response`.
+ */
+const responseBytes = (response: Response): number => {
+    const header = response.headers?.get("content-length") ?? null;
+
+    if (header === null) {
+        return 0;
+    }
+
+    const parsed = Number(header);
+
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+};
+
+/**
+ * Emit the per-request metering data point (fire-and-forget; a no-op without the
+ * binding). A WS upgrade is counted once here; per-message frames are metered by
+ * the DO/AE path, not re-counted on every frame.
+ *
+ * `outcome` + `route` are what let the usage stream answer WHICH endpoint moved
+ * and whether it started failing — the per-deployment health question billing
+ * metrics structurally cannot answer. Both are deliberately low-cardinality (a
+ * status class, an id-collapsed path); the raw code and raw path would make every
+ * record its own dimension.
+ *
+ * `country`/`hostname`/`status` and the duration/size doubles widen that from
+ * "which endpoint" to the full traffic picture. They are read HERE rather than
+ * reconstructed later because this is the only place holding both the inbound
+ * request (its `cf` geo and the hostname it actually arrived on) and the served
+ * response. `startedAt` is captured before dispatch, so the duration measures the
+ * tenant's own work rather than this dispatcher's routing.
+ *
+ * Extracted from `fetch` for two reasons: it keeps the request path's branching
+ * under the complexity budget, and it gives the whole read set ONE failure
+ * boundary. Every argument is a read off the request or the response, and
+ * instrumentation must never fail the request it measures — so the guard lives
+ * here, once, instead of as defensive code inside each helper.
+ */
+const meterRequest = (
+    dataset: AnalyticsEngineDatasetLike | undefined,
+    request: Request,
+    response: Response,
+    route: { plan?: string; scriptName: string },
+    url: URL,
+    startedAt: number,
+): void => {
+    try {
+        recordRequestUsage(dataset, {
+            bytes: responseBytes(response),
+            country: request.cf?.country as string | undefined,
+            durationMs: Date.now() - startedAt,
+            hostname: normalizeHostname(url.hostname),
+            outcome: statusClass(response.status),
+            plan: route.plan ?? "free",
+            route: normalizeRoutePath(url.pathname),
+            scriptName: route.scriptName,
+            status: response.status,
+        });
+    } catch {
+        // Best-effort by design — see the note above.
+    }
+};
 
 // Per-isolate plan + route resolvers, rebuilt only when the control-plane
 // config changes.
@@ -117,6 +190,7 @@ export default {
             // Per-plan runtime caps (§4): CPU + subrequests scale with the tenant's
             // plan, falling back to the free tier when the plan is unknown.
             const limits = limitsForPlan(route.plan);
+            const startedAt = Date.now();
             const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits });
             // A WebSocket upgrade returns a 101 response carrying `webSocket`;
             // returning it verbatim hands the hibernatable socket back to the
@@ -125,22 +199,7 @@ export default {
             // this dispatcher — see spikes/ws-dispatch for the live validation.
             const response = await userWorker.fetch(request);
 
-            // Per-request metering source (fire-and-forget; no-op without the
-            // binding). A WS upgrade is counted once here; per-message frames are
-            // metered by the DO/AE path, not re-counted on every frame.
-            //
-            // `outcome` + `route` are what let the usage stream answer WHICH
-            // endpoint moved and whether it started failing — the per-deployment
-            // health question billing metrics structurally cannot answer. Both
-            // are deliberately low-cardinality (a status class, an id-collapsed
-            // path); the raw code and raw path would make every record its own
-            // dimension.
-            recordRequestUsage(env.USAGE_ANALYTICS, {
-                outcome: statusClass(response.status),
-                plan: route.plan ?? "free",
-                route: normalizeRoutePath(new URL(request.url).pathname),
-                scriptName: route.scriptName,
-            });
+            meterRequest(env.USAGE_ANALYTICS, request, response, route, url, startedAt);
 
             // Debug header (GAPS.md B3): which cell + script served this. A 101
             // upgrade response is immutable — return it verbatim.

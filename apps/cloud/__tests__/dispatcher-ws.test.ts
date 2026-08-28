@@ -67,7 +67,13 @@ describe("dispatcher WebSocket pass-through", () => {
         expect(writeDataPoint).toHaveBeenCalledTimes(1);
         // A 101 upgrade meters as its own status class on the subscription route,
         // so WS traffic stays distinguishable from request traffic in the stream.
-        expect(writeDataPoint).toHaveBeenCalledWith({ blobs: ["acme", "free", "1xx", "/_lunora/ws"], doubles: [1], indexes: ["acme"] });
+        // The upgrade also carries the hostname it arrived on and the exact 101,
+        // but no body bytes — the socket's frames are metered inside the DO.
+        expect(writeDataPoint).toHaveBeenCalledWith({
+            blobs: ["acme", "free", "1xx", "/_lunora/ws", "unknown", "acme.lunora.app", "101"],
+            doubles: [1, expect.any(Number), 0],
+            indexes: ["acme"],
+        });
     });
 
     it("404s an upgrade to an unknown hostname without calling the namespace", async () => {

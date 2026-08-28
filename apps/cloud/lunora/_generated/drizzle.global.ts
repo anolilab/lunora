@@ -24,7 +24,7 @@ export const organizations = sqliteTable("organizations", {
     cellId: text("cellId").references((): AnySQLiteColumn => cells._id).notNull(),
     createdAt: real("createdAt").notNull(),
     name: text("name").notNull(),
-    plan: text("plan").notNull(),
+    plan: text("plan", { mode: "json" }).$type<"free" | "pro" | "enterprise">().notNull(),
     slug: text("slug").notNull(),
     spendCapMinor: real("spendCapMinor"),
     suspendedAt: real("suspendedAt"),

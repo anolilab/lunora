@@ -40,7 +40,7 @@ export interface Doc_organizations {
     cellId: Id<"cells">;
     createdAt: number;
     name: string;
-    plan: unknown;
+    plan: "free" | "pro" | "enterprise";
     slug: string;
     spendCapMinor?: number;
     suspendedAt?: number;
@@ -724,7 +724,7 @@ export interface Insert_organizations {
     cellId: Id<"cells">;
     createdAt: number;
     name: string;
-    plan: unknown;
+    plan: "free" | "pro" | "enterprise";
     slug: string;
     spendCapMinor?: number;
     suspendedAt?: number;

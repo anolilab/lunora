@@ -32,4 +32,6 @@ export const env = defineEnv({
     TELEMETRY_DATASET: v.optional(v.string()),
     /** Iceberg table the span archive lands in (`namespace.table`); defaults to `default.telemetry_spans`. */
     TELEMETRY_SPAN_TABLE: v.optional(v.string()),
+    /** AE dataset the dispatcher meters tenant requests into (`traffic.snapshot`). Defaults to `lunora_tenant_usage`. */
+    USAGE_ANALYTICS_DATASET: v.optional(v.string()),
 });

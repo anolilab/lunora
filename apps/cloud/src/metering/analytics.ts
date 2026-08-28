@@ -43,12 +43,31 @@ export const normalizeRoutePath = (pathname: string): string => {
 /** Status class of a response — `2xx`/`4xx`/`5xx`. Four possible values, so it costs nothing to group on, unlike the raw code. */
 export const statusClass = (status: number): string => `${String(Math.floor(status / 100))}xx`;
 
+/** Longest hostname kept as a dimension. Bounds the tag; a name past this is a probe, not a customer domain. */
+const MAX_HOSTNAME_LENGTH = 100;
+
+/**
+ * Normalize a request hostname to a dimension value — lowercased, port stripped,
+ * length-capped.
+ *
+ * Unlike route and status class, hostname is not bounded by construction: anything
+ * resolving to the dispatcher arrives here, including scanner traffic aimed at
+ * hostnames nobody registered. The cap is what stops a probe run from minting
+ * unbounded dimension values; the domains table remains the source of truth for
+ * which of these is a real custom domain.
+ */
+export const normalizeHostname = (hostname: string): string => hostname.toLowerCase().split(":")[0]?.slice(0, MAX_HOSTNAME_LENGTH) ?? "";
+
 /**
  * Emit one request data point: `blob1=script`, `blob2=plan`, `blob3=outcome`,
- * `blob4=route`, `double1=count`.
+ * `blob4=route`, `blob5=country`, `blob6=hostname`, `blob7=status`,
+ * `double1=count`, `double2=durationMs`, `double3=responseBytes`.
  *
- * `blob1`/`blob2` keep their positions because the usage rollup's SQL reads
- * `blob1 AS scriptName` — the ledger must not shift under a widening.
+ * **Positions are append-only.** `blob1`/`blob2` keep their positions because the
+ * usage rollup's SQL reads `blob1 AS scriptName` and the billing ledger derives
+ * charges from it; every later widening appends rather than renumbering, because
+ * a shifted position silently rewrites what customers are charged and no test
+ * downstream would notice. The same reasoning pins `double1` as the count.
  *
  * The `outcome` and `route` dimensions are what make per-deployment health
  * charts possible: billing metrics can say a tenant's requests rose, but never
@@ -56,18 +75,44 @@ export const statusClass = (status: number): string => `${String(Math.floor(stat
  * separate version blob — a blue/green alias already resolves to the VERSIONED
  * script name, so `blob1` carries the deploy identity for exactly the traffic
  * that has one.
+ *
+ * `country`/`hostname`/`status` answer the three questions the class dimensions
+ * cannot: WHERE the traffic came from, WHICH domain it arrived on (so a tenant
+ * running several can tell them apart), and WHICH code inside a class — a 429 and
+ * a 404 are both `4xx` and mean entirely different things. `durationMs` and
+ * `responseBytes` are recorded as doubles so a wide-window average costs one
+ * query; exact percentiles are NOT read from here, because AE rows are sampled
+ * (see `readTrafficSeries`).
  */
 export const recordRequestUsage = (
     dataset: AnalyticsEngineDatasetLike | undefined,
-    input: { outcome?: string; plan: string; route?: string; scriptName: string },
+    input: {
+        bytes?: number;
+        country?: string;
+        durationMs?: number;
+        hostname?: string;
+        outcome?: string;
+        plan: string;
+        route?: string;
+        scriptName: string;
+        status?: number;
+    },
 ): void => {
     if (!dataset) {
         return;
     }
 
     createAnalytics(dataset).writeDataPoint({
-        blobs: [input.scriptName, input.plan, input.outcome ?? "unknown", input.route ?? "unknown"],
-        doubles: [1],
+        blobs: [
+            input.scriptName,
+            input.plan,
+            input.outcome ?? "unknown",
+            input.route ?? "unknown",
+            input.country ?? "unknown",
+            input.hostname ?? "unknown",
+            input.status === undefined ? "unknown" : String(input.status),
+        ],
+        doubles: [1, input.durationMs ?? 0, input.bytes ?? 0],
         indexes: [input.scriptName],
     });
 };
