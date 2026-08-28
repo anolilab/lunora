@@ -1,3 +1,5 @@
+import { posix } from "node:path";
+
 import type {
     ArrowFunction,
     CallExpression,
@@ -374,7 +376,7 @@ const isGloballyDeclared = (type: Type): boolean => {
 interface QualifiedImport {
     /** The name the module exports it under — `"default"` for a default export. */
     exportName: string;
-    /** The specifier verbatim as the user wrote it. */
+    /** The specifier a package was written with, or the resolved file a relative import names (see {@link emittedSpecifierFor}). */
     specifier: string;
 }
 
@@ -466,11 +468,8 @@ const bindsByName = (importDeclaration: ImportDeclaration, name: string): boolea
  * source file for `getModuleSpecifierSourceFile()` to resolve to — the symbol
  * identity check every other path uses has nothing to compare against here.
  */
-const matchesAmbientModule = (importDeclaration: ImportDeclaration, ambientSpecifier: string, name: string): QualifiedImport | undefined => {
-    const specifier = importDeclaration.getModuleSpecifierValue();
-
-    return specifier === ambientSpecifier && bindsByName(importDeclaration, name) ? { exportName: name, specifier } : undefined;
-};
+const matchesAmbientModule = (importDeclaration: ImportDeclaration, ambientSpecifier: string, name: string): string | undefined =>
+    importDeclaration.getModuleSpecifierValue() === ambientSpecifier && bindsByName(importDeclaration, name) ? name : undefined;
 
 /**
  * Whether `importDeclaration`'s DEFAULT binding resolves to `declaration`.
@@ -479,7 +478,7 @@ const matchesAmbientModule = (importDeclaration: ImportDeclaration, ambientSpeci
  * this matches by resolving the binding rather than by comparing names — and the
  * name it must be written under is `default`, whatever the local alias is.
  */
-const matchesDefaultImport = (importDeclaration: ImportDeclaration, declaration: Node): QualifiedImport | undefined => {
+const matchesDefaultImport = (importDeclaration: ImportDeclaration, declaration: Node): string | undefined => {
     const defaultImport = importDeclaration.getDefaultImport();
 
     if (defaultImport === undefined) {
@@ -488,13 +487,11 @@ const matchesDefaultImport = (importDeclaration: ImportDeclaration, declaration:
 
     const bound = defaultImport.getSymbol();
 
-    return (bound?.getAliasedSymbol() ?? bound)?.getDeclarations().includes(declaration) === true
-        ? { exportName: "default", specifier: importDeclaration.getModuleSpecifierValue() }
-        : undefined;
+    return (bound?.getAliasedSymbol() ?? bound)?.getDeclarations().includes(declaration) === true ? "default" : undefined;
 };
 
 /** Whether `importDeclaration` brings `name` in from the module that declares it, through any re-export chain. */
-const matchesNamedImport = (importDeclaration: ImportDeclaration, declaration: Node, name: string): QualifiedImport | undefined => {
+const matchesNamedImport = (importDeclaration: ImportDeclaration, declaration: Node, name: string): string | undefined => {
     if (!bindsByName(importDeclaration, name)) {
         return undefined;
     }
@@ -503,13 +500,100 @@ const matchesNamedImport = (importDeclaration: ImportDeclaration, declaration: N
     const exported = moduleFile === undefined ? undefined : moduleExport(moduleFile, name);
     const target = exported?.getAliasedSymbol() ?? exported;
 
-    return target?.getDeclarations().includes(declaration) === true ? { exportName: name, specifier: importDeclaration.getModuleSpecifierValue() } : undefined;
+    return target?.getDeclarations().includes(declaration) === true ? name : undefined;
+};
+
+/** A specifier resolved from the handler's own directory rather than from a package name. */
+const RELATIVE_SPECIFIER_RE = /^\.\.?(?:$|\/)/u;
+
+/**
+ * The extension a module is written as once emitted, keyed by the extension its
+ * file has on disk. TypeScript's own resolution substitutes in this direction —
+ * `.js` finds `.ts`, `.mjs` finds `.mts` — and only within a family, which is why
+ * `.mts` and `.cts` cannot borrow the plain `.js` that `.ts`/`.tsx`/`.d.ts` use.
+ *
+ * `.d.ts` earns its own key because ts-morph reports it whole rather than as
+ * `.ts`, so a declaration file misses a map that lists only the four source
+ * extensions — and `index.d.ts` is a directory-index candidate under every
+ * resolution mode, which is how a hand-written shim directory used to slip
+ * through this with the blanket suffix still on it.
+ */
+const EMITTED_EXTENSIONS = new Map([
+    [".cjs", ".cjs"],
+    [".cts", ".cjs"],
+    [".d.ts", ".js"],
+    [".js", ".js"],
+    [".jsx", ".jsx"],
+    [".mjs", ".mjs"],
+    [".mts", ".mjs"],
+    [".ts", ".js"],
+    [".tsx", ".js"],
+]);
+
+/**
+ * Name the module a handler imported from by the file it RESOLVED to, carrying
+ * the extension that file is emitted as.
+ *
+ * The qualifier `_generated/` gets is the user's own import text, and several
+ * spellings of it resolve where they were written and nowhere else — each a
+ * TS2307/TS5097 in a file nobody wrote and nothing can repair from outside:
+ * `paths` does not apply to a relative specifier, and no ambient declaration
+ * satisfies a qualified `import("…").T`.
+ *
+ * `emit.ts` rebases a relative qualifier out of `_generated/` and appends `.js`
+ * when it carries no extension, because the generated files are consumed under
+ * NodeNext where the extension is mandatory. That single suffix is right for
+ * exactly one case — a `.ts` file named without an extension — and wrong for the
+ * rest.
+ *
+ * A DIRECTORY (`./agent/client` → `agent/client/index.ts`) has no extension to
+ * substitute, so `../agent/client.js` resolves to nothing. A `.mts`/`.cts` file
+ * is emitted as `.mjs`/`.cjs`, and substitution does not cross families, so
+ * `.js` misses it. A TS extension the app wrote itself (`./lib/types.ts`, legal
+ * under `allowImportingTsExtensions`) is kept verbatim and is illegal everywhere
+ * that flag is off — including a dedicated strict config for generated output,
+ * the pattern this repo itself ships.
+ *
+ * None of those are questions to ask the written STRING, which is why this
+ * rebuilds the specifier from the resolved path instead of editing the text.
+ * Every shape a heuristic gets wrong — a directory named `index`, a directory
+ * reached as `./feature/index`, one resolved through its own `package.json`
+ * `types` to a file that is not called `index` at all, a dotted directory name
+ * that reads as an extension — is simply the path the checker already found,
+ * expressed from the handler's own directory.
+ *
+ * Left exactly as written: a package specifier (correct from any directory
+ * already), an unresolved or ambient import, and a file in no family we emit —
+ * a `.json` module, whose extension is part of its name rather than something
+ * substitution restores.
+ */
+const emittedSpecifierFor = (handlerFile: SourceFile, importDeclaration: ImportDeclaration): string | undefined => {
+    const written = importDeclaration.getModuleSpecifierValue();
+
+    if (!RELATIVE_SPECIFIER_RE.test(written)) {
+        return undefined;
+    }
+
+    const moduleFile = importDeclaration.getModuleSpecifierSourceFile();
+    const extension = moduleFile === undefined ? undefined : EMITTED_EXTENSIONS.get(moduleFile.getExtension());
+
+    if (moduleFile === undefined || extension === undefined) {
+        return undefined;
+    }
+
+    // ts-morph normalises every path it reports to forward slashes, so the POSIX
+    // helpers are the right ones here on Windows too.
+    const target = `${posix.join(moduleFile.getDirectoryPath(), moduleFile.getBaseNameWithoutExtension())}${extension}`;
+    const rebased = posix.relative(handlerFile.getDirectoryPath(), target);
+
+    return rebased.startsWith(".") ? rebased : `./${rebased}`;
 };
 
 /**
  * The module specifier the handler's file imports `name` from, when that import
- * resolves to `declaration` — the literal string the user wrote, never a
- * resolved path. `undefined` when the module does not import it.
+ * resolves to `declaration` — a package specifier exactly as the user wrote it,
+ * a relative one rewritten by {@link emittedSpecifierFor} to name the file it
+ * resolved to. `undefined` when the module does not import it.
  *
  * This answers both questions the printing rule needs: whether the checker will
  * print the name BARE at `node` (it will, exactly when the module imports it),
@@ -536,13 +620,15 @@ const importSpecifierFor = (handlerFile: SourceFile, declaration: Node, name: st
     const ambientSpecifier = ambientModuleSpecifier(declaration);
 
     for (const importDeclaration of handlerFile.getImportDeclarations()) {
-        const matched =
+        // The matchers answer only WHICH EXPORT was reached. The specifier is
+        // built once, here, so no matcher can be added later that forgets it.
+        const exportName =
             ambientSpecifier === undefined
                 ? (matchesDefaultImport(importDeclaration, declaration) ?? matchesNamedImport(importDeclaration, declaration, name))
                 : matchesAmbientModule(importDeclaration, ambientSpecifier, name);
 
-        if (matched !== undefined) {
-            return matched;
+        if (exportName !== undefined) {
+            return { exportName, specifier: emittedSpecifierFor(handlerFile, importDeclaration) ?? importDeclaration.getModuleSpecifierValue() };
         }
     }
 
