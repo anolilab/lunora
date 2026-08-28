@@ -1,3 +1,14 @@
+## @lunora/payment [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.92...@lunora/payment@1.0.0-alpha.93) (2026-08-28)
+
+### Bug Fixes
+
+* **codegen:** close eight silent-drop gaps in procedure discovery ([#513](https://github.com/anolilab/lunora/issues/513)) ([e393e49](https://github.com/anolilab/lunora/commit/e393e494c0145ad78e0f2b1e27798ed96e7039a3))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.91
+
 ## @lunora/payment [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.91...@lunora/payment@1.0.0-alpha.92) (2026-08-27)
 
 
