@@ -370,6 +370,46 @@ describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", ()
 });
 
 describe("tabCoordinator — subscription-data/subscription-settled wire frames (CLIENT-01)", () => {
+    it("re-announces the leader's connection status when a new tab claims leadership", async () => {
+        expect.assertions(2);
+
+        // `emitConnectionStatus` fires only on a CHANGE and `onBecomeLeader`
+        // announces once, so a tab opened later heard nothing and sat on
+        // `leaderStatus === undefined` — `computeStatus()` answering "idle" while
+        // the app was live, and never producing the transitioned-to-connected
+        // edge that flushes an offline queue.
+        const channelName = `test-cross-tab-${crypto.randomUUID()}`;
+        let answered = 0;
+        const leader = new TabCoordinator({
+            channelName,
+            heartbeatInterval: HEARTBEAT_INTERVAL_MS,
+            leaderTimeout: LEADER_TIMEOUT_MS,
+            onLeaderClaimAnswered: () => {
+                answered += 1;
+            },
+        });
+        const newcomer = new BroadcastChannel(channelName);
+
+        try {
+            leader.start();
+            await delay(LEADER_TIMEOUT_MS + 20);
+
+            expect(leader.isLeader()).toBe(true);
+
+            newcomer.postMessage({ tabId: "zzz-newcomer", ts: Date.now(), type: "claim-leadership" });
+            await vi.waitFor(() => {
+                if (answered === 0) {
+                    throw new Error("leader has not answered the claim yet");
+                }
+            });
+
+            expect(answered).toBe(1);
+        } finally {
+            newcomer.close();
+            leader.stop();
+        }
+    });
+
     it("delivers a leader-broadcast subscription error to a follower's onSubscriptionError", async () => {
         expect.assertions(2);
 

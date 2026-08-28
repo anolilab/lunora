@@ -3370,6 +3370,16 @@ class LunoraClient {
                 const conn = this.getConnection(shardKey);
 
                 if (conn) {
+                    // Drop a start frame still waiting on the socket. Without
+                    // this the cancelled stream was sent anyway on the next open:
+                    // the server opened an iterator nobody consumes, its chunks
+                    // arrived for an id no longer in `this.streams` (a silent
+                    // no-op), and no `unsubscribe` ever followed because the
+                    // consumer had already gone. `handleDisconnect` knows to
+                    // filter `pendingStreams` by id; that knowledge just never
+                    // reached the cancel path.
+                    conn.pendingStreams = conn.pendingStreams?.filter((pending) => (pending as { id?: string }).id !== id);
+
                     sendOn(conn, { id, type: "unsubscribe" });
                 }
 
@@ -3732,6 +3742,17 @@ class LunoraClient {
                 }
 
                 notifySubscription(state, foldOptimistic(data, state.optimisticLayers));
+            },
+            onLeaderClaimAnswered: () => {
+                // A new tab just announced itself. Re-state our status directly:
+                // `emitConnectionStatus` short-circuits when nothing changed, so
+                // a stable leader never re-broadcasts and a late-joining follower
+                // would otherwise sit on `leaderStatus === undefined` — reporting
+                // `"idle"` while the app is live, and never seeing the
+                // transitioned-to-connected edge that flushes its offline queue.
+                if (this.tabCoordinator?.isLeader()) {
+                    this.tabCoordinator.broadcastConnectionStatus(this.computeStatus(), this.identityFingerprint());
+                }
             },
             onSubscriptionError: (key, error, identity) => {
                 // Belt-and-braces identity check — see `onConnectionStatus`'s

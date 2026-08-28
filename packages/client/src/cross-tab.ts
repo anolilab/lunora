@@ -59,6 +59,12 @@ interface TabCoordinatorOptions {
     onConnectionStatus?: (status: ConnectionStatus, identity?: string | null) => void;
 
     /**
+     * Called when the leader broadcasts a subscription error.
+     */
+    /** Fired on the LEADER when it answers another tab's leadership claim — the moment a new follower is known to be listening. */
+    onLeaderClaimAnswered?: () => void;
+
+    /**
      * Called when this tab loses leadership (should close WS connections).
      */
     onStopBeingLeader?: () => void;
@@ -76,10 +82,6 @@ interface TabCoordinatorOptions {
      * absent-field mixed-version rule — identical here).
      */
     onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
-
-    /**
-     * Called when the leader broadcasts a subscription error.
-     */
     onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
 
     /**
@@ -171,6 +173,7 @@ class TabCoordinator {
     private readonly onStopBeingLeader: (() => void) | undefined;
     private readonly onConnectionStatus: ((status: ConnectionStatus, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void) | undefined;
+    private readonly onLeaderClaimAnswered: (() => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionSettled:
         ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void) | undefined;
@@ -189,6 +192,7 @@ class TabCoordinator {
         this.onStopBeingLeader = options.onStopBeingLeader;
         this.onConnectionStatus = options.onConnectionStatus;
         this.onSubscriptionData = options.onSubscriptionData;
+        this.onLeaderClaimAnswered = options.onLeaderClaimAnswered;
         this.onSubscriptionError = options.onSubscriptionError;
         this.onSubscriptionSettled = options.onSubscriptionSettled;
 
@@ -524,9 +528,20 @@ class TabCoordinator {
         }
 
         // We're the current leader — assert our position with a heartbeat so
-        // the claimant defers to us.
+        // the claimant defers to us, and re-announce our connection status.
+        //
+        // The status broadcast is not redundant: `emitConnectionStatus` fires
+        // only on a CHANGE, and `onBecomeLeader` announces once. A tab opened
+        // later therefore heard nothing, left `leaderStatus` undefined, and
+        // `computeStatus()` answered `"idle"` forever — reporting disconnected
+        // while the app was fully live, and never producing the
+        // transitioned-to-connected edge that flushes an offline queue, so a
+        // client using `queueBeforeFirstConnect` queued writes on that tab that
+        // were never sent. A claim is the one moment we know a new tab is
+        // listening.
         if (this.leader) {
             this.broadcast({ type: "heartbeat", tabId: this.tabId, ts: Date.now() });
+            this.onLeaderClaimAnswered?.();
 
             return;
         }
