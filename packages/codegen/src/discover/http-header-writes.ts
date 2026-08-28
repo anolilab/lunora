@@ -4,8 +4,8 @@ import { Node, SyntaxKind } from "ts-morph";
 import { enclosingExportName, isRequestInputDerived, referencesRequestInput, singleHopInitializer } from "../argument-taint";
 import type { HttpHeaderWriteIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import type { InspectableHandler } from "./functions/inline-handler";
-import { inlineHandler } from "./functions/inline-handler";
+import type { InspectableHandler } from "./functions/chain";
+import { inlineHandler } from "./functions/chain";
 
 /**
  * Neutralizers that strip or preclude CR/LF in a header value: the framework CR/LF

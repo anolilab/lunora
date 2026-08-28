@@ -298,6 +298,39 @@ const unwrapToCallExpression = (node: Node | undefined): CallExpression | undefi
 };
 
 /**
+ * Local names an import binds for `exportedName` in a source file.
+ *
+ * Purely syntactic — no `getSymbol()`, no type checker. Deliberate on two
+ * counts: these detectors have to keep working under degraded type info (their
+ * whole reason for matching by name), and they run on every `.use(...)`
+ * argument of every chain, where resolving a symbol per callee is real
+ * type-checker work on a hot path. Scanning a file's import declarations is a
+ * handful of syntactic children by comparison.
+ *
+ * Deliberately NOT cached per source file. ts-morph reuses the `SourceFile`
+ * object when a file is overwritten or refreshed, so a cache keyed on it serves
+ * the previous content's aliases — which is a wrong answer about whether a
+ * procedure declares a policy, traded for a saving this scan does not need.
+ */
+const importAliases = (sourceFile: SourceFile, exportedName: string): Set<string> => {
+    const aliases = new Set<string>();
+
+    for (const declaration of sourceFile.getImportDeclarations()) {
+        if (!isServerSurfaceModule(declaration.getModuleSpecifierValue())) {
+            continue;
+        }
+
+        for (const specifier of declaration.getNamedImports()) {
+            if (specifier.getNameNode().getText() === exportedName) {
+                aliases.add(specifier.getAliasNode()?.getText() ?? specifier.getName());
+            }
+        }
+    }
+
+    return aliases;
+};
+
+/**
  * True when a call's `callee` names `expectedName` — literally, or through an
  * import alias.
  *
@@ -311,16 +344,13 @@ const unwrapToCallExpression = (node: Node | undefined): CallExpression | undefi
  * aliases, so the same file's procedure classified correctly while its policy
  * evidence vanished.
  *
- * The alias hop is additive — the text match still answers first, so degraded
- * type info behaves exactly as before.
- *
- * The alias hop DOES gate on the module specifier, unlike the text match. These
- * signals suppress lints as well as enable them (`usesRls` short-circuits
- * `rls-uncovered-table` and `normalize-id-used-as-authorization`), so widening
- * the match is not a free "find more policies" — trusting
- * `import { rls as x } from "some-other-lib"` would silence a real finding. The
- * text match's own false positives are pre-existing and left alone; the new hop
- * does not add to them.
+ * The alias hop is additive: the text match still answers first, so degraded
+ * type info behaves exactly as before. It does gate on the module specifier,
+ * unlike the text match — these signals SUPPRESS lints as well as enable them
+ * (`usesRls` short-circuits `rls-uncovered-table` and
+ * `normalize-id-used-as-authorization`), so trusting an unrelated library's
+ * `rls` would silence a real finding. The text match's own false positives are
+ * pre-existing and left alone; this hop does not add to them.
  */
 const resolvesToImportedName = (callee: Node, expectedName: string): boolean => {
     if (Node.isPropertyAccessExpression(callee)) {
@@ -331,16 +361,9 @@ const resolvesToImportedName = (callee: Node, expectedName: string): boolean => 
         return false;
     }
 
-    if (callee.getText() === expectedName) {
-        return true;
-    }
+    const text = callee.getText();
 
-    return (callee.getSymbol()?.getDeclarations() ?? []).some(
-        (declaration) =>
-            Node.isImportSpecifier(declaration) &&
-            declaration.getNameNode().getText() === expectedName &&
-            isServerSurfaceModule(declaration.getImportDeclaration().getModuleSpecifierValue()),
-    );
+    return text === expectedName || importAliases(callee.getSourceFile(), expectedName).has(text);
 };
 
 /** One `.method(...)` step of a builder chain, in terminal-to-root order. */

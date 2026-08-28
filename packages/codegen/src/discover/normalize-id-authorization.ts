@@ -3,11 +3,9 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { NormalizeIdAuthorizationIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import chainUsesWrappedCall from "./functions/chain-uses-wrapped-call";
+import type { InspectableHandler } from "./functions/chain";
+import { chainUsesWrappedCall, isDatabaseAccessor, procedureHandler } from "./functions/chain";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
-import type { InspectableHandler } from "./functions/inline-handler";
-import isDatabaseAccessor from "./functions/is-database-accessor";
-import procedureHandler from "./functions/procedure-handler";
 
 /**
  * `ctx.db` id-first row operations that resolve a whole row by its primitive id:

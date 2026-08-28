@@ -11,9 +11,7 @@
 import { Node, Project, SyntaxKind } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import { inlineHandler } from "../../../src/discover/functions/inline-handler";
-import isDatabaseAccessor from "../../../src/discover/functions/is-database-accessor";
-import procedureHandler from "../../../src/discover/functions/procedure-handler";
+import { inlineHandler, isDatabaseAccessor, procedureHandler } from "../../../src/discover/functions/chain";
 
 /**
  * The outermost call expression in `expression`.
