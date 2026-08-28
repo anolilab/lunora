@@ -91,6 +91,26 @@ a transform should not change row identity.
     duplicate ids across the project.
 </Callout>
 
+### What a data migration cannot do
+
+The runner executes **inside one shard's Durable Object**, and the only write it
+performs is a `replace` of the row it was handed. Two consequences are worth
+knowing before you plan a change around it:
+
+- **It cannot delete a row.** Returning `undefined` means "leave this one
+  alone", not "drop it". Removing rows is a job for an ordinary mutation.
+- **It cannot move a row to another DO.** The orchestrator runs the transform
+  once per shard, but each run only ever rewrites its own shard's rows.
+
+That second one rules it out for adopting `.shardBy()` on a table that already
+has rows — re-homing them is an export/import round trip, not a transform. See
+[Migrating a populated table](/docs/concepts/sharding#migrating-a-populated-table).
+
+The admin surface is the exception, and the reason that procedure works: admin
+reads and writes are addressed to a **shard** rather than routed by the schema,
+so the Studio can still reach a root DO's copies of a table the schema has since
+sharded. A data migration is the one path that always follows the schema.
+
 ### Scaffolding
 
 `lunora migrate create <name>` writes a `defineMigration` stub into
