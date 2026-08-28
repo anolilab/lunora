@@ -1045,6 +1045,24 @@ interface WorkerOptions {
     kvIntrospector?: KvIntrospector;
 
     /**
+     * Every table the schema declares, in no particular order. Codegen fills this
+     * in from the same generated `schema` object that backs
+     * {@link WorkerOptions.resolveTableSharding}.
+     *
+     * Export uses it to answer "every table" with a real list. Shard discovery is
+     * driven by the table list — the coordinator unions each named table's live
+     * shard keys — so an export that names no tables discovers no shards. Before
+     * this existed, `lunora export` with no `--tables`, and the scheduled backup
+     * with `backupTables` omitted (documented as "back up every table"), wrote a
+     * file containing only `.global()` D1 rows and no shard-local rows at all.
+     *
+     * Optional so a hand-written worker still runs; absent, export falls back to
+     * the default shard, which covers a single-DO deployment but cannot reach the
+     * other DOs of a `.shardBy(...)` one.
+     */
+    listSchemaTables?: () => ReadonlyArray<string>;
+
+    /**
      * The durable log archive's read config — the R2 Data Catalog (Iceberg)
      * table `pipelineLogSink` writes to, so the studio Logs panel's Archive feed
      * (and the `/_lunora/admin/logs/archive` route) can read it back via R2 SQL.

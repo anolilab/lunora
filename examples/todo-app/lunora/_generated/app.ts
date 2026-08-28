@@ -153,6 +153,8 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.listSchemaTables = () => ["todos"];
+
         options.logArchive = resolveLogArchiveFromEnv(env);
 
         for (const fn of this.extendFns) {

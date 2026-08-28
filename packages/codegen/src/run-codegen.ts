@@ -915,6 +915,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         identity,
         // Schema `.jurisdiction("…")` → pin the generated worker's DOs to the region.
         jurisdiction: schema.jurisdiction,
+        // Drives the emitted `listSchemaTables` — export's seed for "every table".
+        tableNames: schema.tables.map((table) => table.name),
         useUmbrella,
         // Voice-enabled agents (`defineAgent({ voice: … })`) → wire the worker's
         // `/_lunora/voice/<exportName>` route to each agent's `VOICE_*` DO

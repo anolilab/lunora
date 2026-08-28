@@ -440,6 +440,23 @@ interface QueryCoordinator {
  */
 interface ExportFanOutRequest {
     args?: Record<string, unknown>;
+
+    /**
+     * Shard to fall back to when registry discovery yields NOTHING for the
+     * requested tables — normally `"__root__"`.
+     *
+     * Discovery is registry-driven, and a registry only knows the shard keys an
+     * app registers for its `.shardBy(...)` tables. A plain root-DO table has no
+     * entry and never will, so the union came back empty and the export fanned
+     * out to zero shards — returning an empty NDJSON body that looks like a
+     * successful backup of a table that simply had no rows. `orchestrateImport`
+     * has always resolved the same case to the default shard; export not doing so
+     * meant a round trip could silently write back nothing.
+     *
+     * Omit to keep the old "no keys, no shards" behavior (a caller that has
+     * already resolved its own shard set).
+     */
+    defaultShardKey?: string;
     headers?: Record<string, string>;
 
     /**
@@ -1557,7 +1574,16 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // Union the shard keys across all requested shard-local tables so
             // an export of `["users","messages"]` reaches every shard that
             // holds either table. Skip globals — they live in D1, not a DO.
-            const shardKeys = await unionShardKeys(options.registry, request.tables);
+            const discovered = await unionShardKeys(options.registry, request.tables);
+
+            // Empty discovery is the common case, not the exotic one: a root-DO
+            // table is never in the registry, and neither is a `.shardBy(...)`
+            // table before its first shard registers. Falling back to the default
+            // shard makes export agree with `orchestrateImport`, which resolves
+            // exactly this case to `defaultShard`. Without it the fan-out hit zero
+            // shards and the caller got an empty body indistinguishable from a
+            // table with no rows.
+            const shardKeys = discovered.length > 0 || request.defaultShardKey === undefined ? discovered : [request.defaultShardKey];
 
             const exportRequest: ShardRpcRequest = {
                 // Spread the caller's `args` (`batchSize`, future export knobs)
