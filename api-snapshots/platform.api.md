@@ -125,6 +125,24 @@ interface ExecutionContextLike {
 }
 ```
 
+### `HttpCacheLike` (interface)
+
+```ts
+interface HttpCacheLike {
+    delete: (request: Request | string, options?: HttpCacheQueryOptions) => Promise<boolean>;
+    match: (request: Request | string, options?: HttpCacheQueryOptions) => Promise<Response | undefined>;
+    put: (request: Request | string, response: Response) => Promise<void>;
+}
+```
+
+### `HttpCacheQueryOptions` (interface)
+
+```ts
+interface HttpCacheQueryOptions {
+    ignoreMethod?: boolean;
+}
+```
+
 ### `KVNamespaceLike` (interface)
 
 ```ts
@@ -259,14 +277,17 @@ interface PlatformCapabilities {
         crossShardFanout?: Capability;
         durableStreams?: Capability;
         globalTables?: Capability;
+        httpCache?: Capability;
         hyperdrive?: Capability;
         identityProxy?: Capability;
+        images?: Capability;
         keyValueStore?: Capability;
         localSql?: Capability;
         mail?: Capability;
         memoryTables?: Capability;
         objectStorage?: Capability;
         objectStorageBackups?: Capability;
+        objectStorageCdcArchive?: Capability;
         pipelines?: Capability;
         queues?: Capability;
         scheduler?: Capability;
@@ -377,6 +398,7 @@ interface R2BucketLike {
         delimiter?: string;
         limit?: number;
         prefix?: string;
+        startAfter?: string;
     }) => Promise<{
         cursor?: string;
         objects: R2ObjectLike[];
@@ -817,58 +839,24 @@ const defineHostContractSuite: (name: string, factory: ConformanceHostFactory, v
 
 ### `C` (interface)
 
-```ts
-interface ConformanceHost {
-    awaitAlarmFired?: (target: number) => Promise<void>;
-    awaitJobDispatched?: (id: string) => Promise<boolean>;
-    cleanup?: () => void;
-    createSocket?: () => unknown;
-    directory: ShardDirectory;
-    disposeTerminally?: () => void;
-    kv?: ShardKvStore;
-    readFrames?: (socket: SocketHandle) => string[];
-    restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
-    scheduler?: SchedulerHost;
-    shard: ShardHost;
-    simulateDeadLetter?: (id: string) => Promise<boolean>;
-    simulateRecycle?: () => void;
-    socket: SocketHost;
-}
-```
+Re-exported from `@lunora/platform/conformance` — signature tracked in that section.
 
 ### `R` (interface)
 
-```ts
-interface ReferenceHost extends ConformanceHost {
-    restoreSocket: (id: string, attachment: unknown) => SocketHandle;
-    simulateRecycle: () => void;
-}
-```
+Re-exported from `@lunora/platform/conformance` — signature tracked in that section.
 
 ### `VitestApi` (type)
 
-```ts
-type VitestApi = {
-    describe: typeof import("vitest").describe;
-    expect: typeof import("vitest").expect;
-    it: typeof import("vitest").it;
-};
-```
+Re-exported from `@lunora/platform/conformance` — signature tracked in that section.
 
 ### `a` (type)
 
-```ts
-type ConformanceHostFactory = () => ConformanceHost | Promise<ConformanceHost>;
-```
+Re-exported from `@lunora/platform/conformance` — signature tracked in that section.
 
 ### `c` (const)
 
-```ts
-const createReferenceHost: () => ReferenceHost;
-```
+Re-exported from `@lunora/platform/conformance` — signature tracked in that section.
 
 ### `defineHostContractSuite` (const)
 
-```ts
-const defineHostContractSuite: (name: string, factory: ConformanceHostFactory, vitest: VitestApi) => void;
-```
+Re-exported from `@lunora/platform/conformance` — signature tracked in that section.

@@ -1690,6 +1690,7 @@ type RestRoute = (request: Request, env: unknown, url?: URL, context?: Execution
 
 ```ts
 interface RestRouteDeps {
+    edgeCache?: HttpCacheLike | null;
     functions: RestRegistryLike;
     invoke: RestInvoke;
     rateLimit?: RestRateLimit;
@@ -1819,6 +1820,15 @@ interface ShardCallOptions {
 
 ```ts
 type ShardCallReturn<F> = F extends ShardFunctionReference<infer _A, infer R> ? R : unknown;
+```
+
+### `ShardCaller` (interface)
+
+```ts
+interface ShardCaller {
+    identity: ResolvedIdentity | null;
+    shardKey: string;
+}
 ```
 
 ### `ShardCallerIdentity` (interface)
@@ -2174,7 +2184,7 @@ interface WorkerOptions {
     authBasePath?: string;
     authHandler?: (request: Request) => Promise<Response | undefined>;
     authorizeFanOut?: (identity: ResolvedIdentity | null, table: string, functionPath: string) => boolean | Promise<boolean>;
-    authorizeShard?: (identity: ResolvedIdentity | null, shardKey: string) => boolean | Promise<boolean>;
+    authorizeShard?: (caller: ShardCaller) => boolean | Promise<boolean>;
     backupCron?: string;
     backupPrefix?: string;
     backupRetain?: number;
@@ -2208,6 +2218,7 @@ interface WorkerOptions {
     requireEphemeralWsToken?: boolean;
     resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     resolveTableSharding?: AdminTableResolver;
+    restEdgeCache?: HttpCacheLike | null;
     restRateLimit?: RestRateLimit;
     routes?: Record<string, Route>;
     sampling?: TraceSamplingConfig;
