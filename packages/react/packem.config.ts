@@ -6,7 +6,6 @@ import transformer from "@visulima/packem/transformer/esbuild";
 // eslint-disable-next-line import/no-unused-modules -- consumed by packem CLI
 export default defineConfig({
     runtime: "browser",
-    failOnWarn: false,
     externals: [/^react($|\/)/, /^react-dom($|\/)/],
     // Run React Compiler over the hooks/provider so manual `useMemo`/`useCallback`
     // can be dropped from source — the compiler emits optimal memoization at
