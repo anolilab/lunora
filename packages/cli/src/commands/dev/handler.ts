@@ -112,6 +112,13 @@ interface DevCommandOptions {
     flavor?: DevFlavor;
     /** Injection seam for tests — defaults to the real IPv6-loopback probe ({@link hasIpv6Loopback}). */
     hasIpv6Loopback?: () => boolean;
+
+    /**
+     * Logs are NDJSON on stdout (`--json`, or a detected AI agent). Forwarded to
+     * the codegen watcher so a `postcodegen` script's own stdout is routed to
+     * stderr instead of corrupting the stream.
+     */
+    jsonLogs?: boolean;
     logger: Logger;
     /** Injection seam for tests — defaults to the real remote-config materializer. */
     materializeRemote?: typeof materializeRemoteWranglerConfig;
@@ -617,7 +624,14 @@ const startContainerLogStreaming = (cwd: string, logger: Logger): ContainerLogSt
 
 /** Best-effort shutdown of the studio server, codegen watcher, container logs, and remote temp config. */
 const teardown = async (handles: Teardown): Promise<void> => {
-    handles.codegen?.close();
+    // Awaited: `close()` stops the watch loop immediately but resolves only once
+    // a regeneration already in flight is done, and that run may have spawned
+    // the project's `postcodegen`. `defineHandler` calls `process.exit` right
+    // after this, so not awaiting leaves that child running, mid-write, against
+    // a shell that already has its prompt back — the terminal Ctrl-C case is
+    // covered by the signal reaching the whole process group, but a worker crash
+    // or a SIGTERM to the daemon PID is not.
+    await handles.codegen?.close().catch(() => undefined);
     handles.containerLogs?.close();
     await handles.studio?.close().catch(() => undefined);
     // Unlink the generated remote wrangler config last; the disposer is itself
@@ -1036,6 +1050,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         if (plan.runsCodegenWatch) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({
                 apiSpec: options.apiSpec,
+                jsonLogs: options.jsonLogs,
                 logger,
                 projectRoot: cwd,
                 target,
@@ -1043,6 +1058,13 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         }
 
         handles.studio = await startStudioBestEffort(options, plan, cwd, logger);
+
+        // After the studio start, so the two overlap, but before the worker below:
+        // the startup `postcodegen` is what FINISHES generated output, and a
+        // wrangler bundle taken while it is still running is the unfinished copy.
+        // `runCodegen` itself already completed inside `startCodegenWatch`.
+        await handles.codegen?.ready;
+
         const studioUrl = handles.studio?.url;
 
         // A Vite/meta-framework was detected: nudge the user to their framework
@@ -1145,6 +1167,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         // passed flag arrives as `false`, absent as `true` (the option default).
         codegen: options.codegen === false ? false : undefined,
         cwd,
+        jsonLogs,
         logger,
         port: options.port,
         remote,

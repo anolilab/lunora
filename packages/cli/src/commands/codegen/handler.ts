@@ -180,8 +180,19 @@ const warnAboutExportGaps = async (projectRoot: string, logger: Logger): Promise
 
     try {
         gaps = collectExportGaps(await inferLunoraBindings({ projectRoot }));
-    } catch {
-        return; // Best-effort: inference failures are owned by the commands that gate on them.
+    } catch (error: unknown) {
+        // Best-effort: inference failures are owned by the commands that gate on
+        // them, so this does not fail the run. It is still SAID, though —
+        // returning silently made a skipped check indistinguishable from a clean
+        // one, which is the same shape of quiet as the gap it looks for. A
+        // project whose entry this cannot resolve would read `lunora codegen` as
+        // proof its workflows are wired and find out at deploy.
+        logger.warn(
+            `could not check whether declared containers/workflows/agents are re-exported by the worker entry: ` +
+                `${error instanceof Error ? error.message : String(error)}. Run \`lunora doctor\` to check explicitly.`,
+        );
+
+        return;
     }
 
     for (const gap of gaps) {
