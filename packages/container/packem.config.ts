@@ -5,7 +5,6 @@ import transformer from "@visulima/packem/transformer/esbuild";
 // eslint-disable-next-line import/no-unused-modules -- consumed by packem CLI
 export default defineConfig({
     runtime: "node",
-    failOnWarn: false,
     // `@cloudflare/containers` is a devDependency, NOT a runtime dependency, so
     // packem inlines its source into our `dist/do` chunk instead of leaving an
     // `import … from "@cloudflare/containers"` edge. Two reasons:

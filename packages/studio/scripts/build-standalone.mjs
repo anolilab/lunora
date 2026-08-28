@@ -5,18 +5,16 @@
 //
 // It bundles the *already-built* dist mount entry rather than the TS source, so
 // esbuild never has to resolve the project's NodeNext `.js` import specifiers.
-// Run after `packem build`. packem's extension depends on its `runtime` setting
-// (`browser` → `.js`, `node` → `.mjs`), so detect whichever it produced rather
-// than hard-coding one.
+// Run after `packem build`.
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { build } from "esbuild";
 
-const mountEntry = ["dist/mount.js", "dist/mount.mjs"].find((candidate) => existsSync(join(process.cwd(), candidate)));
+const mountEntry = "dist/mount.mjs";
 
-if (mountEntry === undefined) {
-    throw new Error("build-standalone: no dist/mount.{js,mjs} found — run `packem build` first.");
+if (!existsSync(join(process.cwd(), mountEntry))) {
+    throw new Error(`build-standalone: no ${mountEntry} found — run \`packem build\` first.`);
 }
 
 // Synthetic entry: pull the named export from the built library and mount it,
