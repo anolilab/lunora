@@ -288,17 +288,17 @@ const updateDevServerState = (projectRoot: string, patch: Partial<DevServerState
 };
 
 /**
- * Remove `.lunora/dev.json`. Idempotent and never throws. When `expectedPid`
- * is given, the file is only removed while it still records that PID — so a
- * shutting-down server can't clobber the record a newer server just wrote.
- */
-/**
  * Whether a record reports a server that is accepting requests, as opposed to
  * one that has merely started. Lives here so the CLI's `status`, its JSON
  * output, and any future reader cannot each invent their own answer.
  */
 const isDevServerReady = (state: Pick<DevServerState, "readyAt"> | undefined): boolean => state?.readyAt !== undefined;
 
+/**
+ * Remove `.lunora/dev.json`. Idempotent and never throws. When `expectedPid`
+ * is given, the file is only removed while it still records that PID — so a
+ * shutting-down server can't clobber the record a newer server just wrote.
+ */
 const clearDevServerState = (projectRoot: string, expectedPid?: number): void => {
     try {
         if (expectedPid !== undefined) {
@@ -425,11 +425,11 @@ export {
     DEV_LOG_FILE_ENV,
     DEV_STATE_DIR,
     DEV_STATE_FILE,
+    isDevServerReady,
     isProcessAlive,
     isRecordedProcessCurrent,
     readDevServerState,
     readLiveDevServerState,
-    isDevServerReady,
     updateDevServerState,
     writeDevServerState,
 };
