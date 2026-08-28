@@ -1,3 +1,19 @@
+## @lunora/codegen [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.136...@lunora/codegen@1.0.0-alpha.137) (2026-08-28)
+
+### Bug Fixes
+
+* **codegen:** close eight silent-drop gaps in procedure discovery ([#513](https://github.com/anolilab/lunora/issues/513)) ([e393e49](https://github.com/anolilab/lunora/commit/e393e494c0145ad78e0f2b1e27798ed96e7039a3))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.97
+* **@lunora/agent:** upgraded to 1.0.0-alpha.72
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.42
+* **@lunora/do:** upgraded to 1.0.0-alpha.107
+* **@lunora/server:** upgraded to 1.0.0-alpha.91
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.45
+
 ## @lunora/codegen [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.135...@lunora/codegen@1.0.0-alpha.136) (2026-08-28)
 
 ### Bug Fixes
