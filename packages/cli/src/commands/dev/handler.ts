@@ -1103,17 +1103,14 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // someone else, and blocking the banner on it would delay the very server
         // it reports.
         //
-        // Before the attached-mode return below, not after the spawn — under
-        // `--no-worker` this process still OWNS the record, so skipping the probe
-        // there left `status` reporting "starting" forever for a server that had
-        // been serving for an hour, and the poll loop in the monorepo docs (whose
-        // whole subject is `--no-worker`) never terminating. Somebody else running
-        // the worker changes who listens, not who reports.
-        //
         // Only the wrangler flavor: on the Vite flavors `workerOrigin` is a
         // pre-listen guess and `@lunora/vite` writes the authoritative record,
         // stamping `readyAt` itself once Vite resolves its real URL.
-        if (plan.flavor === "wrangler") {
+        const startReadyProbe = (): void => {
+            if (plan.flavor !== "wrangler") {
+                return;
+            }
+
             handles.readyProbe = new AbortController();
 
             // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction: the probe reports rather than throws, and teardown aborts it
@@ -1124,13 +1121,18 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
                 probe: options.probeReady,
                 signal: handles.readyProbe.signal,
             });
-        }
+        };
 
         if (!plan.workerEnabled) {
             // Attached mode: whatever is left after `--no-worker` keeps running
             // and an external runner owns the worker. Park until interrupted so
             // the supervisor sees a normal long-lived process.
             //
+            // The probe still runs: somebody else starting the worker changes who
+            // listens, not who reports, and this process still owns the record.
+            // Skipping it here left `status` saying "starting" forever for a
+            // server that had been serving for an hour.
+            startReadyProbe();
             logger.info(attachedModeNotice(plan));
 
             return { code: await (options.waitForInterrupt ?? waitForInterrupt)(logger), plan };
@@ -1143,6 +1145,15 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // The Lunora realtime sidecar (`wrangler dev`, owns ShardDO) for the
         // framework-worker flavor — `undefined` for every single-process flavor.
         const sidecar = plan.sidecar === undefined ? undefined : spawn(plan.sidecar, logger);
+
+        // After the spawn, not before: the probe cannot tell OUR worker from
+        // anything else already listening on that origin. Started early, a
+        // stale server or an unrelated process holding the port would answer
+        // immediately, `readyAt` would be stamped for it, and `status` would
+        // report ready while wrangler was still failing to bind — pointing every
+        // dependent task at the wrong server. (Attached mode is the exception
+        // above: there the worker is someone else's by definition.)
+        startReadyProbe();
 
         handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl);
 

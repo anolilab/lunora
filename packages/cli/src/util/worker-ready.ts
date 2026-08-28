@@ -47,8 +47,19 @@ const markWorkerReadyWhenServing = async (options: {
     const deadline = Date.now() + timeoutMs;
 
     while (!signal.aborted && Date.now() < deadline) {
-        // eslint-disable-next-line no-await-in-loop -- readiness polling: each tick re-samples the socket
-        if (await probe(origin)) {
+        let answered = false;
+
+        try {
+            // eslint-disable-next-line no-await-in-loop -- readiness polling: each tick re-samples the socket
+            answered = await probe(origin);
+        } catch {
+            // A probe is allowed to reject; "never rejects" is this function's
+            // contract, not its collaborator's. The caller floats this promise,
+            // so letting one through would surface as an unhandled rejection
+            // that takes down the dev server the probe only meant to observe.
+        }
+
+        if (answered) {
             // Only while the record is still OURS. Every other mutation of this
             // file is ownership-checked (`claimDevServerState`'s exclusive
             // create, `clearDevServerState(cwd, expectedPid)`), and a late stamp

@@ -59,12 +59,19 @@ listening, which is enough to find and stop a server and not enough to gate on.
 # Bounded, and bails if the server died: `running: false` reports no `ready` key
 # at all, so an unbounded `until .ready == true` would spin forever on a dead
 # server rather than failing.
+ready=false
+
 for _ in $(seq 120); do
     status=$(lunora dev status --json)
-    [ "$(jq -r .ready <<<"$status")" = "true" ] && break
-    [ "$(jq -r .running <<<"$status")" = "false" ] && { echo "dev server is not running"; exit 1; }
+    if [ "$(jq -r .ready <<<"$status")" = "true" ]; then ready=true; break; fi
+    if [ "$(jq -r .running <<<"$status")" = "false" ]; then echo "dev server is not running"; exit 1; fi
     sleep 1
 done
+
+# Falling out of the loop is a TIMEOUT, not a pass — without this the tests run
+# against a server that never became ready, which is the failure the readiness
+# stamp exists to prevent.
+[ "$ready" = "true" ] || { echo "dev server never became ready"; exit 1; }
 
 pnpm run test:integration
 ```

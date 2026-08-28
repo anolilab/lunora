@@ -150,6 +150,41 @@ describe("markWorkerReadyWhenServing", () => {
         }
     });
 
+    it("survives a probe that rejects, rather than becoming an unhandled rejection", async () => {
+        expect.assertions(2);
+
+        // "Never rejects" is this function's contract, not its collaborator's,
+        // and the caller floats the promise — so a throwing probe would surface
+        // as an unhandled rejection that takes down the dev server it only meant
+        // to observe.
+        const workdir = projectWithStartedServer();
+        const { logger } = silentLogger();
+        let attempts = 0;
+
+        try {
+            const recorded = await markWorkerReadyWhenServing({
+                cwd: workdir,
+                logger,
+                origin: "http://localhost:8787",
+                probe: async () => {
+                    attempts += 1;
+
+                    if (attempts === 1) {
+                        throw new Error("probe blew up");
+                    }
+
+                    return true;
+                },
+                signal: new AbortController().signal,
+            });
+
+            expect(recorded).toBe(true);
+            expect(attempts).toBe(2);
+        } finally {
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
     it("does not stamp a record another process has since claimed", async () => {
         expect.assertions(2);
 

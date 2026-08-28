@@ -940,6 +940,39 @@ describe("lunora dev", () => {
             expect(origins).toContain("http://localhost:8787");
         });
 
+        it("does not probe a managed worker before it has been spawned", async () => {
+            expect.assertions(1);
+
+            // The probe cannot tell OUR worker from anything else already
+            // listening on that origin. Started before the spawn, a stale server
+            // or an unrelated process holding the port answers immediately,
+            // `readyAt` is stamped for it, and every dependent task is pointed at
+            // the wrong server while wrangler is still failing to bind.
+            const order: string[] = [];
+
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                probeReady: async () => {
+                    order.push("probe");
+
+                    return true;
+                },
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    order.push("spawn");
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(order.indexOf("spawn")).toBeLessThan(order.indexOf("probe"));
+        });
+
         it("probes under --no-worker, where an external runner owns the worker", async () => {
             expect.assertions(1);
 
