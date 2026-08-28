@@ -17,26 +17,31 @@ import { effectiveKind } from "../../../shared/effective-kind";
 import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "../../../shared/wire-codec";
 
 /**
- * Walk a decoded JSON column for wire tags only when one can be present.
- *
- * `decodeWire` is identity for pure JSON but still walks and rebuilds the whole
- * structure to prove it — pure overhead for the ordinary document carrying no
- * `bigint`/bytes leaf, which is the common case on the per-column path of every
- * global read. Decoding unconditionally measured ~1.3x on an object column and
- * ~1.25x on a 100-row page against a plain parse; this gate recovers about three
- * quarters of that.
- *
- * A tagged value is a JSON array whose first element is exactly {@link WIRE_TAG},
- * so a tag cannot survive `JSON.stringify` without appearing verbatim in the
- * text. Testing the raw string is therefore sound in the direction that matters:
- * a false negative is impossible, and a false positive (app data that happens to
- * contain the sentinel) merely takes the slow path and still decodes correctly.
- *
- * Takes the already-parsed value rather than parsing itself so it depends only on
- * imports: `import/exports-last` wants a non-exported helper above the exports,
- * and calling `tryJsonParse` from there would trip `no-use-before-define`.
+ * Marks a stored column as wire-encoded. Reuses {@link WIRE_TAG} rather than
+ * minting a second sentinel — as a *prefix* it cannot be confused with the tag
+ * appearing *inside* a value, because `JSON.stringify` output always starts with
+ * `{`, `[`, `"`, a digit, `-`, `t`, `f`, or `n`, never `$`.
  */
-const decodeWireIfTagged = (raw: string, parsed: unknown): unknown => (raw.includes(WIRE_TAG) ? decodeWire(parsed) : parsed);
+const WIRE_PREFIX = WIRE_TAG;
+
+/**
+ * Decode a stored JSON column, honouring the wire marker written by
+ * {@link sqliteEncode}.
+ *
+ * Testing an explicit prefix rather than sniffing for the tag anywhere in the
+ * text is what makes this unambiguous: a legacy row that merely *contains* an
+ * array shaped like a wire payload is ordinary data and is returned as parsed,
+ * where a content sniff would decode it and the next write would persist the
+ * corruption.
+ *
+ * It is also the cheaper test. `decodeWire` is identity for pure JSON but still
+ * walks and rebuilds the whole structure to prove it — pure overhead on the
+ * per-column path of every global read, measuring ~1.3x on an object column and
+ * ~1.25x on a 100-row page. A `startsWith` is O(1) against the O(n) scan a
+ * content sniff needs.
+ */
+const decodeJsonColumn = (raw: string, parse: (text: string) => unknown): unknown =>
+    raw.startsWith(WIRE_PREFIX) ? decodeWire(parse(raw.slice(WIRE_PREFIX.length))) : parse(raw);
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown): unknown => {
@@ -66,11 +71,21 @@ export const sqliteEncode = (value: unknown): unknown => {
     // Wire-encode a composite so a nested `bigint`/bytes leaf survives. A bare
     // `JSON.stringify` threw an untyped `TypeError` on `{ n: 1n }` (surfacing as
     // an opaque 500) and silently flattened `{ b: <ArrayBuffer> }` to `{"b":{}}`
-    // — data destroyed with no error at all. `encodeWire` is identity for pure
-    // JSON, so an ordinary document stores byte-identically to before and
-    // existing rows still read back unchanged.
+    // — data destroyed with no error at all.
+    //
+    // Only a value that actually needs it is wire-encoded, and that form is
+    // marked with a leading `WIRE_PREFIX` so the reader can tell it apart from
+    // ordinary JSON with certainty rather than by sniffing the content. Without
+    // the marker, a row already holding the array `["$lunora.wire$","bigint","42"]`
+    // — legitimate app data, written before this path existed and so never passed
+    // through `encodeWire`'s `"arr"` escape — decodes as `42n`, and the next
+    // `patch`/`replace` persists that corruption. `encodeWire` escapes such an
+    // array on the way in, so only pre-existing rows are exposed; the marker
+    // closes them too.
+    //
+    // An ordinary document is untouched: no prefix, byte-identical to before.
     try {
-        return needsWireEncoding(value) ? JSON.stringify(encodeWire(value)) : JSON.stringify(value);
+        return needsWireEncoding(value) ? WIRE_PREFIX + JSON.stringify(encodeWire(value)) : JSON.stringify(value);
     } catch (error: unknown) {
         // `encodeWire` throws a bare `TypeError` for a non-plain object and a
         // `RangeError` past its depth cap; re-thrown typed so the writer names
@@ -148,12 +163,17 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
         case "any":
         case "from":
         case "union": {
-            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[")) ? decodeWireIfTagged(raw, tryJsonParse(raw)) : raw;
+            // The wire marker joins `{`/`[` as a shape this branch must decode —
+            // a marked value is not raw JSON, so it would otherwise fall through
+            // and be returned as its own storage string.
+            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[") || raw.startsWith(WIRE_PREFIX))
+                ? decodeJsonColumn(raw, tryJsonParse)
+                : raw;
         }
         case "array":
         case "object":
         case "record": {
-            return typeof raw === "string" ? decodeWireIfTagged(raw, tryJsonParse(raw)) : raw;
+            return typeof raw === "string" ? decodeJsonColumn(raw, tryJsonParse) : raw;
         }
         case "bigint": {
             return decodeBigint(raw);

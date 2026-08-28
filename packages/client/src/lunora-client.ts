@@ -1013,7 +1013,22 @@ class LunoraClient {
      */
     private readonly streams = new Map<
         string,
-        { durable: boolean; generation: number | undefined; handle: StreamHandle; lastSeq: number; message: ClientMessage; shardKey: string | undefined }
+        {
+            durable: boolean;
+            generation: number | undefined;
+            handle: StreamHandle;
+            lastSeq: number;
+            message: ClientMessage;
+            shardKey: string | undefined;
+
+            /**
+             * Whether the start frame ever reached the server. Distinguishes "the
+             * run exists server-side and must be told to stop" from "the frame is
+             * still queued locally and can simply be dropped" — which is the whole
+             * question on the cancel path when the socket is down.
+             */
+            started: boolean;
+        }
     >();
 
     /** Live shape subscriptions (partial replication), keyed by their wire id. */
@@ -3364,26 +3379,7 @@ class LunoraClient {
         const { handle, iterable } = createStream<ReturnOf<F>>({
             maxBuffer: options.maxBuffer,
             onCancel: () => {
-                // Send the cancel frame on the matching connection (if any).
-                // If the socket is down we drop the cancel: the DO has already
-                // lost its handle on close, so there's nothing to abort.
-                const conn = this.getConnection(shardKey);
-
-                if (conn) {
-                    // Drop a start frame still waiting on the socket. Without
-                    // this the cancelled stream was sent anyway on the next open:
-                    // the server opened an iterator nobody consumes, its chunks
-                    // arrived for an id no longer in `this.streams` (a silent
-                    // no-op), and no `unsubscribe` ever followed because the
-                    // consumer had already gone. `handleDisconnect` knows to
-                    // filter `pendingStreams` by id; that knowledge just never
-                    // reached the cancel path.
-                    conn.pendingStreams = conn.pendingStreams?.filter((pending) => (pending as { id?: string }).id !== id);
-
-                    sendOn(conn, { id, type: "unsubscribe" });
-                }
-
-                this.streams.delete(id);
+                this.cancelStream(id, shardKey);
             },
         });
 
@@ -3410,7 +3406,17 @@ class LunoraClient {
         // `durable` starts from the caller's intent and is corrected by the first
         // `seq`-bearing chunk; a server that did not declare the procedure durable
         // never sends one, so the stream stays non-resumable.
-        this.streams.set(id, { durable: options.durable === true, generation: undefined, handle: handle as StreamHandle, lastSeq: 0, message, shardKey });
+        const record = {
+            durable: options.durable === true,
+            generation: undefined as number | undefined,
+            handle: handle as StreamHandle,
+            lastSeq: 0,
+            message,
+            shardKey,
+            started: false,
+        };
+
+        this.streams.set(id, record);
 
         // Fast path: socket is open, try to send immediately. `sendOn` can still
         // return `false` if the socket closed between the `wsState` check and the
@@ -3418,6 +3424,10 @@ class LunoraClient {
         // delivered, so fall through to the bounded pending-queue path below so it
         // rides the next reconnect instead of leaking a forever-hanging consumer.
         const sentImmediately = conn?.wsState === "open" && sendOn(conn, message);
+
+        // Once the frame lands the server owns a run for this id, so a later
+        // cancel has to reach it rather than just dropping the local record.
+        record.started = sentImmediately;
 
         if (!sentImmediately && conn === undefined) {
             // No connection at all, so there is nothing to send on AND nothing to
@@ -4930,16 +4940,7 @@ class LunoraClient {
                 // Reconnect-after-close: in-flight streams have already torn down
                 // on the server, so the only entries here are brand-new ones that
                 // raced the connect.
-                if (conn.pendingStreams && conn.pendingStreams.length > 0) {
-                    const pending = conn.pendingStreams;
-
-                    // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
-                    conn.pendingStreams = [];
-
-                    for (const message of pending) {
-                        sendOn(conn, message);
-                    }
-                }
+                this.flushPendingStreams(conn);
 
                 // Rejoin every whisper topic registered for this shard so ephemeral
                 // channels survive a socket bounce.
@@ -4954,6 +4955,66 @@ class LunoraClient {
                 this.flushOfflineQueue(shardKey).catch(() => undefined);
             },
         });
+    }
+
+    /**
+     * Send the stream-start frames queued while the socket was (re)connecting,
+     * marking each one that lands as started on the server.
+     */
+    private flushPendingStreams(conn: ShardConnection): void {
+        if (!conn.pendingStreams || conn.pendingStreams.length === 0) {
+            return;
+        }
+
+        const pending = conn.pendingStreams;
+
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.pendingStreams = [];
+
+        for (const message of pending) {
+            // Reaching the server is what makes a later cancel owe it an
+            // unsubscribe rather than a silent local delete.
+            const stream = sendOn(conn, message) ? this.streams.get(String((message as { id?: string }).id)) : undefined;
+
+            if (stream) {
+                stream.started = true;
+            }
+        }
+    }
+
+    /**
+     * Tear down a stream the consumer cancelled, telling the server when the
+     * server is the one still holding it.
+     */
+    private cancelStream(id: string, shardKey: string | undefined): void {
+        const conn = this.getConnection(shardKey);
+        const stream = this.streams.get(id);
+
+        if (conn) {
+            // Drop a start frame still waiting on the socket. Without this the
+            // cancelled stream was sent anyway on the next open: the server opened
+            // an iterator nobody consumes, its chunks arrived for an id no longer
+            // in `this.streams` (a silent no-op), and no `unsubscribe` ever
+            // followed because the consumer had already gone. `handleDisconnect`
+            // knows to filter `pendingStreams` by id; that knowledge just never
+            // reached the cancel path.
+            conn.pendingStreams = conn.pendingStreams?.filter((pending) => (pending as { id?: string }).id !== id);
+
+            // Dropping the cancel when the socket is down is right only for an
+            // EPHEMERAL run: the DO lost its handle on close, so there is nothing
+            // left to abort. A DURABLE run is the opposite — it outlives the
+            // socket by design, and the line above just removed the resume frame
+            // that would have carried us back to it. Without queueing the
+            // unsubscribe the server keeps producing and persisting a run no one
+            // will ever read, and nothing later says stop. `pendingUnsubscribes`
+            // already flushes ahead of `pendingStreams` on open, so the teardown
+            // lands before any resume that races it.
+            if (!sendOn(conn, { id, type: "unsubscribe" }) && stream?.durable === true && stream.started) {
+                conn.pendingUnsubscribes.push({ id, type: "unsubscribe" });
+            }
+        }
+
+        this.streams.delete(id);
     }
 
     private handleDisconnect(conn: ShardConnection): void {
@@ -5319,6 +5380,21 @@ class LunoraClient {
         if (state) {
             const subscriptionError = buildSubscriptionError(message);
 
+            // Snapshot the identity and key BEFORE fanning. `fanSubscriptionError`
+            // runs subscriber `onError` callbacks synchronously, and one of them
+            // may call `setAuthToken` — signing out and back in is a natural
+            // reaction to an auth-shaped rejection. Reading the fingerprint
+            // afterwards stamps this frame with the identity that replaced the one
+            // the error was raised under, and the `identity` field is exactly what
+            // followers trust to decide the frame is theirs: tabs on the NEW
+            // identity would accept a rejection belonging to the OLD session.
+            //
+            // Stamping the captured identity is the whole fix — followers still on
+            // that identity accept it (correct) and everyone else drops it
+            // (correct), so there is no need to also suppress the broadcast.
+            const identity = this.identityFingerprint();
+            const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+
             fanSubscriptionError(state.errorCallbacks, subscriptionError);
 
             // Fan it to follower tabs too. `broadcastSubscriptionError` existed
@@ -5329,11 +5405,7 @@ class LunoraClient {
             // like its `data` and `settled` siblings — only the leader holds the
             // socket that produced this frame.
             if (this.tabCoordinator?.isLeader()) {
-                this.tabCoordinator.broadcastSubscriptionError(
-                    SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey),
-                    subscriptionError,
-                    this.identityFingerprint(),
-                );
+                this.tabCoordinator.broadcastSubscriptionError(key, subscriptionError, identity);
             }
 
             return;

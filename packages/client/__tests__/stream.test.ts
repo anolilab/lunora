@@ -421,6 +421,50 @@ describe("stream", () => {
             client.close();
         });
 
+        it("queues the unsubscribe when a started durable stream is cancelled while disconnected", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const iterable = client.stream(fnRef<number>("chat:answer"), {});
+
+            const first = latestSocket();
+
+            first.open();
+
+            const { id } = first.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>).find((f) => f.type === "stream") as { id: string };
+
+            // A seq-bearing chunk marks the run durable — it now outlives the
+            // socket, and the server keeps producing and persisting it.
+            first.receive({ data: 1, generation: 1234, id, seq: 1, type: "chunk" });
+
+            // Socket drops. The disconnect path queues a resume frame.
+            first.close();
+
+            // Consumer gives up while still disconnected. Dropping the cancel here
+            // is right for an ephemeral run but leaks a durable one: the resume
+            // frame is removed and nothing else ever tells the server to stop.
+            iterable.cancel();
+
+            vi.runOnlyPendingTimers();
+
+            const second = latestSocket();
+
+            second.open();
+
+            const frames = second.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+            const unsubscribeAt = frames.findIndex((f) => f.type === "unsubscribe" && f.id === id);
+
+            expect(unsubscribeAt).toBeGreaterThanOrEqual(0);
+            // And no resume may be sent for a run we just cancelled.
+            expect(frames.some((f) => f.type === "stream" && f.id === id)).toBe(false);
+            // Teardown has to precede anything that could restart it.
+            expect(frames.slice(0, unsubscribeAt).some((f) => f.type === "stream")).toBe(false);
+
+            client.close();
+        });
+
         it("buffers the start frame while the socket is connecting and flushes it on open", async () => {
             expect.assertions(2);
 
