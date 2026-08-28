@@ -10815,9 +10815,14 @@ abstract class ShardDO {
     /**
      * Gate the upgrade request against two complementary controls:
      *
-     * 1. Origin allowlist via `env.LUNORA_ALLOWED_ORIGINS` (comma-separated).
-     * When unset, any origin is accepted — convenient for local dev,
-     * not suitable for production.
+     * 1. Origin allowlist via `env.LUNORA_ALLOWED_ORIGINS` (comma-separated,
+     * a single `*` permitting any origin). When unset, any origin is
+     * accepted — convenient for local dev, not suitable for production.
+     * The wildcard must be honoured here because the worker's CORS layer
+     * honours it (`@lunora/runtime`'s `parseEnvCors`): reading the same
+     * variable more strictly took every WebSocket upgrade down with a bare
+     * 403 on a configuration the CORS side documents as supported, and a
+     * browser sends its real `Origin`, never `*`, so nothing else matched.
      * 2. Bearer token via `env.LUNORA_WS_BEARER`. When set, the upgrade
      * must present a matching token. We accept either an
      * `Authorization: Bearer <token>` header (preferred) or a
@@ -10848,12 +10853,12 @@ abstract class ShardDO {
                 return false;
             }
 
-            const list = allowedOrigins
+            const list = new Set(allowedOrigins
                 .split(",")
                 .map((entry) => entry.trim())
-                .filter((entry) => entry.length > 0);
+                .filter((entry) => entry.length > 0));
 
-            if (!list.includes(origin)) {
+            if (!list.has("*") && !list.has(origin)) {
                 return false;
             }
         }
