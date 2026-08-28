@@ -28,6 +28,7 @@ import {
     DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
     isCodegenDisabled,
+    isDevServerReady,
     isRecordedProcessCurrent,
     readDevServerState,
     readLiveDevServerState,
@@ -36,15 +37,13 @@ import {
 } from "@lunora/config";
 
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import type { ReadinessProbe } from "../../util/dev-probe";
+import { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs } from "../../util/dev-probe";
 import type { Logger } from "../../util/logger";
 import { printJson } from "../../util/output-format";
 import { spawnShellCompat } from "../../util/spawn";
 import type { DevOptions } from "./index";
 
-/** How long `--background` waits for the server to accept requests before giving up. */
-const DEFAULT_READY_TIMEOUT_MS = 120_000;
-/** Poll cadence for readiness / process-death checks. */
-const POLL_INTERVAL_MS = 250;
 /** Grace period `dev stop` allows for a clean SIGTERM shutdown before SIGKILL. */
 const STOP_GRACE_MS = 10_000;
 /** Trailing log lines `dev logs` prints by default (0 = all, within {@link LOG_TAIL_MAX_BYTES}). */
@@ -53,9 +52,6 @@ const DEFAULT_LOG_LINES = 100;
 const FAILURE_LOG_TAIL_LINES = 40;
 /** Upper bound on how much of the capture log is read back — a long-lived run's log can grow unbounded. */
 const LOG_TAIL_MAX_BYTES = 256 * 1024;
-
-/** Env overriding {@link DEFAULT_READY_TIMEOUT_MS}. */
-const READY_TIMEOUT_ENV = "LUNORA_DEV_READY_TIMEOUT_MS";
 
 /**
  * How the dev child runs. `wrangler` is the classic `lunora dev` stack (wrangler
@@ -133,26 +129,6 @@ const viteDevCommand = (cwd: string): { args: ReadonlyArray<string>; command: st
     // `<manager> run dev` is valid for npm, pnpm, yarn, and bun alike.
     return { args: ["run", "dev"], command: manager };
 };
-
-/**
- * True when an HTTP server answers at `origin` — ANY response counts,
- * including a 404. The probe targets `/_lunora/status` (the runtime's public
- * health route), but an older runtime without that route still proves the
- * server is up by answering at all; only a refused/failed connection is "not
- * ready".
- */
-const defaultProbe = async (origin: string): Promise<boolean> => {
-    try {
-        await fetch(new URL("/_lunora/status", origin), { signal: AbortSignal.timeout(1000) });
-
-        return true;
-    } catch {
-        return false;
-    }
-};
-
-/** Readiness probe seam — tests swap the real HTTP probe out. */
-type ReadinessProbe = (origin: string) => Promise<boolean>;
 
 /** A spawned detached child, narrowed to what the wait loop needs. */
 interface DetachedChild {
@@ -306,7 +282,7 @@ interface BackgroundCommandOptions {
     pollIntervalMs?: number;
     /** Injection seam for tests — defaults to the real HTTP readiness probe. */
     probe?: ReadinessProbe;
-    /** Injection seam for tests — defaults to env override or {@link DEFAULT_READY_TIMEOUT_MS}. */
+    /** Injection seam for tests — defaults to `resolveReadyTimeoutMs` (LUNORA_DEV_READY_TIMEOUT_MS, else two minutes). */
     readyTimeoutMs?: number;
     /** Injection seam for tests — defaults to the real detached spawner. */
     spawnDetached?: DetachedSpawner;
@@ -379,8 +355,7 @@ const waitUntilReady = async (parameters: {
 const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ code: number }> => {
     const { cwd, logger } = options;
     const logPath = resolveLogPath(cwd, undefined);
-    const environmentTimeout = Number(process.env[READY_TIMEOUT_ENV] ?? "");
-    const timeout = options.readyTimeoutMs ?? (Number.isFinite(environmentTimeout) && environmentTimeout > 0 ? environmentTimeout : DEFAULT_READY_TIMEOUT_MS);
+    const timeout = resolveReadyTimeoutMs(options.readyTimeoutMs);
 
     const child = (options.spawnDetached ?? defaultDetachedSpawner)({
         args: options.command.args,
@@ -838,7 +813,7 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
             // `running` is "a process exists"; `ready` is "it answered". A
             // supervisor composing Lunora with other workers wants the second —
             // gate on this, not on `running`, before starting a dependent step.
-            ready: state.readyAt !== undefined,
+            ready: isDevServerReady(state),
             readyAt: state.readyAt,
             running: true,
             startedAt: state.startedAt,
@@ -857,7 +832,7 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
         // Distinguishes "the process is up" from "the worker answers" — the
         // record exists from the moment the server starts, so without this the
         // status line reads identically either side of the port opening.
-        state.readyAt === undefined ? "starting" : "ready",
+        isDevServerReady(state) ? "ready" : "starting",
     ];
 
     logger.success(`Dev server running at ${state.url} (${details.join(", ")})`);

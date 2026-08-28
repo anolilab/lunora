@@ -56,14 +56,31 @@ listening, which is enough to find and stop a server and not enough to gate on.
 
 ```bash
 # Wait for the worker to serve, then run whatever depends on it.
-until [ "$(lunora dev status --json | jq -r .ready)" = "true" ]; do sleep 0.5; done
+# Bounded, and bails if the server died: `running: false` reports no `ready` key
+# at all, so an unbounded `until .ready == true` would spin forever on a dead
+# server rather than failing.
+for _ in $(seq 120); do
+    status=$(lunora dev status --json)
+    [ "$(jq -r .ready <<<"$status")" = "true" ] && break
+    [ "$(jq -r .running <<<"$status")" = "false" ] && { echo "dev server is not running"; exit 1; }
+    sleep 1
+done
+
 pnpm run test:integration
 ```
 
 `lunora dev status` shows the same thing for a human, as `ready` or `starting`
-in its detail line. On the Vite flavors `@lunora/vite` writes the record itself,
-once Vite has resolved its URLs — so there the record appearing at all already
-means ready.
+in its detail line. It works under `--no-worker` too: this process still owns the
+record, so it reports on the worker your runner started.
+
+`readyAt` is a claim about the record's own `url` and nothing else. On the Vite
+flavors `@lunora/vite` writes the record once Vite has resolved that URL, so
+`ready` there means the framework dev server is up — on SvelteKit/Nuxt the
+`wrangler dev` sidecar that owns `ShardDO` runs on its own port, which this
+record does not advertise and `readyAt` says nothing about.
+
+Raise `LUNORA_DEV_READY_TIMEOUT_MS` if a cold build is slower than the default
+two minutes; it moves the background wait and this stamp together.
 
 <Callout type="warn">
     A missing `readyAt` means *not ready yet*, never *never*. A worker that takes longer than the probe waits keeps running with the field absent, so poll for

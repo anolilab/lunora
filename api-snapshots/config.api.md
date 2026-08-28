@@ -1264,6 +1264,12 @@ const interpretRemote: (value: unknown) => RemotePreference;
 const isCodegenDisabled: (value: string | undefined) => boolean;
 ```
 
+### `isDevServerReady` (const)
+
+```ts
+const isDevServerReady: (state: Pick<DevServerState, "readyAt"> | undefined) => boolean;
+```
+
 ### `isInteractive` (const)
 
 ```ts
@@ -1507,7 +1513,9 @@ const streamContainerLogs: (options: ContainerLogStreamOptions) => ContainerLogS
 ### `updateDevServerState` (const)
 
 ```ts
-const updateDevServerState: (projectRoot: string, patch: Partial<DevServerState>) => DevServerState | undefined;
+const updateDevServerState: (projectRoot: string, patch: Partial<DevServerState>, options?: {
+    expectedPid?: number;
+}) => DevServerState | undefined;
 ```
 
 ### `upsertDevVariableLine` (const)

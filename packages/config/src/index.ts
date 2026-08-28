@@ -50,6 +50,7 @@ export {
     DEV_LOG_FILE_ENV,
     DEV_STATE_DIR,
     DEV_STATE_FILE,
+    isDevServerReady,
     isProcessAlive,
     isRecordedProcessCurrent,
     readDevServerState,

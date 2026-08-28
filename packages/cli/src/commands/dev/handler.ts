@@ -43,6 +43,7 @@ import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
+import type { ReadinessProbe } from "../../util/dev-probe";
 import { findAvailablePort } from "../../util/free-port";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
@@ -52,7 +53,7 @@ import { spawnShellCompat } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
 import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
-import { markWorkerReadyWhenServing } from "../../util/worker-ready";
+import markWorkerReadyWhenServing from "../../util/worker-ready";
 import type { DevOptions } from "./index";
 import type { DevFlavor } from "./lifecycle";
 import {
@@ -120,11 +121,14 @@ interface DevCommandOptions {
      * stderr instead of corrupting the stream.
      */
     jsonLogs?: boolean;
+
     logger: Logger;
     /** Injection seam for tests — defaults to the real remote-config materializer. */
     materializeRemote?: typeof materializeRemoteWranglerConfig;
     /** Studio server port. */
     port?: number;
+    /** Injection seam for tests — defaults to the real HTTP readiness probe. Without it the suite issues live GETs to the dev port. */
+    probeReady?: ReadinessProbe;
     /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`LUNORA_REMOTE=1` / `--remote`); DO shards stay local. */
     remote?: boolean;
     /** Injection seam for tests — defaults to the real codegen watcher. */
@@ -133,10 +137,21 @@ interface DevCommandOptions {
     startStudio?: typeof startStudioServer;
     /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
     startWorker?: WorkerSpawner;
+
     /** Disable the embedded studio server. */
     studio?: boolean;
     /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
     target?: string;
+
+    /**
+     * Injection seam for tests — defaults to parking until SIGINT.
+     *
+     * Attached mode (`--no-worker`) ends only on a signal, so without this the
+     * whole branch is unreachable from a test. That is how the readiness probe
+     * came to be wired after the early return, reported for a flavor it never
+     * covered, and shipped.
+     */
+    waitForInterrupt?: (logger: Logger) => Promise<number>;
     /** Disable the `wrangler dev` spawn — an external task runner owns the worker. */
     worker?: boolean;
     /** `wrangler dev` port. */
@@ -627,9 +642,10 @@ const startContainerLogStreaming = (cwd: string, logger: Logger): ContainerLogSt
 
 /** Best-effort shutdown of the studio server, codegen watcher, container logs, and remote temp config. */
 const teardown = async (handles: Teardown): Promise<void> => {
-    // First, so the readiness probe stops before anything it observes goes away
-    // — otherwise it keeps polling an origin that is being torn down and only
-    // stops on its own timeout.
+    // Idempotent second call: `runDevCommand`'s `finally` aborts before clearing
+    // the state record, and this covers the paths that tear down without going
+    // through it. `AbortController.abort()` on an already-aborted controller is a
+    // no-op.
     handles.readyProbe?.abort();
 
     // Awaited: `close()` stops the watch loop immediately but resolves only once
@@ -1081,6 +1097,35 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             logger.warn(plan.frameworkHint);
         }
 
+        // Stamp `readyAt` on `.lunora/dev.json` once the recorded origin answers,
+        // so a task runner supervising Lunora alongside other workers waits on a
+        // fact instead of a guessed sleep. Not awaited: readiness is metadata FOR
+        // someone else, and blocking the banner on it would delay the very server
+        // it reports.
+        //
+        // Before the attached-mode return below, not after the spawn — under
+        // `--no-worker` this process still OWNS the record, so skipping the probe
+        // there left `status` reporting "starting" forever for a server that had
+        // been serving for an hour, and the poll loop in the monorepo docs (whose
+        // whole subject is `--no-worker`) never terminating. Somebody else running
+        // the worker changes who listens, not who reports.
+        //
+        // Only the wrangler flavor: on the Vite flavors `workerOrigin` is a
+        // pre-listen guess and `@lunora/vite` writes the authoritative record,
+        // stamping `readyAt` itself once Vite resolves its real URL.
+        if (plan.flavor === "wrangler") {
+            handles.readyProbe = new AbortController();
+
+            // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction: the probe reports rather than throws, and teardown aborts it
+            markWorkerReadyWhenServing({
+                cwd,
+                logger,
+                origin: plan.workerOrigin,
+                probe: options.probeReady,
+                signal: handles.readyProbe.signal,
+            });
+        }
+
         if (!plan.workerEnabled) {
             // Attached mode: whatever is left after `--no-worker` keeps running
             // and an external runner owns the worker. Park until interrupted so
@@ -1088,7 +1133,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             //
             logger.info(attachedModeNotice(plan));
 
-            return { code: await waitForInterrupt(logger), plan };
+            return { code: await (options.waitForInterrupt ?? waitForInterrupt)(logger), plan };
         }
 
         ensureSidecarGenerated(plan, options, cwd, logger, target);
@@ -1101,21 +1146,6 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
         handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl);
 
-        // Stamp `readyAt` on `.lunora/dev.json` once the worker actually answers,
-        // so a task runner supervising Lunora alongside other workers can wait on
-        // a fact instead of a guessed sleep. Deliberately not awaited: readiness
-        // is metadata FOR someone else, and blocking the banner and the supervise
-        // loop on it would delay the very server it is reporting. Only for the
-        // flavor whose record this process owns — the Vite plugin writes its own.
-        // `--no-worker` needs no check: attached mode returned above, and the
-        // worker it would probe is someone else's to report on anyway.
-        if (plan.flavor === "wrangler") {
-            handles.readyProbe = new AbortController();
-
-            // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction: the probe reports rather than throws, and teardown aborts it
-            markWorkerReadyWhenServing({ cwd, logger, origin: plan.workerOrigin, signal: handles.readyProbe.signal });
-        }
-
         printAgentRulesHint(logger, cwd);
 
         const code = await superviseWorkers(worker, sidecar, logger);
@@ -1127,6 +1157,10 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // The state record is only cleared while it still carries THIS process's
         // PID (the guard makes the vite flavor — where Vite's plugin owns the
         // record — and the already-running early return no-ops).
+        // Abort first, THEN clear: the probe patches this record, so stopping it
+        // before the file goes away is what makes the teardown ordering match
+        // what its comment claims.
+        handles.readyProbe?.abort();
         clearDevServerState(cwd, process.pid);
         await teardown(handles);
     }

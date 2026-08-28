@@ -897,4 +897,74 @@ describe("lunora dev", () => {
             expect(infos.some((line) => line.includes("hint:"))).toBe(true);
         });
     });
+
+    describe("readiness probe wiring", () => {
+        /**
+         * Which flavors get a `readyAt` stamp from the CLI, and which delegate.
+         *
+         * This is the test whose absence let `--no-worker` ship without one: the
+         * probe was started after the attached-mode early return, so the flavor
+         * whose entire purpose is being supervised externally reported "starting"
+         * forever, and the poll loop in the monorepo docs never terminated.
+         */
+        const runWithProbe = async (overrides: Partial<DevCommandOptions>): Promise<{ origins: string[] }> => {
+            const origins: string[] = [];
+
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                probeReady: async (origin) => {
+                    origins.push(origin);
+
+                    return true;
+                },
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+                ...overrides,
+            });
+
+            return { origins };
+        };
+
+        it("probes the worker origin on the wrangler flavor", async () => {
+            expect.assertions(1);
+
+            const { origins } = await runWithProbe({ flavor: "wrangler" });
+
+            expect(origins).toContain("http://localhost:8787");
+        });
+
+        it("probes under --no-worker, where an external runner owns the worker", async () => {
+            expect.assertions(1);
+
+            // `--no-worker` parks the process without spawning wrangler, but this
+            // process still owns `.lunora/dev.json` — so it still owes a
+            // readiness answer about the origin it recorded.
+            const { origins } = await runWithProbe({
+                flavor: "wrangler",
+                // Attached mode parks until interrupted; end it immediately so the
+                // test observes what was wired before the park, not a hang.
+                waitForInterrupt: async () => 0,
+                worker: false,
+            });
+
+            expect(origins).toContain("http://localhost:8787");
+        });
+
+        it("does not probe on the vite flavor — the plugin writes the authoritative record", async () => {
+            expect.assertions(1);
+
+            // `workerOrigin` is a pre-listen guess there (Vite picks its own
+            // port), so probing it would stamp readiness for the wrong origin.
+            const { origins } = await runWithProbe({ flavor: "vite" });
+
+            expect(origins).toHaveLength(0);
+        });
+    });
 });

@@ -193,12 +193,14 @@ interface DevCommandOptions {
     logger: Logger;
     materializeRemote?: typeof materializeRemoteWranglerConfig;
     port?: number;
+    probeReady?: ReadinessProbe;
     remote?: boolean;
     startCodegen?: typeof startCodegenWatch;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;
     target?: string;
+    waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;
 }
