@@ -3169,6 +3169,9 @@ importers:
       '@visulima/find-ai-runner':
         specifier: catalog:cli
         version: 1.0.1
+      '@visulima/package':
+        specifier: catalog:cli
+        version: 5.0.12(@visulima/yaml@1.0.0)(ini@7.0.0)(jsonc-parser@3.3.1)(smol-toml@1.7.1)
       dockerode:
         specifier: catalog:tooling
         version: 5.0.1(supports-color@10.2.2)

@@ -997,9 +997,8 @@ const runCodegenStep = async (
         // first, so nothing else would catch it.
         const postCodegen = await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput });
 
+        // Already logged by the hook — this only decides that it BLOCKS.
         if (postCodegen.error !== undefined) {
-            logger.error(postCodegen.error);
-
             return { error: postCodegen.error };
         }
 

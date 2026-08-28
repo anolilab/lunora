@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createCodegenProject, findTsconfig } from "@lunora/codegen";
+import { runPostCodegenHook } from "@lunora/config";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
@@ -22,6 +23,18 @@ vi.mock(import("@lunora/codegen"), async (importOriginal) => {
         createCodegenProject: vi.fn<typeof actual.createCodegenProject>(actual.createCodegenProject),
         findTsconfig: vi.fn<typeof actual.findTsconfig>(actual.findTsconfig),
     };
+});
+
+// The plugin's contract with the hook is "call it after a run that produced
+// output, and arm the settle window only when it actually ran" — the hook's own
+// behaviour (which script, which package manager, how failures are reported) is
+// `@lunora/config`'s to test. Defaults to the real one, so every OTHER test in
+// this file keeps exercising the real path: with no `package.json` in the
+// fixture it correctly reports `ran: false`.
+vi.mock(import("@lunora/config"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, runPostCodegenHook: vi.fn<typeof actual.runPostCodegenHook>(actual.runPostCodegenHook) };
 });
 
 const CRONS_SOURCE = `import { cronJobs } from "@lunora/scheduler";
@@ -1232,6 +1245,120 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             await vi.runAllTimersAsync();
 
             expect(findTsconfigCalls).toHaveBeenCalledWith(join(workdir, "lunora"));
+        });
+    });
+
+    describe("postcodegen hook (configureServer)", () => {
+        beforeEach(() => {
+            vi.useFakeTimers();
+            vi.mocked(runPostCodegenHook).mockClear();
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        /** Wire a server and hand back its `change` listener. */
+        const changeListenerFor = (server: import("vite").ViteDevServer): ((file: string) => void) => {
+            const { calls } = (server.watcher.on as ReturnType<typeof vi.fn>).mock;
+
+            return calls.find((arguments_) => arguments_[0] === "change")?.[1] as (file: string) => void;
+        };
+
+        it("runs the project's postcodegen after a watch regeneration", async () => {
+            expect.assertions(2);
+
+            // Before this, a Vite or meta-framework project — the more common
+            // shape — had no post-generation hook at all: `lunora dev` delegates
+            // regeneration to this plugin, so the CLI's own hook never applied.
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+            changeListenerFor(server)(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+            expect(vi.mocked(runPostCodegenHook).mock.calls[0]?.[0]).toMatchObject({ cwd: workdir });
+        });
+
+        it("does not arm the settle window when the project declares no hook", async () => {
+            expect.assertions(1);
+
+            // The real hook reports `ran: false` for this fixture. Arming on
+            // every regeneration instead would deafen the watcher for the window
+            // after each one, dropping real saves in nearly every project.
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChange = changeListenerFor(server);
+
+            onChange(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+            onChange(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(2);
+        });
+
+        it("ignores a change the hook itself wrote, so regeneration cannot retrigger itself", async () => {
+            expect.assertions(2);
+
+            // `runCodegen` only writes `_generated/`, which `onChange` skips, so
+            // this loop was structurally impossible before the hook. A
+            // `postcodegen` is arbitrary project code, and anything it writes
+            // under the schema directory looks exactly like a developer's save.
+            writeFixture(workdir);
+            vi.mocked(runPostCodegenHook).mockResolvedValue({ ran: true });
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChange = changeListenerFor(server);
+
+            onChange(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+
+            // Standing in for the hook's own write, inside the settle window.
+            onChange(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+        });
+
+        it("resumes regenerating once the settle window has passed", async () => {
+            expect.assertions(1);
+
+            // The window must not swallow real edits beyond it — otherwise the
+            // guard above would trade a spin loop for a dead watcher.
+            writeFixture(workdir);
+            vi.mocked(runPostCodegenHook).mockResolvedValue({ ran: true });
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChange = changeListenerFor(server);
+
+            onChange(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            await vi.advanceTimersByTimeAsync(400);
+            onChange(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(2);
         });
     });
 });

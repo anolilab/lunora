@@ -97,15 +97,10 @@ const runOnce = async (
     // turns on JSON logging whenever an AI agent is detected, not only under an
     // explicit flag, and the hook's stdout is otherwise inherited onto the same
     // fd the NDJSON stream writes to — any script that prints corrupts it.
+    // A failure is reported by the hook itself and deliberately not acted on
+    // here: unlike `prepare`/`deploy` the dev loop must keep running, because the
+    // next edit is the chance to fix it.
     const hook = await runPostCodegenHook({ cwd: projectRoot, logger, spawner, stdoutToStderr: jsonLogs });
-
-    // Non-fatal here, unlike `prepare`/`deploy`: the dev loop's job is to keep
-    // running so the next edit gets another attempt. Reported so a hook that
-    // fails every tick is visible rather than silently leaving the output
-    // half-finished.
-    if (hook.error !== undefined) {
-        logger.error(hook.error);
-    }
 
     return hook.ran;
 };

@@ -521,6 +521,34 @@ interface FrameworkDetection {
 }
 ```
 
+### `HookLogger` (interface)
+
+```ts
+interface HookLogger {
+    error: (message: string) => void;
+    info: (message: string) => void;
+}
+```
+
+### `HookSpawnDescriptor` (interface)
+
+```ts
+interface HookSpawnDescriptor {
+    args: ReadonlyArray<string>;
+    command: string;
+    cwd?: string;
+    stdoutToStderr?: boolean;
+}
+```
+
+### `HookSpawner` (type)
+
+```ts
+type HookSpawner = (descriptor: HookSpawnDescriptor) => Promise<{
+    code: number;
+}>;
+```
+
 ### `InferOptions` (interface)
 
 ```ts
@@ -744,6 +772,18 @@ interface NamedResource {
 const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntry>>>;
 ```
 
+### `PackageManager` (type)
+
+```ts
+type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
+```
+
+### `PackageManagerProbe` (type)
+
+```ts
+type PackageManagerProbe = (manager: PackageManager) => boolean;
+```
+
 ### `ParseSchemaResult` (type)
 
 ```ts
@@ -766,6 +806,15 @@ type PolicyEdit = AdditivePolicyEdit | DestructivePolicyEdit;
 
 ```ts
 type PolicyScaffoldFailureReason = "already-wired" | "destructive" | "invalid-identifier" | "unknown-procedure" | "unsupported-procedure-shape";
+```
+
+### `PostCodegenHookResult` (interface)
+
+```ts
+interface PostCodegenHookResult {
+    error?: string;
+    ran: boolean;
+}
 ```
 
 ### `ProvisionResult` (interface)
@@ -993,6 +1042,17 @@ interface WireRlsEdit {
 
 Re-exported from `@lunora/codegen` — signature tracked at its source.
 
+### `addArgsFor` (const)
+
+```ts
+const addArgsFor: (manager: PackageManager, packages: ReadonlyArray<string>, options?: {
+    dev?: boolean;
+}) => {
+    args: string[];
+    command: string;
+};
+```
+
 ### `applyAdditiveEdit` (const)
 
 ```ts
@@ -1085,10 +1145,22 @@ const detectAiAgent: (env?: EnvLike) => AgentDetection | undefined;
 const detectFramework: (root: string) => FrameworkDetection;
 ```
 
+### `detectInstalledManagers` (const)
+
+```ts
+const detectInstalledManagers: (probe?: PackageManagerProbe) => PackageManager[];
+```
+
 ### `detectLintTools` (const)
 
 ```ts
 const detectLintTools: (projectRoot: string) => LintTool[];
+```
+
+### `detectPackageManager` (const)
+
+```ts
+const detectPackageManager: (startDirectory: string) => PackageManager;
 ```
 
 ### `discoverAgentInfo` (const)
@@ -1133,6 +1205,15 @@ const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<strin
 const escapeRegExp: (value: string) => string;
 ```
 
+### `execArgsFor` (const)
+
+```ts
+const execArgsFor: (manager: PackageManager, command: string, args: ReadonlyArray<string>) => {
+    args: string[];
+    command: string;
+};
+```
+
 ### `fillDevSecrets` (const)
 
 ```ts
@@ -1159,6 +1240,15 @@ const generateSecretValue: (randomHex?: (bytes: number) => string) => string;
 
 ```ts
 const inferLunoraBindings: (options: InferOptions) => Promise<InferredBindings>;
+```
+
+### `installArgsFor` (const)
+
+```ts
+const installArgsFor: (manager: PackageManager) => {
+    args: string[];
+    command: string;
+};
 ```
 
 ### `interpretRemote` (const)
@@ -1367,6 +1457,32 @@ const resolveProjectTarget: (projectRoot: string, explicit?: string) => string;
 
 ```ts
 const resolveTargetOrThrow: (projectRoot: string, explicit?: string) => string;
+```
+
+### `runPostCodegenHook` (const)
+
+```ts
+const runPostCodegenHook: (options: {
+    cwd: string;
+    logger: HookLogger;
+    spawner?: HookSpawner;
+    stdoutToStderr?: boolean;
+}) => Promise<PostCodegenHookResult>;
+```
+
+### `runScriptArgsFor` (const)
+
+```ts
+const runScriptArgsFor: (manager: PackageManager, script: string) => {
+    args: string[];
+    command: string;
+};
+```
+
+### `runScriptCommand` (const)
+
+```ts
+const runScriptCommand: (manager: PackageManager, script: string) => string;
 ```
 
 ### `scaffoldPolicyFile` (const)

@@ -3,7 +3,7 @@ import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, findTsconfig, refreshCodegenProject, runCodegen } from "@lunora/codegen";
-import { CODEGEN_ENV, inferLunoraBindings, isCodegenDisabled, LUNORA_CONFIG_FILE } from "@lunora/config";
+import { CODEGEN_ENV, inferLunoraBindings, isCodegenDisabled, LUNORA_CONFIG_FILE, runPostCodegenHook } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectWranglerSecretVariables, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, WRANGLER_FILES } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
@@ -19,6 +19,19 @@ import { registerDevServerClose, runPendingClose } from "./server-close";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 const DEBOUNCE_MS = 100;
+
+/**
+ * How long after a `postcodegen` run the watcher ignores schema-directory
+ * changes.
+ *
+ * `runCodegen` only writes `_generated/`, which `onChange` already skips, so
+ * regeneration could never retrigger itself. A `postcodegen` script is arbitrary
+ * project code run at the project root, though, and anything it touches under
+ * the schema directory looks exactly like a developer's save — regenerate, run
+ * the hook, repeat, for as long as the dev server is up. The CLI's own watch loop
+ * carries the same guard for the same reason.
+ */
+const HOOK_SETTLE_MS = 300;
 
 /** Matches a project-variant tsconfig filename (`tsconfig.build.json`, …). */
 const TSCONFIG_VARIANT_RE = /[/\\]tsconfig\..+\.json$/u;
@@ -363,6 +376,11 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // invalidation loop below target the wrong (empty) directory.
     let absoluteGeneratedDirectory = resolve(options.projectRoot, options.generatedDir);
 
+    // When the project's `postcodegen` last finished — see {@link HOOK_SETTLE_MS}.
+    // Plugin-scoped, not server-scoped: `buildStart` runs the hook too, and the
+    // watcher registered in `configureServer` has to ignore what that one wrote.
+    let hookSettledAt = 0;
+
     // Captured in configureServer and used to push overlay events. Undefined in
     // build mode (vite build) — the overlay callbacks are never wired up then.
     let devServer: ViteDevServer | undefined;
@@ -436,6 +454,26 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
             if (outputDirectory !== undefined) {
                 absoluteGeneratedDirectory = outputDirectory;
+
+                // The project's own post-generation step, exactly as `lunora
+                // build`/`prepare`/`deploy` run it. A Vite project's codegen is
+                // owned here, so without this its `postcodegen` never ran at all
+                // and `vite build` shipped output the project considers
+                // unfinished. Only after a run that produced output — a hook over
+                // a tree codegen did not write edits the previous run's files.
+                //
+                // `blockingMessage` is what fails a build; a failing hook reports
+                // (from inside `runPostCodegenHook`) and does not, matching the
+                // advisory policy one branch below.
+                const hook = await runPostCodegenHook({ cwd: options.projectRoot, logger });
+
+                // Armed only when a hook actually RAN. Arming it on every
+                // regeneration would deafen the watcher for the window after each
+                // one — dropping real saves, in every project that declares no
+                // `postcodegen`, which is nearly all of them.
+                if (hook.ran) {
+                    hookSettledAt = Date.now();
+                }
             }
 
             // `vite build` fails on an ERROR-level advisory/platform diagnostic —
@@ -579,6 +617,78 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 }
             };
 
+            /**
+             * One debounced regeneration: refresh the cached Project, run codegen,
+             * run the project's `postcodegen`, then tell the client.
+             *
+             * A named function rather than the timer callback's body so the timer
+             * stays synchronous (`setTimeout` cannot await) and so the nesting here
+             * stops one level short of the depth limit. Never rejects — the `catch`
+             * is its outermost statement — because a timer callback has nobody to
+             * hand a rejection to.
+             */
+            const regenerate = async (changedFile: string): Promise<void> => {
+                try {
+                    // The server may have closed during the debounce window.
+                    if (closed) {
+                        return;
+                    }
+
+                    // Reuse the cached Project across runs: build it on first use,
+                    // otherwise sync it with the on-disk file set so discovery sees
+                    // the same files a fresh Project would — without re-parsing the
+                    // whole TS program.
+                    if (cachedProject === undefined) {
+                        cachedProject = createCodegenProject(absoluteSchemaDirectory);
+                    } else {
+                        refreshCodegenProject(cachedProject, absoluteSchemaDirectory);
+                    }
+
+                    // `blockingMessage` (an ERROR-level advisory/platform
+                    // diagnostic) is intentionally ignored here: dev stays
+                    // log-only (already logged inside runCodegenSafely) —
+                    // only `vite build`, in buildStart above, escalates it.
+                    const { outputDirectory } = runCodegenSafely(options, serverLogger, overlay, cachedProject);
+
+                    if (outputDirectory === undefined) {
+                        // Codegen was skipped or threw — drop the (possibly partially
+                        // mutated) cache so the next run rebuilds from scratch rather
+                        // than risk emitting wrong code off a corrupted Project.
+                        cachedProject = undefined;
+
+                        return;
+                    }
+
+                    absoluteGeneratedDirectory = outputDirectory;
+
+                    // The project's post-generation step, before the client is told
+                    // the API changed — the point of the hook is that what the dev
+                    // server compiles is the FINISHED output, so reloading first
+                    // would serve the unfinished copy for the hook's duration.
+                    // Failures are reported inside the hook and never end the watch
+                    // loop: the next edit is the chance to fix it.
+                    const hook = await runPostCodegenHook({ cwd: options.projectRoot, logger: serverLogger });
+
+                    // Armed only when a hook actually RAN — see HOOK_SETTLE_MS.
+                    if (hook.ran) {
+                        hookSettledAt = Date.now();
+                    }
+
+                    invalidateGenerated();
+
+                    // Scope the reload: evict the workerd runner's module cache
+                    // (invalidateModule alone doesn't reach it) and nudge the
+                    // client with a custom event instead of a destructive browser
+                    // reload — unless we're recovering from an error overlay.
+                    notifyEnvironmentsAfterCodegen(server, changedFile, hadErrorOverlay);
+                    hadErrorOverlay = false;
+                } catch (error: unknown) {
+                    // Awaiting the hook made this async, which turns what used to be
+                    // an uncaught exception into a silent unhandled rejection.
+                    serverLogger.error(`${LUNORA_TAG} codegen watch: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            };
+
             const onChange = (file: string): void => {
                 const normalized = resolve(file);
 
@@ -636,6 +746,13 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return;
                 }
 
+                // …and skip the window after the project's `postcodegen` ran, so
+                // a hook that rewrites a schema-directory file doesn't read as a
+                // developer's save. See HOOK_SETTLE_MS.
+                if (Date.now() - hookSettledAt < HOOK_SETTLE_MS) {
+                    return;
+                }
+
                 if (debounceTimer) {
                     clearTimeout(debounceTimer);
                 }
@@ -643,46 +760,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 debounceTimer = setTimeout(() => {
                     debounceTimer = undefined;
 
-                    // The server may have closed during the debounce window.
-                    if (closed) {
-                        return;
-                    }
-
-                    // Reuse the cached Project across runs: build it on first use,
-                    // otherwise sync it with the on-disk file set so discovery sees
-                    // the same files a fresh Project would — without re-parsing the
-                    // whole TS program.
-                    if (cachedProject === undefined) {
-                        cachedProject = createCodegenProject(absoluteSchemaDirectory);
-                    } else {
-                        refreshCodegenProject(cachedProject, absoluteSchemaDirectory);
-                    }
-
-                    // `blockingMessage` (an ERROR-level advisory/platform
-                    // diagnostic) is intentionally ignored here: dev stays
-                    // log-only (already logged inside runCodegenSafely) —
-                    // only `vite build`, in buildStart above, escalates it.
-                    const { outputDirectory } = runCodegenSafely(options, serverLogger, overlay, cachedProject);
-
-                    if (outputDirectory === undefined) {
-                        // Codegen was skipped or threw — drop the (possibly partially
-                        // mutated) cache so the next run rebuilds from scratch rather
-                        // than risk emitting wrong code off a corrupted Project.
-                        cachedProject = undefined;
-
-                        return;
-                    }
-
-                    absoluteGeneratedDirectory = outputDirectory;
-
-                    invalidateGenerated();
-
-                    // Scope the reload: evict the workerd runner's module cache
-                    // (invalidateModule alone doesn't reach it) and nudge the
-                    // client with a custom event instead of a destructive browser
-                    // reload — unless we're recovering from an error overlay.
-                    notifyEnvironmentsAfterCodegen(server, normalized, hadErrorOverlay);
-                    hadErrorOverlay = false;
+                    // Fire-and-forget: `regenerate` reports every failure itself
+                    // (the `catch` below is its outermost statement) and there is
+                    // nothing in a timer callback to await it from. Async at all
+                    // because the project's `postcodegen` inside is a subprocess.
+                    // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction; a rejection here could only come from the catch handler itself
+                    regenerate(normalized);
                 }, DEBOUNCE_MS);
             };
 
