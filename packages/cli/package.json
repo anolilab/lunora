@@ -80,7 +80,6 @@
         "@visulima/cerebro": "catalog:cli",
         "@visulima/error": "catalog:prod",
         "@visulima/fs": "catalog:cli",
-        "@visulima/package": "catalog:cli",
         "@visulima/pail": "catalog:cli",
         "@visulima/path": "catalog:cli",
         "@visulima/spinner": "catalog:cli",

@@ -145,9 +145,9 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
     // anything the project chained onto it would otherwise be skipped here.
     const postCodegen = await runPostCodegenHook({ cwd, logger: options.logger, spawner: options.spawner });
 
+    // Already logged by the hook — this only decides that it BLOCKS, which is the
+    // one thing that differs between its callers.
     if (postCodegen.error !== undefined) {
-        options.logger.error(postCodegen.error);
-
         return {
             code: 1,
             error: postCodegen.error,
