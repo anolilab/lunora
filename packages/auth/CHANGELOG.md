@@ -1,3 +1,14 @@
+## @lunora/auth [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.102...@lunora/auth@1.0.0-alpha.103) (2026-08-28)
+
+### Bug Fixes
+
+* **codegen:** close eight silent-drop gaps in procedure discovery ([#513](https://github.com/anolilab/lunora/issues/513)) ([e393e49](https://github.com/anolilab/lunora/commit/e393e494c0145ad78e0f2b1e27798ed96e7039a3))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.91
+
 ## @lunora/auth [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.101...@lunora/auth@1.0.0-alpha.102) (2026-08-27)
 
 
