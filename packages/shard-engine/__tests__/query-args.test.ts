@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import { renderSql } from "../src/drizzle";
-import { buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys } from "../src/query-args";
+import { buildSeekWhere, CURSOR_PREFIX, decodeCursor, encodeCursor, normalizeOrderKeys } from "../src/query-args";
 import type { WhereSqlStrategy } from "../src/where-sql";
 import { compileWhereSql } from "../src/where-sql";
 import type { WhereInput } from "../src/where-types";
@@ -70,9 +70,21 @@ describe("encodeCursor / decodeCursor", () => {
     it("rejects a non-array payload", () => {
         expect.assertions(1);
 
-        const bogus = btoa(JSON.stringify({ not: "an array" }));
+        // Carries the format marker on purpose. Without it the marker check
+        // rejects first and this stops exercising the shape check it is named
+        // for — passing for the wrong reason.
+        const bogus = CURSOR_PREFIX + btoa(JSON.stringify({ not: "an array" }));
 
         expect(() => decodeCursor(bogus)).toThrow("invalid cursor");
+    });
+
+    it("rejects a cursor with no format marker", () => {
+        expect.assertions(1);
+
+        // A cursor minted before the tiebreak direction changed. Its bytes are a
+        // perfectly good payload; only the seek's reading of them moved, so the
+        // marker is the sole thing that can tell the two apart.
+        expect(() => decodeCursor(btoa(JSON.stringify([1, "row-1"])))).toThrow("invalid cursor");
     });
 });
 
@@ -89,15 +101,20 @@ describe("buildSeekWhere", () => {
         });
     });
 
-    it("descending key uses < for the strict comparison", () => {
+    it("descending key uses < for the strict comparison, tiebreak included", () => {
         expect.assertions(1);
 
         const where = buildSeekWhere([{ direction: "desc", field: "createdAt" }], [1700, "row_42"]);
         const compiled = compile(where);
 
+        // `id < ?`, not `id > ?`: the implicit tiebreak sorts the same way the
+        // key it breaks does, so the ORDER BY reads `createdAt DESC, id DESC` and
+        // the seek has to select rows below the cursor on BOTH terms. A seek that
+        // disagreed with its own ORDER BY here would skip or repeat rows at a page
+        // boundary that lands inside a group of equal `createdAt`.
         expect(compiled).toEqual({
             params: [1700, 1700, "row_42"],
-            sql: `(${json("createdAt")} < ?) OR ((${json("createdAt")} = ?) AND (id > ?))`,
+            sql: `(${json("createdAt")} < ?) OR ((${json("createdAt")} = ?) AND (id < ?))`,
         });
     });
 
@@ -115,7 +132,7 @@ describe("buildSeekWhere", () => {
 
         // Balanced grouping (see `joinClauses`); same terms, same param order.
         expect(compiled.sql).toBe(
-            `(${json("a")} > ?) OR (((${json("a")} = ?) AND (${json("b")} < ?)) OR ((${json("a")} = ?) AND ((${json("b")} = ?) AND (id > ?))))`,
+            `(${json("a")} > ?) OR (((${json("a")} = ?) AND (${json("b")} < ?)) OR ((${json("a")} = ?) AND ((${json("b")} = ?) AND (id < ?))))`,
         );
         expect(compiled.params).toEqual(["av", "av", "bv", "av", "bv", "row_1"]);
     });

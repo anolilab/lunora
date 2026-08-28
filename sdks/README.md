@@ -142,6 +142,7 @@ change that adds or removes a capability.
 | Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
+| Several sockets per client    | ❌³    | ❌³ | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
 
 ¹ Each in the language's own PULL type, not one shape forced onto eight — an
 async generator in Python, a receive channel in Go, an `Enumerator` in Ruby, an
@@ -151,6 +152,21 @@ order are the same everywhere, which is what
 `subscription_stream_yields_frame_values_in_order` asserts.
 
 ² Through an injected adapter, like HTTP and the socket — see below.
+
+³ **One client holds one socket, and this is load-bearing.** Every port has a
+single sender field (`attach_socket`/`AttachSocket`/`attachSocket` replaces it
+rather than adding one), and every inbound frame arrives through a
+`handleFrame(raw)` that carries no connection identity — there is none on the
+wire either, since a poke frame names only its `pokeId`. An app spanning several
+shards builds one client per shard, which is also what keeps
+`protocol/README.md` §5.3's `(connection, pokeId)` rule satisfied here: each
+client owns its own poke buffers, so two shards' concurrent `poke-1` frames can
+never meet. Routing two sockets into one client is not merely unscoped for
+pokes — the second `attachSocket` orphans the first socket, and
+`resendSubscriptions` then blasts every shard's subscriptions down whichever one
+attached last. Do not add a connection key to the buffer map without first
+giving these clients a real multi-socket model; a key alone would quiet one
+symptom of a configuration that is broken in several other places.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the
@@ -349,7 +365,8 @@ because each one reads a `cursor` the frame handler writes. Every one of those
 six has a test that starts a socket reader and four subscriber threads and
 asserts on the resulting subscription count — a lost `nextId++` silently forgets
 a live subscription, and that is deterministic where waiting for a hash map to
-corrupt is not. The Swift leg additionally runs under `--sanitize=thread`; the
+corrupt is not. The Swift leg additionally runs under `--sanitize=thread` in CI
+(`SDK_TEST_TSAN=1`, see [Conformance](#conformance)); the
 Ruby one gives its injected sender a `Thread.pass`, because MRI's 100ms time
 slice otherwise lets four CPU-bound threads each run to completion without ever
 interleaving, and the case then passes with the lock removed.
@@ -655,6 +672,26 @@ Where the manifest drives the run, a required name with no dispatch arm fails,
 which is the same guarantee from the other direction: the only way to go green is
 to execute a case under that name.
 
+**The manifest holds a suite to 33 named cases; it cannot hold one that ran
+nothing at all.** Six of these eight test tools exit 0 having collected NO tests
+— `unittest discover` finding no matching module, an empty `test/test_*.rb`
+glob, a Go package with no `_test.go`, `cargo test` and `swift test` with
+nothing to run — and in every one of those the manifest check is itself a test
+that did not run either. So `run-all.sh` reads each leg's own summary line for
+the number of cases it executed, prints it (`PASS python (85 cases)`), and fails
+a leg that exited 0 having executed none. That read is fail-closed: a leg whose
+summary cannot be parsed counts as zero, so a change to a runner's output format
+turns this red rather than quietly reverting it to an exit-code-only check.
+
+**The dart leg needs two more guards, because Dart's failure mode is silence.** A
+case that awaits a future nothing will ever complete does not hang the process:
+the event loop drains, `main()` is abandoned part-way, and the VM exits 0 having
+printed nothing — indistinguishable from a full green run, and exactly how this
+suite once reported PASS with 16 of its 69 cases executed. So `main()` sets
+`exitCode = 1` on entry and clears it only at the bottom, which makes every path
+that does not reach the end a failure; and `run()` gives each case a 30-second
+timeout, so the abandoned one is named rather than merely turning the leg red.
+
 Run all of them at once with `./sdks/run-all.sh`, which fans the suites out in
 parallel — they are eight independent toolchains reading the same read-only
 fixtures, so the whole set costs about as long as the slowest compiler rather
@@ -694,7 +731,20 @@ a PASS recorded before the edit. Without it, editing a fixture or the manifest
 leaves the go leg green without having run.
 
 CI runs all eight per PR (`sdk-conformance` in `.github/workflows/test.yml`),
-and each leg also runs `./sdks/generated-check.sh <lang>` — the generated surface
+one language per matrix leg — and each leg invokes **this same script**,
+`bash sdks/run-all.sh <lang>`, exactly as the lint leg invokes `lint-all.sh`. The
+workflow used to carry its own copy of the eight commands, which drifted from
+this file in three places and left the zero-executed-cases assertion above
+protecting local runs only. There is no second command list to keep in step.
+
+The one flag CI wants and a local run does not is the swift leg's thread
+sanitizer, and it is a switch rather than an omission: the step sets
+`SDK_TEST_TSAN=1`, `run_suite` adds `--sanitize=thread` for it, and the summary
+line names it (`PASS swift [--sanitize=thread] (7 cases)`) so a green leg says
+which build ran. Locally it is off, because a TSan build roughly triples the
+slowest leg; `SDK_TEST_TSAN=1 ./sdks/run-all.sh swift` reproduces CI's.
+
+Each leg also runs `./sdks/generated-check.sh <lang>` — the generated surface
 hardcodes the runtime's call signatures, and nothing else pins that coupling.
 
 ## The generated-SDK check
@@ -722,6 +772,14 @@ not encode its own argument model, and Ruby called a `to_dynamic` the models wer
 not rendered with. A third — Rust — sent `"limit": null` for an unset optional,
 which `v.optional()` rejects; the smoke that calls it is what surfaced that, one
 build after the same bug was fixed in Ruby.
+
+**The setup steps in each leg are `&&`-chained, and that is load-bearing.** This
+script runs without `set -e`, so an unchained `cp` failure was simply stepped
+over — and the two legs that assemble their smoke as a TEST rather than as a
+program (go, rust) then ran a project with no tests in it. `cargo test` reported
+"0 passed" and exited 0, so a rust leg that had copied nothing read as a PASS;
+`cargo test --test generated_smoke` names the target instead, so its absence is
+"no test target named `generated_smoke`" and a non-zero exit.
 
 The smoke programs are `sdks/smoke/<lang>/`, and each asserts the same thing: that
 a generated call reaches the wire as

@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { CdcChange, DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
-import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations, trimCdcChanges } from "../src/ctx-db";
+import type { CdcChange, DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
+import {
+    applyCdcChanges,
+    cdcCanVouchFor,
+    cdcTouchesTables,
+    createShardCtxDb as createShardContextDatabase,
+    readCdcChanges,
+    runShardMigrations,
+    trimCdcChanges,
+} from "../src/ctx-db";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -120,6 +128,39 @@ describe("ctx-db change-data-capture", () => {
         expect(drained.cursor).toBe(5);
     });
 
+    describe("cdcCanVouchFor", () => {
+        it("vouches for a local table and refuses anything the changelog never records", () => {
+            expect.assertions(3);
+
+            setupWriter(true);
+
+            // A real table: the changelog records every write to it, so "nothing
+            // changed" is a claim it can support.
+            expect(cdcCanVouchFor(harness.sql, new Set(["messages"]))).toBe(true);
+            // A `.global()` table is never created locally, so it falls to the
+            // default — as does the flags/admin wildcard, which is not a table.
+            expect(cdcCanVouchFor(harness.sql, new Set(["messages", "profiles"]))).toBe(false);
+            expect(cdcCanVouchFor(harness.sql, new Set(["*"]))).toBe(false);
+        });
+
+        it("picks up a table created after the catalog was first read", () => {
+            expect.assertions(2);
+
+            setupWriter(true);
+
+            // Warm the memo, and record a miss for a table that does not exist yet.
+            expect(cdcCanVouchFor(harness.sql, new Set(["late_arrival"]))).toBe(false);
+
+            harness.sql.exec(`CREATE TABLE late_arrival (id TEXT PRIMARY KEY)`);
+
+            // Only positive answers are cached: a dep the memo does not know
+            // re-reads the catalog rather than refusing forever. Getting this
+            // wrong would silently deny every resume for a table added by a later
+            // migration, which no test would otherwise notice.
+            expect(cdcCanVouchFor(harness.sql, new Set(["late_arrival"]))).toBe(true);
+        });
+    });
+
     it("trims entries at or below a checkpointed seq", async () => {
         expect.assertions(2);
 
@@ -128,7 +169,7 @@ describe("ctx-db change-data-capture", () => {
         await writer.insert("messages", { _id: "a", authorId: "u1", channelId: "c1", text: "1" }, { allowExplicitId: true });
         await writer.insert("messages", { _id: "b", authorId: "u1", channelId: "c1", text: "2" }, { allowExplicitId: true });
 
-        trimCdcChanges(harness.sql, 1);
+        trimCdcChanges(harness.sql, 1, 100);
 
         const remaining = readCdcChanges(harness.sql);
 
@@ -250,5 +291,67 @@ describe("cdc round-trip of a v.bigint() column (plan 265)", () => {
         const { changes } = readCdcChanges(harness.sql);
 
         expect(changes[0]?.doc?.["amount"]).toBe(10n);
+    });
+});
+
+/**
+ * `cdcTouchesTables` binds one parameter per table in the read-set, and the
+ * read-set is however many tables one query happened to read. Workerd caps a
+ * statement at 100 bound parameters and `node:sqlite` does not, so the cap
+ * cannot be reproduced by running the probe — assert the shape instead: no
+ * single statement may bind more than the cap, whatever the read-set size.
+ */
+describe("cdcTouchesTables under a wide read-set", () => {
+    /** Workerd's per-statement bound-parameter ceiling. */
+    const WORKERD_BOUND_PARAM_CAP = 100;
+
+    /** Wraps a real SQL handle, recording the bound-parameter count of every statement it runs. */
+    const countingSql = (sql: SqlExec): { paramCounts: number[]; sql: SqlExec } => {
+        const paramCounts: number[] = [];
+
+        return {
+            paramCounts,
+            sql: {
+                exec: (query: string, ...parameters: unknown[]) => {
+                    paramCounts.push(parameters.length);
+
+                    return sql.exec(query, ...parameters);
+                },
+            },
+        };
+    };
+
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("answers a 250-table read-set without ever binding past the cap", async () => {
+        expect.assertions(2);
+
+        const writer = setupWriter(true);
+
+        await writer.insert("messages", { body: "hi", channel: "general", id: "m1" });
+
+        const readSet = new Set([...Array.from({ length: 249 }, (_, index) => `t${String(index)}`), "messages"]);
+        const { paramCounts, sql } = countingSql(harness.sql);
+
+        expect(cdcTouchesTables(sql, 0, readSet)).toBe(true);
+        expect(Math.max(...paramCounts)).toBeLessThanOrEqual(WORKERD_BOUND_PARAM_CAP);
+    });
+
+    it("reports no touch when nothing in the wide read-set moved", async () => {
+        expect.assertions(1);
+
+        const writer = setupWriter(true);
+
+        await writer.insert("messages", { body: "hi", channel: "general", id: "m1" });
+
+        const readSet = new Set(Array.from({ length: 250 }, (_, index) => `t${String(index)}`));
+
+        expect(cdcTouchesTables(harness.sql, 0, readSet)).toBe(false);
     });
 });

@@ -548,7 +548,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                 const host = {
                     buildShapeDiff: () => [{ id: "r1", op: "upsert", value: {} }],
                     computeOpLogShapeSeed: () => {
-                        return { baseCheckpoint: undefined, cursor: 10, epoch: "e1", rowsPatch: [] };
+                        return { baseCheckpoint: undefined, cursor: 10, epoch: "e1", reset: true, rowsPatch: [] };
                     },
                     currentCdcEpoch: () => "e1",
                     deliverWhisperLocal: () => 0,

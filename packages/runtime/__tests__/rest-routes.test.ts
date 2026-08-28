@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
+import { defaultHttpCache, VARY_KEY_PARAM } from "../src/rest-edge-cache";
 import { argsFromQuery } from "../src/rest-routes";
+import { fakeCache } from "./helpers/edge-cache";
 
 /**
  * The public REST surface (`/_lunora/rest/<namespace>/<fn>`, plan 167) — RUNTIME-02
@@ -133,6 +135,228 @@ describe("createWorker — REST args-shape boundary", () => {
         // setter to intercept the assignment, so it lands as an ordinary own
         // property and survives the round-trip to the shard.
         expect(Object.getOwnPropertyDescriptor(forwardedBody.args, "__proto__")?.value).toEqual({ polluted: true });
+    });
+});
+
+/**
+ * The edge-cache WIRING, as distinct from `rest-edge-cache.test.ts`, which covers
+ * the store/lookup decisions in isolation. What matters here is what the route
+ * actually does with them: that a hit costs no shard dispatch, that a miss still
+ * stores, that the rate-limit gate is consulted first, and that the opt-out
+ * reaches `buildRestRoutes` from `createWorker`.
+ */
+describe("createWorker — REST edge cache", () => {
+    const cachedFunctions = {
+        "messages:list": { expose: { cache: { maxAge: 60, scope: "public" }, rest: true }, kind: "query" },
+    } as const;
+
+    /** `fakeContext` but collecting `waitUntil` promises, so a test can await the deferred `put`. */
+    const collectingContext = () => {
+        const pending: Promise<unknown>[] = [];
+
+        return {
+            context: { passThroughOnException: () => undefined, waitUntil: (promise: Promise<unknown>) => pending.push(promise) },
+            settled: async () => {
+                await Promise.all(pending);
+            },
+        };
+    };
+
+    const listRequest = () => new Request("https://app.example/_lunora/rest/messages/list");
+
+    it("serves the second identical request from the cache, with no second shard dispatch", async () => {
+        expect.assertions(4);
+
+        const shard = createShardSpy(Response.json({ items: [] }));
+        const { cache } = fakeCache();
+        const { context, settled } = collectingContext();
+        const worker = createWorker({ functions: cachedFunctions, restEdgeCache: cache, shardDO: shard.namespace });
+
+        const first = await worker.fetch(listRequest(), {}, context);
+
+        await settled();
+
+        expect(first.headers.get("x-lunora-edge-cache")).toBeNull();
+        expect(shard.calls).toHaveLength(1);
+
+        const second = await worker.fetch(listRequest(), {}, context);
+
+        expect(second.headers.get("x-lunora-edge-cache")).toBe("hit");
+        // The whole point: the origin was not touched a second time.
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("stores nothing, and dispatches every time, when the caller presents a credential", async () => {
+        expect.assertions(2);
+
+        const shard = createShardSpy(Response.json({ items: [] }));
+        const { cache, entries } = fakeCache();
+        const { context, settled } = collectingContext();
+        const worker = createWorker({ functions: cachedFunctions, restEdgeCache: cache, shardDO: shard.namespace });
+        const credentialed = () => new Request("https://app.example/_lunora/rest/messages/list", { headers: { cookie: "session=abc" } });
+
+        await worker.fetch(credentialed(), {}, context);
+        await settled();
+        await worker.fetch(credentialed(), {}, context);
+        await settled();
+
+        expect(entries.size).toBe(0);
+        expect(shard.calls).toHaveLength(2);
+    });
+
+    it("consults the rate-limit gate BEFORE the cache — a hit is still the caller's request", async () => {
+        expect.assertions(4);
+
+        const shard = createShardSpy(Response.json({ items: [] }));
+        const { cache } = fakeCache();
+        const { context, settled } = collectingContext();
+        let charged = 0;
+        let limited = false;
+        const worker = createWorker({
+            functions: cachedFunctions,
+            restEdgeCache: cache,
+            restRateLimit: () => {
+                charged += 1;
+
+                return limited ? new Response("slow down", { status: 429 }) : undefined;
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(listRequest(), {}, context);
+        await settled();
+
+        // Now the entry is warm. A limited caller must still get a 429 rather
+        // than being handed the cached body for free.
+        limited = true;
+
+        const rejected = await worker.fetch(listRequest(), {}, context);
+
+        expect(rejected.status).toBe(429);
+        expect(rejected.headers.get("x-lunora-edge-cache")).toBeNull();
+        expect(charged).toBe(2);
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("keeps the surface headers-only when the edge cache is opted out with null", async () => {
+        expect.assertions(3);
+
+        const shard = createShardSpy(Response.json({ items: [] }));
+        const { context, settled } = collectingContext();
+        const worker = createWorker({ functions: cachedFunctions, restEdgeCache: null, shardDO: shard.namespace });
+
+        const first = await worker.fetch(listRequest(), {}, context);
+
+        await settled();
+        await worker.fetch(listRequest(), {}, context);
+        await settled();
+
+        // The declared policy still goes out on the wire...
+        expect(first.headers.get("cache-control")).toBe("public, max-age=60");
+        // ...but nothing is stored, so every request reaches the origin.
+        expect(first.headers.get("x-lunora-edge-cache")).toBeNull();
+        expect(shard.calls).toHaveLength(2);
+    });
+
+    it("does not cache an endpoint that declared no policy at all", async () => {
+        expect.assertions(2);
+
+        const shard = createShardSpy(Response.json({ items: [] }));
+        const { cache, entries } = fakeCache();
+        const { context, settled } = collectingContext();
+        const worker = createWorker({ functions: restFunctions, restEdgeCache: cache, shardDO: shard.namespace });
+
+        await worker.fetch(listRequest(), {}, context);
+        await settled();
+        await worker.fetch(listRequest(), {}, context);
+        await settled();
+
+        expect(entries.size).toBe(0);
+        expect(shard.calls).toHaveLength(2);
+    });
+
+    it("never serves a paid response to a caller who did not pay", async () => {
+        expect.assertions(4);
+
+        const shard = createShardSpy(Response.json({ premium: true }));
+        const { cache, entries } = fakeCache();
+        const { context, settled } = collectingContext();
+        const worker = createWorker({ functions: cachedFunctions, restEdgeCache: cache, shardDO: shard.namespace });
+        // The x402 charge gate runs INSIDE the dispatch, downstream of the cache
+        // lookup, so a stored paid response would be replayed for free — together
+        // with the payer's settlement receipt.
+        const paid = new Request("https://app.example/_lunora/rest/messages/list", { headers: { "x-payment": "signed-payload" } });
+
+        const answered = await worker.fetch(paid, {}, context);
+
+        await settled();
+
+        expect(answered.headers.get("cache-control")).toContain("private");
+        expect(entries.size).toBe(0);
+
+        const unpaid = await worker.fetch(listRequest(), {}, context);
+
+        expect(unpaid.headers.get("x-lunora-edge-cache")).toBeNull();
+        expect(shard.calls).toHaveLength(2);
+    });
+
+    it("does not let the reserved cache-key parameter reach the procedure or move the key", async () => {
+        expect.assertions(3);
+
+        const shard = createShardSpy(Response.json({ items: [] }));
+        const { cache } = fakeCache();
+        const { context, settled } = collectingContext();
+        const worker = createWorker({ functions: cachedFunctions, restEdgeCache: cache, shardDO: shard.namespace });
+
+        await worker.fetch(new Request(`https://app.example/_lunora/rest/messages/list?${VARY_KEY_PARAM}=evil`), {}, context);
+        await settled();
+
+        const forwarded = (await shard.calls[0]?.request.clone().json()) as { args?: Record<string, unknown> };
+
+        // It is reserved, so it is not an argument...
+        expect(forwarded.args ?? {}).not.toHaveProperty(VARY_KEY_PARAM);
+
+        // ...and it keyed where the clean request keys, so a hit answers that one.
+        const clean = await worker.fetch(listRequest(), {}, context);
+
+        expect(clean.headers.get("x-lunora-edge-cache")).toBe("hit");
+        expect(shard.calls).toHaveLength(1);
+    });
+});
+
+describe("defaultHttpCache", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it("returns undefined on a runtime with no `caches` global", () => {
+        expect.assertions(1);
+
+        vi.stubGlobal("caches", undefined);
+
+        expect(defaultHttpCache()).toBeUndefined();
+    });
+
+    it("returns the host's default cache when there is one", () => {
+        expect.assertions(1);
+
+        const cache = { delete: async () => false, match: async () => undefined, put: async () => {} };
+
+        vi.stubGlobal("caches", { default: cache });
+
+        expect(defaultHttpCache()).toBe(cache);
+    });
+
+    it("treats a throwing accessor as no cache rather than propagating", () => {
+        expect.assertions(1);
+
+        vi.stubGlobal("caches", {
+            get default(): never {
+                throw new Error("not available in this context");
+            },
+        });
+
+        expect(defaultHttpCache()).toBeUndefined();
     });
 });
 

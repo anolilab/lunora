@@ -29,6 +29,7 @@ import type {
     AggregateOptions,
     AggregateResult,
     AggregateTally,
+    CdcChange,
     ColumnMetaLike,
     CrossShardReadArgs,
     DatabaseWriterLike,
@@ -59,10 +60,15 @@ import {
     assertFlatPredicate,
     assertValidClientId,
     buildSeekWhere,
+    CDC_LOG_TABLE,
+    CDC_LOG_TABLE_SEQ_INDEX,
+    cdcTrimmedError,
     coerceAggregateNumber,
     compileWhereSql,
     ConflictError,
     CountRlsUnsupportedError,
+    CURSOR_PREFIX,
+    cursorBelowRetainedFloor,
     decodeCursor,
     encodeAggregateKey,
     encodeCursor,
@@ -94,6 +100,7 @@ import {
     softDeleteScope,
     sortColumnName,
     throwingScheduler,
+    tiebreakDirectionFor,
 } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -108,7 +115,7 @@ import type { SqlCtxExec } from "./sql-exec";
 import { columnRefSql, createIndexIfNotExists, decodeRow, decodeRows, forEachRowPaged, queryAll, queryBatch, queryRun, serializeColumnValue } from "./sql-exec";
 import { effectiveColumnKind } from "./value-codec";
 
-/** Order fields that already provide a stable tiebreak (no extra `id ASC` needed). */
+/** Order fields that already provide a stable tiebreak (no extra `id` term needed). */
 const ID_ORDER_FIELDS = new Set(["_id", "id"]);
 
 /**
@@ -132,14 +139,24 @@ const nullSafeEqualsSql = (engine: SqlDialect["name"], reference: SQL, value: un
 
 /**
  * Drizzle `ORDER BY` list — the SQL-object twin of `@lunora/do`'s string
- * `compileOrderBy`: each key as `<col> ASC|DESC`, with an `id ASC` tiebreak
- * appended unless an id field is already ordered (keeps paging deterministic).
+ * `compileOrderBy`: each key as `<col> ASC|DESC`, with an `id` tiebreak appended
+ * unless an id field is already ordered (keeps paging deterministic).
+ *
+ * The tiebreak follows the last key's direction, via the shared
+ * `tiebreakDirectionFor`. This backend does not append sort keys to its declared
+ * indexes the way the DO does, so it gains nothing directly — but it shares
+ * `buildSeekWhere`, and a cursor seek that disagrees with its own ORDER BY about
+ * tie direction skips or repeats rows at a page boundary where the keys tie.
  */
 const compileOrderBySql = (keys: ReadonlyArray<{ direction?: string; field: string }>): SQL => {
     const parts = keys.map((key) => sql`${columnRefSql(key.field)} ${sql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
 
     if (!keys.some((key) => ID_ORDER_FIELDS.has(key.field))) {
-        parts.push(sql`${columnRefSql("id")} ASC`);
+        // No adaptation: the helper reads `direction` off the last key and
+        // nothing else, so the keys go in as they are.
+        const tiebreak = tiebreakDirectionFor(keys);
+
+        parts.push(sql`${columnRefSql("id")} ${sql.raw(tiebreak === "desc" ? "DESC" : "ASC")}`);
     }
 
     return sql.join(parts, sql`, `);
@@ -164,6 +181,26 @@ interface SqlCtxDbOptions {
      * legacy behaviour.
      */
     cdc?: boolean;
+
+    /**
+     * How long `.global()` changelog entries are kept, in milliseconds. Absent
+     * (the default) means forever — the log grows for the life of the database.
+     *
+     * Opt-in for the same reason the shard-local windows are, and the reason is
+     * not caution: this log's streaming-export consumers hold opaque cursors
+     * issued outside this deployment, and nothing here can see where they sit.
+     * A default window would be a guess whose failure mode is silent data loss
+     * in someone's warehouse. A deployment that wants the log bounded states a
+     * window it knows covers its consumers; `.global()` shape pollers are then
+     * protected exactly, by the floor this read path reports rather than by the
+     * window. See `sweepSqlCdcRetention`.
+     *
+     * Time rather than rows because the log is SHARED: every shard in every
+     * region writes it, so a row count is not a bound any single consumer can
+     * reason about, while "older than N" is exactly what they compare their own
+     * lag against.
+     */
+    cdcRetentionMs?: number;
     clock?: () => number;
 
     /**
@@ -603,7 +640,14 @@ const hydrateRankRows = async (
     return documents;
 };
 
-/** Base64-encode a rankPage continuation cursor (the `[partition, ...sortValues, id]` tuple) as JSON. */
+/**
+ * Base64-encode a rankPage continuation cursor (the `[partition, ...sortValues, id]`
+ * tuple) as JSON, behind the shared cursor marker.
+ *
+ * The marker is not decoration: `decodeCursor` refuses anything without it, so
+ * a mint site that forgets it produces cursors its own reader rejects. This one
+ * did, and only the rank pagination test caught it.
+ */
 const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
     const json = JSON.stringify(cursorValues);
     const bytes = new TextEncoder().encode(json);
@@ -613,7 +657,7 @@ const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
         binary += String.fromCodePoint(byte);
     }
 
-    return btoa(binary);
+    return CURSOR_PREFIX + btoa(binary);
 };
 
 /**
@@ -867,21 +911,64 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
     }
 };
 
-/** Reserved append-only changelog table backing CDC streaming export for global tables (CDC consumers only — D1 point-in-time recovery is the platform's Time Travel, not a changelog replay). */
-const CDC_LOG_TABLE = "__cdc_log";
+/**
+ * The two changelog identifiers, imported from `@lunora/shard-engine` rather than
+ * re-declared. The `.global()` log and the DO log are the same table under two
+ * dialects, and a name that differed between them would break every consumer
+ * that reads both — so the shared thing is shared, and only the DIALECT
+ * differences (the MySQL key prefix below, the `SELECT` forms) live here.
+ */
+/* The changelog identifiers come from `@lunora/shard-engine` — see the import. */
 
-/** One change-data-capture entry: a committed mutation, in monotonic `seq` order. Mirrors the DO twin. */
-interface CdcChange {
-    /** Post-image document for insert/update; absent for delete (the `id` identifies the removed row). */
-    doc?: Record<string, unknown>;
-    id: string;
-    op: "delete" | "insert" | "update";
-    /** Monotonic per-database cursor — strictly increasing, never reused. */
-    seq: number;
-    table: string;
-    /** Wall-clock millis when the change committed (the ctx-db `clock`). */
-    ts: number;
-}
+/** Single-row table holding the `.global()` sweep lease — the fleet's only retention coordination. */
+const CDC_SWEEP_TABLE = "__cdc_sweep";
+
+/** The lease row's fixed key. One log, one sweeper, one row. */
+const CDC_SWEEP_ROW = "global";
+
+/**
+ * How long a winning sweeper holds the lease, and therefore roughly how often
+ * the FLEET sweeps in total — not how often each shard does.
+ *
+ * A shard-local sweep can pick its own interval because it is alone. Here the
+ * interval has to be a property of the log, or a deployment's sweep rate would
+ * scale with its shard count.
+ */
+const CDC_SWEEP_LEASE_MS = 60_000;
+
+/**
+ * Rows one `.global()` sweep pass may delete.
+ *
+ * Same REASON as the shard-local `SHARD_CDC_SWEEP_MAX_ROWS` in `@lunora/do` — an
+ * unbounded first sweep over an accumulated backlog aborts and retries forever —
+ * but deliberately a fifth of its value, and named apart from it so neither
+ * reads as a re-export of the other. That sweep deletes from the shard's own
+ * workerd SQLite; this one goes over the network to D1 or PlanetScale, where the
+ * same row count is a much larger statement.
+ */
+const GLOBAL_CDC_SWEEP_MAX_ROWS = 10_000;
+
+/**
+ * Minimum spacing between LEASE ATTEMPTS on one isolate.
+ *
+ * The lease is what stops the fleet sweeping N times; this is what stops a busy
+ * isolate paying a compare-and-set on every single `.global()` write. It is
+ * module-level, so it is per-isolate and deliberately approximate — many
+ * isolates means many attempts, but each is one small conditional `UPDATE` that
+ * mostly matches nothing, and the lease makes the ones that do match harmless.
+ */
+const CDC_SWEEP_ATTEMPT_MS = 30_000;
+
+/**
+ * When this isolate last tried to claim the sweep lease. See
+ * {@link CDC_SWEEP_ATTEMPT_MS}.
+ *
+ * One counter for the whole isolate, deliberately: an app has a single global
+ * changelog, so "this isolate" and "this log" are the same scope. A worker that
+ * ever bound two `.global()` backends would share the throttle between them and
+ * sweep at most one per window — key this by store at that point, not before.
+ */
+let lastSweepAttemptAt = 0;
 
 /** Create the `__cdc_log` table. Idempotent; only run when CDC is enabled. */
 const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<void> => {
@@ -895,6 +982,147 @@ const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
         dialect,
         sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(CDC_LOG_TABLE)} (${sql.identifier("seq")} ${sql.raw(autoincrementPrimaryKey)}, ${sql.identifier("ts")} ${sql.raw(real)} NOT NULL, ${sql.identifier("table")} ${sql.raw(key)} NOT NULL, ${sql.identifier("id")} ${sql.raw(key)} NOT NULL, ${sql.identifier("op")} ${sql.raw(key)} NOT NULL, ${sql.identifier("doc")} ${sql.raw(text)})`,
     );
+
+    // `("table", seq)` covers both the filter and the ordering of every
+    // table-scoped changelog read (the `.global()` shape delta path); without it
+    // that read scans the whole log in commit order and discards other tables'
+    // rows. Mirrors the DO twin's `CDC_LOG_TABLE_SEQ_INDEX`.
+    //
+    // The key prefix is what makes this legal on MySQL. `key` is `VARCHAR(768)`
+    // there precisely because 768 utf8mb4 characters is InnoDB's limit for a
+    // SINGLE-column index (768 × 4 = 3072 bytes) — so adding `seq` to it puts the
+    // composite key over that limit and the migration fails outright with
+    // ER_TOO_LONG_KEY. A prefix bounds `table`'s contribution; it costs nothing in
+    // selectivity because the column holds a table name, not user data. Engines
+    // that index text directly (SQLite, Postgres) return no prefix and index the
+    // whole column.
+    const tablePrefix = dialect.indexKeyPrefix?.("string");
+
+    await createIndexIfNotExists(exec, dialect, {
+        columns: sql`${tablePrefix === undefined ? sql`${sql.identifier("table")}` : sql`${sql.identifier("table")}(${sql.raw(String(tablePrefix))})`}, ${sql.identifier("seq")}`,
+        name: CDC_LOG_TABLE_SEQ_INDEX,
+        table: CDC_LOG_TABLE,
+        unique: false,
+    });
+
+    // The sweep lease. One row, and it is the whole of the cross-shard
+    // coordination: see {@link sweepSqlCdcRetention}.
+    await queryRun(
+        exec,
+        dialect,
+        sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(CDC_SWEEP_TABLE)} (${sql.identifier("id")} ${sql.raw(key)} NOT NULL PRIMARY KEY, ${sql.identifier("lease_until")} ${sql.raw(real)} NOT NULL)`,
+    );
+
+    // Seed it expired so the first writer to look can claim it. `DO NOTHING` on
+    // conflict: every shard in the fleet runs this migration, and the row must
+    // survive their races without any of them resetting a live lease.
+    await queryRun(
+        exec,
+        dialect,
+        sql`INSERT INTO ${sql.identifier(CDC_SWEEP_TABLE)} (${sql.identifier("id")}, ${sql.identifier("lease_until")}) VALUES (${CDC_SWEEP_ROW}, ${0}) ${
+            // MySQL has no `DO NOTHING`; the conventional no-op assignment is the
+            // same trick the upsert builder above uses for its dialect split.
+            dialect.name === "mysql"
+                ? sql`ON DUPLICATE KEY UPDATE ${sql.identifier("id")} = ${sql.identifier("id")}`
+                : sql`ON CONFLICT(${sql.identifier("id")}) DO NOTHING`
+        }`,
+    );
+};
+
+/**
+ * Try to become the fleet's sweeper for one window.
+ *
+ * The `.global()` changelog differs from the shard-local one in exactly one way
+ * that matters here: it has no owner. Every shard writes it, from every region,
+ * and none of them is the one that should trim it. Left to themselves they would
+ * all trim it at once — N concurrent unbounded `DELETE`s against one D1 database.
+ *
+ * A lease row settles it without a registry: whoever wins the compare-and-set
+ * sweeps, everyone else returns immediately, and the lease doubles as the
+ * interval (a winner holds it for {@link CDC_SWEEP_LEASE_MS}, so the fleet
+ * sweeps about that often in total rather than once per shard). A sweeper that
+ * dies mid-pass loses nothing: the lease simply expires and the next writer
+ * picks up where the `ts` cutoff says to.
+ */
+const acquireSqlCdcSweepLease = async (exec: SqlCtxExec, dialect: SqlDialect, now: number): Promise<boolean> => {
+    const claim = sql`UPDATE ${sql.identifier(CDC_SWEEP_TABLE)} SET ${sql.identifier("lease_until")} = ${now + CDC_SWEEP_LEASE_MS} WHERE ${sql.identifier("id")} = ${CDC_SWEEP_ROW} AND ${sql.identifier("lease_until")} <= ${now}`;
+
+    // Same compare-and-set idiom as the OCC write path: `RETURNING` where the
+    // engine has it, affected-rows where it does not (MySQL).
+    if (dialect.supportsReturning) {
+        const claimed = await queryAll(exec, dialect, sql`${claim} RETURNING ${sql.identifier("id")}`);
+
+        return claimed.length > 0;
+    }
+
+    const result = await queryRun(exec, dialect, claim);
+
+    return (dialect.affectedRows ? dialect.affectedRows(result ?? { rowsAffected: 0 }) : 0) > 0;
+};
+
+/**
+ * Delete `.global()` changelog entries older than `retentionMs`, at most
+ * {@link GLOBAL_CDC_SWEEP_MAX_ROWS} per pass, and only if this writer wins the lease.
+ *
+ * **Time, not rows.** The shard-local twin bounds its log by row count because
+ * one shard owns it and a row count is a memory bound on that one object. This
+ * log is shared, so a row count means nothing to any individual consumer — but
+ * "older than N" is directly what every consumer needs to reason about, and it
+ * is the unit an operator can compare against their own connector's lag.
+ *
+ * **Which consumers this can strand, and what protects each:**
+ *
+ * - `.global()` shape pollers hold in-memory cursors this store cannot see. They
+ *   are protected EXACTLY rather than approximately: {@link readSqlCdcChangedTables}
+ *   reports the retained floor, and a poller below it treats the tick as "no
+ *   visibility" and re-reads every shape. That is the same self-healing path a
+ *   changelog error already takes, so a trimmed poller is slow for one tick, not
+ *   wrong. No cursor registry, no assumption about how far behind a shard can be.
+ * - Streaming-export / warehouse consumers hold opaque cursors issued outside
+ *   this deployment. Nothing here can see them, so nothing here guesses:
+ *   {@link readSqlCdcChanges} refuses a page below the floor rather than serving
+ *   the surviving tail, and retention stays OFF unless an operator states a
+ *   window they know covers their connector.
+ */
+const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, retentionMs: number, now: number): Promise<void> => {
+    if (!(await acquireSqlCdcSweepLease(exec, dialect, now))) {
+        return;
+    }
+
+    const cutoff = now - retentionMs;
+
+    // Bounded per pass for the same reason the shard-local sweep is: the first
+    // sweep after an operator enables retention faces the entire accumulated
+    // log, and an unbounded DELETE that aborts leaves no progress behind.
+    //
+    // The bounded select is wrapped in a derived table, which looks redundant
+    // and is not: MySQL rejects a `LIMIT` inside an `IN (subquery)` outright
+    // ("This version of MySQL doesn't yet support 'LIMIT & IN/ALL/ANY/SOME
+    // subquery'"), so the direct form throws on every Hyperdrive-MySQL
+    // deployment while working fine on SQLite and Postgres. Materialising the
+    // subquery through a derived table is the one form all three accept —
+    // MySQL's own `DELETE … ORDER BY … LIMIT` would need a dialect split,
+    // since Postgres has no such syntax. Postgres requires the alias, so it is
+    // not optional either.
+    await queryRun(
+        exec,
+        dialect,
+        sql`
+            DELETE FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} IN (
+                        SELECT ${sql.identifier("seq")} FROM (
+                            SELECT ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("ts")} <= ${cutoff} ORDER BY ${sql.identifier("seq")} ASC LIMIT ${sql.raw(String(GLOBAL_CDC_SWEEP_MAX_ROWS))}
+                        ) AS ${sql.identifier("expired")}
+                    )
+        `,
+    );
+};
+
+/** Oldest `seq` still retained in the `.global()` changelog, or `undefined` when it is empty. */
+const readSqlCdcFloor = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<number | undefined> => {
+    const rows = await queryAll(exec, dialect, sql`SELECT MIN(${sql.identifier("seq")}) AS ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)}`);
+    const floor = Number(rows[0]?.["seq"] ?? Number.NaN);
+
+    return Number.isFinite(floor) ? floor : undefined;
 };
 
 /** Append one committed mutation to the changelog (post-image JSON, or NULL for delete). */
@@ -929,6 +1157,26 @@ const readSqlCdcChanges = async (
     const sinceSeq = options.sinceSeq ?? 0;
     const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
 
+    // Retention-gap guard, mirroring the shard-local `runShardCdcSync`. Without
+    // it a consumer resuming below a swept floor is handed the surviving tail
+    // with an advanced cursor and no indication anything was skipped — a
+    // warehouse table permanently missing the trimmed range, reported nowhere.
+    // `+ 1` because a consumer sitting exactly at `floor - 1` has seen
+    // everything below the floor.
+    //
+    // Unconditional, unlike `readSqlCdcChangedTables`, which reads the floor only
+    // when retention is configured. That reader runs on the 2s shape poll and its
+    // consumers self-heal by re-reading; this one serves opaque warehouse cursors
+    // that cannot. Skipping the probe when retention is currently off would
+    // disarm the guard for a deployment that swept and then turned retention
+    // back off — one round trip per export page is not worth trading a silent
+    // gap for.
+    const floor = await readSqlCdcFloor(exec, dialect);
+
+    if (floor !== undefined && cursorBelowRetainedFloor(floor, sinceSeq)) {
+        throw cdcTrimmedError(floor, sinceSeq, "global");
+    }
+
     const rows = await queryAll(
         exec,
         dialect,
@@ -945,9 +1193,80 @@ const readSqlCdcChanges = async (
     return { changes, cursor: changes.at(-1)?.seq ?? sinceSeq };
 };
 
-/** Drop changelog entries at or below a checkpointed `throughSeq` (retention). */
-const trimSqlCdcChanges = async (exec: SqlCtxExec, throughSeq: number, dialect: SqlDialect): Promise<void> => {
-    await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} <= ${throughSeq}`);
+/**
+ * Which tables the changelog recorded a write to after `sinceSeq`, plus the
+ * cursor to resume from. Metadata only — it reads no `doc`, so its cost is a
+ * grouped scan over an index range rather than the size of the documents in it.
+ *
+ * The `.global()` shape poll asks this once per tick for the whole shard, and a
+ * shape whose table is absent from the answer skips its membership read
+ * entirely.
+ *
+ * **One statement, and the cursor comes out of the same rows as the tables.**
+ * Reading the head separately — in either order — opens a window where a write
+ * commits between the two round trips and ends up absent from `tables` while
+ * sitting at or below the adopted `cursor`, which loses it for good. Deriving
+ * the cursor as the max `seq` actually returned closes that window by
+ * construction: the caller can never advance past a row this scan did not see.
+ *
+ * **What it does NOT close**, and the poll's resync interval is what covers it:
+ * Postgres and MySQL allocate `seq` from a sequence BEFORE commit, so a
+ * transaction holding a lower `seq` can commit after one holding a higher one.
+ * No single read can see the uncommitted row, so a change can land below a
+ * cursor already adopted. That change is invisible to the changelog probe until
+ * the next unconditional pass — bounded by `GLOBAL_SHAPE_RESYNC_MS`, which is
+ * the same bound already accepted for an out-of-band writer. D1 has no such
+ * window (single writer, and `withSession` gives both reads one snapshot).
+ */
+const readSqlCdcChangedTables = async (
+    exec: SqlCtxExec,
+    sinceSeq: number,
+    dialect: SqlDialect,
+    options: { cursorOnly?: boolean; retained?: boolean } = {},
+): Promise<{ cursor: number; floor?: number; tables: string[] }> => {
+    if (options.cursorOnly) {
+        // The caller is reading everything this pass regardless, so the table
+        // list would be discarded — and on the cold-instance case that produces
+        // it, computing it means grouping the entire changelog. `MAX(seq)` over
+        // the primary key answers what is actually wanted.
+        const head = await queryAll(exec, dialect, sql`SELECT MAX(seq) AS seq FROM ${sql.identifier(CDC_LOG_TABLE)}`);
+        const rawCursor = Number(head[0]?.["seq"] ?? sinceSeq);
+
+        return { cursor: Number.isFinite(rawCursor) ? rawCursor : sinceSeq, tables: [] };
+    }
+
+    const rows = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT ${sql.identifier("table")} AS ${sql.identifier("table")}, MAX(seq) AS seq FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq} GROUP BY ${sql.identifier("table")}`,
+    );
+
+    let cursor = sinceSeq;
+    const tables: string[] = [];
+
+    for (const row of rows) {
+        const seq = Number(row["seq"]);
+
+        if (Number.isFinite(seq) && seq > cursor) {
+            cursor = seq;
+        }
+
+        tables.push(String(row["table"]));
+    }
+
+    // The retained floor, so a caller can tell "nothing changed" from "what
+    // changed was swept away". Read AFTER the scan, not before: the floor only
+    // ever rises, so a sweep interleaving between the two makes this report a
+    // gap that has only just opened — one wasted full pass. Reading it first
+    // would let a sweep land after it and hide a gap that is real.
+    //
+    // Only when retention is configured. With no sweep the floor never moves off
+    // the log's first row, so the gap it detects cannot occur — and this is a
+    // read on a two-second poll, which is the wrong place to spend a round trip
+    // proving something that is true by construction.
+    const floor = options.retained === true ? await readSqlCdcFloor(exec, dialect) : undefined;
+
+    return { cursor, tables, ...(floor === undefined ? {} : { floor }) };
 };
 
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
@@ -1022,6 +1341,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const cdcEnabled = options.cdc ?? false;
+    // Positive-and-finite only: a zero or negative window would mean "delete
+    // everything ever written", which is never what an operator means by a
+    // retention setting and is not a state this should be able to reach by typo.
+    const cdcRetentionMs =
+        typeof options.cdcRetentionMs === "number" && Number.isFinite(options.cdcRetentionMs) && options.cdcRetentionMs > 0
+            ? options.cdcRetentionMs
+            : undefined;
     // Resolved request auth for `.serverDefault(fn)` column factories; defaults
     // to the anonymous slice when the writer is built without a caller identity.
     // eslint-disable-next-line unicorn/no-null -- the auth slice models the anonymous caller as null identity/userId (mirrors `ServerDefaultContext`)
@@ -1037,8 +1363,33 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * inside the row write's transaction and so is atomic.
      */
     const recordCdc = async (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): Promise<void> => {
-        if (cdcEnabled) {
-            await appendSqlCdcChange(exec, clock(), table, id, op, doc, dialect);
+        if (!cdcEnabled) {
+            return;
+        }
+
+        await appendSqlCdcChange(exec, clock(), table, id, op, doc, dialect);
+
+        if (cdcRetentionMs === undefined) {
+            return;
+        }
+
+        const now = clock();
+
+        // Per-isolate throttle before the fleet-wide lease: the lease is a write,
+        // and attempting it on every changelog append would double this path's
+        // cost. See {@link CDC_SWEEP_ATTEMPT_MS}.
+        if (now - lastSweepAttemptAt < CDC_SWEEP_ATTEMPT_MS) {
+            return;
+        }
+
+        lastSweepAttemptAt = now;
+
+        try {
+            await sweepSqlCdcRetention(exec, dialect, cdcRetentionMs, now);
+        } catch {
+            // Retention is maintenance. A failed sweep must never surface on a
+            // write whose row and changelog entry have already committed — the
+            // log simply stays larger until a later pass claims the lease.
         }
     };
     const scheduler = options.scheduler ?? throwingScheduler;
@@ -2007,6 +2358,32 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     });
 
     const writer: DatabaseWriterLike = {
+        /**
+         * Which tables the changelog saw a write to after `sinceSeq` (see
+         * {@link DatabaseWriterLike.cdcChangedTables}) — `undefined` when this
+         * store has CDC disabled, since there is then no log to answer from and
+         * the caller must fall back to re-reading. A missing/never-migrated log
+         * table reports the same way rather than throwing: "no visibility" is a
+         * state the caller already handles, and a poll tick is the wrong place
+         * to surface a migration problem.
+         */
+        async cdcChangedTables(
+            sinceSeq: number,
+            readOptions?: { cursorOnly?: boolean },
+        ): Promise<{ cursor: number; floor?: number; tables: string[] } | undefined> {
+            if (!cdcEnabled) {
+                return undefined;
+            }
+
+            try {
+                await ensureMigrated();
+
+                return await readSqlCdcChangedTables(exec, sinceSeq, dialect, { ...readOptions, retained: cdcRetentionMs !== undefined });
+            } catch {
+                return undefined;
+            }
+        },
+
         // eslint-disable-next-line sonarjs/cognitive-complexity -- routes count/sum/avg/min/max through the indexed companion vs scan fallback; the branching reads clearer inline than split across per-op helpers
         async aggregate(tableName, aggOptions: AggregateOptions): Promise<AggregateResult> {
             const definition = schema.tables[tableName];
@@ -3232,12 +3609,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
 export {
     createSqlCtxDb,
+    readSqlCdcChangedTables,
     readSqlCdcChanges,
+    readSqlCdcFloor,
     runSqlAggregateMigrations,
     runSqlCdcMigration,
     runSqlGlobalTableMigrations,
     runSqlRankMigrations,
-    trimSqlCdcChanges,
+    sweepSqlCdcRetention,
 };
 export { backfillSqlSearchIndexes, runSqlSearchMigrations } from "./ctx-db-search";
 export type { SqlCtxDbOptions };

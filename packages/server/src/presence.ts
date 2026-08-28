@@ -18,12 +18,14 @@
  * re-sends only the changed row to subscribers, not the whole list.
  * - **TTL by read-time filter**: `listPresent` filters `lastSeen > now - ttl`,
  * so a client that stops heart-beating silently disappears from the list
- * without any reaper. The read filter only HIDES stale rows; it never deletes
- * them, so to keep the table from growing unbounded you SHOULD schedule the
- * sweep ({@link PresenceFunctions.sweep}) on a cron / `runAfter`. The heartbeat
+ * without any reaper. The read filter only HIDES stale rows; each heartbeat
+ * additionally reaps a small batch of its room's long-expired rows, so an
+ * active room's table self-cleans without any scheduling. The sweep
+ * ({@link PresenceFunctions.sweep}) remains as optional hardening for bulk
+ * cleanup of rooms that went quiet with stale rows left behind. The heartbeat
  * also bounds its `data` blob and refuses to write under another identity's
- * session, but a reaper is still required to reclaim aged-out rows. For
- * high-traffic rooms, wrap the presence functions with `@lunora/ratelimit`.
+ * session. For high-traffic rooms, wrap the presence functions with
+ * `@lunora/ratelimit`.
  *
  * # Wiring
  *
@@ -57,6 +59,22 @@ import type { MutationCtx as MutationContext, RegisteredLifecycleHook, Registere
 
 /** Default time-to-live for a presence row: a heartbeat keeps a member "present" for this long. */
 const DEFAULT_TTL_MS = 30_000;
+
+/**
+ * Default upper bound on SESSION ROWS `listPresent` reads per call. Sized for
+ * sessions, not people: a user with three tabs open holds three rows, and the
+ * per-user dedup runs after the read, so the cap has to clear the room's
+ * expected tab count rather than its head count.
+ */
+const DEFAULT_MAX_SESSIONS = 1024;
+
+/**
+ * How many of a room's oldest rows each heartbeat inspects for reaping. Small
+ * on purpose: the reap rides on the hot mutation path, so it must stay O(1) —
+ * a steady heartbeat stream still reclaims rows faster than it creates them
+ * (one insert per new session vs. up to this many deletes per beat).
+ */
+const REAP_BATCH = 8;
 
 /**
  * Cap on the serialized size (bytes) of a heartbeat `data` blob. The awareness
@@ -111,6 +129,21 @@ interface DefinePresenceOptions {
     disconnectGraceMs?: number;
 
     /**
+     * Upper bound on SESSION ROWS `listPresent` reads per call — one row per
+     * `(roomId, sessionId)`, so one per open tab, NOT one per person. The read
+     * is newest-first over the `(roomId, lastSeen)` index, so the rows kept are
+     * always the freshest heartbeats and a room with more sessions than this
+     * has its stalest ones truncated.
+     *
+     * Because the multi-tab dedup collapses rows only AFTER the read, a cap
+     * below the room's live session count drops real, currently-heartbeating
+     * members off the bottom of the list. Size it against expected tabs (a
+     * 300-person room at two tabs each is 600 rows), not expected people.
+     * Defaults to 1024. A non-finite value falls back to the default.
+     */
+    maxSessions?: number;
+
+    /**
      * How long (ms) a heartbeat keeps a member present. `listPresent` excludes
      * rows whose `lastSeen` is older than `now - ttlMs`. Defaults to 30s.
      */
@@ -155,8 +188,10 @@ interface PresenceFunctions {
 
     /**
      * Internal mutation that hard-deletes every expired row for `roomId`. Stale
-     * rows already vanish from `listPresent` via the read-time TTL filter; this
-     * only reclaims storage. Schedule it (cron / `runAfter`) if you care.
+     * rows already vanish from `listPresent` via the read-time TTL filter, and
+     * active rooms self-clean via the heartbeat's opportunistic reap; this is
+     * optional hardening for bulk cleanup of rooms that went quiet with stale
+     * rows left behind (schedule it on a cron / `runAfter` if you care).
      */
     sweep: RegisteredMutation<{ roomId: ReturnType<typeof v.string> }, { deleted: number }>;
 }
@@ -184,8 +219,11 @@ const presenceExtension = defineSchemaExtension(PRESENCE_KEY, {
         })
             // Drives the heartbeat upsert lookup.
             .index("byRoomSession", ["roomId", "sessionId"])
-            // Drives the `listPresent` / `sweep` per-room scans.
-            .index("byRoom", ["roomId"]),
+            // Drives the `sweep` per-room scan.
+            .index("byRoom", ["roomId"])
+            // Drives `listPresent`'s bounded newest-first read and the
+            // heartbeat's oldest-first opportunistic reap.
+            .index("byRoomLastSeen", ["roomId", "lastSeen"]),
     },
 }) as unknown as SchemaExtension<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable> }>;
 
@@ -211,6 +249,12 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
     // A grace window longer than the TTL would never hide the row before the
     // TTL filter already does, so clamp it; negative values disable the grace.
     const disconnectGraceMs = Math.max(0, Math.min(options.disconnectGraceMs ?? 0, ttlMs));
+    // `Number.isFinite` first: a `NaN` / `Infinity` option would otherwise flow
+    // through `Math.max`/`Math.floor` unchanged and reach the reader as
+    // `LIMIT NaN`.
+    const requestedSessions = options.maxSessions;
+    const maxSessions =
+        requestedSessions !== undefined && Number.isFinite(requestedSessions) ? Math.max(1, Math.floor(requestedSessions)) : DEFAULT_MAX_SESSIONS;
 
     const heartbeat = mutation
         .input({
@@ -256,20 +300,42 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
             // insert+delete churn that would re-send the whole present list.
             await (existing ? context.db.patch(existing["_id"] as never, row) : context.db.insert(PRESENCE_TABLE, row));
 
+            // Self-reaping: each heartbeat reclaims a few of its room's aged-out
+            // rows so the table stays bounded without the app scheduling `sweep`.
+            // The reap cutoff sits a full max(grace, ttl) window behind the
+            // visibility cutoff (`now - ttlMs`), so a row the read-time filter
+            // could still show — or that a grace-window reconnect could revive —
+            // is never deleted.
+            const reapCutoff = lastSeen - ttlMs - Math.max(disconnectGraceMs, ttlMs);
+            const oldest = await context.db
+                .query(PRESENCE_TABLE)
+                .withIndex("byRoomLastSeen", (q) => q.eq("roomId", args.roomId))
+                .order("asc")
+                .take(REAP_BATCH);
+            const expired = oldest.filter((oldRow) => (oldRow["lastSeen"] as number) <= reapCutoff);
+
+            await Promise.all(expired.map((oldRow) => context.db.delete(oldRow["_id"] as never)));
+
             return { lastSeen };
         });
 
     const listPresent = query.input({ roomId: v.string() }).query(async ({ args, ctx: context }): Promise<PresenceMember[]> => {
         const cutoff = Date.now() - ttlMs;
 
+        // Bounded newest-first read over the `(roomId, lastSeen)` index: cost
+        // scales with `maxSessions`, not with however many rows the room has
+        // ever accumulated — this query re-runs for every subscriber on every
+        // heartbeat, so an unbounded `.collect()` here is the hot path. The cap
+        // counts session rows; the dedup below then collapses a user's tabs.
         const rows = await context.db
             .query(PRESENCE_TABLE)
-            .withIndex("byRoom", (q) => q.eq("roomId", args.roomId))
-            .collect();
+            .withIndex("byRoomLastSeen", (q) => q.eq("roomId", args.roomId))
+            .order("desc")
+            .take(maxSessions);
 
-        // Newest heartbeat first, so the dedup below keeps the freshest row per
-        // user and the returned list stays newest-first.
-        const live = rows.filter((row) => (row["lastSeen"] as number) > cutoff).toSorted((a, b) => (b["lastSeen"] as number) - (a["lastSeen"] as number));
+        // Rows arrive newest heartbeat first, so the dedup below keeps the
+        // freshest row per user and the returned list stays newest-first.
+        const live = rows.filter((row) => (row["lastSeen"] as number) > cutoff);
 
         // Collapse multiple sessions of the same authenticated user — the
         // common multi-tab / multi-device case — to a single member so a "who's

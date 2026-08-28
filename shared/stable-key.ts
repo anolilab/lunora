@@ -48,14 +48,26 @@
  * does not skip `undefined` fields). The two are different contracts.
  */
 
-/** Code-point-stable key comparator (no locale dependence) for deterministic encoding. */
-const compareKeys = (a: string, b: string): number => {
-    if (a < b) {
-        return -1;
-    }
+/**
+ * Whether a string needs JSON escaping — a quote, a backslash, a control
+ * character, or any surrogate code unit.
+ *
+ * Surrogates are excluded from the fast path wholesale, pairs included, even
+ * though a well-formed pair passes through `JSON.stringify` unchanged. Only a
+ * LONE surrogate is escaped (to `\udXXX`), and telling the two apart costs more
+ * than handing the whole string to `JSON.stringify`. Emoji keys therefore take
+ * the slow path, which is correct and rare.
+ */
+const NEEDS_ESCAPE = /["\\\u0000-\u001F\uD800-\uDFFF]/;
 
-    return a > b ? 1 : 0;
-};
+/**
+ * `JSON.stringify` for a string, skipped when nothing in it can escape.
+ *
+ * Keys and short string leaves dominate these encodings and almost never need
+ * escaping, and wrapping in quotes directly measured ~1.2x over the generic
+ * call on realistic query args.
+ */
+const quote = (text: string): string => (NEEDS_ESCAPE.test(text) ? JSON.stringify(text) : `"${text}"`);
 
 const stableStringify = (value: unknown): string => {
     // Encode `undefined` as `null` (mirrors `JSON.stringify`'s array-element
@@ -98,12 +110,26 @@ const stableStringify = (value: unknown): string => {
         }
     }
 
+    if (typeof value === "string") {
+        return quote(value);
+    }
+
     if (value === null || typeof value !== "object") {
         return JSON.stringify(value);
     }
 
     if (Array.isArray(value)) {
-        return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+        let out = "[";
+
+        for (let index = 0; index < value.length; index++) {
+            if (index > 0) {
+                out += ",";
+            }
+
+            out += stableStringify(value[index]);
+        }
+
+        return out + "]";
     }
 
     // Reject non-plain objects (`Date`, `ArrayBuffer`, typed arrays, `Map`, `Set`,
@@ -123,8 +149,14 @@ const stableStringify = (value: unknown): string => {
     }
 
     const record = value as Record<string, unknown>;
-    const keys = Object.keys(record).toSorted(compareKeys);
-    const parts: string[] = [];
+    // `sort()` with no comparator, not `toSorted(compareKeys)`. The default
+    // comparator sorts strings by UTF-16 code unit — byte-identical to the
+    // `a < b` comparator this replaces (verified by fuzzing both over random
+    // key sets), and it is NOT locale-sensitive; that is `localeCompare`.
+    // Sorting in place is safe because `Object.keys` hands back a fresh array.
+    const keys = Object.keys(record).sort();
+    let out = "{";
+    let first = true;
 
     for (const key of keys) {
         const raw = record[key];
@@ -133,10 +165,18 @@ const stableStringify = (value: unknown): string => {
             continue;
         }
 
-        parts.push(`${JSON.stringify(key)}:${stableStringify(raw)}`);
+        if (first) {
+            first = false;
+        } else {
+            out += ",";
+        }
+
+        out += quote(key);
+        out += ":";
+        out += stableStringify(raw);
     }
 
-    return `{${parts.join(",")}}`;
+    return out + "}";
 };
 
 export { stableStringify };

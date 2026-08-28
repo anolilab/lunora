@@ -13,7 +13,7 @@
 /* eslint-disable unicorn/no-null -- `resolveIdentity` is a runtime contract that returns `null` for an anonymous request; `undefined` would be a different signal */
 import type { AuthAuditEntry, AuthAuditReader } from "./audit";
 import { INTERNAL_SECRET_HEADER, READ_AUDIT_PATH, RESOLVE_SESSION_PATH } from "./auth-do";
-import { DEFAULT_AUTH_BASE_PATH } from "./handler";
+import { DEFAULT_AUTH_BASE_PATH, isAuthRoutePath } from "./handler";
 
 /** The slice of a Durable Object namespace this needs — structural, so tests need no runtime. */
 export interface AuthNamespaceLike {
@@ -129,7 +129,7 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
         authHandler: async (request) => {
             // Only auth routes go to the object; everything else falls through to the
             // Lunora worker exactly as it does in D1 mode.
-            if (!new URL(request.url).pathname.startsWith(basePath)) {
+            if (!isAuthRoutePath(new URL(request.url).pathname, basePath)) {
                 return undefined;
             }
 

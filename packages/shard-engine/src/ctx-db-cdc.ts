@@ -12,15 +12,29 @@
 /* eslint-disable no-restricted-syntax -- every `dsql\`…\`` here is a drizzle tagged-template SQL builder binding a value, not a string conversion; the rule misfires on the inner TemplateLiteral (see where-sql.ts). */
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-cdc" mirrors its parent "ctx-db.ts" (the established public module name). */
 
+import { LunoraError } from "@lunora/errors";
+import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { DatabaseWriterLike, SqlExec } from "./ctx-db";
-import { runDrizzle } from "./do-exec";
+import { runDrizzle, runSql } from "./do-exec";
 import { decodeDocJson, encodeDocJson } from "./do-sql";
 import { ConflictError } from "./transaction";
 
 /** Reserved append-only changelog table backing CDC streaming export and replay-PITR. */
 const CDC_LOG_TABLE = "__cdc_log";
+
+/**
+ * The changelog append, as text. Fully constant — one table, fixed columns, every
+ * value bound — and it runs once per committed mutation, so building it through
+ * a drizzle template per write was pure overhead (see `row-statements.ts`, which
+ * holds the per-table statements for the same reason; this one lives here
+ * because the table name is private to this module).
+ *
+ * `__tests__/row-statements.test.ts` pins this against what the template rendered.
+ */
+const CDC_APPEND_SQL = `INSERT INTO ${quoteIdentifier(CDC_LOG_TABLE)} (ts, ${quoteIdentifier("table")}, id, op, doc) VALUES (?, ?, ?, ?, ?)`;
 
 /** One change-data-capture entry: a committed mutation, in monotonic `seq` order. */
 interface CdcChange {
@@ -35,11 +49,21 @@ interface CdcChange {
     ts: number;
 }
 
+/** Composite index backing every table-filtered changelog read (`("table", seq)`). */
+const CDC_LOG_TABLE_SEQ_INDEX = "__cdc_log_table_seq";
+
 /**
  * Create the `__cdc_log` table. `seq` is an `AUTOINCREMENT` primary key, giving
  * each shard a monotonic cursor that streaming-export consumers and replay-PITR
  * page through; `doc` holds the post-image JSON for insert/update and is `NULL`
  * for delete. Only created when CDC is enabled, so non-CDC apps pay nothing.
+ *
+ * The `("table", seq)` index is not optional bookkeeping: every read the shape
+ * path makes is `WHERE "table" [IN …] AND seq > ? ORDER BY seq`, and on the `seq`
+ * primary key alone that is a scan in commit order which reads and DISCARDS every
+ * row belonging to another table. One busy table then taxes every quiet table's
+ * subscribers in proportion to the busy one's write volume. The composite index
+ * covers both the filter and the ordering, so a shape reads only its own ops.
  */
 const migrateCdcLog = (sql: SqlExec): void => {
     runDrizzle(
@@ -53,6 +77,28 @@ const migrateCdcLog = (sql: SqlExec): void => {
             doc TEXT
         )`,
     );
+
+    // Isolated from the table's own migration, because this statement is the one
+    // that can be EXPENSIVE rather than instant. `IF NOT EXISTS` makes it
+    // idempotent; it does not make it cheap. On an existing deployment upgrading
+    // into this index, the first cold start builds it over however many rows the
+    // log accumulated while it had no retention — and that build runs
+    // synchronously on the request path. If it exceeds the isolate's budget and
+    // takes the whole migration down with it, EVERY subsequent request restarts
+    // from scratch and the shard is bricked rather than slow.
+    //
+    // Letting it fail alone converts that into the recoverable shape: the log
+    // still works (reads fall back to the `seq` scan they used before this index
+    // existed), the retention sweep bounds the log over the following minutes,
+    // and the next cold start retries against a smaller table until it succeeds.
+    try {
+        runDrizzle(
+            sql,
+            dsql`CREATE INDEX IF NOT EXISTS ${dsql.identifier(CDC_LOG_TABLE_SEQ_INDEX)} ON ${dsql.identifier(CDC_LOG_TABLE)} (${dsql.identifier("table")}, seq)`,
+        );
+    } catch {
+        /* see above: a degraded read path beats an unbootable shard, and the next cold start retries */
+    }
 };
 
 /**
@@ -63,10 +109,27 @@ const appendCdcChange = (sql: SqlExec, ts: number, table: string, id: string, op
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct post-image for a delete; the `id` column identifies the removed row.
     const docValue = doc === undefined ? null : encodeDocJson(doc);
 
-    runDrizzle(
-        sql,
-        dsql`INSERT INTO ${dsql.identifier(CDC_LOG_TABLE)} (ts, ${dsql.identifier("table")}, id, op, doc) VALUES (${ts}, ${table}, ${id}, ${op}, ${docValue})`,
-    );
+    runSql(sql, CDC_APPEND_SQL, ts, table, id, op, docValue);
+};
+
+/**
+ * How many table names one `IN (…)` filter may bind. Workerd caps a statement at
+ * 100 bound parameters; the callers here spend one or two on the range bounds, so
+ * this leaves headroom rather than sitting on the limit.
+ */
+const CDC_TABLE_FILTER_CHUNK = 90;
+
+/** Bind a non-empty table set as an `AND "table" IN (?, …)` fragment, or nothing at all for the unfiltered read. */
+const tableInClause = (tables: ReadonlySet<string> | undefined): SQL => {
+    if (!tables || tables.size === 0) {
+        return dsql``;
+    }
+
+    // Bind each table name as a parameter so the `IN (…)` list can never inject SQL.
+    return dsql` AND ${dsql.identifier("table")} IN (${dsql.join(
+        [...tables].map((table) => dsql`${table}`),
+        dsql`, `,
+    )})`;
 };
 
 /**
@@ -86,15 +149,8 @@ const readCdcChanges = (
     const sinceSeq = options.sinceSeq ?? 0;
     const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
 
-    // Bind each table name as a parameter so the `IN (…)` list can never inject
-    // SQL; an empty/omitted set leaves the predicate off entirely (full page).
-    const tableFilter =
-        options.tables && options.tables.size > 0
-            ? dsql` AND ${dsql.identifier("table")} IN (${dsql.join(
-                  [...options.tables].map((table) => dsql`${table}`),
-                  dsql`, `,
-              )})`
-            : dsql``;
+    // An empty/omitted set leaves the predicate off entirely (full page).
+    const tableFilter = tableInClause(options.tables);
 
     const rows = runDrizzle<{ doc: null | string; id: string; op: string; seq: number; table: string; ts: number }>(
         sql,
@@ -111,12 +167,283 @@ const readCdcChanges = (
 };
 
 /**
+ * Does ANY change newer than `sinceSeq` touch one of `tables`? A metadata-only
+ * existence probe — it never reads, and never decodes, a `doc`.
+ *
+ * This is the whole question the subscription resume path asks, and answering it
+ * by materializing the changes is what made a long-offline client the most
+ * expensive one to serve: reading a bounded page of changes to test
+ * `changes.some((c) => readSet.has(c.table))` decoded every post-image in the
+ * range, and a client past the page cap could not be proven current at all, so it
+ * was re-sent its entire snapshot. Backed by the `("table", seq)` index, this is
+ * a single index seek whose cost does not grow with the range.
+ *
+ * An empty `tables` returns `false`: the caller has no dependency to test, which
+ * is never grounds for claiming a change touched it (the resume path treats an
+ * unknown read-set as non-resumable before it ever gets here).
+ *
+ * The read-set is chunked because it is unbounded — it is however many tables one
+ * query happened to read — while workerd caps a statement at 100 bound
+ * parameters, and `sinceSeq` already spends one. A wide read-set would otherwise
+ * throw here rather than answer, turning a resumable subscription into an error
+ * on the seed path.
+ */
+const cdcTouchesTables = (sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): boolean => {
+    if (tables.size === 0) {
+        return false;
+    }
+
+    const names = [...tables];
+
+    for (let index = 0; index < names.length; index += CDC_TABLE_FILTER_CHUNK) {
+        const chunk = new Set(names.slice(index, index + CDC_TABLE_FILTER_CHUNK));
+
+        const rows = runDrizzle<{ hit: number }>(
+            sql,
+            dsql`SELECT 1 AS hit FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq}${tableInClause(chunk)} LIMIT 1`,
+        ).toArray();
+
+        if (rows.length > 0) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Can the changelog speak for EVERY entry in a subscription's read-set?
+ *
+ * This is the question {@link cdcTouchesTables} silently assumes the answer to.
+ * That probe reports "no change" for a dependency the log never records, and a
+ * "no change" the log cannot actually vouch for is indistinguishable on the wire
+ * from a genuine one — the resuming client keeps a stale value forever.
+ *
+ * The log records writes to THIS shard's own SQLite tables and nothing else, so
+ * a great deal of what a query can read is invisible to it. A `.global()` table
+ * lives in D1 and no DO ever appends a CDC entry for it, so a write by ANY shard
+ * leaves this log untouched. The `"*"` wildcard an admin/flags read stamps names
+ * no table at all, and a flag flipped in the provider never touches SQLite.
+ * `ctx.kv`, `ctx.storage`, `ctx.vectors`, `ctx.system`, and a wall-clock
+ * predicate like `_creationTime > now - 1h` leave no row-level trace anywhere in
+ * the log either.
+ *
+ * So the vouchable set is defined POSITIVELY, and read from the storage itself
+ * rather than from a list someone has to remember to extend: a dependency is
+ * vouchable iff a table of that name exists in this DO's SQLite. That is the
+ * set `recordCdc` appends for, plus the shard's own bookkeeping tables, which
+ * no `ctx.db` read can name. Anything else — a `.global()` table, a sentinel, a
+ * dependency stamped by a capability added after this was written — falls to
+ * the default, and the default is "cannot vouch". Getting the classification
+ * wrong then costs a needless re-snapshot instead of silently serving stale
+ * data.
+ *
+ * The live-refresh path is already pessimistic in exactly this way (see
+ * `writeTouchesMemo` in `subscription-range-gate.ts` — "assume touched on any
+ * uncertainty"); this is the resume path agreeing with it.
+ *
+ * An EMPTY read-set is unvouchable for the same reason and not a special case:
+ * a query whose dependencies were never recorded may well read a global table,
+ * so "nothing changed locally" proves nothing about it.
+ *
+ * Reads the whole `sqlite_master` table list rather than probing the read-set
+ * names with an `IN (…)`: a shard holds tens of tables, and binding one
+ * parameter per dependency would walk into workerd's 100-bound-parameter cap on
+ * a wide read-set.
+ */
+const localTableCache = new WeakMap<object, Set<string>>();
+
+/** Every physical table in this DO's SQLite. */
+const readLocalTables = (sql: SqlExec): Set<string> =>
+    new Set(
+        runDrizzle<{ name: string }>(sql, dsql`SELECT name FROM sqlite_master WHERE type = 'table'`)
+            .toArray()
+            .map((row) => row.name),
+    );
+
+const cdcCanVouchFor = (sql: SqlExec, deps: ReadonlySet<string>): boolean => {
+    if (deps.size === 0) {
+        return false;
+    }
+
+    // The catalog is memoized per `sql` handle, because it moves only when a
+    // migration runs while this question is asked on every resume evaluation —
+    // and that is the hot path the whole two-stage read exists to keep flat
+    // (measured: the uncached scan cost ~18% of `evaluateResume`).
+    //
+    // Only a POSITIVE answer is ever cached. A dep the cache does not know
+    // re-reads the catalog once and retries, so a table created after the cache
+    // was built is picked up rather than being refused forever; and because a
+    // miss always re-reads, the cache can never turn a vouchable dep into a
+    // refusal. The reverse — a table DROPPED after being cached — would leave a
+    // stale vouch, but a query whose dependency no longer exists cannot read it
+    // to begin with, so no live subscription can hold one.
+    let local = localTableCache.get(sql);
+    let reread = false;
+
+    if (local === undefined) {
+        local = readLocalTables(sql);
+        reread = true;
+        localTableCache.set(sql, local);
+    }
+
+    for (const dep of deps) {
+        if (local.has(dep)) {
+            continue;
+        }
+
+        if (reread) {
+            return false;
+        }
+
+        local = readLocalTables(sql);
+        reread = true;
+        localTableCache.set(sql, local);
+
+        if (!local.has(dep)) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
+/** One changed row key in a range: the id, the LATEST op that hit it, and that op's `seq`. No post-image. */
+interface CdcChangeKey {
+    id: string;
+    op: CdcChange["op"];
+    seq: number;
+}
+
+/**
+ * The distinct row keys `table` saw change in `(sinceSeq, upTo]`, each carrying
+ * the latest op that hit it — the metadata half of the two-stage shape diff.
+ *
+ * Stage two ({@link import("./ctx-db-shapes").selectShapeMembers}) intersects
+ * these ids with the shape's predicate and reads the surviving documents from
+ * the table itself, so nothing here needs a post-image: selecting `doc` would
+ * decode every changed row in the range to keep only the ones the predicate
+ * admits, which for a catch-up over a large range is most of the work and all of
+ * the memory.
+ *
+ * `MAX(seq)` with bare `id`/`op` columns is SQLite's documented single-aggregate
+ * behaviour — the bare columns come from the row that supplied the max — and
+ * collapses multiple ops on one row to the newest, exactly as the read-then-
+ * overwrite drain it replaces did. `seq <= upTo` bounds the read at the
+ * checkpoint the poke will be stamped with; the drain it replaces bounded only
+ * its loop, so its final page could pull rows past `upTo` into the diff.
+ */
+const readCdcChangeKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[] => {
+    // `maxSeq`, not a second `seq`: aliasing the aggregate to the name of the
+    // column it aggregates leaves `ORDER BY seq` resolvable two ways, and which
+    // one wins is an engine rule rather than something stated here.
+    const rows = runDrizzle<{ id: string; maxSeq: number; op: string }>(
+        sql,
+        dsql`SELECT id, op, MAX(seq) AS maxSeq FROM ${dsql.identifier(CDC_LOG_TABLE)}
+             WHERE ${dsql.identifier("table")} = ${table} AND seq > ${sinceSeq} AND seq <= ${upTo}
+             GROUP BY id
+             ORDER BY maxSeq ASC`,
+    ).toArray();
+
+    return rows.map((row) => {
+        return { id: row.id, op: row.op as CdcChange["op"], seq: row.maxSeq };
+    });
+};
+
+/**
  * Drop changelog entries at or below a checkpointed `throughSeq` — retention
  * after a consumer has durably advanced past them, so the log can't grow
- * unbounded.
+ * unbounded. Deletes at most `maxRows` per call, oldest first.
+ *
+ * The bound is not a nicety. A retention sweep runs on a write path, and its
+ * first run after an operator enables retention faces the whole accumulated log
+ * — the exact situation the knob was turned on for. An unbounded `DELETE` over
+ * millions of rows there is not merely slow: if it exceeds the DO's per-request
+ * limits it aborts having changed nothing, and the next sweep issues the
+ * identical unbounded statement. That loop never makes progress and never
+ * reports why. Bounding each pass makes a large backlog take many sweeps instead
+ * of never finishing.
  */
-const trimCdcChanges = (sql: SqlExec, throughSeq: number): void => {
-    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq <= ${throughSeq}`);
+const trimCdcChanges = (sql: SqlExec, throughSeq: number, maxRows: number): void => {
+    runDrizzle(
+        sql,
+        dsql`DELETE FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq IN (
+            SELECT seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq <= ${throughSeq} ORDER BY seq ASC LIMIT ${maxRows}
+        )`,
+    );
+};
+
+/**
+ * Drop the POST-IMAGES at or below `throughSeq`, keeping the `(seq, table, id,
+ * op)` key rows — the cheap tier of a two-tier changelog.
+ *
+ * A deleted row and a doc-less row are very different answers to a resuming
+ * client. Deleting the row destroys the only record that the key changed, so the
+ * client cannot be told anything except "re-seed the whole shape". Keeping the
+ * key and dropping the payload still answers *which* keys moved, and the shape
+ * path reads their current values from the table anyway (see
+ * `selectShapeMembers`) — so a client far past payload retention still gets an
+ * exact key-level delta instead of a full re-download. Payloads are also where
+ * essentially all the bytes are: a key row is a few dozen bytes against a
+ * document that is routinely kilobytes.
+ *
+ * Only a payload consumer — streaming export, replay-PITR ({@link
+ * applyCdcChanges}) — genuinely needs the post-image, and compaction is opt-in
+ * (`LUNORA_CDC_PAYLOAD_RETENTION`) precisely because this shard cannot see where
+ * such a consumer's cursor sits. What protects them is the READ path, not the
+ * sweep: `ShardDO.runShardCdcSync` refuses to serve a page containing a
+ * doc-less insert/update and raises `CDC_PAYLOAD_COMPACTED`, so a consumer
+ * re-syncs from a snapshot instead of silently recording a compacted row as a
+ * delete.
+ */
+const compactCdcDocs = (sql: SqlExec, throughSeq: number, maxRows: number): void => {
+    // `SET doc = NULL` as a SQL literal, not a bound `${null}`: the storage-level
+    // "payload dropped" is a property of the statement, not a value the caller
+    // supplies, and binding it invites an implicit JS-to-string conversion on the
+    // way through the driver.
+    //
+    // Bounded per call like {@link trimCdcChanges}, and for the same reason. The
+    // `doc IS NOT NULL` filter sits INSIDE the bounded prefix rather than beside
+    // it, so a batch is `maxRows` rows that actually need compacting — outside,
+    // a prefix of already-compacted rows would consume the whole batch and the
+    // sweep would stall short of the rows carrying the bytes.
+    runDrizzle(
+        sql,
+        dsql`UPDATE ${dsql.identifier(CDC_LOG_TABLE)} SET doc = NULL WHERE seq IN (
+            SELECT seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq <= ${throughSeq} AND doc IS NOT NULL ORDER BY seq ASC LIMIT ${maxRows}
+        )`,
+    );
+};
+
+/**
+ * The `seq` that leaves exactly `keep` rows behind it — i.e. the largest cutoff a
+ * sweep may trim/compact through when honouring a row-count cap. Returns
+ * `undefined` when the log already holds `keep` rows or fewer (nothing to do).
+ *
+ * Computed with `LIMIT 1 OFFSET keep - 1` over descending `seq` rather than
+ * arithmetic on the cursor: `seq` has gaps (a trimmed prefix, a rolled-back
+ * transaction), so `cursor - keep` would trim a variable and occasionally very
+ * large number of extra rows.
+ */
+const cdcSeqLeavingRows = (sql: SqlExec, keep: number): number | undefined => {
+    if (keep <= 0) {
+        // Keep nothing: every retained row is past the window, so the cutoff is
+        // the newest `seq` present. Deliberately MAX over the live rows rather
+        // than the AUTOINCREMENT high-watermark — the latter survives a trim and
+        // would name a seq no row has.
+        const head = runDrizzle<{ seq: null | number }>(sql, dsql`SELECT MAX(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)}`).toArray();
+
+        return head[0]?.seq ?? undefined;
+    }
+
+    const rows = runDrizzle<{ seq: number }>(
+        sql,
+        dsql`SELECT seq FROM ${dsql.identifier(CDC_LOG_TABLE)} ORDER BY seq DESC LIMIT 1 OFFSET ${keep - 1}`,
+    ).toArray();
+
+    const oldestKept = rows[0]?.seq;
+
+    return oldestKept === undefined ? undefined : oldestKept - 1;
 };
 
 /**
@@ -144,6 +471,45 @@ const readCdcCursor = (sql: SqlExec): number => {
 };
 
 /**
+ * Is `sinceSeq` below the retained window a floor of `floor` describes?
+ *
+ * Six call sites across three packages ask this, and the `+ 1` is why it is
+ * stated once: a consumer sitting at `sinceSeq` has SEEN everything up to and
+ * including it and expects `sinceSeq + 1` next, so a floor of exactly
+ * `sinceSeq + 1` is the boundary case where nothing was missed. A `>` written as
+ * `>=` at any one site fails silently in one of the two directions the log has
+ * no way to report: a permanently re-seeding client, or a served gap.
+ *
+ * An `undefined` floor means an EMPTY log, and this returns `false` for it —
+ * "nothing retained" is not "your cursor is below what is retained". The callers
+ * that must also refuse an empty log say so themselves, at the call site, so the
+ * two questions stay visibly distinct rather than folded into one predicate that
+ * answers whichever the reader assumed.
+ *
+ * Deliberately not a `floor is number` type predicate, tempting as that is for
+ * the throwing callers: the FALSE branch would then narrow `floor` to
+ * `undefined`, and the predicate is false for a perfectly defined floor the
+ * cursor happens to sit inside. A caller that needs the value re-checks it, in
+ * one visible token.
+ */
+const cursorBelowRetainedFloor = (floor: number | undefined, sinceSeq: number): boolean => floor !== undefined && floor > sinceSeq + 1;
+
+/**
+ * The refusal a read path returns when {@link cursorBelowRetainedFloor} holds.
+ *
+ * One builder rather than the message written out per path: the remediation
+ * ("resume from a snapshot") is the same everywhere, and two copies drift the
+ * moment one is reworded. `scope` names which log — the shard's own, or the
+ * `.global()` one — since the answer for a consumer differs by which.
+ */
+const cdcTrimmedError = (floor: number, sinceSeq: number, scope: "global" | "shard"): LunoraError =>
+    new LunoraError(
+        "CDC_LOG_TRIMMED",
+        `${scope === "global" ? "global cdc" : "cdc"} entries at or below seq ${String(floor - 1)} have been trimmed; resume from a snapshot (sinceSeq ${String(sinceSeq)} is below the retained window)`,
+        { status: 409 },
+    );
+
+/**
  * Oldest `seq` still retained in the changelog, or `undefined` when the log is
  * empty. A reconnecting subscriber whose `sinceSeq` is below `floor - 1` has
  * missed changes that `trimCdcChanges` already compacted away, so it must take a
@@ -153,6 +519,42 @@ const minCdcSeq = (sql: SqlExec): number | undefined => {
     const rows = runDrizzle<{ seq: null | number }>(sql, dsql`SELECT MIN(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)}`).toArray();
 
     return rows[0]?.seq ?? undefined;
+};
+
+/**
+ * The oldest `seq` a PAYLOAD consumer — streaming export, replay-PITR, a region
+ * read replica — can still be replayed from. Distinct from {@link minCdcSeq},
+ * which is the oldest retained KEY and is what the shape path gates on: after
+ * {@link compactCdcDocs} the two diverge, and the difference is a range whose
+ * keys survive but whose documents do not.
+ *
+ * Measured as "past the newest row that SHOULD carry a post-image and doesn't",
+ * which is the same test `ShardDO.runShardCdcSync` applies per page — stated
+ * once, so the read path's refusal and the floor a consumer is told to bootstrap
+ * from can never disagree. The inverse framing ("oldest row that still has a
+ * doc") looks equivalent and is not: a `delete` stores a NULL post-image by
+ * design, so a perfectly replayable log whose retained prefix happens to open
+ * with deletes would report a floor above rows it can serve, and force needless
+ * bootstraps.
+ *
+ * Compaction only ever clears a prefix, so one `MAX` answers it. Folds in
+ * {@link minCdcSeq} as well: a trimmed row is no more replayable than a
+ * compacted one, and every caller wants the higher of the two.
+ */
+const minCdcReplayableSeq = (sql: SqlExec): number | undefined => {
+    const rows = runDrizzle<{ seq: null | number }>(
+        sql,
+        dsql`SELECT MAX(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE op <> 'delete' AND doc IS NULL`,
+    ).toArray();
+
+    const compactedThrough = rows[0]?.seq ?? undefined;
+    const trimFloor = minCdcSeq(sql);
+
+    if (compactedThrough === undefined) {
+        return trimFloor;
+    }
+
+    return Math.max(compactedThrough + 1, trimFloor ?? 0);
 };
 
 /**
@@ -263,13 +665,24 @@ export {
     applyCdcChanges,
     bumpCdcEpoch,
     CDC_LOG_TABLE,
+    CDC_LOG_TABLE_SEQ_INDEX,
     CDC_META_TABLE,
+    cdcCanVouchFor,
+    cdcSeqLeavingRows,
+    cdcTouchesTables,
+    cdcTrimmedError,
+    compactCdcDocs,
+    cursorBelowRetainedFloor,
     migrateCdcLog,
     migrateCdcMeta,
+    minCdcReplayableSeq,
     minCdcSeq,
+    readCdcChangeKeys,
     readCdcChanges,
     readCdcCursor,
     readCdcEpoch,
     trimCdcChanges,
 };
-export type { CdcChange };
+export type { CdcChange, CdcChangeKey };
+
+export { CDC_APPEND_SQL };

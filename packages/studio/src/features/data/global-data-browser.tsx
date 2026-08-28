@@ -12,6 +12,7 @@ import DataFacets from "./data-facets";
 import GlobalDataPage from "./global-data-page";
 import GlobalTablesEmptyState from "./global-tables-empty-state";
 import { useFacets } from "./hooks/use-facets";
+import { useMaskView } from "./hooks/use-mask-view";
 import { TableListSidebar } from "./table-list-sidebar";
 
 interface GlobalDataBrowserProps {
@@ -242,6 +243,12 @@ export const GlobalDataBrowser = ({
         setOffset(Math.max(0, nextOffset));
     };
 
+    // The "Mask sensitive columns" preview for the open table, same hook the shard
+    // browser uses: `maskPolicies` is deployment-wide `(table, column, strategy)`
+    // and a `.global()` table is browsed under its logical schema name, so a
+    // `.use(mask(...))` policy resolves here exactly as it does there.
+    const { maskColumns, maskOn, maskView, onToggleMask } = useMaskView({ columns: page?.columns ?? NO_COLUMNS, selectedTable });
+
     const total = page?.total ?? 0;
     const hasPrevious = offset > 0;
     const hasNext = page !== null && offset + page.rows.length < total;
@@ -320,11 +327,15 @@ export const GlobalDataBrowser = ({
                 {page !== null && (
                     <GlobalDataPage
                         filters={filters}
+                        hasMaskedColumns={maskColumns.size > 0}
+                        mask={maskView}
+                        maskOn={maskOn}
                         onChangePageSize={changePageSize}
                         onJumpToPage={jumpToPage}
                         onNext={goNext}
                         onPrevious={goPrevious}
                         onRemoveFilter={removeFilter}
+                        onToggleMask={onToggleMask}
                         page={page}
                         pageSize={pageSize}
                         pagination={{ hasNext, hasPrevious, rangeEnd, rangeStart, total }}
@@ -332,7 +343,7 @@ export const GlobalDataBrowser = ({
                 )}
             </div>
 
-            <DataFacets columns={page?.columns ?? NO_COLUMNS} facets={facets} onFacetFilter={onFacetFilter} onToggleFacet={onToggleFacet} />
+            <DataFacets columns={page?.columns ?? NO_COLUMNS} facets={facets} mask={maskView} onFacetFilter={onFacetFilter} onToggleFacet={onToggleFacet} />
         </div>
     );
 };

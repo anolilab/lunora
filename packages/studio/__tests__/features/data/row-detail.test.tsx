@@ -19,6 +19,7 @@ const renderDrawer = (overrides: Partial<Parameters<typeof RowDetailDrawer>[0]> 
     render(
         <RowDetailDrawer
             columns={COLUMNS}
+            mask={overrides.mask ?? { columns: new Map(), enabled: false }}
             onClose={overrides.onClose ?? vi.fn<() => void>()}
             onNavigate={overrides.onNavigate ?? vi.fn<(target: string, id: string) => void>()}
             refs={overrides.refs ?? DEFAULT_REFS}

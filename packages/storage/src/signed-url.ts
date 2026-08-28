@@ -24,20 +24,24 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { assertCanonicalSafe, extractHost, fromBase64Url, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical } from "../../../shared/hmac-url";
+import {
+    assertCanonicalSafe,
+    extractHost,
+    fromBase64Url,
+    isOnlySlashesPath,
+    MAX_SIGNED_URL_TTL_SECONDS,
+    signCanonical,
+    validateTtlSeconds,
+    verifyCanonical,
+} from "../../../shared/hmac-url";
 import { trimTrailingSlashes } from "./internal";
 import type { SignedUrlOptions } from "./types";
 
 // Hoisted to module scope so the literal isn't recompiled on every call. The
-// base64url codec, bounded key cache, host extraction, and sign/verify live in
-// `shared/hmac-url.ts` (shared byte-for-byte with `@lunora/bindings` images).
+// base64url codec, bounded key cache, host extraction, sign/verify, and the
+// TTL/base-path validators live in `shared/hmac-url.ts` (shared byte-for-byte
+// with `@lunora/bindings` images).
 const LEADING_SLASH_RE = /^\//;
-
-// A `baseUrl` pathname consisting only of slashes (`""`, `"/"`, `"//"`, …) is
-// not a "path" for the subpath-base guard below — `trimTrailingSlashes`
-// collapses any run of trailing slashes to the bare origin when the URL is
-// built, so e.g. `https://cdn.test//` must be accepted like the bare origin.
-const ONLY_SLASHES_RE = /^\/+$/u;
 
 // Host is lowercased so a signature minted for `Example.com` verifies against
 // `example.com` — DNS is case-insensitive, but the URL parser preserves case.
@@ -81,12 +85,10 @@ export const buildSignedUrl = async (
     // Fail fast on a non-positive/non-finite TTL (which would mint an
     // already-expired URL that verify silently rejects) and enforce a ceiling
     // so a bogus value can't mint an effectively non-expiring URL.
-    if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
-        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: expiresInSeconds must be a positive finite number");
-    }
+    const ttlProblem = validateTtlSeconds(expiresInSeconds, MAX_SIGNED_URL_TTL_SECONDS);
 
-    if (expiresInSeconds > MAX_SIGNED_URL_TTL_SECONDS) {
-        throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: expiresInSeconds must not exceed ${String(MAX_SIGNED_URL_TTL_SECONDS)} (7 days)`);
+    if (ttlProblem !== undefined) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: ${ttlProblem}`);
     }
 
     // contentType is a PUT-only pin: a GET URL has no request body to constrain,
@@ -98,8 +100,9 @@ export const buildSignedUrl = async (
     // key from the ENTIRE `url.pathname` and can't know the base prefix — so a
     // base mounted at a subpath makes every minted URL fail verification. The
     // signature only binds host + key, not the base path, so we can't recover
-    // it on verify; reject it loudly here instead of silently minting dead URLs
-    // (see `ONLY_SLASHES_RE` above for the trailing-slash carve-out).
+    // it on verify; reject it loudly here instead of silently minting dead URLs.
+    // A pathname of only slashes is fine — `trimTrailingSlashes` collapses it to
+    // the bare origin (see `isOnlySlashesPath` in `shared/hmac-url.ts`).
     let basePath = "";
 
     try {
@@ -108,7 +111,7 @@ export const buildSignedUrl = async (
         // Non-absolute baseUrl (host-only form handled by `extractHost`): no path.
     }
 
-    if (basePath !== "" && !ONLY_SLASHES_RE.test(basePath)) {
+    if (basePath !== "" && !isOnlySlashesPath(basePath)) {
         throw new LunoraError(
             "VALIDATION_ERROR",
             `@lunora/storage: baseUrl must not carry a path ("${basePath}") — the key is verified from the full URL pathname, so a subpath base would make every signed URL fail verification`,

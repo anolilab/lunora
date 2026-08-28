@@ -41,6 +41,41 @@ handlers get a read-only surface (`download`, `getMetadata`, `getSignedUrl`,
 (`store`, `delete`, `generateUploadUrl`, multipart, presigned). On `ctx.storage`,
 `download(key)` resolves to the `ReadableStream` directly.
 
+## Deleting an object with the row that owns it
+
+A mutation runs inside the shard's storage transaction, which can roll back. An
+R2 delete cannot — so `delete` stays action-only, and a mutation that removes the
+row pointing at an object queues the object instead:
+
+```ts
+export const remove = mutation.input({ id: v.id("attachments") }).mutation(async ({ args, ctx }) => {
+    const attachment = await ctx.db.attachments.get(args.id);
+
+    if (!attachment) {
+        return;
+    }
+
+    await ctx.db.attachments.delete(args.id);
+    ctx.storage.deleteAfterCommit(attachment.key);
+});
+```
+
+The queue is flushed once the transaction commits, and never if it rolled back —
+so the row and the bytes cannot disagree. `deleteAfterCommit` returns `void`
+rather than a promise: nothing has been attempted yet when it returns, and the
+object is still there on the next line.
+
+The flush runs after the response wherever the host can defer it (Cloudflare
+can), so the caller does not wait on R2. The trade is that an object can briefly
+outlive its row, and that a failed delete leaks the object rather than failing a
+mutation that already committed — each failure is logged with its key. Nothing
+reads an object without its row, so the window itself is invisible.
+
+`ctx.storage.bucket("avatars").deleteAfterCommit(key)` queues against that bucket.
+An action needs none of this for its own deletes — it is not transactional, so it
+calls `delete` directly — but a mutation it reaches through `ctx.runMutation`
+still queues, and those deletes are flushed when the action finishes.
+
 Build the full `Storage` outside a handler (or to use the object-level reads,
 ranged downloads, and multipart shown below) with
 `createStorage({ bucket, publicBaseUrl?, signingSecret?, s3? })`. The examples

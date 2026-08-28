@@ -21,6 +21,14 @@ module Lunora
   # of thousands of dispatches. A flush with a larger backlog chunks itself.
   MAX_BATCH_ENTRIES = 500
 
+  # How many un-applied poke buffers to retain before evicting the oldest. A
+  # buffer is only released at its +pokeEnd+; a socket that drops mid-poke never
+  # sends one, so without a bound the abandoned buffers accumulate for the life
+  # of the client — one per reconnect, and unbounded against a peer that opens
+  # pokes it never closes. Concurrent in-flight pokes number in the low single
+  # digits, so this is far above any legitimate working set.
+  MAX_PENDING_POKES = 64
+
   # A coded error from an RPC error envelope.
   class ApiError < StandardError
     attr_reader :code, :data
@@ -551,7 +559,11 @@ module Lunora
         @subscriptions.delete(frame["id"])
         kind
       when "pokeStart"
-        @pokes[frame["pokeId"]] = {}
+        # Evict oldest-first at the cap. A Hash preserves insertion order, so
+        # the first key is the oldest buffer; one that old is no longer going to
+        # see its +pokeEnd+.
+        @pokes.shift while @pokes.size >= MAX_PENDING_POKES
+        @pokes[frame["pokeId"]] = { parts: {}, resets: [] }
         kind
       when "pokePart" then buffer_poke_part(frame)
       when "pokeEnd" then apply_poke(frame, deferred)
@@ -632,7 +644,11 @@ module Lunora
       # no batch to join, and guessing would apply a fragment of one.
       if buffer
         shape_id = frame["shapeId"]
-        buffer[shape_id] = (buffer[shape_id] || []) + (frame["rowsPatch"] || [])
+        buffer[:parts][shape_id] = (buffer[:parts][shape_id] || []) + (frame["rowsPatch"] || [])
+        # A shape gets at most one part per poke, but record the flag sticky
+        # (never cleared) so a server that splits a seed across parts still
+        # replaces the view rather than merging into it.
+        buffer[:resets] << shape_id if frame["reset"] == true
       end
       "pokePart"
     end
@@ -641,9 +657,21 @@ module Lunora
       buffer = @pokes.delete(frame["pokeId"])
       return "pokeEnd" if buffer.nil?
 
-      buffer.each do |shape_id, operations|
+      buffer[:parts].each do |shape_id, operations|
         shape = @shapes[shape_id]
         next if shape.nil?
+
+        # A reset part carries the shape's COMPLETE membership, so it REPLACES
+        # the view rather than patching it. Merging one keeps every row that left
+        # the shape while this client was away: a (re)seed is inserts-only, so
+        # nothing already held can ever be removed by it, and the stale row
+        # renders for the life of the client. Nothing else on the wire says so —
+        # a retention re-seed keeps the epoch, and most pokes carry no
+        # +baseCheckpoint+ either.
+        if buffer[:resets].include?(shape_id)
+          shape[:rows].clear
+          shape[:order].clear
+        end
 
         operations.each { |operation| apply_row_op(shape, operation) }
         shape[:checkpoint] = frame["checkpoint"] if frame.key?("checkpoint")

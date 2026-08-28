@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Project } from "ts-morph";
+import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { discoverFunctions } from "../src/discover-functions";
@@ -282,6 +282,408 @@ describe("discoverFunctions", () => {
             const result = discoverFunctions(project, workdir);
 
             expect(result[0]?.returnType).toBe("{ id: string }[]");
+        });
+
+        it("expands an `enum` to its wire values — the bare-name rule is not interfaces-and-aliases only", () => {
+            expect.assertions(2);
+
+            // An `enum` prints as `Status.Done` — the enum's name, bare — and a
+            // `class` as `Receipt`. Both are ordinary ways to declare a return
+            // type, and both landed in `_generated/api.ts` as undeclared
+            // identifiers (TS2304) while `lunora codegen` exited 0, because the
+            // bare-name rule only recognised interfaces and type aliases. What
+            // actually crosses the wire for an enum is the member's VALUE.
+            writeFunction(
+                "reports.ts",
+                `
+            import { query } from "@lunora/server";
+
+            export enum Status {
+                Done = "done",
+                Open = "open",
+            }
+
+            enum Priority {
+                Low = 1,
+                High = 2,
+            }
+
+            export const status = query({
+                args: {},
+                handler: (): Status => Status.Open,
+            });
+
+            export const priority = query({
+                args: {},
+                handler: (): Priority => Priority.Low,
+            });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+            const byName = new Map(result.map((definition) => [definition.exportName, definition.returnType]));
+
+            expect(byName.get("status")).toBe('"done" | "open"');
+            expect(byName.get("priority")).toBe("1 | 2");
+        });
+
+        it("declines a `class` return type to `unknown` rather than inventing a shape", () => {
+            expect.assertions(1);
+
+            // Detecting the class is right — printed bare it is a TS2304. Expanding
+            // it is not. `encodeWire` REFUSES a class instance outright
+            // (`shared/wire-codec.ts`: only plain objects and the supported built-ins
+            // round-trip), so no such value ever reaches a caller; and the structural
+            // shape would be wrong in three directions at once — methods and getters
+            // live on the prototype and never serialize, `#private` fields never
+            // serialize, and `private`/`protected` members would be published into
+            // the client-facing type. `result.format(...)` typed off a method is a
+            // runtime TypeError with no compile error anywhere. `unknown` is the
+            // contract this expander opens with: never worse than a bare name.
+            writeFunction(
+                "receipts.ts",
+                `
+            import { query } from "@lunora/server";
+
+            export class Receipt {
+                #hidden = 1;
+                constructor(public readonly id: string, private secret: string) {}
+                get total(): number { return 1; }
+                format(prefix: string): string { return prefix + this.id; }
+            }
+
+            export const latest = query({
+                args: {},
+                handler: (): Receipt | null => null,
+            });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+
+            expect(result[0]?.returnType).toBe("unknown");
+        });
+
+        it("expands an enum imported from a SIBLING module — the member is imported under its enum's name", () => {
+            expect.assertions(1);
+
+            // The reachability half: an enum member's declaration is the member,
+            // whose own name (`Done`) is never what the handler imports. Asking
+            // whether `Done` was imported answers no, so the qualified bare name
+            // would be judged reachable and printed.
+            writeFunction(
+                "lib/status.ts",
+                `
+            export enum Status {
+                Done = "done",
+                Open = "open",
+            }
+        `,
+            );
+            writeFunction(
+                "orders.ts",
+                `
+            import { query } from "@lunora/server";
+            import { Status } from "./lib/status";
+
+            export const state = query({
+                args: {},
+                handler: (): { status: Status } => ({ status: Status.Open }),
+            });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+            const state = result.find((definition) => definition.exportName === "state");
+
+            expect(state?.returnType).toBe('{ status: "done" | "open" }');
+        });
+
+        it("expands an alias the checker reuses from a declaration's syntax, which the type graph reports as absent", () => {
+            expect.assertions(2);
+
+            // TypeScript's node builder reuses the syntax of a property's declared
+            // type annotation whenever that annotation is in scope where the type
+            // is printed, so `{ action: AuditAction }` renders the alias verbatim.
+            // The same property fetched through the checker comes back with no
+            // alias symbol at all, fully resolved to its union — so a type-graph
+            // walk reported "nothing unreachable here" about text naming an alias
+            // on its face, and the bare name reached `_generated/` as a TS2304.
+            // Reproduced with the alias behind a conditional type (`Infer<typeof
+            // schema>`), the shape every Standard Schema wrapper produces.
+            writeFunction(
+                "lib/audit.ts",
+                `
+            export interface StandardSchema<O> { "~standard": { types?: { output: O } } }
+            export type Infer<S> = S extends StandardSchema<infer O> ? O : never;
+            export declare const AuditActionSchema: StandardSchema<"user.create" | "user.delete">;
+            export type AuditAction = Infer<typeof AuditActionSchema>;
+        `,
+            );
+
+            // `imported` names the alias through an import; `local` re-derives it
+            // in the handler's own module. Both are in scope at the handler, so
+            // both print bare.
+            writeFunction(
+                "audit.ts",
+                `
+            import { query } from "@lunora/server";
+            import { AuditActionSchema, type AuditAction, type Infer } from "./lib/audit";
+
+            type LocalAction = Infer<typeof AuditActionSchema>;
+
+            declare const loadImported: () => Promise<{ action: AuditAction }[]>;
+            declare const loadLocal: () => Promise<{ action: LocalAction }[]>;
+
+            export const imported = query({ args: {}, handler: async () => ({ isDone: true, logs: await loadImported() }) });
+            export const local = query({ args: {}, handler: async () => await loadLocal() });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const byName = new Map(discoverFunctions(project, workdir).map((f) => [f.exportName, f]));
+
+            expect(byName.get("imported")?.returnType).toBe('{ isDone: boolean; logs: { action: "user.create" | "user.delete" }[] }');
+            expect(byName.get("local")?.returnType).toBe('{ action: "user.create" | "user.delete" }[]');
+        });
+
+        it("expands a type declared inside the handler body, not just at module top level", () => {
+            expect.assertions(1);
+
+            // The rule is "declared in the handler's own module", at ANY nesting
+            // depth — a body-local `interface` is as unreachable from
+            // `_generated/` as a top-level one, and prints just as bare.
+            writeFunction(
+                "rows.ts",
+                `
+            import { query } from "@lunora/server";
+
+            export const get = query({ args: {}, handler: async () => {
+                interface Row { a: string; b: number }
+                const row: Row = { a: "", b: 1 };
+                return row;
+            } });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe("{ a: string; b: number }");
+        });
+
+        it("qualifies a user's own `Doc` — the dataModel exemption is by declaration path, never by name", () => {
+            expect.assertions(1);
+
+            // `Doc`/`Id` print correctly bare only because emit imports THOSE from
+            // `./dataModel.js`. Exempting the NAME instead of the declaration path
+            // is worse than the leak it guards: a user's own generic `Doc` would be
+            // emitted bare AND given the generated import — silently bound to a
+            // different type, with no compile error anywhere to show for it.
+            // Qualified by the user's own module, it can be neither.
+            writeFunction("lib/mydoc.ts", `export type Doc<T extends string> = { table: T; body: string };`);
+
+            writeFunction(
+                "posts.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Doc } from "./lib/mydoc";
+
+            declare const load: () => Promise<Doc<"posts">>;
+
+            export const get = query({ args: {}, handler: async () => await load() });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/mydoc").Doc<"posts">');
+        });
+
+        it("qualifies a PACKAGE type the handler imports — a module `.d.ts` is no more reachable than a user's own file (#509)", () => {
+            expect.assertions(1);
+
+            // Every `.d.ts` and everything under `node_modules` used to be waved
+            // through as "prints correctly bare", on the reasoning that reached
+            // `Date` and the rest of `lib.*.d.ts`. But those are GLOBAL; a
+            // module-scoped declaration in a package is reachable only through an
+            // import, and `_generated/` has none — so a handler returning an
+            // imported `PaginationResult` (or `lunorash/server`'s own) wrote the
+            // bare name into `api.ts` as a TS2304 while `lunora codegen` exited 0.
+            writeFunction("node_modules/pkg/package.json", `{ "name": "pkg", "version": "1.0.0", "types": "index.d.ts" }`);
+            writeFunction("node_modules/pkg/index.d.ts", `export interface Page<T> { items: T[]; cursor: string | null }`);
+
+            writeFunction(
+                "feed.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Page } from "pkg";
+
+            declare const load: () => Promise<Page<string>>;
+
+            export const list = query({ args: {}, handler: async () => await load() });
+        `,
+            );
+
+            const project = new Project({
+                compilerOptions: { module: ModuleKind.ESNext, moduleResolution: ModuleResolutionKind.Bundler, strict: true, target: ScriptTarget.ES2022 },
+                skipAddingFilesFromTsConfig: true,
+                useInMemoryFileSystem: false,
+            });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("pkg").Page<string>');
+        });
+
+        it("leaves a GLOBAL declaration bare — `lib.*.d.ts` resolves from `_generated/` as well as it does from the handler", () => {
+            expect.assertions(1);
+
+            // The other side of the same rule, and the reason it is keyed on
+            // "script-mode file" rather than "`.d.ts` file": expanding `Date`
+            // structurally would be wrong (it is a class instance, so the walk
+            // declines outright and the return collapses to `unknown`), and
+            // qualifying it is impossible — there is no module to name.
+            writeFunction(
+                "clock.ts",
+                `
+            import { query } from "@lunora/server";
+
+            export const now = query({ args: {}, handler: async () => ({ at: new Date(), raw: new Uint8Array() }) });
+        `,
+            );
+
+            const project = new Project({
+                compilerOptions: { module: ModuleKind.ESNext, moduleResolution: ModuleResolutionKind.Bundler, strict: true, target: ScriptTarget.ES2022 },
+                skipAddingFilesFromTsConfig: true,
+                useInMemoryFileSystem: false,
+            });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe("{ at: Date; raw: Uint8Array<ArrayBuffer>; }");
+        });
+
+        it("keeps an alias for an ARRAY — qualifying runs ahead of the structural branches on purpose", () => {
+            expect.assertions(1);
+
+            // `type Badges = Badge[]` is a reference the checker prints by name.
+            // Expanding it would emit `import("./lib/badges").Badge[]` and throw
+            // the alias away for nothing; worse, an alias for a union whose member
+            // cannot be reproduced would decline to `unknown` when naming it would
+            // have worked. That is the whole reason the qualifier sits above
+            // `isArray`/`isUnion`, and nothing but this test enforces the order.
+            writeFunction("lib/badges.ts", `export interface Badge { label: string }\nexport type Badges = Badge[];\n`);
+            writeFunction(
+                "badges.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Badges } from "./lib/badges";
+
+            export const list = query({ args: {}, handler: async (): Promise<Badges> => [] });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/badges").Badges');
+        });
+
+        it("keeps an alias for a UNION, rather than flattening it to its members", () => {
+            expect.assertions(1);
+
+            // The other half of the ordering rule. Moving the qualifier back below
+            // `isUnion` still passes every other test in this file.
+            writeFunction("lib/result.ts", `export type Outcome = { kind: "ok"; value: string } | { kind: "err"; reason: string };\n`);
+            writeFunction(
+                "outcome.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Outcome } from "./lib/result";
+
+            export const get = query({ args: {}, handler: async (): Promise<Outcome> => ({ kind: "ok", value: "x" }) });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/result").Outcome');
+        });
+
+        it("declines a return whose member the wire cannot encode, imported or not", () => {
+            expect.assertions(1);
+
+            // `encodeWire` throws on a class instance at the send site, so naming
+            // one types a call that can never complete. The handler imports only
+            // `Envelope` here — `Money` is therefore NOT bare-nameable, the
+            // reachability walk waves it through, and the checker prints it fully
+            // qualified. Catching that needs a gate on the whole return type, not
+            // a branch inside the expansion.
+            writeFunction("lib/money.ts", `export class Money { format(): string { return "x"; } }\nexport interface Envelope { at: Money; label: string }\n`);
+            writeFunction(
+                "wallet.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Envelope } from "./lib/money";
+
+            export const get = query({ args: {}, handler: async (): Promise<Envelope> => null as never });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe("unknown");
+        });
+
+        it("qualifies a type from an ambient `declare module` — a script-mode file is not automatically global (#511)", () => {
+            expect.assertions(1);
+
+            // The bare-name exemption is keyed on the file having no module
+            // symbol, because that is what a global looks like. A script-mode
+            // `.d.ts` can still carry `declare module "spec" { … }`, whose members
+            // are module-scoped and reachable only through an import — the
+            // ordinary packaging of `declare module "*.svg"` and of a shim for an
+            // untyped dependency. Those went out bare.
+            //
+            // The specifier has to be matched as TEXT here: an ambient module
+            // declaration has no source file for the import to resolve to, so the
+            // symbol-identity check every other path uses has nothing to compare.
+            writeFunction("amb.d.ts", `declare module "virtual:thing" {\n    export interface Badge { label: string }\n}\n`);
+            writeFunction(
+                "badges.ts",
+                `
+            import { query } from "@lunora/server";
+            import type { Badge } from "virtual:thing";
+
+            export const get = query({ args: {}, handler: async (): Promise<Badge> => ({ label: "x" }) });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("virtual:thing").Badge');
+        });
+
+        it("qualifies a DEFAULT-imported type under `default`, not under its local alias (#511)", () => {
+            expect.assertions(1);
+
+            // A default import's local name is an alias the exporting module never
+            // agreed to, so `import("./lib/boxed").Boxed` would not resolve even
+            // though `Boxed` is what the handler calls it. Matching resolves the
+            // binding rather than comparing names, and the export is written under
+            // the name the module actually publishes.
+            writeFunction("lib/boxed.ts", `interface Boxed { v: number }\nexport default Boxed;\n`);
+            writeFunction(
+                "boxed.ts",
+                `
+            import { query } from "@lunora/server";
+            import type Renamed from "./lib/boxed";
+
+            export const get = query({ args: {}, handler: async (): Promise<Renamed> => ({ v: 1 }) });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir)[0]?.returnType).toBe('import("./lib/boxed").default');
         });
 
         it("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {

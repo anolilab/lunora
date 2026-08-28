@@ -330,6 +330,56 @@
                 "_id": "m2",
                 "text": "yo"
             }
+        ],
+        "$comment-reset": "A full (re)seed carries the shape's COMPLETE membership and is inserts-only, so a client that splices it onto its existing view keeps every row that left the shape while it was disconnected. `pokePart.reset: true` marks it on the wire. Starting from `expectedRows` above, applying `resetPokeSequence` must yield `resetExpectedRows` — m1 is gone even though no delete op was sent. `reset` is independent of `baseCheckpoint`: most live poke paths carry no base, so an absent base must never be read as 'this is a seed'.",
+        "resetPokeSequence": [
+            {
+                "type": "pokeStart",
+                "pokeId": "p2",
+                "epoch": "e1"
+            },
+            {
+                "type": "pokePart",
+                "pokeId": "p2",
+                "shapeId": "shape_1",
+                "reset": true,
+                "rowsPatch": [
+                    {
+                        "op": "insert",
+                        "key": "m2",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m2",
+                            "text": "yo"
+                        }
+                    },
+                    {
+                        "op": "insert",
+                        "key": "m3",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m3",
+                            "text": "new"
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "pokeEnd",
+                "pokeId": "p2",
+                "checkpoint": 9,
+                "epoch": "e1"
+            }
+        ],
+        "resetExpectedRows": [
+            {
+                "_id": "m2",
+                "text": "yo"
+            },
+            {
+                "_id": "m3",
+                "text": "new"
+            }
         ]
     }
 }

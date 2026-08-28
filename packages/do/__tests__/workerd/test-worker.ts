@@ -282,6 +282,20 @@ class TestSyncDO extends DurableObject<Env> {
     public socketTags(): string[][] {
         return this.ctx.getWebSockets().map((ws) => this.ctx.getTags(ws));
     }
+
+    /**
+     * The owner's relayed-shape retention floor (`OwnerRelay.minShapeCursor()`).
+     *
+     * Reached through the `private relay` field because that is the only way to
+     * observe it: `ShardDO.retentionFloor` folds it into the CDC sweep, which is
+     * gated behind two retention env knobs and a 60s interval — so a test that
+     * drove the sweep would prove the sweep works, not that the floor exists.
+     * `private` is compile-time only, and this file already reaches past it for
+     * `broadcastDelta`.
+     */
+    public relayShapeFloor(): number | undefined {
+        return (this.shard as unknown as { relay?: { minShapeCursor: () => number | undefined } }).relay?.minShapeCursor();
+    }
 }
 
 class TestSessionDO extends DurableObject<Env> {

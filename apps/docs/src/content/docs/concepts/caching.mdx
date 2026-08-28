@@ -3,7 +3,13 @@ title: Caching
 description: Edge caching with Cloudflare Workers Cache — declarative headers on HTTP routes and programmatic cache purging from actions.
 ---
 
-Lunora supports **Cloudflare Workers Cache** for HTTP routes. RPC queries and mutations are `POST /_lunora/rpc` by design and not cacheable at the edge, so caching is exposed only on `httpRoute` HTTP endpoints and `httpAction` handlers.
+Lunora supports **Cloudflare Workers Cache** for HTTP routes. RPC queries and mutations are `POST /_lunora/rpc` by design and not cacheable at the edge, so caching is exposed on the surfaces that have a cacheable URL: `httpRoute` HTTP endpoints, `httpAction` handlers, and a query published over [REST](/docs/concepts/rest-api#caching) with `.expose({ rest: true, cache })`.
+
+The `httpRoute` methods below write whatever value you pass — they are the
+lower-level escape hatch. The REST `cache` policy is the guarded surface: it
+re-derives `public` vs `private` from the live request, never stores a
+credentialed exchange in the shared cache, and folds the varying headers into the
+cache key rather than trusting `Vary`. Prefer it when the endpoint is a procedure.
 
 ## Enabling Workers Cache
 

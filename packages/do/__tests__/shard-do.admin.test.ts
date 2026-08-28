@@ -203,11 +203,13 @@ const FANOUT_PATH_COUNTERS_KEYS = ["maxMs", "passes", "peakSocketsIterated", "so
 const FANOUT_PATH_COUNTERS_KEY_GUARD: KeysMatch<keyof FanoutPathCounters, (typeof FANOUT_PATH_COUNTERS_KEYS)[number]> = true;
 
 const FANOUT_METRICS_RESULT_KEYS = [
+    "globalPoll",
     "maxRelays",
     "peakSubscribers",
     "promoted",
     "relayCount",
     "shapePoke",
+    "shapeProbe",
     "sinceMs",
     "topics",
     "totalConnections",
@@ -831,11 +833,13 @@ describe("shardDO admin introspection", () => {
         expect([...FANOUT_PATH_COUNTERS_KEYS]).toStrictEqual(["maxMs", "passes", "peakSocketsIterated", "socketsDelivered", "socketsIterated", "totalMs"]);
         expect(FANOUT_METRICS_RESULT_KEY_GUARD).toBe(true);
         expect([...FANOUT_METRICS_RESULT_KEYS]).toStrictEqual([
+            "globalPoll",
             "maxRelays",
             "peakSubscribers",
             "promoted",
             "relayCount",
             "shapePoke",
+            "shapeProbe",
             "sinceMs",
             "topics",
             "totalConnections",

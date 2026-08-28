@@ -3,10 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import type { SavedQuery } from "../../lib/saved-queries";
-
-/** Shared control-button class, matching the data browser's toolbar buttons. */
-const CONTROL_BTN =
-    "inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50";
+import { CONTROL_BTN } from "./control-button";
 
 /**
  * The "name this query" input shown after Save query is clicked. Self-focuses on

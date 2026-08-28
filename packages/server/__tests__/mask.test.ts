@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { fnv1aHex } from "../../../shared/fnv1a";
 import type { MaskOptions, MaskPolicies, Middleware } from "../src/index";
 import { definePermission, defineRole, defineSchema, defineTable, indexFieldsFromSchema, initLunora, LunoraError, mask, v } from "../src/index";
 
@@ -379,6 +380,19 @@ interface Page {
     page: Record<string, unknown>[];
 }
 
+/**
+ * Inputs that exercise the `"hash"` strategy's wiring rather than the digest
+ * itself: the empty string (loop never entered), a bigint's decimal form past
+ * `Number.MAX_SAFE_INTEGER`, an ordinary value, a 4 KiB string (32-bit wraparound,
+ * many times over), and a non-BMP code point. Expected digests are computed from
+ * `shared/fnv1a.ts` — the SAME function the studio's mask preview calls — so this
+ * asserts that the middleware routes the value through it unchanged, not what the
+ * algorithm returns. The digest itself is pinned once, against edge-case inputs,
+ * in `packages/studio/__tests__/features/data/data-browser-mask.test.tsx`
+ * ("fnv1aHex > pins the digest for the algorithm's edge-case inputs").
+ */
+const HASH_INPUTS: ReadonlyArray<string> = ["", "9007199254740993", "ada@example.com", "x".repeat(4096), "\u{1F642} masked"];
+
 /* -------------------------------------------------------------------------
  * Tests
  * ---------------------------------------------------------------------- */
@@ -689,6 +703,51 @@ describe("mask — read path", () => {
         expect(a).not.toBe(c);
         // The token never equals the raw value.
         expect(a).not.toBe("same@x.com");
+    });
+
+    // `JSON.stringify` throws on a bigint, so without an explicit case
+    // `applyStrategy`'s fail-closed catch turned every `v.bigint()` cell into
+    // `null` — silently losing the stable token `"hash"` exists for. The studio's
+    // preview always hashed the decimal form; this is the server agreeing.
+    it("hashes a bigint column over its decimal form instead of failing closed", async () => {
+        expect.assertions(3);
+
+        const database = createFakeDatabase([
+            { _id: "u1", balance: 9_007_199_254_740_993n, table: "users" },
+            { _id: "u2", balance: 9_007_199_254_740_993n, table: "users" },
+        ]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { balance: "hash" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("users"));
+
+        const result = (await handler.handler(makeContext(database, "u1"), {})) as Page;
+
+        // The same digest as hashing the decimal string — what the studio shows.
+        expect(result.page[0]?.["balance"]).toBe(fnv1aHex("9007199254740993"));
+        // Not the redaction sentinel the throwing `JSON.stringify` used to produce.
+        expect(result.page[0]?.["balance"]).not.toBeNull();
+        // Still deterministic: equal bigints hash equal, so the column stays groupable.
+        expect(result.page[1]?.["balance"]).toBe(result.page[0]?.["balance"]);
+    });
+});
+
+describe("mask — 'hash' routes through the shared FNV-1a digest", () => {
+    it("returns the shared digest of the cell value, unaltered", async () => {
+        expect.assertions(5);
+
+        for (const value of HASH_INPUTS) {
+            const database = createFakeDatabase([{ _id: "u1", secret: value, table: "users" }]);
+
+            const handler = lunora.query
+                .use(maskForTest({ users: { secret: "hash" } }))
+                .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("users"));
+
+            // eslint-disable-next-line no-await-in-loop -- one handler per input; sequential reads keep a failure pointed at the offending input
+            const result = (await handler.handler(makeContext(database, "u1"), {})) as Page;
+
+            expect(result.page[0]?.["secret"]).toBe(fnv1aHex(value));
+        }
     });
 });
 

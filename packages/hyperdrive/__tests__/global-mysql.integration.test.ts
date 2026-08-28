@@ -1,6 +1,14 @@
 /* eslint-disable no-secrets/no-secrets -- companion table names like "__agg_todos_sumSeqByProject" trip the entropy heuristic; they're not secrets. */
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
-import { runSqlAggregateMigrations, runSqlGlobalTableMigrations, runSqlRankMigrations } from "@lunora/sql-store";
+import {
+    readSqlCdcChangedTables,
+    readSqlCdcChanges,
+    runSqlAggregateMigrations,
+    runSqlCdcMigration,
+    runSqlGlobalTableMigrations,
+    runSqlRankMigrations,
+    sweepSqlCdcRetention,
+} from "@lunora/sql-store";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createHyperdriveGlobalCtxDb } from "../src/global";
@@ -91,6 +99,8 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
         await harness.query("DROP TABLE IF EXISTS `things`");
         await harness.query("DROP TABLE IF EXISTS `__agg_todos_sumSeqByProject`");
         await harness.query("DROP TABLE IF EXISTS `__rank_todos_bySeq`");
+        await harness.query("DROP TABLE IF EXISTS `__cdc_log`");
+        await harness.query("DROP TABLE IF EXISTS `__cdc_sweep`");
     });
 
     afterAll(async () => {
@@ -171,6 +181,74 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                 // Re-writing identical values changes 0 rows; without CLIENT_FOUND_ROWS the
                 // affected-rows OCC guard would see 0 and throw. With it, it sees the matched row.
                 await expect(writer.patch(id, { priority: "low" })).resolves.not.toThrow();
+            },
+            TEST_TIMEOUT,
+        );
+    });
+
+    describe("`.global()` changelog retention sweep", () => {
+        /**
+         * MySQL is the engine that exercises the OTHER half of the sweep lease.
+         * It has no `RETURNING`, so the compare-and-set that decides which shard
+         * sweeps falls to `dialect.affectedRows` (with `CLIENT_FOUND_ROWS`), and
+         * the lease row is seeded with `ON DUPLICATE KEY UPDATE` rather than
+         * `ON CONFLICT DO NOTHING`. Both branches are MySQL-only and neither is
+         * reachable from the SQLite or Postgres suites.
+         */
+        const setupCdc = async (now: () => number): Promise<DatabaseWriterLike> => {
+            await runSqlGlobalTableMigrations(harness.exec, todosSchema, mysqlDialect);
+            await runSqlCdcMigration(harness.exec, mysqlDialect);
+
+            return createHyperdriveGlobalCtxDb({ cdc: true, clock: now, engine: "mysql", exec: harness.exec, schema: todosSchema });
+        };
+
+        it(
+            "sweeps by age and reports the retained floor",
+            async () => {
+                expect.assertions(3);
+
+                let clock = FIXED_CLOCK;
+                const writer = await setupCdc(() => clock);
+
+                await writer.insert("todos", { _id: "t1", archived: false, priority: "high", projectId: "p1", seq: 1 }, { allowExplicitId: true });
+                clock = FIXED_CLOCK + 10_000;
+                await writer.insert("todos", { _id: "t2", archived: false, priority: "high", projectId: "p1", seq: 2 }, { allowExplicitId: true });
+
+                await sweepSqlCdcRetention(harness.exec, mysqlDialect, 5000, clock);
+
+                const remaining = await readSqlCdcChanges(harness.exec, { sinceSeq: 1 }, mysqlDialect);
+
+                expect(remaining.changes.map((change) => change.id)).toEqual(["t2"]);
+
+                const probe = await readSqlCdcChangedTables(harness.exec, 0, mysqlDialect, { retained: true });
+
+                expect(probe.floor).toBe(2);
+
+                await expect(readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, mysqlDialect)).rejects.toThrow(/trimmed/u);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "hands the lease to exactly one sweeper per window (affected-rows CAS)",
+            async () => {
+                expect.assertions(1);
+
+                let clock = FIXED_CLOCK;
+                const writer = await setupCdc(() => clock);
+
+                await writer.insert("todos", { _id: "t1", archived: false, priority: "high", projectId: "p1", seq: 1 }, { allowExplicitId: true });
+                clock = FIXED_CLOCK + 10_000;
+                await writer.insert("todos", { _id: "t2", archived: false, priority: "high", projectId: "p1", seq: 2 }, { allowExplicitId: true });
+
+                await sweepSqlCdcRetention(harness.exec, mysqlDialect, 5000, clock);
+                // A second sweeper in the same window must find the lease held —
+                // otherwise this 0ms window deletes the row the first pass kept.
+                await sweepSqlCdcRetention(harness.exec, mysqlDialect, 0, clock);
+
+                const remaining = await readSqlCdcChanges(harness.exec, { sinceSeq: 1 }, mysqlDialect);
+
+                expect(remaining.changes.map((change) => change.id)).toEqual(["t2"]);
             },
             TEST_TIMEOUT,
         );

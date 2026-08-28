@@ -11,6 +11,7 @@ import {
     isInternalCode,
     isLunoraError,
     LunoraError,
+    raise,
     resolveHint,
     toErrorBody,
     unreachable,
@@ -402,5 +403,50 @@ describe("invariant / unreachable", () => {
         expect.assertions(1);
 
         expect(() => unreachable("branch")).toThrow(LunoraError);
+    });
+});
+
+describe("raise", () => {
+    it("throws the requested code with catalog defaults", () => {
+        expect.assertions(4);
+
+        let caught: unknown;
+
+        try {
+            raise("NOT_FOUND", "thread 7");
+        } catch (error) {
+            caught = error;
+        }
+
+        expect(isLunoraError(caught)).toBe(true);
+        expect((caught as LunoraError).code).toBe("NOT_FOUND");
+        expect((caught as LunoraError).status).toBe(404);
+        expect((caught as Error).message).toBe("thread 7");
+    });
+
+    it("forwards options to the constructor", () => {
+        expect.assertions(2);
+
+        let caught: unknown;
+
+        try {
+            raise("BAD_REQUEST", "bad cursor", { data: { cursor: "x" }, status: 418 });
+        } catch (error) {
+            caught = error;
+        }
+
+        expect((caught as LunoraError).status).toBe(418);
+        expect((caught as LunoraError).data).toStrictEqual({ cursor: "x" });
+    });
+
+    it("narrows the value it is called through", () => {
+        expect.assertions(1);
+
+        const rows: ({ id: string } | undefined)[] = [{ id: "a" }];
+        // The point of the `never` annotation: `id` is `string`, not `string | undefined`,
+        // without a non-null assertion. A compile error here IS the failure.
+        const { id } = rows[0] ?? raise("NOT_FOUND", "row");
+
+        expect(id).toBe("a");
     });
 });

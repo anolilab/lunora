@@ -83,13 +83,8 @@ test("signed URL returns 403 after expiry", async ({ user }) => {
         data: { expiresInSeconds: 1, key: "avatars/e2e/expiry" },
     });
 
-    if (response.status() === 404) {
-        // Older playground without /test/sign — skip rather than fail.
-        test.skip(true, "playground has no /test/sign helper; expiry test needs harness route");
-
-        return;
-    }
-
+    // A 404 here means the harness route is gone (or `LUNORA_E2E` is unset) —
+    // that is a broken harness, not a reason to mute the assertion below.
     expect(response.ok()).toBe(true);
 
     const body = (await response.json()) as { url?: string };

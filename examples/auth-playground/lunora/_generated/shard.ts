@@ -2,8 +2,8 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, RunShardApplyCdcArgs, RunShardExportArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike, TelemetrySink } from "lunorash/do";
-import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
-import { asBucketStorage, createSecrets, LunoraError } from "lunorash/server";
+import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
+import { asBucketStorage, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
 
 import schema from "../schema.js";
@@ -347,6 +347,9 @@ const storageStub = {
     getUrl: () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
+    head: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
+    },
     list: async () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
@@ -413,7 +416,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // The main `/rpc` path always supplies one; `dispatchLifecycle` /
             // `handleRunAs` don't mint their own and omit it, so they keep the
             // prior fallback behavior unchanged.
-            const ctx = this.buildCtx({ functionPath, headroom });
+            const ctx = this.buildCtx({ functionPath, headroom, trusted: registered.lifecycle === "init" });
 
             // A mutation's writes must commit all-or-nothing: wrap its dispatch in
             // the DO's BEGIN/COMMIT span so any throw (a validator, an RLS denial,
@@ -429,16 +432,38 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // watermark are atomic — a crash can't leave the writes durable without
             // the replay guard.
             if (registered.kind === "mutation") {
-                return this.runInTransaction(async () => {
-                    const result = await registered.handler(ctx, args);
+                const result = await this.runInTransaction(async () => {
+                    const value = await registered.handler(ctx, args);
 
-                    this.commitMutationBookkeeping(result);
+                    this.commitMutationBookkeeping(value);
 
-                    return result;
+                    return value;
                 });
+
+                // The transaction committed, so the rows are durable and the objects
+                // their deletion orphaned can go. Deliberately AFTER the span, never
+                // inside it: an R2 delete cannot roll back, so a delete issued from
+                // within a transaction that later aborts destroys data the surviving
+                // row still points at. A throw above skips this entirely and the
+                // queue dies with `ctx`.
+                //
+                // `flushDeferredDeletes` never rejects — the mutation has already
+                // succeeded, so a failed cleanup must not turn into a failed response.
+                // A leaked object is reported through `ctx.log` instead, with its key.
+                await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+                return result;
             }
 
-            return registered.handler(ctx, args);
+            const result = await registered.handler(ctx, args);
+
+            // An action is not itself transactional, but `ctx.runMutation` runs its
+            // submutations on THIS ctx, so their queued deletes land here — this is
+            // the first point at which those writes are known to have committed. A
+            // dispatch with nothing queued no-ops.
+            await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+            return result;
         }
 
         // Only a `mutation` may enter the base class's single-writer gate for
@@ -486,9 +511,59 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             };
         }
 
-        protected override lifecycleHookPaths(event: "connect" | "disconnect"): readonly string[] {
+        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
+
+        protected override async runShardInit(): Promise<void> {
+            this.ensureMigrated();
+
+            await this.dispatchShardInit();
+        }
+
+        // One `onQueryChange` dispatch. Mirrors `executeSubscription` — the
+        // socket-terminated half of the same reactivity — and differs only in who
+        // consumes the result: the base's `dispatchReactors` stores the digest as
+        // the new baseline and the footprint as the "should I even re-run this"
+        // gate, instead of pushing a frame down a socket.
+        //
+        // Wrapped in `runInTransaction` because a reactor handler is a mutation
+        // and its writes must commit all-or-nothing. Safe to open here: the refresh
+        // drain runs OUTSIDE any dispatch transaction (it is post-flush background
+        // work), so this never nests.
+        //
+        // NO identity is threaded, and the ctx is built `trusted`. A reactor fires
+        // because data moved, not because anyone asked, so there is no user for RLS
+        // to scope to — it runs in the same system tier as migrations and the
+        // external-source poll loop. Inheriting the shared per-request identity
+        // would instead run an app's reactor as whichever user happened to write
+        // last, which is worse than running it as nobody.
+        protected override async runReactor(functionPath: string, previousDigest?: string): Promise<{ digest: string; ran: boolean; tables: readonly string[] } | undefined> {
+            const registered = LUNORA_FUNCTIONS[functionPath];
+
+            if (!registered || registered.kind !== "mutation") {
+                return undefined;
+            }
+
+            this.ensureMigrated();
+
+            const footprint = createReadFootprint();
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
+            const outcome = (await this.runInTransaction(async () => registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>))) as {
+                digest: string;
+                ran: boolean;
+            };
+
+            // A reactor IS a mutation, so its ctx carries the deferred-delete queue
+            // and its transaction has just committed. Without this the queue would
+            // die with `ctx` and the objects would leak with nothing to find: no
+            // error, no warning, no failed request — a reactor that reaps orphaned
+            // rows is a textbook use of one.
+            await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+            return { digest: outcome.digest, ran: outcome.ran, tables: [...footprint.tables] };
+        }
+
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
             return LUNORA_TABLE_REFS[table];
@@ -558,6 +633,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -601,6 +678,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -655,6 +734,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -682,6 +763,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -743,6 +826,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -771,6 +856,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -802,6 +889,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -821,7 +910,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.migrated = true;
         }
 
-        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void } = {}): unknown {
+        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
             // refresh — both run in deferred/interleaved contexts), use it by
@@ -833,12 +922,47 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const secrets = createSecrets(env);
 
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            // `list`/`get` are the two methods `ctx.db.system.query("_scheduled_functions")`
+            // reaches through, and pending jobs live in the SchedulerDO — nothing the
+            // CDC changelog records — so reading them must forfeit a delta resume.
+            // The scheduler's own `runAfter`/`runAt`/`cancel` are writes and stay unstamped.
+            const scheduler = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally
             // (its `list`/`getMetadata` throw the "no storage configured" error).
-            const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
+            //
+            // Wrapped BEFORE the split so both consumers share one stamping facade.
+            // Only the methods that actually reach R2 are stamped: `getUrl` and
+            // `getSignedUrl` build a URL from the configured base (and an HMAC) and
+            // read nothing, and they are what handlers overwhelmingly call — stamping
+            // them would forfeit resumes for a dependency that cannot move the result.
+            // `bucket` IS stamped: it hands back a sub-facade this wrapper does not
+            // reach, so the selection is the last point at which the read can be seen.
+            const storage = markUnvouchableReads(asBucketStorage(config.storage?.(env) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
+                "bucket",
+                "download",
+                "getMetadata",
+                "list",
+            ]);
+            // `ctx.storage.deleteAfterCommit(key)`, on every dispatch that can host
+            // a MUTATION handler — which is not only a mutation dispatch:
+            // `ctx.runMutation` hands the CALLER's ctx to the callee, so a mutation
+            // reached from an action runs on the action's ctx. Wrapping mutations
+            // alone made that composition throw a bare TypeError on a method the
+            // handler's own type promises. Queries stay unwrapped: they cannot host
+            // one, and their ctx is built on the hot subscription path.
+            //
+            // Every dispatch wrapped here also flushes (see `handleRpc` and
+            // `runReactor`) — a queue nothing drains leaks silently, which is worse
+            // than not having the method at all.
+            //
+            // Wrapped OUTSIDE the read-stamping facade so `bucket(name)` still
+            // resolves through it and stays stamped, and applied only to
+            // `ctx.storage` so `ctx.db.system._storage` (which shares the adapter
+            // above) is untouched.
+            const contextKind = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind;
+            const contextStorage = contextKind === "mutation" || contextKind === "action" ? withDeferredDeletes(storage) : storage;
             // `ctx.log`: the DO base builds the attributed logger (structured
             // fields + `.with(...)` child + trace correlation) and routes each call
             // to the optional `observability` sink. It also buffers the line (studio
@@ -870,8 +994,20 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
-                enforceRls: true,
+                // A dispatch with NO caller identity runs system-trusted: RLS scopes
+                // rows to a user, and these have no user to scope to. This is the tier
+                // migrations, imports and the external-source poll loop already run in
+                // (see `adminWriterPrelude`). Only `onShardInit` and `onQueryChange`
+                // reach it; `onConnect`/`onDisconnect` carry a verified identity and
+                // stay guarded like any request.
+                enforceRls: options.trusted !== true,
                 headroom: options.headroom ?? this.transactionHeadroom(),
+                // A live predicate, not a flag: the transaction opens AFTER this ctx
+                // is built (a mutation dispatch wraps the handler), so only a call-time
+                // read reports the truth. `_commitSeq` reuses one sequence across
+                // writes only while they commit together — an action is not wrapped, so
+                // each of its writes allocates its own.
+                inTransaction: () => this.isInTransaction(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
                 onReadRange: options.onReadRange,
@@ -918,14 +1054,32 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 orm: bindOrm(facade),
                 scheduler,
                 span,
-                storage,
+                storage: contextStorage,
                 trace,
                 secrets,
             };
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);
             ctx.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx);
-            ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("query", reference.__lunoraRef, fnArgs, ctx);
+            // `ctx.runQuery(ref, args, { untracked: true })` runs the sub-query on
+            // its OWN context, built without the read-footprint hooks — so its
+            // reads never enter this subscription's footprint and a write to the
+            // tables it touched does not re-run us. Everything else is inherited:
+            // `functionPath` (log/metric attribution), `headroom` (the sub-query
+            // must not escape this dispatch's resource ceiling), and — load-bearing
+            // — the identity BY VALUE. Omitting identity would let `buildCtx` fall
+            // back to the shared per-request fields, which a concurrent RPC may
+            // have re-set, and an RLS-scoped sub-query would then read as the wrong
+            // user. A tracked call keeps sharing `ctx` exactly as before.
+            ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) =>
+                dispatchRun(
+                    "query",
+                    reference.__lunoraRef,
+                    fnArgs,
+                    runOptions?.untracked === true
+                        ? this.buildCtx({ functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId } })
+                        : ctx,
+                );
 
             return ctx;
         }

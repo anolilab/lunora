@@ -23,6 +23,6 @@ export {
 } from "./catalog";
 export type { LunoraErrorLike } from "./guards";
 export { isLunoraError } from "./guards";
-export { invariant, unreachable } from "./invariant";
+export { invariant, raise, unreachable } from "./invariant";
 export type { ErrorBody, ToErrorBodyOptions, ToErrorBodyResult } from "./to-error-body";
 export { toErrorBody } from "./to-error-body";

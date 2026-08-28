@@ -1,4 +1,5 @@
 import { isLunoraError, toErrorBody } from "@lunora/errors";
+import type { HttpCacheLike } from "@lunora/platform";
 
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
@@ -714,6 +715,22 @@ interface NotifySubscriptionFilter {
     userId?: null | string;
 }
 
+/**
+ * The caller a {@link WorkerOptions.authorizeShard} decision is made for.
+ *
+ * Every value that reaches this gate originates OUTSIDE the trust boundary — an
+ * RPC, a REST call, a WebSocket upgrade, an in-process `serverQuery`. Dispatch
+ * that originates INSIDE it (a firing cron, a scheduler job) never reaches the
+ * gate at all, so `identity: null` means exactly one thing here: an
+ * unauthenticated end user.
+ */
+interface ShardCaller {
+    /** The identity `resolveIdentity` produced for this request, or `null` when the caller is unauthenticated. */
+    identity: ResolvedIdentity | null;
+    /** The shard the caller named (the default shard when the request named none). */
+    shardKey: string;
+}
+
 interface WorkerOptions {
     /**
      * An additional, async authorization gate for the `/_lunora/admin/*` plane
@@ -844,14 +861,23 @@ interface WorkerOptions {
     authorizeFanOut?: (identity: ResolvedIdentity | null, table: string, functionPath: string) => boolean | Promise<boolean>;
 
     /**
-     * Optional per-shard authorization callback. Called from both the RPC
-     * dispatch path and the WebSocket upgrade path after `resolveIdentity`
-     * has produced an identity but before the request is forwarded to the
-     * named shard. Returning `false` (or a promise resolving to `false`)
-     * causes the runtime to reject the request with a 403
-     * `FORBIDDEN_SHARD` error. When unset, the runtime allows the
-     * request — preserving the historical "any client may name any
-     * shard" posture.
+     * Optional per-shard authorization callback for CLIENT-ORIGINATED access.
+     * Called from the RPC, REST, in-process `serverQuery`, and WebSocket-upgrade
+     * paths after `resolveIdentity` has produced an identity but before the
+     * request is forwarded to the named shard. Returning `false` (or a promise
+     * resolving to `false`) rejects the request with a 403 `FORBIDDEN_SHARD`.
+     * When unset, naming a non-default shard is default-denied unless the worker
+     * opts into open access with `allowUnauthenticatedShardAccess: true`.
+     *
+     * SCOPE — this is a gate on CALLERS, so it only ever runs where there is one.
+     * Server-initiated dispatch (a firing cron, a scheduler job) does NOT pass
+     * through it: those originate inside the trust boundary (the worker's own
+     * `scheduled()` handler, or the HMAC/admin-bearer-gated scheduler endpoint,
+     * which authenticates first), and they carry no end-user identity to judge.
+     * The reserved `__lunora_admin__:*` RPCs are exempt for the same reason.
+     * A gate that sees `identity: null` is therefore always looking at an
+     * anonymous END USER, and `({ identity }) => identity?.userId !== undefined`
+     * is a correct, complete gate — it cannot starve the scheduler.
      *
      * Note: this callback does NOT gate fan-out envelopes — fan-out
      * targets every live shard for a table and must be authorized at the
@@ -859,7 +885,7 @@ interface WorkerOptions {
      * without `authorizeFanOut` causes fan-out envelopes to be denied by
      * default.
      */
-    authorizeShard?: (identity: ResolvedIdentity | null, shardKey: string) => boolean | Promise<boolean>;
+    authorizeShard?: (caller: ShardCaller) => boolean | Promise<boolean>;
 
     /**
      * Cron expression that triggers the built-in backup. When set alongside
@@ -880,9 +906,16 @@ interface WorkerOptions {
     backupPrefix?: string;
 
     /**
-     * Retention bound for scheduled backups: keep only the newest N snapshots
-     * under {@link WorkerOptions.backupPrefix}, pruning older NDJSON objects and
-     * their manifests after each run. Omit (or `0`) to keep every backup.
+     * Retention window for scheduled backups: the newest N snapshots under
+     * {@link WorkerOptions.backupPrefix} are the ones considered current. Omit
+     * (or `0`) to treat every backup as current.
+     *
+     * **Reporting only — this never deletes.** Each run logs how many snapshots
+     * sit past the window and points at `lunora backup prune`, which is the only
+     * thing that removes one (and which confirms first). A bucket therefore
+     * grows until someone prunes it. Said explicitly because the name reads like
+     * the opposite, and because a backup deleted by a cron nobody was watching
+     * is not a failure mode this should ever have.
      */
     backupRetain?: number;
 
@@ -1208,6 +1241,17 @@ interface WorkerOptions {
      * bucket rows; when omitted, every row routes to the default shard.
      */
     resolveTableSharding?: AdminTableResolver;
+
+    /**
+     * The shared HTTP cache a REST `cache` policy is stored in and served from.
+     *
+     * Defaults to the host's own (`caches.default` on Cloudflare), which is what
+     * makes `.expose({ rest: true, cache })` store anything at all. Pass `null` to
+     * keep the surface headers-only — the declared `Cache-Control` still goes out,
+     * but nothing is written to the colo. A host with no cache needs no opt-out:
+     * `rest-edge-cache` finds none and degrades to the same behaviour.
+     */
+    restEdgeCache?: HttpCacheLike | null;
 
     /**
      * Optional per-request rate-limit gate for the opt-in public REST surface
@@ -2573,21 +2617,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
-     * Per-shard authorization, shared by the RPC, WebSocket-upgrade, and
-     * server-dispatch paths: run `authorizeShard` when configured (403
-     * `FORBIDDEN_SHARD` on deny); otherwise a non-default shard is
-     * default-denied via {@link guardUnauthenticatedShardAccess}. `guard: false`
-     * skips that fallback — system dispatch (a scheduler/cron job) may target
-     * any shard when no gate is configured.
+     * Per-shard authorization for a client-originated request, shared by the
+     * RPC, REST, `serverQuery`, and WebSocket-upgrade paths: run
+     * `authorizeShard` when configured (403 `FORBIDDEN_SHARD` on deny);
+     * otherwise a non-default shard is default-denied via
+     * {@link guardUnauthenticatedShardAccess}.
+     *
+     * Server-initiated dispatch does not call this — see
+     * {@link WorkerOptions.authorizeShard} for why.
      */
-    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string, guard = true): Promise<void> => {
+    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string): Promise<void> => {
         if (options.authorizeShard) {
-            const allowed = await options.authorizeShard(identity, shardKey);
+            const allowed = await options.authorizeShard({ identity, shardKey });
 
             if (!allowed) {
                 throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
             }
-        } else if (guard && shardKey !== defaultShard) {
+        } else if (shardKey !== defaultShard) {
             guardUnauthenticatedShardAccess("shard");
         }
     };
@@ -2607,9 +2653,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     /**
      * Forward a server-initiated function call (a scheduler dispatch or a firing
-     * cron job) to its shard. Re-applies per-shard authorization with a `null`
-     * (system) identity so a server job can't reach a shard a same-shard end-user
-     * RPC would be denied, then POSTs `{ functionPath, args }` to the shard's RPC.
+     * cron job) to its shard: POST `{ functionPath, args }` to the shard's RPC.
+     *
+     * The app's `authorizeShard` gate is deliberately NOT applied here. It is a
+     * gate on callers, and this dispatch has none: both entry points are already
+     * inside the trust boundary (the worker's own `scheduled()` handler, and
+     * `handleSchedulerDispatch`, which verifies an HMAC signature or admin bearer
+     * before it gets here). Running the gate anyway meant passing a `null`
+     * identity that the app could not distinguish from an anonymous end user, so
+     * the natural gate (`identity?.userId !== undefined`) 403'd every cron and
+     * scheduled job — with the DO retrying forever and nothing in the app's logs
+     * naming the cause. The reserved `__lunora_admin__:*` RPCs are exempted from
+     * the same gate for the same reason.
      */
     const dispatchToShard = async (
         functionPath: string,
@@ -2618,9 +2673,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         mutationId?: string,
         forwardedIdentity?: { identity?: string; userId?: string },
     ): Promise<Response> => {
-        // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`; system dispatch has no end-user identity
-        await assertShardAuthorized(null, shardKey, false);
-
         // `x-lunora-system` marks this as a trusted server-initiated dispatch so the
         // shard may run `internal` functions (scheduled/cron jobs are typically
         // internal). Authorization was already enforced above; this header is set
@@ -2822,9 +2874,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * authenticate.
      *
      * On success the job is dispatched through the SAME shard-forward path as
-     * `/_lunora/rpc` (re-applying `authorizeShard` for the named shard so the
-     * scheduler cannot bypass per-shard auth), and the shard's response is
-     * propagated.
+     * `/_lunora/rpc` and the shard's response is propagated. This request's own
+     * signature/bearer check IS the authorization — the app's `authorizeShard`
+     * gate judges end-user callers and does not run here (see
+     * {@link WorkerOptions.authorizeShard}).
      */
     const handleSchedulerDispatch = async (request: Request, env: unknown): Promise<Response> => {
         assertMethod(request, "POST", "Scheduler dispatch");
@@ -2902,9 +2955,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // headers pass through to the shard alongside the system flag for RLS.
         const identity = readForwardedIdentity(request);
 
-        // Re-apply per-shard authorization (inside `dispatchToShard`) so a
-        // scheduled job cannot reach a shard a direct RPC for the same shard
-        // would be denied — the scheduler runs jobs with no end-user identity.
         const response = await dispatchToShard(candidate.functionPath, args, shardKey, mutationId, identity);
 
         // Workpool jobs hold a concurrency slot until the action settles; release
@@ -3592,11 +3642,20 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // ownership). Same shape/authorization ordering as the RPC/WS paths.
         const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
 
+        // Deliberately NOT `assertShardAuthorized`, and the difference is the
+        // `else`: that helper default-denies only a NON-default shard, because its
+        // callers have a default shard a caller may legitimately land on. There is
+        // no default voice shard — every `threadKey` is client-supplied — so this
+        // path default-denies unconditionally. Routing it through the helper would
+        // admit a caller who names the default shard as their `threadKey`.
         if (options.authorizeShard) {
-            const allowed = await options.authorizeShard(identity, threadKey);
+            const allowed = await options.authorizeShard({ identity, shardKey: threadKey });
 
             if (!allowed) {
-                return new Response("Forbidden", { status: 403 });
+                // The same typed error the helper throws, so a denied voice caller
+                // gets `FORBIDDEN_SHARD` like every other path rather than an
+                // untyped 403 a client cannot branch on.
+                throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
             }
         } else {
             // Every voice `threadKey` is client-supplied and there is no default
@@ -4647,6 +4706,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         functions: options.functions ?? {},
         invoke: invokeExposed,
         readJsonBody: readJsonBodyWithLimit,
+        // `null` is a meaningful value here (the explicit opt-out) and `undefined`
+        // means "whatever the host has", so the option is forwarded as-is rather
+        // than spread when truthy.
+        edgeCache: options.restEdgeCache,
         ...(options.restRateLimit ? { rateLimit: options.restRateLimit } : {}),
     });
 
@@ -5183,6 +5246,7 @@ export type {
     RpcContext,
     RpcEnvelope,
     ScheduledControllerLike,
+    ShardCaller,
     ShardingInfo,
     StorageDeleteFunction as StorageDeleteFn,
     StorageDownloadFunction as StorageDownloadFn,

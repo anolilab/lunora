@@ -12,6 +12,7 @@ import type { AdvisorContainerOverride } from "./container-overrides";
 import type { AdvisorContainer } from "./containers";
 import type { AdvisorExportSink } from "./export-sinks";
 import type { AdvisorFailOpenGuard } from "./fail-open-guards";
+import type { AdvisorFlagRead } from "./flag-reads";
 import type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
 import type { AdvisorFunctionMetrics } from "./function-metrics";
 import type { AdvisorGeoIndexUsage } from "./geo-index-usages";
@@ -261,6 +262,20 @@ export interface LintContext {
      * the lint finds nothing.
      */
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
+
+    /* eslint-disable no-secrets/no-secrets -- the referenced lint rule id in the doc comment, not a credential */
+
+    /**
+     * `ctx.flags` reads lexically inside a `query(...)` handler — the
+     * `flag_read_in_subscription` input. A flag flip appends nothing to `__cdc_log`,
+     * so no live subscription is re-run and the query keeps serving the branch it
+     * last picked; `useFlag` is the reactive path. Only `query` handlers are
+     * recorded — a `mutation`/`action` runs once, so there is no staleness there.
+     * Supplied by the codegen feeder; absent for runtime callers, where the lint
+     * finds nothing.
+     */
+    flagReads?: ReadonlyArray<AdvisorFlagRead>;
+    /* eslint-enable no-secrets/no-secrets -- re-enable after the flagReads doc block */
 
     /**
      * `ctx.flags.boolean(key, default)` reads with a statically-known string key and

@@ -113,6 +113,43 @@ export const syncCustomer = action.input({ orgId: v.string() }).action(async ({ 
 | `pg` (node-postgres)     | `fromNodePg`     | `$1, $2, …`  |
 | `mysql2/promise`         | `fromMysql2`     | `?`          |
 
+## Reactive reads over your schema: the `.source()` modifier
+
+The projection above is the escape hatch. For the common case — an existing Postgres you are not going to move, and a read path that should feel live — declare the source on the table and Lunora runs the whole loop on the shard's alarm: pull, diff, materialize, poke subscribers. No action, no mutation, no cron to write:
+
+```ts
+// lunora/schema.ts
+export default defineSchema({
+    messages: defineTable({ body: v.string(), channelId: v.string() })
+        .shardBy("channelId")
+        .source({
+            binding: "HYPERDRIVE_MESSAGES",
+            query: 'select id, body, channel_id as "channelId" from messages where channel_id = $1',
+            tenantBy: (shardKey) => [shardKey], // mandatory under .shardBy() — the tenant boundary
+        }),
+});
+
+export const channelMessages = defineShape({ table: "messages", where: () => ({}) });
+```
+
+Supply the driver once, when the shard DO is constructed. Lunora memoizes it per binding:
+
+```ts
+createShardDO({
+    sourceClient: (env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)),
+});
+```
+
+Clients subscribe with the shape they would use over any table — external data stops being external once it is materialized.
+
+Three things to know before you build on it:
+
+- **It polls; it is not logical replication.** Freshness is the refresh cadence: every alarm tick by default, `refresh: { everyMs }` to throttle, `refresh: "manual"` to drive it yourself. Writes from other systems land on the next pull.
+- **`tenantBy` is the isolation boundary.** `defineSchema` throws at load if a sourced `.shardBy()` table omits it, and the `external_source_unscoped` advisor lint catches it at build time. Without it, one tenant's DO pulls every tenant's rows.
+- **`mode: "full-pull"` (the default) diffs the whole slice each tick**, so upstream deletes are detected for free, at a bench ceiling around 10k rows. Past that, `mode: "incremental"` pulls only rows past a durable watermark via a cursor column. An incremental slice cannot see a delete on its own — an absent row means "unchanged", not "deleted" — so it **requires** a delete-visibility path: either `reconcileEveryMs` (a periodic full-pull sweep) or `softDeleteColumn` (an upstream tombstone column the cursor query returns, so do not filter it out). `defineSchema` throws and the `external_source_incremental_no_delete_path` lint fails the build if an incremental source declares neither.
+
+`.source()` cannot be combined with `.global()` — they are contradictory tiers, and `defineSchema` rejects it.
+
 ## Reactive `.global()` over Hyperdrive
 
 The `@lunora/hyperdrive/global` subpath is the opposite trade-off: Lunora **owns** the schema and a `.global()` table gets a real column-per-field layout on your Postgres/MySQL, with every write routed through the shared store core. Live queries stay reactive — identical to D1 — because the writer drives the same broadcast hook. Build the writer inside the Durable Object that hosts the `.global()` store and inject it as `globalDb`:
@@ -127,7 +164,7 @@ const globalDb = createPostgresGlobalCtxDb({ query: (text, params) => sql.unsafe
 
 For MySQL use `createMysqlGlobalCtxDb` with a `mysql2/promise` pool created with `flags: ["FOUND_ROWS"]` — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
 
-> This README covers the basics. For the full API and the determinism/realtime rationale, see the **[documentation](https://lunora.sh/docs/addons/hyperdrive)**.
+> This README covers the basics. For the full API and the determinism/realtime rationale, see the **[documentation](https://lunora.sh/docs/packages/hyperdrive)**.
 
 ## Non-goals
 

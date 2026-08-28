@@ -568,6 +568,61 @@ const relocateGeneratedImports = (returnType: string): string =>
         return `import("${withExtension}")`;
     });
 
+/**
+ * An `import("…")` qualifier the checker resolved to a file INSIDE `node_modules`
+ * and then printed as a path rather than as a module specifier — e.g.
+ * `import(".pnpm/@lunora+server@1.0.0-alpha.87_…/node_modules/@lunora/server/data-model")`
+ * for a handler returning the ORM facade's `LoadWith<…>`.
+ *
+ * That string is not a specifier and resolves from nowhere: it is one installer's
+ * on-disk layout, complete with a content hash that changes on any `node_modules`
+ * rebuild, so it is a TS2307 in the generated file on the machine that produced it
+ * and a different one everywhere else.
+ *
+ * Everything after the FINAL `node_modules/` is the specifier that was wanted
+ * (`@lunora/server/data-model`), whatever nesting the store put in front of it —
+ * so that is what we keep. Runs before the relative rebasers, which would
+ * otherwise treat a `../../node_modules/…` form as one of the user's own modules
+ * and rebase + `.js`-suffix it into something even further from a specifier, and
+ * before {@link relocateBaseQualifiers}, which maps the recovered
+ * `@lunora/<base>` onto the umbrella the project actually depends on.
+ *
+ * The segment is located by scanning, not by matching. A pattern of the shape
+ * `(?:[^"]*\/)?node_modules\/` backtracks polynomially on a qualifier carrying
+ * many `/node_modules/` runs — flagged by CodeQL, and the rendered text this walks
+ * comes from the user's own types, so the input is not ours to bound.
+ * `lastIndexOf` answers the same question in one pass.
+ */
+const IMPORT_QUALIFIER_RE = /import\("(?<spec>[^"]+)"\)/gu;
+
+/** The path segment whose LAST occurrence separates the store layout from the specifier. */
+const NODE_MODULES_SEGMENT = "node_modules/";
+
+/**
+ * A `@types/*` tail is never a specifier: the declarations for `foo` live in
+ * `@types/foo`, but the name anything imports is `foo`. Recovering the directory
+ * name would emit a package that does not exist, replacing a path that at least
+ * resolved locally — so leave the qualifier alone and let the relative rebasers
+ * have it.
+ */
+const TYPES_PACKAGE_SPEC_RE = /^@types\//u;
+
+const unresolveStoreQualifiers = (rendered: string): string =>
+    rendered.replaceAll(IMPORT_QUALIFIER_RE, (match, spec: string) => {
+        const segmentStart = spec.lastIndexOf(NODE_MODULES_SEGMENT);
+
+        // Anchored on a path boundary, never a word boundary: `vendor-node_modules/`
+        // ends with the segment's text but is an ordinary directory, and rewriting
+        // through it would turn a working relative path into a bare specifier.
+        if (segmentStart === -1 || (segmentStart > 0 && spec[segmentStart - 1] !== "/")) {
+            return match;
+        }
+
+        const recovered = spec.slice(segmentStart + NODE_MODULES_SEGMENT.length);
+
+        return recovered === "" || TYPES_PACKAGE_SPEC_RE.test(recovered) ? match : `import("${recovered}")`;
+    });
+
 /** Any relative `import("…")` qualifier — the user's own modules as well as `_generated/*`. */
 const RELATIVE_IMPORT_RE = /import\("(?<spec>\.\.?\/[^"]+)"\)/gu;
 
@@ -632,12 +687,15 @@ const relocateUserRelativeImports = (returnType: string, filePath: string): stri
     });
 
 /**
- * Rebase every relative `import("…")` qualifier in a rendered type so it
- * resolves from inside `_generated/` — `_generated/*` targets via
- * {@link relocateGeneratedImports}, the user's own modules via
- * {@link relocateUserRelativeImports}. Order is load-bearing (the user rebase
- * skips `_generated/` prefixes and hands them on), which is why the pair lives
- * behind one name instead of being spelled out at each site.
+ * Make every `import("…")` qualifier in a rendered type resolve from inside
+ * `_generated/`: a `node_modules` path recovered back to a specifier by
+ * {@link unresolveStoreQualifiers}, `_generated/*` targets rebased by
+ * {@link relocateGeneratedImports}, the user's own modules by
+ * {@link relocateUserRelativeImports}. Order is load-bearing throughout (the
+ * store-path recovery must precede the relative rebasers, which would otherwise
+ * claim a `../../node_modules/…` form as a user module; the user rebase skips
+ * `_generated/` prefixes and hands them on), which is why the three live behind
+ * one name instead of being spelled out at each site.
  *
  * Applies to ARGUMENT types as well as return types. Only the return type was
  * rebased before, so a relative qualifier reaching an argument — a
@@ -648,7 +706,8 @@ const relocateUserRelativeImports = (returnType: string, filePath: string): stri
  * `lunora codegen` exits 0, so it surfaces only when a sibling package
  * typechecks the same file and has nowhere to filter the error away.
  */
-const rebaseRelativeQualifiers = (rendered: string, filePath: string): string => relocateGeneratedImports(relocateUserRelativeImports(rendered, filePath));
+const rebaseRelativeQualifiers = (rendered: string, filePath: string): string =>
+    relocateGeneratedImports(relocateUserRelativeImports(unresolveStoreQualifiers(rendered), filePath));
 
 /**
  * Every base package the `lunorash` umbrella re-exports (its top-level,
@@ -728,7 +787,12 @@ const relocateBaseQualifiers = (rendered: string, useUmbrella: boolean): string 
  * `emitFunctions` so the selection rule stays in one place.
  */
 const referencedDataModelImports = (body: string): ReadonlyArray<"Doc" | "Id"> =>
-    (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`\b${name}<`, "u").test(body));
+    // A QUALIFIED occurrence does not count. A handler may import its own
+    // `Doc`/`Id` from its own module, which renders as
+    // `import("../lib/mydoc.js").Doc<"posts">` — that names its own module and
+    // needs no import here, so counting it would emit an unused
+    // `import type { Doc }` and fail the generated file under `noUnusedLocals`.
+    (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`(?<![.$\w])${name}<`, "u").test(body));
 
 /**
  * The `Return` a `FunctionReference` should carry.
@@ -749,6 +813,13 @@ const referencedDataModelImports = (body: string): ReadonlyArray<"Doc" | "Id"> =
  *
  * Falls back to the handler when no `.output()` is declared, so a project that
  * never uses it emits byte-identical output.
+ *
+ * A `stream` is the exception and keeps the handler's type. `.output()` is inert
+ * on that terminal — `makeStreamHandler` is never given `state.output`, and the
+ * terminal is generic over its own yield type, so the builder does not even
+ * type-check the declaration (`packages/server/src/builder/types.ts` says so on
+ * the `stream` member). Preferring an unenforced, untyped declaration there
+ * would describe chunks the handler does not yield.
  */
 const referenceReturnType = (definition: FunctionIR): string => {
     // `parseValidator` yields `{ kind: "any" }` for anything that is not a call
@@ -757,7 +828,7 @@ const referenceReturnType = (definition: FunctionIR): string => {
     // Preferring that over the handler would replace a precise inferred type
     // with `unknown` — reintroducing, on every procedure with a hoisted output
     // validator, exactly the leak this function exists to stop.
-    if (definition.output === undefined || definition.output.kind === "any") {
+    if (definition.output === undefined || definition.output.kind === "any" || definition.kind === "stream") {
         return definition.returnType;
     }
 
@@ -1043,9 +1114,9 @@ const renderSandboxFunctionRegistry = (usesSandbox: boolean, functions: Readonly
  * `api.agents.agentRun` exist as typed references
  * (`useSubscription(api.agents.agentMessages, { key })`,
  * `useAgentState({ api, threadKey })` over `api.agents.agentState`,
- * `useMutation(api.agents.agentResolveApproval)`). The four thread-write
- * mutations (`agentAppendMessage`/`agentEnsureThread`/`agentPatchThread`/
- * `agentSetState`) stay internal — the loop dispatches them by path over the
+ * `useMutation(api.agents.agentResolveApproval)`). The thread-write mutations
+ * (`agentAppendMessage`/`agentDeleteMessage`/`agentEnsureThread`/
+ * `agentPatchThread`/`agentSetState`) stay internal — the loop dispatches them by path over the
  * scheduler channel and nothing client- or caller-side needs a reference;
  * `agentResolveApproval` is public because a client resolves approvals with it,
  * and `agentRun` is public because an HTTP-only client (the `@lunora/mcp`
@@ -1642,6 +1713,14 @@ const renderFunctionRegistry = (
  * `(args) => Promise<Return>`; `args` is optional only when the function takes
  * none. The runtime leaves dispatch through `callRegistered`, which infers the
  * return type from the interface's contextual type.
+ *
+ * `Return` comes from {@link referenceReturnType}, so a declared `.output()`
+ * wins over the handler's inferred type here exactly as it does in `api.ts`.
+ * Reading `definition.returnType` directly is what let the two surfaces
+ * disagree: `ctx.run*` through the caller saw a field the validator declares
+ * `v.optional(...)` as required, and a `v.string()` narrowed to a branded
+ * `Id<...>` — while `api.ts`, one function away, described the same procedure
+ * correctly.
  */
 const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: string; types: string } => {
     const ordered = groupByFileSorted(functions);
@@ -1652,13 +1731,15 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
                 .map((definition) => {
                     const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
                     const optional = argsType === "{}" ? "?" : "";
-                    const returnType = rebaseRelativeQualifiers(definition.returnType, definition.filePath);
+                    const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
 
                     // A `stream` handler returns an `AsyncIterable<T>` *synchronously*;
                     // `callRegistered` awaits the handler, and awaiting a non-thenable
                     // async-iterable yields the iterable itself. So the leaf resolves to
                     // `AsyncIterable<T>`, not a single element `T`. (Note `unwrapHandlerReturn`
-                    // already unwrapped the iterable to its element type in `returnType`.)
+                    // already unwrapped the iterable to its element type — and
+                    // `referenceReturnType` keeps a stream on that inferred type rather
+                    // than an inert `.output()`, so this is still the element type.)
                     if (definition.kind === "stream") {
                         return `        ${definition.exportName}: (args${optional}: ${argsType}) => Promise<AsyncIterable<${returnType}>>;`;
                     }
@@ -2107,6 +2188,7 @@ import type {
     InternalQueryBuilder,
     MutationBuilder,
     MutationCtx as MutationCtxBase,
+    MutationStorage,
     MutatorDefinition,
     QueryBuilder,
     QueryCtx as QueryCtxBase,
@@ -2282,7 +2364,7 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${vectorsOm
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: MutationStorage<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
@@ -3013,6 +3095,7 @@ const EMPTY_HELPER_FRAGMENTS: HelperFragments = { build: "", configField: "", co
  * override, else the conventional `env.KV`; absent both, every method throws a
  * directed error via `kvStub`.
  */
+/* eslint-disable no-secrets/no-secrets -- the flagged high-entropy strings are emitted identifiers (`markUnvouchableReads(kvBinding`), not credentials. */
 const emitKvFragments = (hasKv: boolean): HelperFragments => {
     if (!hasKv) {
         return EMPTY_HELPER_FRAGMENTS;
@@ -3023,7 +3106,16 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
     return {
         build: `
             const kvBinding = config.kv?.(env) ?? (env as Record<string, unknown>).KV;
-            const kv: Kv = kvBinding ? createKv({ namespace: kvBinding as KVNamespaceLike }) : kvStub;
+            // KV is not this shard's SQLite, so nothing appends a \`__cdc_log\` entry
+            // when a value changes — a subscription that read one can never be proven
+            // current on reconnect and must re-snapshot. Reads only; \`put\`/\`delete\`
+            // are writes and stay unstamped.
+            const kv: Kv = markUnvouchableReads(kvBinding ? createKv({ namespace: kvBinding as KVNamespaceLike }) : kvStub, options.onRead, [
+                "get",
+                "getRaw",
+                "getWithMetadata",
+                "list",
+            ]);
 `,
         configField: `\n    kv?: (env: Record<string, unknown>) => KVNamespaceLike;`,
         contextField: `\n                kv,`,
@@ -3031,6 +3123,10 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
         stub: renderThrowingStub("kvStub: Kv", kvMissing, ["delete", "get", "getRaw", "getWithMetadata", "list", "put"]),
     };
 };
+
+/* eslint-enable no-secrets/no-secrets */
+
+/* eslint-disable no-secrets/no-secrets -- the flagged string is the `flag_read_in_subscription` advisory's rule id, quoted in the docblock below, not a credential. */
 
 /**
  * `ctx.flags` (OpenFeature feature flags) fragments. A flag read is an external
@@ -3041,18 +3137,31 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
  * it. The default `targetingKey` is derived from `flagsConfig.identify(auth)`
  * over the request's verified identity. `createFlags` never throws, so there is
  * no stub fallback — provider/init errors resolve as the supplied default value.
+ *
+ * **`flags` is deliberately NOT stamped unvouchable**, unlike the other external
+ * reads on this ctx (`ctx.kv`, `ctx.storage`, `ctx.vectors`, `ctx.db.system`).
+ * Flags are an input the invalidation system does not model at all: a flip
+ * appends nothing to `__cdc_log`, so it re-runs no live subscription either.
+ * Refusing the resume would converge the ONE moment a client reconnects while
+ * leaving it stale for the whole time it stays connected — a permanent cost for
+ * half the property, and an inconsistency between the two states harder to
+ * explain than either extreme.
+ *
+ * The reactive path already exists and is correct: a `useFlag` subscription is
+ * served through `FLAGS_FUNCTION_PREFIX`, tagged `ADMIN_WILDCARD`, and
+ * re-evaluated on every write-flush. Branching on a flag INSIDE a cached query
+ * is a point-in-time evaluation, and the `flag_read_in_subscription` advisory
+ * says so — the same answer the repo gives for `Date.now()` in a query, which is
+ * the identical class of unmodellable input.
  */
 const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFragments => {
     if (!hasFlags) {
         return EMPTY_HELPER_FRAGMENTS;
     }
-
     return {
         build: `
-            const flags: import("${flagsSpecifier}").LunoraFlags = createFlags({
-                hooks: flagsConfig.hooks,
-                logger: flagsConfig.logger,
-                provider: () => config.flags?.(env) ?? flagsConfig.provider(env),
+            const flags: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
+                provider: () => config.flags?.(env),
                 targetingKey: () => flagsConfig.identify?.({ identity: identity ?? null, userId: userId ?? null }),
             });
 `,
@@ -3062,6 +3171,8 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
         stub: "",
     };
 };
+
+/* eslint-enable no-secrets/no-secrets */
 
 /**
  * `ctx.notify` / `ctx.push` (`@lunora/notify`) fragments. Mirrors
@@ -3170,10 +3281,8 @@ const emitFlagsOverrides = (
 
     const clientBuild = (targetingKey: string): string => `
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const flags: import("${flagsSpecifier}").LunoraFlags = createFlags({
-                hooks: flagsConfig.hooks,
-                logger: flagsConfig.logger,
-                provider: () => config.flags?.(env) ?? flagsConfig.provider(env),
+            const flags: import("${flagsSpecifier}").LunoraFlags = createFlags(flagsConfig, env, {
+                provider: () => config.flags?.(env),
                 targetingKey: ${targetingKey},
             });`;
 
@@ -4004,11 +4113,13 @@ const emitX402Fragments = (hasX402: boolean): { build: string; configField: stri
 /**
  * The `@lunora/do` type names the generated shard imports. The base set is always
  * present; `WorkflowsResult` / `QueuesResult` are added only when the project
- * declares workflows / queues (their `*Metadata()` overrides reference them) and
- * `WriteHook` only when it has vector indexes (the auto-sync write hook), so a
- * workflow-/queue-/vector-free app's import line stays minimal.
+ * declares workflows / queues (their `*Metadata()` overrides reference them),
+ * `SearchBackfillProgress` only when it has shard-local search indexes (the
+ * `backfillSearch` override's return type) and `WriteHook` only when it has
+ * vector indexes (the auto-sync write hook), so a workflow-/queue-/search-/
+ * vector-free app's import line stays minimal.
  */
-const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean, hasFlags: boolean): string[] => [
+const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean, hasFlags: boolean, hasShardSearchIndexes: boolean): string[] => [
     "AdvisorProcedure",
     "AdvisoryFinding",
     "DatabaseWriterLike",
@@ -4030,6 +4141,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "RunShardWriteArgs",
     "RunShardWriteResult",
     "SchedulerLike",
+    ...(hasShardSearchIndexes ? ["SearchBackfillProgress"] : []),
     "TransactionHeadroomTracker",
     "SchemaLike",
     "ShardDOState",
@@ -4291,6 +4403,10 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // this, so a schema with no sourced table emits a byte-identical `shard.ts`.
     const hasSourcedTables = schema.tables.some((table) => table.externalSource !== undefined);
     const hasMemoryTables = schema.tables.some((table) => table.memory === true);
+    // Shard-local search indexes are what the `__lunora_admin__:backfillSearch`
+    // override serves; a schema with none leaves the base class's "unsupported"
+    // hook in place rather than emitting a call that can only report zero pages.
+    const hasShardSearchIndexes = schema.tables.some((table) => table.shardMode !== "global" && table.searchIndexes.length > 0);
 
     if (hasD1Global && hasHyperdriveGlobal) {
         // Mixing backends needs a per-table routing writer (id-addressed ops must
@@ -4311,7 +4427,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
     // (from `@lunora/server`) now owns the per-table accessor binding.
-    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0, hasFlags);
+    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0, hasFlags, hasShardSearchIndexes);
 
     // A shape's `resolveShape` override returns an `effectiveWhere: WhereInput`,
     // so the DO's `WhereInput` type is pulled in only when the project has shapes.
@@ -4411,7 +4527,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${hasShardSearchIndexes ? "backfillSearchIndexes, " : ""}buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}markUnvouchableReads, ${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         // `TraceRefLike` rides along with the source imports: the poll override
         // takes the alarm's trace so its contained failures are correlated, and
         // `@lunora/do` projects it structurally rather than re-exporting the
@@ -4424,8 +4540,8 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         // read-registry builder + `composeShapeReadWhere` so `resolveShape` can
         // AND-merge a shape's predicate with the table's read base-where.
         hasShapes
-            ? `import { asBucketStorage, buildRlsReadRegistry, composeShapeReadWhere, createSecrets, LunoraError } from "${base.server}";`
-            : `import { asBucketStorage, createSecrets, LunoraError } from "${base.server}";`,
+            ? `import { asBucketStorage, buildRlsReadRegistry, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes } from "${base.server}";`
+            : `import { asBucketStorage, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes } from "${base.server}";`,
     ];
 
     // The per-table facade binding lives in `@lunora/server` so codegen and the
@@ -4484,14 +4600,14 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
     // field under `noImplicitAny`. The Hyperdrive thunk below stays narrow on
     // purpose — it is handed the same object and simply never reads the extras.
     const d1ConfigField = hasD1Global
-        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;`
         : "";
 
     // Hyperdrive-backed `.global()` tables receive their writer via an optional
     // `hyperdriveGlobal` thunk (mirrors `d1`); the host builds it with the global
     // writer factory from `@lunora/hyperdrive/global` over a Hyperdrive driver.
     const hyperdriveGlobalConfigField = hasHyperdriveGlobal
-        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
         : "";
 
     // External-source ingest (plan 077): the host supplies one resolver that turns a
@@ -4597,6 +4713,13 @@ ${vectorNamespaceField}
                 vectors = vectorsStub;
                 onWrite = undefined;
             }
+
+            // Vectorize lives outside this shard's SQLite, so a query whose result
+            // depends on a similarity search cannot be proven current on reconnect —
+            // an unrelated upsert (or a re-index) moves the matches without touching
+            // \`__cdc_log\`. Wrapped AFTER \`onWrite\` is built so the write-through
+            // vector-sync hook keeps calling the bare facade.
+            vectors = markUnvouchableReads(vectors, options.onRead, ["getByIds", "query"]);
 `
         : "";
 
@@ -4679,7 +4802,7 @@ ${vectorNamespaceField}
     // which does not declare these fields — doesn't trip an excess-property
     // error; the Hyperdrive factory simply never reads the extra properties.
     const globalDatabaseLine = hasGlobalTables
-        ? `            const globalRequest = { bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
+        ? `            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 
     // Local-first sync engine, global tier: when a project has shapes AND
@@ -4698,7 +4821,7 @@ ${vectorNamespaceField}
             // A shape read performs no writes, so the widened request only needs
             // the inbound bookmark (pin the membership drain to the caller's own
             // prior writes) — no \`onBookmark\` here.
-            const globalRequest = { ...identity, bookmark: this.getInboundBookmark() };
+            const globalRequest = { ...identity, ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() };
             const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
             const rows: Array<{ doc: Record<string, unknown>; id: string }> = [];
 
@@ -4725,6 +4848,17 @@ ${vectorNamespaceField}
             } while (cursor !== null);
 
             return rows;
+        }
+
+        protected override async readGlobalChangedTables(sinceSeq: number, cursorOnly?: boolean): Promise<{ cursor: number; floor?: number; tables: string[] } | undefined> {
+            const env = this.env as Record<string, unknown>;
+            // Metadata-only: this asks the global changelog which TABLES moved,
+            // never what changed in them, so it costs one small read per poll tick
+            // for the whole shard — and a tick whose answer omits a shape's table
+            // skips that shape's membership drain entirely.
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() }) ?? globalDbStub;
+
+            return globalDb.cdcChangedTables?.(sinceSeq, { cursorOnly });
         }
 `
             : "";
@@ -5065,7 +5199,7 @@ export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${x402ConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}
 }
-${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["delete", "download", "getMetadata", "getSignedUrl", "getUrl", "list", "upload"], { sync: ["getUrl"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${aiStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${x402Stub}
+${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["delete", "download", "getMetadata", "getSignedUrl", "getUrl", "head", "list", "upload"], { sync: ["getUrl"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${aiStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${x402Stub}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -5140,16 +5274,38 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // watermark are atomic — a crash can't leave the writes durable without
             // the replay guard.
             if (registered.kind === "mutation") {
-                return this.runInTransaction(async () => {
-                    const result = await registered.handler(ctx, args);
+                const result = await this.runInTransaction(async () => {
+                    const value = await registered.handler(ctx, args);
 
-                    this.commitMutationBookkeeping(result);
+                    this.commitMutationBookkeeping(value);
 
-                    return result;
+                    return value;
                 });
+
+                // The transaction committed, so the rows are durable and the objects
+                // their deletion orphaned can go. Deliberately AFTER the span, never
+                // inside it: an R2 delete cannot roll back, so a delete issued from
+                // within a transaction that later aborts destroys data the surviving
+                // row still points at. A throw above skips this entirely and the
+                // queue dies with \`ctx\`.
+                //
+                // \`flushDeferredDeletes\` never rejects — the mutation has already
+                // succeeded, so a failed cleanup must not turn into a failed response.
+                // A leaked object is reported through \`ctx.log\` instead, with its key.
+                await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+                return result;
             }
 
-            return registered.handler(ctx, args);
+            const result = await registered.handler(ctx, args);
+
+            // An action is not itself transactional, but \`ctx.runMutation\` runs its
+            // submutations on THIS ctx, so their queued deletes land here — this is
+            // the first point at which those writes are known to have committed. A
+            // dispatch with nothing queued no-ops.
+            await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+            return result;
         }
 
         // Only a \`mutation\` may enter the base class's single-writer gate for
@@ -5233,6 +5389,13 @@ ${shardInitOverride}
                 digest: string;
                 ran: boolean;
             };
+
+            // A reactor IS a mutation, so its ctx carries the deferred-delete queue
+            // and its transaction has just committed. Without this the queue would
+            // die with \`ctx\` and the objects would leak with nothing to find: no
+            // error, no warning, no failed request — a reactor that reaps orphaned
+            // rows is a textbook use of one.
+            await this.deferPastResponse(flushDeferredDeletes(ctx));
 
             return { digest: outcome.digest, ran: outcome.ran, tables: [...footprint.tables] };
         }
@@ -5498,7 +5661,20 @@ ${adminWriterPrelude}
             runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false${snapshotArgument} });
             this.migrated = true;
         }
+${
+    hasShardSearchIndexes
+        ? `
+        protected override runShardSearchBackfill(options: { maxPages?: number }): SearchBackfillProgress {
+            // Migrations create the fts5 companions; without them every backfill
+            // statement would raise "no such table" on a shard that has never
+            // served a request.
+            this.ensureMigrated();
 
+            return backfillSearchIndexes(this.sql as SqlExec, schema as unknown as SchemaLike, options);
+        }
+`
+        : ""
+}
         private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
@@ -5509,12 +5685,47 @@ ${adminWriterPrelude}
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
 ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}${agentsBuild}
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            // \`list\`/\`get\` are the two methods \`ctx.db.system.query("_scheduled_functions")\`
+            // reaches through, and pending jobs live in the SchedulerDO — nothing the
+            // CDC changelog records — so reading them must forfeit a delta resume.
+            // The scheduler's own \`runAfter\`/\`runAt\`/\`cancel\` are writes and stay unstamped.
+            const scheduler = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
             // \`storageStub\` fallback satisfies SystemReaderStorageLike structurally
             // (its \`list\`/\`getMetadata\` throw the "no storage configured" error).
-            const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
+            //
+            // Wrapped BEFORE the split so both consumers share one stamping facade.
+            // Only the methods that actually reach R2 are stamped: \`getUrl\` and
+            // \`getSignedUrl\` build a URL from the configured base (and an HMAC) and
+            // read nothing, and they are what handlers overwhelmingly call — stamping
+            // them would forfeit resumes for a dependency that cannot move the result.
+            // \`bucket\` IS stamped: it hands back a sub-facade this wrapper does not
+            // reach, so the selection is the last point at which the read can be seen.
+            const storage = markUnvouchableReads(asBucketStorage(config.storage?.(env) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
+                "bucket",
+                "download",
+                "getMetadata",
+                "list",
+            ]);
+            // \`ctx.storage.deleteAfterCommit(key)\`, on every dispatch that can host
+            // a MUTATION handler — which is not only a mutation dispatch:
+            // \`ctx.runMutation\` hands the CALLER's ctx to the callee, so a mutation
+            // reached from an action runs on the action's ctx. Wrapping mutations
+            // alone made that composition throw a bare TypeError on a method the
+            // handler's own type promises. Queries stay unwrapped: they cannot host
+            // one, and their ctx is built on the hot subscription path.
+            //
+            // Every dispatch wrapped here also flushes (see \`handleRpc\` and
+            // \`runReactor\`) — a queue nothing drains leaks silently, which is worse
+            // than not having the method at all.
+            //
+            // Wrapped OUTSIDE the read-stamping facade so \`bucket(name)\` still
+            // resolves through it and stays stamped, and applied only to
+            // \`ctx.storage\` so \`ctx.db.system._storage\` (which shares the adapter
+            // above) is untouched.
+            const contextKind = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind;
+            const contextStorage = contextKind === "mutation" || contextKind === "action" ? withDeferredDeletes(storage) : storage;
             // \`ctx.log\`: the DO base builds the attributed logger (structured
             // fields + \`.with(...)\` child + trace correlation) and routes each call
             // to the optional \`observability\` sink. It also buffers the line (studio
@@ -5575,7 +5786,7 @@ ${notifyBuild}
                 now,${ormContextField}
                 scheduler,
                 span,
-                storage,
+                storage: contextStorage,
                 trace,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${agentsContextField}
             };
 ${isActionLine}${actionOnlyBlock}

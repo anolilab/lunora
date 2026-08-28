@@ -24,8 +24,13 @@
     "type": "module",
     "sideEffects": false,
     "exports": {
+        "./angular": "./src/angular/index.ts",
         "./core": "./src/core/index.ts",
         "./react": "./src/react/index.ts",
+        "./solid": "./src/solid/index.ts",
+        "./solid-v2": "./src/solid-v2/index.ts",
+        "./svelte": "./src/svelte/index.ts",
+        "./vue": "./src/vue/index.ts",
         "./styles.css": "./src/styles/auth-ui.css",
         "./package.json": "./package.json"
     },

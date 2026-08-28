@@ -15,12 +15,14 @@ export type { SqlCtxDbOptions, SqlCtxExec } from "./ctx-db";
 export {
     createSqlCtxDb,
     decodeGlobalRow,
+    readSqlCdcChangedTables,
     readSqlCdcChanges,
+    readSqlCdcFloor,
     runSqlAggregateMigrations,
     runSqlCdcMigration,
     runSqlGlobalTableMigrations,
     runSqlRankMigrations,
-    trimSqlCdcChanges,
+    sweepSqlCdcRetention,
 } from "./ctx-db";
 export { backfillSqlSearchIndexes, runSqlSearchMigrations } from "./ctx-db-search";
 export { migrateSearchState, SEARCH_STATE_TABLE } from "./ctx-db-search-state";

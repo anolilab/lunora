@@ -10,7 +10,7 @@ import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta, TablePage } from "../../lib/admin";
 import { fireAndForget, formatCell } from "../../lib/internal";
 import type { MaskView } from "../../lib/mask-preview";
-import { maskCell } from "../../lib/mask-preview";
+import { maskCell, maskRow } from "../../lib/mask-preview";
 import { cn } from "../../lib/utils";
 import flooredRectObserver from "../../lib/virtual-rect";
 import { columnWindow, pinnedOffsets } from "./column-window";
@@ -304,7 +304,15 @@ const PREVIEW_FIELD_LIMIT = 8;
  * fields, fetched lazily on first hover and cached. Fixed-positioned at the cell
  * so the surrounding scroll containers can't clip it.
  */
-const RefPreviewCard = ({ anchor, state }: { anchor: { left: number; top: number }; state: Exclude<PreviewState, "idle"> }): ReactElement => {
+const RefPreviewCard = ({
+    anchor,
+    mask,
+    state,
+}: {
+    anchor: { left: number; top: number };
+    mask: MaskView;
+    state: Exclude<PreviewState, "idle">;
+}): ReactElement => {
     const t = useT();
     const style = { left: anchor.left, position: "fixed", top: anchor.top, zIndex: 50 } as CSSProperties;
 
@@ -315,7 +323,9 @@ const RefPreviewCard = ({ anchor, state }: { anchor: { left: number; top: number
     } else if (state.row === null) {
         body = <p className="px-3 py-2 text-xs text-muted-foreground">{t("No matching row.")}</p>;
     } else {
-        const entries = Object.entries(state.row).slice(0, PREVIEW_FIELD_LIMIT);
+        // Masked BEFORE slicing, so the preview shows what the grid would show for
+        // the same columns rather than the stored value.
+        const entries = Object.entries(maskRow(state.row, mask)).slice(0, PREVIEW_FIELD_LIMIT);
 
         body = (
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 px-3 py-2">
@@ -351,12 +361,14 @@ const RefPreviewCard = ({ anchor, state }: { anchor: { left: number; top: number
 const RefCell = ({
     column,
     id,
+    maskViewFor,
     onNavigate,
     onPreview,
     target,
 }: {
     column: string;
     id: string;
+    maskViewFor: (table: string, columns: ReadonlyArray<string>) => MaskView;
     onNavigate: (target: string, id: string) => void;
     onPreview: (target: string, id: string) => Promise<Record<string, unknown> | null>;
     target: string;
@@ -413,7 +425,13 @@ const RefCell = ({
             >
                 {id} ↗
             </button>
-            {anchor !== null && preview !== "idle" && <RefPreviewCard anchor={anchor} state={preview} />}
+            {anchor !== null && preview !== "idle" && (
+                <RefPreviewCard
+                    anchor={anchor}
+                    mask={maskViewFor(target, preview === "loading" || preview.row === null ? [] : Object.keys(preview.row))}
+                    state={preview}
+                />
+            )}
         </>
     );
 };
@@ -458,6 +476,15 @@ interface GridEdit {
 interface GridReferences {
     /** Column name → referenced table, for the columns that are foreign keys. */
     columns: Record<string, string> | undefined;
+
+    /**
+     * A mask view for the TARGET table of a hover preview, built from the fetched
+     * row's own keys. The grid's own `mask` covers the browsed table and does not
+     * apply to a row from somewhere else — without this the preview showed the
+     * target's `password` / `api_key` columns in the clear while the grid beside it
+     * masked exactly those.
+     */
+    maskViewFor: (table: string, columns: ReadonlyArray<string>) => MaskView;
     onNavigate: (target: string, id: string) => void;
     onPreview: (target: string, id: string) => Promise<Record<string, unknown> | null>;
 }
@@ -601,6 +628,7 @@ const EditableCell = ({
                 column={column}
                 id={String(rawValue)}
                 key={`${target}:${String(rawValue)}`}
+                maskViewFor={refs.maskViewFor}
                 onNavigate={refs.onNavigate}
                 onPreview={refs.onPreview}
                 target={target}

@@ -24,6 +24,25 @@ import type { WhereInput } from "./where-types";
 /** The implicit tiebreak appended to every sort so the order is total. */
 const TIEBREAK_FIELD = "id";
 
+/**
+ * Which way the implicit `id` tiebreak sorts: the same way the last real sort
+ * key does.
+ *
+ * It used to be pinned `asc`. That made a descending read emit
+ * `_creationTime DESC, id ASC` — two directions in one ORDER BY, which no
+ * single-direction index can satisfy. SQLite answered it with
+ * `USE TEMP B-TREE FOR LAST TERM OF ORDER BY`, sorting each tie group instead
+ * of walking the index backwards, and a descending page measured 1.4-2.0x
+ * slower than the aligned form. The DO builds every declared index as
+ * `(<fields>, _creationTime, id)`, so following the last key's direction is
+ * exactly what lets that index be read forwards OR backwards.
+ *
+ * {@link buildSeek} and every ORDER BY builder MUST use this one rule. A cursor
+ * seek that disagrees with its own ORDER BY about tie direction skips or repeats
+ * rows at a page boundary where the sort keys tie.
+ */
+const tiebreakDirectionFor = (keys: ReadonlyArray<{ direction?: string }>): SortDirection => (keys.at(-1)?.direction === "desc" ? "desc" : "asc");
+
 const ID_FIELDS = new Set(["_id", "id"]);
 
 /**
@@ -47,7 +66,19 @@ const normalizeOrderKeys = (orderBy: OrderByInput[] | undefined): OrderKey[] => 
     return keys;
 };
 
+/** Any code point outside ASCII — the test gating {@link toBase64}'s fast path. */
+const NON_ASCII = /[\u0080-\u{10FFFF}]/u;
+
 const toBase64 = (text: string): string => {
+    // `btoa` already takes a latin-1 string, and an all-ASCII string IS its own
+    // UTF-8 byte sequence — so for one the encode and the byte-by-byte rebuild
+    // below are both the identity. Cursors are `JSON.stringify` of a creation
+    // time and an id, so that is nearly always the case, and skipping the two
+    // passes measured ~7x on the encode. A non-ASCII id pays one extra scan.
+    if (!NON_ASCII.test(text)) {
+        return btoa(text);
+    }
+
     const bytes = new TextEncoder().encode(text);
     let binary = "";
 
@@ -66,6 +97,28 @@ const fromBase64 = (encoded: string): string => {
 };
 
 /**
+ * Prefix stamped on every cursor this build mints.
+ *
+ * A cursor is an opaque `[...sortValues, id]` tuple with no self-describing
+ * shape, so its BYTES cannot tell you which seek predicate was meant to read
+ * them. When the implicit `id` tiebreak changed direction (see
+ * {@link tiebreakDirectionFor}), the bytes stayed identical and only their
+ * MEANING moved: a cursor minted under `… DESC, id ASC` fed to the `… DESC,
+ * id DESC` predicate seeks the wrong way through a group of rows that tie on
+ * the real sort key.
+ *
+ * That is not hypothetical. A mounted paginated feed holds its page boundaries
+ * in client state for the life of the component and replays them on every
+ * reactive re-run, so a deploy hands pre-change cursors straight to the changed
+ * predicate. Measured on six rows tied on one `_creationTime`: the page came
+ * back holding a row from the PREVIOUS page while four rows became unreachable.
+ *
+ * `~` is deliberately outside the base64 alphabet, so a legacy (unprefixed)
+ * cursor can never be mistaken for a prefixed one whatever its payload.
+ */
+const CURSOR_PREFIX = "~2";
+
+/**
  * Encode the sort key of `doc` (the values of each `orderBy` field, then its
  * id) as an opaque base64 cursor. The id is always included so the seek has a
  * unique terminal column.
@@ -80,7 +133,7 @@ const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string
     // in here and threw `TypeError: Do not know how to serialize a BigInt` — the
     // same defect class this store's blob codec exists to fix, surviving in the
     // cursor. Identity for pure-JSON keys, so existing cursors are byte-identical.
-    return toBase64(JSON.stringify(encodeWire(values)));
+    return CURSOR_PREFIX + toBase64(JSON.stringify(encodeWire(values)));
 };
 
 /**
@@ -93,10 +146,19 @@ const invalidCursor = (): LunoraError => new LunoraError("BAD_REQUEST", "invalid
 
 /** Decode a cursor back into its ordered sort-key values (orderBy fields, then id). */
 const decodeCursor = (cursor: string): unknown[] => {
+    // Refuse an unprefixed cursor rather than seek with it. It was minted by a
+    // build whose tiebreak ran the other way, so reading it here returns rows
+    // from the wrong side of the tie group — silently, and looking exactly like
+    // a correct page. A typed 400 is recoverable (the client resets the feed);
+    // wrong rows presented as right ones are not.
+    if (!cursor.startsWith(CURSOR_PREFIX)) {
+        throw invalidCursor();
+    }
+
     let decoded: unknown;
 
     try {
-        decoded = decodeWire(JSON.parse(fromBase64(cursor)));
+        decoded = decodeWire(JSON.parse(fromBase64(cursor.slice(CURSOR_PREFIX.length))));
     } catch {
         // atob() throws InvalidCharacterError on non-base64 input, JSON.parse
         // throws SyntaxError on malformed JSON, and `decodeWire` throws
@@ -118,7 +180,9 @@ const decodeCursor = (cursor: string): unknown[] => {
  * prefix equalities with the pivot comparison `operatorFor` chooses.
  */
 const buildSeek = (keys: OrderKey[], cursorValues: unknown[], operatorFor: (direction: SortDirection, isFinal: boolean) => string): WhereInput => {
-    const columns: OrderKey[] = keys.some((key) => ID_FIELDS.has(key.field)) ? keys : [...keys, { direction: "asc", field: TIEBREAK_FIELD }];
+    const columns: OrderKey[] = keys.some((key) => ID_FIELDS.has(key.field))
+        ? keys
+        : [...keys, { direction: tiebreakDirectionFor(keys), field: TIEBREAK_FIELD }];
 
     const branches: WhereInput[] = [];
 
@@ -247,6 +311,7 @@ export {
     applySelect,
     buildSeekBeforeWhere,
     buildSeekWhere,
+    CURSOR_PREFIX,
     decodeCursor,
     encodeCursor,
     fromBase64,
@@ -254,6 +319,7 @@ export {
     isLiveForCompanion,
     normalizeOrderKeys,
     softDeleteScope,
+    tiebreakDirectionFor,
     toBase64,
 };
 

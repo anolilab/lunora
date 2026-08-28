@@ -1,3 +1,41 @@
+## @lunora/svelte [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.93...@lunora/svelte@1.0.0-alpha.94) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.60
+
+## @lunora/svelte [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.92...@lunora/svelte@1.0.0-alpha.93) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.59
+* **@lunora/errors:** upgraded to 1.0.0-alpha.24
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.27
+
+## @lunora/svelte [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.91...@lunora/svelte@1.0.0-alpha.92) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.58
+* **@lunora/errors:** upgraded to 1.0.0-alpha.23
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.26
+
+## @lunora/svelte [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.90...@lunora/svelte@1.0.0-alpha.91) (2026-08-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.57
+
+## @lunora/svelte [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.89...@lunora/svelte@1.0.0-alpha.90) (2026-08-24)
+
+### Features
+
+* **svelte:** accept reactive query args ([#467](https://github.com/anolilab/lunora/issues/467)) ([041b454](https://github.com/anolilab/lunora/commit/041b454da81cc4575431b588352055f5cf8d7527))
+
 ## @lunora/svelte [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.88...@lunora/svelte@1.0.0-alpha.89) (2026-08-23)
 
 

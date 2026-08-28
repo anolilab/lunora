@@ -225,6 +225,22 @@ export interface QueryArgs {
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
+
+    /**
+     * Return `continueCursor: null` without building one. **Engine-internal**, in
+     * the same sense as `baseWhere` / `relationBaseWhere` / `relationMask`: no
+     * user-facing query builder sets it.
+     *
+     * Set only by `findFirst`, which reads `page[0]` and discards the envelope —
+     * so the cursor it was handed cost an `encodeWire`, a `JSON.stringify` and a
+     * base64 for a value nobody reads, on a read that is one of the most common
+     * in the framework.
+     *
+     * A caller that sets this and then READS `continueCursor` gets `null` where a
+     * next page exists, and pages nowhere. `isDone` stays honest either way, so
+     * prefer it for "is there more". Nothing but `findFirst` should set this.
+     */
+    omitContinueCursor?: boolean;
     orderBy?: OrderByInput[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;
     relationMask?: RelationMask;
@@ -498,6 +514,54 @@ export interface MutationDelta {
 export interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
     asId?: (tableName: string, id: string) => string;
+
+    /**
+     * Which tables this store's change-data-capture log recorded a write to
+     * after `sinceSeq`, plus the log's current head — a metadata-only probe that
+     * reads no documents.
+     *
+     * It exists so a poller can find out that nothing it watches has changed
+     * without re-reading what it watches. The `.global()` shape path polls on a
+     * timer because a global table is written from other shards and other
+     * regions, with no coordinator to poke it; before this, every tick answered
+     * "did anything change?" by draining the entire membership of every live
+     * shape from the global backend and diffing it, which costs the same whether
+     * the answer is yes or no — and on a healthy deployment it is overwhelmingly
+     * no.
+     *
+     * Optional because it is only meaningful on a store with CDC enabled: a
+     * caller that gets `undefined` has no visibility and must fall back to
+     * re-reading, which is what every caller did before this method existed.
+     *
+     * `cursorOnly` asks for the head WITHOUT the table list, for a caller that
+     * has already decided to read everything this pass — a cold instance with no
+     * cursor to compare against, or a scheduled resync. Such a caller still needs
+     * a cursor to adopt so the NEXT pass can narrow, but the table list it would
+     * be handed is discarded, and computing it means scanning the changelog from
+     * `sinceSeq` — which on a cold instance is the whole log.
+     */
+    cdcChangedTables?: (
+        sinceSeq: number,
+        options?: { cursorOnly?: boolean },
+    ) => Promise<
+        | {
+              cursor: number;
+
+              /**
+               * Oldest `seq` the changelog still retains, when the store is
+               * configured to trim it. Absent means "nothing is ever trimmed",
+               * which is the default and makes the gap below impossible.
+               *
+               * A caller whose `sinceSeq` is under this floor has had the very
+               * rows it was about to reason about deleted, so `tables` UNDER-
+               * REPORTS: it must treat the answer as no-visibility and re-read
+               * everything, exactly as it does when this method is unavailable.
+               */
+              floor?: number;
+              tables: string[];
+          }
+        | undefined
+    >;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;

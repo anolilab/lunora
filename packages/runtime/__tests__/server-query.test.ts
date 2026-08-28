@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { encodeIdentityHeader } from "../../../shared/identity-header";
-import type { ExecutionContextLike, ResolvedIdentity } from "../src/create-worker";
+import type { ExecutionContextLike, ResolvedIdentity, ShardCaller } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -164,7 +164,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
 
         // `authorizeShard` denies the anonymous caller — the same gate `handleRpc`
         // runs. If `serverQuery` bypassed it, this is where the divergence would show.
-        const authorizeShard = vi.fn<(identity: ResolvedIdentity | null, shardKey: string) => boolean>((identity) => identity !== null);
+        const authorizeShard = vi.fn<(caller: ShardCaller) => boolean>(({ identity }) => identity !== null);
 
         const worker = createWorker({ authorizeShard, shardDO: shard.namespace });
 
@@ -184,7 +184,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
     it("allows an authenticated call through the auth gate identically on both paths", async () => {
         expect.assertions(3);
 
-        const authorizeShard = (identity: ResolvedIdentity | null): boolean => identity !== null;
+        const authorizeShard = ({ identity }: ShardCaller): boolean => identity !== null;
         const resolveIdentity = (): ResolvedIdentity => {
             return { userId: "user_42" };
         };
@@ -205,7 +205,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
     it("passes the resolved identity to authorizeShard the same way handleRpc does", async () => {
         expect.assertions(2);
 
-        const authorizeShard = vi.fn<(identity: ResolvedIdentity | null, shardKey: string) => boolean>(() => true);
+        const authorizeShard = vi.fn<(caller: ShardCaller) => boolean>(() => true);
         const resolveIdentity = (): ResolvedIdentity => {
             return { email: "u@example.com", userId: "user_42" };
         };
@@ -217,7 +217,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
         expect(authorizeShard).toHaveBeenCalledTimes(1);
         // Full identity object (not just userId) + the resolved shardKey — exactly
         // the arguments the HTTP path passes.
-        expect(authorizeShard).toHaveBeenCalledWith({ email: "u@example.com", userId: "user_42" }, "channel-7");
+        expect(authorizeShard).toHaveBeenCalledWith({ identity: { email: "u@example.com", userId: "user_42" }, shardKey: "channel-7" });
     });
 
     it("returns a BAD_REQUEST error Response (not a throw) for a non-reference, mirroring the HTTP catch", async () => {

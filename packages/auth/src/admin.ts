@@ -378,6 +378,39 @@ const MAX_BAN_SECONDS = 100 * 365 * 24 * 60 * 60;
 const INVITATION_TTL_MS = 48 * 60 * 60 * 1000;
 
 /**
+ * Plugin tables `removeUser` unwinds, each gated on the model actually being
+ * installed. None of these declare `onDelete: "cascade"` in better-auth's schema
+ * (only `session` and `account` do), so nothing removes them even on an
+ * FK-enforcing backend — and D1 has FK enforcement off entirely.
+ *
+ * The `oauth*` and `deviceCode` rows are the sharp end: an `oauthAccessToken` is a
+ * bearer credential a third party can present as the deleted user until its own
+ * expiry, and a refresh token mints fresh ones. `deleteUserSessions` reaches only
+ * the session-bound ones.
+ *
+ * `invitation` is keyed on `inviterId` — invitations the user *sent*; ones
+ * addressed **to** them are keyed by email, not user, and deliberately stay. Audit
+ * log rows are absent by design too (forensics outlive the account).
+ *
+ * Deliberately NOT here: `ssoProvider` and `oauthClient`. Their `userId` is the
+ * admin who *registered* a tenant-wide resource (a SAML/OIDC domain config, a
+ * dynamically-registered OAuth client), not a credential belonging to that user —
+ * removing them would break login for every OTHER user of that domain or app.
+ */
+const USER_CASCADE = [
+    { field: "userId", model: "member" },
+    { field: "userId", model: "teamMember" },
+    { field: "userId", model: "passkey" },
+    { field: "userId", model: "twoFactor" },
+    { field: "userId", model: "oauthAccessToken" },
+    { field: "userId", model: "oauthRefreshToken" },
+    { field: "userId", model: "oauthConsent" },
+    { field: "userId", model: "deviceCode" },
+    { field: "userId", model: "walletAddress" },
+    { field: "inviterId", model: "invitation" },
+] as const;
+
+/**
  * Columns never handed back to a browser across any model: bearer credentials,
  * password hashes, OAuth tokens, and 2FA secrets. A denylist (not an allowlist)
  * so app-defined `additionalFields` still pass through; the names cover the
@@ -460,6 +493,49 @@ const buildUserFields = (
     }
 
     return out;
+};
+
+/** Roles are stored as a comma-joined string, so an owner is matched by substring — the convention already used elsewhere in this file. */
+const isOwnerRole = (role: unknown): boolean => typeof role === "string" && role.includes("owner");
+
+/**
+ * Refuse to delete a user who is the only owner left in an organization.
+ *
+ * `removeUser` unwinds `member` rows, so without this the org survives with zero
+ * owners: nobody can administer it, invite to it, or delete it, and the operator
+ * gets no signal that it happened. Transferring ownership or calling
+ * `deleteOrganization` first are both explicit acts; silently orphaning an org is
+ * not one of them.
+ */
+const assertNotLastOwner = async (context_: Awaited<LunoraAuth["$context"]>, userId: string): Promise<void> => {
+    const memberships = await context_.adapter.findMany<{ organizationId?: string; role?: string }>({
+        model: "member",
+        where: [{ field: "userId", value: userId }],
+    });
+
+    const ownedOrgIds = memberships.filter((row) => isOwnerRole(row.role) && typeof row.organizationId === "string").map((row) => row.organizationId as string);
+
+    if (ownedOrgIds.length === 0) {
+        return;
+    }
+
+    const rosters = await Promise.all(
+        ownedOrgIds.map(async (organizationId) =>
+            context_.adapter.findMany<{ role?: string; userId?: string }>({
+                model: "member",
+                where: [{ field: "organizationId", value: organizationId }],
+            }),
+        ),
+    );
+
+    const orphaned = ownedOrgIds.find((_, index) => !rosters[index]?.some((row) => row.userId !== userId && isOwnerRole(row.role)));
+
+    if (orphaned !== undefined) {
+        throw new LunoraAuthAdminError(
+            `user is the last owner of organization ${orphaned} — transfer ownership or delete the organization first`,
+            "LAST_ORGANIZATION_OWNER",
+        );
+    }
 };
 
 /**
@@ -1061,8 +1137,28 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 await context_.adapter.delete({ model: "member", where: [{ field: "id", value: memberId }] });
             }),
 
+        // `internalAdapter.deleteUser` removes only `session`/`account`/`user` rows.
+        // FK cascade may be off (D1), so unwind {@link USER_CASCADE} explicitly —
+        // orphaned `twoFactor` rows would retain the TOTP secret and backup codes of
+        // an account that no longer exists.
+        //
+        // The cascade is several non-atomic writes ending in `deleteUser`, so a
+        // mid-failure leaves a partially-cascaded user; every step is idempotent, so
+        // re-running `removeUser` is the recovery.
         removeUser: ({ userId }) =>
             withContext(async (context_) => {
+                const tables = getAuthTables(context_.options);
+
+                if (tables["member"]) {
+                    await assertNotLastOwner(context_, userId);
+                }
+
+                await Promise.all(
+                    USER_CASCADE.filter(({ model }) => tables[model]).map(({ field, model }) =>
+                        context_.adapter.deleteMany({ model, where: [{ field, value: userId }] }),
+                    ),
+                );
+
                 await context_.internalAdapter.deleteUserSessions(userId);
                 await context_.internalAdapter.deleteUser(userId);
             }),
@@ -1105,9 +1201,42 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     throw new LunoraAuthAdminError(`password must be at most ${max.toString()} characters`, "PASSWORD_TOO_LONG");
                 }
 
+                // Existence first: hashing is a deliberately expensive KDF, and an
+                // unknown user should not be able to make the admin plane pay it.
+                if (!(await context_.internalAdapter.findUserById(userId))) {
+                    throw new LunoraAuthAdminError("user not found", "USER_NOT_FOUND");
+                }
+
+                // `updatePassword` is an updateMany filtered on `providerId: "credential"`
+                // — zero matching rows is a silent no-op. A user created without a
+                // password (or via OAuth) has no credential account yet, so create it.
+                const accounts = await context_.internalAdapter.findAccounts(userId);
+                const hasCredential = accounts.some((account) => account.providerId === "credential");
+
+                // Creating one on a deployment with email+password turned off would
+                // plant a password login that goes live the day the feature is enabled.
+                // Rotating an EXISTING credential stays allowed — that account was a
+                // deliberate act whenever it was made.
+                if (!hasCredential && context_.options.emailAndPassword?.enabled !== true) {
+                    throw new LunoraAuthAdminError("email/password sign-in is disabled for this deployment", "EMAIL_PASSWORD_DISABLED");
+                }
+
                 const hashed = await context_.password.hash(newPassword);
 
-                await context_.internalAdapter.updatePassword(userId, hashed);
+                if (hasCredential) {
+                    await context_.internalAdapter.updatePassword(userId, hashed);
+                } else {
+                    await context_.internalAdapter.linkAccount({
+                        // `accountId`, not the `providerAccountId` 1.7.0's prereleases
+                        // briefly used — GA reverted that rename. Same shape as the
+                        // create-user path above.
+                        accountId: userId,
+                        issuer: createLocalAccountIssuer("credential"),
+                        password: hashed,
+                        providerId: "credential",
+                        userId,
+                    });
+                }
             }),
 
         unbanUser: ({ userId }) =>

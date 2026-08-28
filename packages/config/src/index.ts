@@ -12,6 +12,7 @@ export {
     LUNORA_SKILL_NAMES,
     ROOT_SKILL_NAME,
 } from "./agent-rules";
+export { CODEGEN_ENV, isCodegenDisabled } from "./codegen-env";
 export type { ContainerIR, DiscoverContainerInfoResult } from "./container-info";
 export { discoverContainerInfo } from "./container-info";
 export type {
@@ -62,6 +63,7 @@ export {
     DEV_VARS_KEY_PATTERN,
     escapeRegExp,
     parseDevVariableEntries,
+    removeDevVariableLine,
     upsertDevVariableLine,
 } from "./dev-variables-format";
 export { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "./driver-registry";

@@ -374,9 +374,13 @@ const withAuthAudit = <Options extends { hooks?: { after?: unknown } }>(options:
 
     const after = existing
         ? async (context: unknown): Promise<unknown> => {
-              await existing(context);
+              const returned = await existing(context);
 
-              return (audit as unknown as (context: unknown) => Promise<unknown>)(context);
+              await (audit as unknown as (context: unknown) => Promise<unknown>)(context);
+
+              // The audit hook records a side effect and must never replace a
+              // response the caller's own hook produced.
+              return returned;
           }
         : audit;
 

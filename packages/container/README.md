@@ -196,7 +196,7 @@ await lunora.mutation("jobs:markDone", { id: pending[0].id });
 
 The token is a bearer your Worker's `resolveIdentity` recognizes — pass it to the container as a `secret`. Non-JS containers can `POST /_lunora/rpc` with `{ functionPath, args }` directly.
 
-Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization")`, strip the `Bearer ` prefix, and compare the token against a Worker secret (e.g. `env.LUNORA_CONTAINER_TOKEN`) you also forward to the container. Return a `{ userId }` identity only on a match and `null` otherwise — an unrecognised request then runs anonymously and is rejected by your functions' own authorization checks. See [Securing the bridge](https://lunora.sh/docs/addons/containers#securing-the-bridge) for the full example.
+Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization")`, strip the `Bearer ` prefix, and compare the token against a Worker secret (e.g. `env.LUNORA_CONTAINER_TOKEN`) you also forward to the container. Return a `{ userId }` identity only on a match and `null` otherwise — an unrecognised request then runs anonymously and is rejected by your functions' own authorization checks. See [Securing the bridge](https://lunora.sh/docs/packages/container#securing-the-bridge) for the full example.
 
 ### Entry points
 
@@ -204,7 +204,7 @@ Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization
 - `@lunora/container/do` — workerd-only: the `LunoraContainer` base class the generated DO classes extend (pulls in `@cloudflare/containers`).
 - `@lunora/container/bridge` — runtime-agnostic: `createContainerBridge` for calling Lunora functions from inside a container.
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/containers)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/container)**.
 
 ### Known platform limitations
 

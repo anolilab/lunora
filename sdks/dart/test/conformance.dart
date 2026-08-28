@@ -29,6 +29,14 @@ import 'wire_cases.dart';
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
 Future<void> main() async {
+  // Red until proven green, because Dart's failure mode here is silence: an
+  // abandoned `main()` — a case awaiting a future nothing completes — drains the
+  // event loop and exits 0 having printed nothing, which is exactly how this
+  // suite once reported PASS with 16 of its 69 cases run. `exitCode` is the
+  // status the VM uses when it falls off the end, so setting it here means every
+  // path that does not reach the bottom of this function is a failure.
+  exitCode = 1;
+
   await run(caseWireCodecRoundTrip);
   await run(caseUndefinedIsDistinctFromNull);
   await run(caseOverLongBigIntRejected);
@@ -48,6 +56,8 @@ Future<void> main() async {
   await run(caseShapeSubscribeFrame);
   await run(casePokeSequenceMaterialisesRows);
   await run(casePokePartsDoNotApplyBeforePokeEnd);
+  await run(caseResetPokeReplacesTheView);
+  await run(casePendingPokeBuffersAreBounded);
   await run(caseWireValuePassesModelJsonThrough);
   await run(caseWatchStreamUnsubscribesOnCancel);
   await run(caseWatchSupportsManyListenersAndReListening);
@@ -118,6 +128,7 @@ Future<void> main() async {
   }
 
   if (failures.isEmpty) {
+    exitCode = 0;
     stdout.writeln('PASS  $executed cases, covering all ${required.length} in the shared manifest');
     return;
   }

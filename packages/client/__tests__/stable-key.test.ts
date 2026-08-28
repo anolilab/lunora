@@ -18,6 +18,39 @@ describe("stableStringify fail-loud contract", () => {
         expect(stableStringify({ b: undefined, a: 1 })).toBe('{"a":1}');
     });
 
+    it("escapes strings exactly as JSON.stringify does, in both keys and values", () => {
+        // 15 hazards, asserted as both a value and a key.
+        expect.assertions(30);
+
+        // The encoder skips `JSON.stringify` for strings that provably cannot
+        // escape. Every hazard below must still encode identically, or two
+        // distinct values could share one cache key and be served each other's
+        // data. Lone surrogates are the subtle case: `JSON.stringify` escapes a
+        // lone half to `\udXXX` while a well-formed pair passes through.
+        const hazards = [
+            "plain",
+            "",
+            '"',
+            "\\",
+            'say "hi"',
+            "tab\there",
+            "newline\nhere",
+            "\u0000",
+            "\u001F",
+            "\u007F",
+            "café",
+            "\u{1F680}",
+            "\uD800",
+            "\uDFFF",
+            "a\uDC00b",
+        ];
+
+        for (const text of hazards) {
+            expect(stableStringify(text)).toBe(JSON.stringify(text));
+            expect(stableStringify({ [text]: 1 })).toBe(`{${JSON.stringify(text)}:1}`);
+        }
+    });
+
     it("throws a clear error on a bigint instead of JSON.stringify's cryptic one", () => {
         expect.assertions(2);
 

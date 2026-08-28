@@ -309,6 +309,9 @@ describe("handleCorsPreflight", () => {
 
         expect(exposed).toContain("x-d1-bookmark");
         expect(exposed).toContain("x-lunora-shard-key");
+        // The REST edge-cache hit indicator: documented as readable, so a browser
+        // client has to actually be able to read it.
+        expect(exposed).toContain("x-lunora-edge-cache");
     });
 
     it("ignores non-preflight OPTIONS and disabled CORS", () => {

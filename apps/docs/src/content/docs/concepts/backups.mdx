@@ -252,8 +252,74 @@ Import the referenced table before the table that references it.
 Snapshots are point-in-time. To keep an external warehouse or ETL sink in step
 with the deployment as it changes, use the continuous CDC export tap instead: it
 streams the shard op-log to named sinks with at-least-once, per-shard-ordered,
-resumable delivery. Configuration and delivery semantics are covered in
-[@lunora/runtime](/docs/packages/runtime#continuous-cdc-export-tap).
+resumable delivery.
+
+### Keeping the changelog from growing forever
+
+The tap reads a per-shard changelog (`__cdc_log`) that the shard appends to on
+every committed mutation. Nothing trims it by default, so on a write-heavy shard
+it grows for the lifetime of the app. Two environment variables bound it, and
+both are off unless you set them:
+
+| Variable                       | What it does                                                                                                                      |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `LUNORA_CDC_PAYLOAD_RETENTION` | Keeps the newest N entries' documents and strips the rest, retaining every key. The documents are where nearly all the bytes are. |
+| `LUNORA_CDC_LOG_RETENTION`     | Keeps the newest N entries and **deletes** the rest outright.                                                                     |
+
+They are deliberately opt-in. A shard can read the cursors of its own
+subscribers and never sweeps past the slowest of them, but it cannot see where
+an external consumer sits — a warehouse connector holds a cursor token issued by
+the Worker, and nothing in the shard knows what it is. So you state the window
+you can afford, and the sweep additionally never crosses the in-shard floor.
+
+Both are parsed strictly. `LUNORA_CDC_LOG_RETENTION=10k` is not "10,000" — it is
+ignored entirely, which is the safe reading for a value that controls a delete.
+
+### Archiving trimmed entries to R2
+
+Trimming is a cliff. A consumer that resumes below the retained window is told
+to re-seed from a full snapshot, which for a connector that was offline over a
+weekend means re-downloading the shard because a few megabytes of changelog were
+deleted.
+
+Bind an R2 bucket as `LUNORA_CDC_ARCHIVE` and the sweep uploads entries before
+destroying them, so the export tap above can be served out of the archive
+instead of being refused:
+
+```jsonc
+// wrangler.jsonc
+{
+    "r2_buckets": [{ "binding": "LUNORA_CDC_ARCHIVE", "bucket_name": "my-app-cdc-archive" }],
+    "vars": { "LUNORA_CDC_LOG_RETENTION": "100000" },
+}
+```
+
+There is no flag to turn this on — the presence of the binding is the switch,
+and a shard without it behaves exactly as before. Four things worth knowing:
+
+- **It needs `LUNORA_CDC_LOG_RETENTION`.** Payload retention alone keeps every
+  key, so there is no cliff to soften and nothing is uploaded.
+- **Nothing is deleted before the upload is acknowledged.** A failed upload
+  skips that cycle's trim; the log stays larger until the next sweep.
+- **Nothing prunes the archive.** It grows without bound by design. Set an R2
+  lifecycle rule on the bucket if you want it bounded — an expired segment
+  leaves a hole the read-back reports as a refusal, never as a silent gap.
+- **A point-in-time restore orphans everything already archived.** Segments are
+  filed under the changelog's epoch, and a restore forks the timeline onto a new
+  one. That is deliberate — entries describing changes that no longer happened
+  must not be servable — but no read path will ever reach the old segments
+  again, and nothing deletes them. Clear the bucket after a
+  [PITR restore](#point-in-time-recovery), or keep paying for them.
+
+A consumer far enough behind is still told to re-seed: a read reaches back a
+bounded number of segments, which at the default sweep cadence covers roughly
+half an hour of continuous trimming.
+
+<Callout type="warn">
+    **This serves the export tap, and nothing else.** A reconnecting realtime subscriber below the retained window still re-seeds, and so does a read replica —
+    both check the floor before they read and never reach the archive. Binding the bucket will not stop your clients re-downloading a shape after a long
+    disconnect; it stops your warehouse connector re-downloading the shard.
+</Callout>
 
 ## Practising a restore
 

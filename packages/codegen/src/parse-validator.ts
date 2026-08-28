@@ -35,15 +35,21 @@ const FIELD_NAME_RE = /^[A-Za-z_$][\w$]*$/u;
  * `defineTable`. They unwrap to the base validator's IR with the constraint
  * recorded under `column`, rather than counting as their own validator kind.
  */
-const COLUMN_MODIFIERS = new Set(["$defaultFn", "$onUpdateFn", "$type", "default", "defaultNow", "nullable", "unique"]);
+const COLUMN_MODIFIERS = new Set(["$defaultFn", "$onUpdateFn", "$type", "default", "defaultNow", "nullable", "serverDefault", "unique"]);
 
 const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR => {
     const column: ColumnMetaIR = { notNull: true, ...base.column };
 
     switch (modifier) {
+        // `.serverDefault(fn)` joins the defaults: it stamps the column from the
+        // request auth on every write and returns `TInsert | undefined`, so the
+        // field is optional on insert for the same reason as the others. It is
+        // also the documented way to make a field non-client-controllable, so
+        // refusing to parse it took a security control down with the build.
         case "$defaultFn":
         case "default":
-        case "defaultNow": {
+        case "defaultNow":
+        case "serverDefault": {
             column.hasDefault = true;
 
             break;
@@ -85,14 +91,34 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
 const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "geoPoint", "null", "number", "string", "timestamp"]);
 
 /**
- * Refinement/annotation modifiers that hang off any base `v.*` validator
- * (`.check(pred, …)` adds a runtime predicate; `.meta({ schema })` merges a
- * JSON Schema fragment). Neither changes the validator's *kind* or the TS type
- * it emits, so codegen unwraps them to the base validator's IR. Without this the
- * parser would treat `check`/`meta` as unknown kinds and throw — even though the
- * `unbounded_string_arg` advisor explicitly recommends them for length bounds.
+ * Modifiers that carry a RUNTIME PREDICATE: `.check(...)` spelled out, and every
+ * named refinement `@lunora/values` puts on the column surfaces —
+ * `v.string().max(200)`, `v.number().int()`, `v.string().email()`, and the rest of
+ * `StringColumnValidator` / `NumberColumnValidator` / `ArrayColumnValidator`.
+ *
+ * Each is a `self.check(...)` at runtime (see `v.ts`), so it refines the value
+ * without changing the validator's kind, and each records `hasRefinement` for the
+ * same reason: the predicate is a closure the IR cannot represent, so the AOT
+ * compiler must decline the node rather than emit a fast path that accepts a
+ * 10,000-character string the interpreted parser rejects.
+ *
+ * Absent from this set the named ones reached {@link parseBuilderMember} as if
+ * `.max` were a validator factory, and codegen ABORTED with `Unsupported
+ * validator kind: max` — on a schema column as readily as on an `.input()` arg,
+ * so a published, publicly-typed API made the whole app ungeneratable.
+ *
+ * Kept in sync with `packages/values/src/v.ts` by a test that reads the three
+ * interfaces and asserts set equality in both directions — the failure mode of
+ * drift here is that hard abort, not a degraded type.
  */
-const TRANSPARENT_MODIFIERS = new Set(["check", "meta"]);
+const REFINEMENT_MODIFIERS = new Set(["check", "email", "int", "length", "max", "min", "pattern", "positive", "url"]);
+
+/**
+ * Modifiers that are pure ANNOTATION: they attach metadata (a JSON Schema
+ * fragment) and leave both the kind and the accepted values alone, so the IR
+ * passes through untouched and the AOT compiler may still compile the node.
+ */
+const METADATA_MODIFIERS = new Set(["meta"]);
 
 /**
  * Identifiers currently being followed to their declaration, so a self- or
@@ -124,7 +150,22 @@ const resolvingAliases = new Set<Identifier>();
  */
 const resolveValidatorAlias = (identifier: Identifier): Expression | undefined => {
     const symbol = identifier.getSymbol();
-    const declaration = (symbol?.getAliasedSymbol() ?? symbol)?.getValueDeclaration();
+    let declaration = (symbol?.getAliasedSymbol() ?? symbol)?.getValueDeclaration();
+
+    // A shorthand property (`{ bounded }`) is its own initializer, so the
+    // identifier reaching here IS the property name — and its symbol is the
+    // PROPERTY, whose declaration is the shorthand assignment rather than the
+    // const it stands for. Resolution stopped there and the field degraded to
+    // `unknown` in the public api surface, while the longhand `{ bounded: bounded }`
+    // spelling of the same thing resolved fine. Silent, and the wrong way round:
+    // `object-shorthand` autofixes the working spelling into the broken one.
+    // `getValueSymbol` is the checker's answer to "what does this shorthand
+    // stand for"; the aliased hop after it covers an imported validator.
+    if (declaration !== undefined && Node.isShorthandPropertyAssignment(declaration)) {
+        const valueSymbol = declaration.getValueSymbol();
+
+        declaration = (valueSymbol?.getAliasedSymbol() ?? valueSymbol)?.getValueDeclaration();
+    }
 
     if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
         return undefined;
@@ -394,7 +435,12 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     const member = callee.getName();
     const args = call.getArguments();
 
-    if (COLUMN_MODIFIERS.has(member) || TRANSPARENT_MODIFIERS.has(member)) {
+    // Every modifier unwraps to its receiver's IR; the three sets differ only in
+    // what they then record. Partitioned by EFFECT so adding a modifier means
+    // choosing which list it belongs in — a single `member === …` comparison
+    // standing in for one of the sets is how the next addition silently gets the
+    // wrong treatment.
+    if (COLUMN_MODIFIERS.has(member) || REFINEMENT_MODIFIERS.has(member) || METADATA_MODIFIERS.has(member)) {
         const receiver = callee.getExpression();
         const base = Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
 
@@ -402,16 +448,11 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
             return applyColumnModifier(base, member);
         }
 
-        // `.check(...)` / `.meta(...)` refine or annotate the base validator without
-        // altering its kind — unwrap to the receiver's IR. `.check(...)` additionally
-        // records a `hasRefinement` flag (its predicate is a runtime closure the IR
-        // can't represent) so the AOT compiler declines the node; `.meta(...)` is pure
-        // metadata and leaves the IR unchanged.
-        return member === "check" ? { ...base, hasRefinement: true } : base;
+        return REFINEMENT_MODIFIERS.has(member) ? { ...base, hasRefinement: true } : base;
     }
 
     return parseBuilderMember(member, args, call);
 };
 
-export { parseObjectShape, parseValidator, setStandardTypeResolver };
+export { COLUMN_MODIFIERS, METADATA_MODIFIERS, parseObjectShape, parseValidator, REFINEMENT_MODIFIERS, setStandardTypeResolver };
 export type { StandardTypeResolver };

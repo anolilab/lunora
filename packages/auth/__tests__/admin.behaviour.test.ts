@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { createAuthAdmin } from "../src/admin";
 import { createAuth } from "../src/create-auth";
-import { admin } from "../src/plugins";
+import { admin, deviceAuthorization, jwt, oauthProvider, organization, twoFactor } from "../src/plugins";
 
 /**
  * Round-trip behaviour for `createAuthAdmin`, exercised against the real
@@ -133,6 +133,68 @@ describe("createAuthAdmin", () => {
         await expect(adminApi.setUserPassword({ newPassword: "x", userId: user.id })).rejects.toThrow(/PASSWORD_TOO_SHORT|at least/iu);
     });
 
+    const credentialAccounts = (userId: string): Record<string, unknown>[] =>
+        (database["account"] ?? []).filter((row) => {
+            const account = row as { providerId?: string; userId?: string };
+
+            return account.userId === userId && account.providerId === "credential";
+        }) as Record<string, unknown>[];
+
+    it("creates the credential account when setting a password for a user without one", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "nopw@example.com", name: "NoPw" });
+
+        expect(credentialAccounts(user.id)).toHaveLength(0);
+
+        await adminApi.setUserPassword({ newPassword: STRONG_PASSWORD, userId: user.id });
+
+        const accounts = credentialAccounts(user.id);
+
+        expect(accounts).toHaveLength(1);
+        expect(typeof accounts[0]?.["password"]).toBe("string");
+    });
+
+    it("rejects setting a password for an unknown user", async () => {
+        expect.assertions(1);
+
+        await expect(adminApi.setUserPassword({ newPassword: STRONG_PASSWORD, userId: "no-such-user" })).rejects.toThrow(/USER_NOT_FOUND|not found/iu);
+    });
+
+    it("updates the existing credential account without adding a second one", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "haspw@example.com", name: "HasPw", password: STRONG_PASSWORD });
+        const before = credentialAccounts(user.id)[0]?.["password"];
+
+        await adminApi.setUserPassword({ newPassword: "another sound password", userId: user.id }); // gitleaks:allow -- test fixture password, not a real secret
+
+        const accounts = credentialAccounts(user.id);
+
+        expect(accounts).toHaveLength(1);
+        expect(typeof accounts[0]?.["password"]).toBe("string");
+        expect(accounts[0]?.["password"]).not.toBe(before);
+    });
+
+    it("refuses to plant a credential account on a deployment with email+password disabled", async () => {
+        expect.assertions(2);
+
+        const oauthOnlyDatabase = seedMemoryDatabase();
+        const oauthOnlyAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(oauthOnlyDatabase),
+            plugins: [admin()],
+            secret: SECRET,
+        });
+        const oauthOnlyAdmin = createAuthAdmin(oauthOnlyAuth);
+
+        const user = await oauthOnlyAdmin.createUser({ email: "oauthonly@example.com", name: "OAuthOnly" });
+
+        // Creating one here would go live the day email+password is switched on.
+        await expect(oauthOnlyAdmin.setUserPassword({ newPassword: STRONG_PASSWORD, userId: user.id })).rejects.toThrow(/EMAIL_PASSWORD_DISABLED|disabled/iu);
+        expect(oauthOnlyDatabase["account"]).toHaveLength(0);
+    });
+
     it("mints an impersonation token for a user", async () => {
         expect.assertions(2);
 
@@ -186,6 +248,152 @@ describe("createAuthAdmin", () => {
         await adminApi.removeUser({ userId: user.id });
 
         expect(userRow(user.id)).toBeUndefined();
+    });
+
+    it("removes a user cleanly when no plugin tables exist", async () => {
+        expect.assertions(1);
+
+        // The default harness has no organization/two-factor/passkey plugins,
+        // so every cascade gate must skip rather than throw.
+        const user = await adminApi.createUser({ email: "noplugins@example.com", name: "NoPlugins" });
+
+        await expect(adminApi.removeUser({ userId: user.id })).resolves.toBeUndefined();
+    });
+
+    it("cascades removeUser over user-keyed plugin tables", async () => {
+        expect.assertions(5);
+
+        const pluginDatabase: Record<string, unknown[]> = {
+            ...seedMemoryDatabase(),
+            invitation: [],
+            member: [],
+            organization: [],
+            team: [],
+            teamMember: [],
+            twoFactor: [],
+        };
+        const pluginAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(pluginDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), organization({ teams: { enabled: true } }), twoFactor()],
+            secret: SECRET,
+        });
+        const pluginAdmin = createAuthAdmin(pluginAuth);
+
+        const user = await pluginAdmin.createUser({ email: "cascade@example.com", name: "Cascade" });
+        const survivor = await pluginAdmin.createUser({ email: "stays@example.com", name: "Stays" });
+
+        const org = await pluginAdmin.createOrganization({ name: "Cascade Org", ownerId: user.id });
+
+        // A second owner, so removing `user` doesn't trip the last-owner guard.
+        await pluginAdmin.addMember({ organizationId: org.id, role: "owner", userId: survivor.id });
+        await pluginAdmin.inviteMember({ email: "guest@example.com", inviterId: user.id, organizationId: org.id });
+
+        // The harness has no endpoint-level 2FA/team enrolment; seed the
+        // user-keyed rows directly — the cascade only cares about the rows.
+        pluginDatabase["twoFactor"]?.push({ backupCodes: "codes", id: "tf1", secret: "totp-secret", userId: user.id });
+        pluginDatabase["teamMember"]?.push({ createdAt: new Date(), id: "tm1", teamId: "team1", userId: user.id });
+
+        await pluginAdmin.removeUser({ userId: user.id });
+
+        const rowsFor = (model: string, field: string): unknown[] =>
+            (pluginDatabase[model] ?? []).filter((row) => (row as Record<string, unknown>)[field] === user.id);
+
+        expect(rowsFor("member", "userId")).toHaveLength(0);
+        expect(rowsFor("teamMember", "userId")).toHaveLength(0);
+        expect(rowsFor("twoFactor", "userId")).toHaveLength(0);
+        expect(rowsFor("invitation", "inviterId")).toHaveLength(0);
+
+        // Scoped strictly to the removed user: the survivor's membership stays.
+        expect((pluginDatabase["member"] ?? []).filter((row) => (row as Record<string, unknown>)["userId"] === survivor.id)).toHaveLength(1);
+    });
+
+    it("cascades removeUser over the OAuth-provider credential tables", async () => {
+        expect.assertions(5);
+
+        const oauthDatabase: Record<string, unknown[]> = {
+            ...seedMemoryDatabase(),
+            deviceCode: [],
+            oauthAccessToken: [],
+            oauthClient: [],
+            oauthConsent: [],
+            oauthRefreshToken: [],
+        };
+        const oauthAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(oauthDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), jwt(), oauthProvider({ consentPage: "/consent", loginPage: "/sign-in" }), deviceAuthorization()],
+            secret: SECRET,
+        });
+        const oauthAdmin = createAuthAdmin(oauthAuth);
+
+        const user = await oauthAdmin.createUser({ email: "tokens@example.com", name: "Tokens" });
+
+        // Issuing these needs a full third-party authorization dance; the rows are
+        // what the cascade acts on. None of these declare onDelete in better-auth's
+        // schema, so nothing else would ever remove them.
+        oauthDatabase["oauthAccessToken"]?.push({ accessToken: "at-live", clientId: "c1", id: "at1", userId: user.id });
+        oauthDatabase["oauthRefreshToken"]?.push({ clientId: "c1", id: "rt1", refreshToken: "rt-live", userId: user.id });
+        oauthDatabase["oauthConsent"]?.push({ clientId: "c1", consentGiven: true, id: "oc1", userId: user.id });
+        oauthDatabase["deviceCode"]?.push({ deviceCode: "dc", id: "dc1", userCode: "ABCD", userId: user.id });
+        // A client this user registered belongs to everyone using that app — it stays.
+        oauthDatabase["oauthClient"]?.push({ clientId: "c1", id: "cl1", userId: user.id });
+
+        await oauthAdmin.removeUser({ userId: user.id });
+
+        expect(oauthDatabase["oauthAccessToken"]).toHaveLength(0);
+        expect(oauthDatabase["oauthRefreshToken"]).toHaveLength(0);
+        expect(oauthDatabase["oauthConsent"]).toHaveLength(0);
+        expect(oauthDatabase["deviceCode"]).toHaveLength(0);
+        expect(oauthDatabase["oauthClient"]).toHaveLength(1);
+    });
+
+    it("refuses to remove the last owner of an organization instead of orphaning it", async () => {
+        expect.assertions(3);
+
+        const orgDatabase: Record<string, unknown[]> = { ...seedMemoryDatabase(), invitation: [], member: [], organization: [] };
+        const orgAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(orgDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), organization()],
+            secret: SECRET,
+        });
+        const orgAdmin = createAuthAdmin(orgAuth);
+
+        const owner = await orgAdmin.createUser({ email: "sole@example.com", name: "Sole" });
+        await orgAdmin.createOrganization({ name: "Sole Owner Co", ownerId: owner.id });
+
+        await expect(orgAdmin.removeUser({ userId: owner.id })).rejects.toThrow(/LAST_ORGANIZATION_OWNER|last owner/iu);
+
+        // Refused, not half-applied: the user and their membership both survive.
+        expect(orgDatabase["user"]).toHaveLength(1);
+        expect(orgDatabase["member"]).toHaveLength(1);
+    });
+
+    it("removes an org member who is not the last owner", async () => {
+        expect.assertions(2);
+
+        const orgDatabase: Record<string, unknown[]> = { ...seedMemoryDatabase(), invitation: [], member: [], organization: [] };
+        const orgAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(orgDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), organization()],
+            secret: SECRET,
+        });
+        const orgAdmin = createAuthAdmin(orgAuth);
+
+        const owner = await orgAdmin.createUser({ email: "keeps@example.com", name: "Keeps" });
+        const plain = await orgAdmin.createUser({ email: "plain@example.com", name: "Plain" });
+        const org = await orgAdmin.createOrganization({ name: "Two Person Co", ownerId: owner.id });
+
+        await orgAdmin.addMember({ organizationId: org.id, userId: plain.id });
+
+        await expect(orgAdmin.removeUser({ userId: plain.id })).resolves.toBeUndefined();
+        expect(orgDatabase["member"]).toHaveLength(1);
     });
 
     it("reports capabilities from the enabled plugins", async () => {

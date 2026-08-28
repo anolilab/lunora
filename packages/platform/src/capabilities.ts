@@ -71,6 +71,21 @@ export interface PlatformCapabilities {
         /** Global (replicated) tables backed by a SQL store. */
         globalTables?: Capability;
 
+        /**
+         * A shared HTTP cache in front of the app that the runtime can READ AND
+         * WRITE — the Web Cache API (`caches.default` on Cloudflare), projected
+         * as `HttpCacheLike`.
+         *
+         * Rated separately from the app merely emitting `Cache-Control`, because
+         * only this half needs a host primitive. Emitting the header is portable
+         * by construction: any host that returns an HTTP response can do it, and
+         * browsers and downstream CDNs honour it wherever the app runs. What is
+         * not portable is a store the Worker itself can `match`/`put` against,
+         * which is why `@lunora/runtime`'s REST edge cache degrades to
+         * headers-only on a target rated `unsupported` rather than failing.
+         */
+        httpCache?: Capability;
+
         /** BYO database via connection pooling (Hyperdrive / RDS Proxy). */
         hyperdrive?: Capability;
 
@@ -92,6 +107,8 @@ export interface PlatformCapabilities {
          * host either populates or does not.
          */
         identityProxy?: Capability;
+        /** Image transforms (resize/format/optimize) via an Images binding. */
+        images?: Capability;
         /** Key-value storage (KV / Redis / DynamoDB). */
         keyValueStore?: Capability;
         /** Local SQL execution inside a shard. */
@@ -113,7 +130,15 @@ export interface PlatformCapabilities {
          */
         memoryTables?: Capability;
 
-        /** Object storage (R2 / S3 / MinIO). */
+        /**
+         * Object storage (R2 / S3 / MinIO).
+         *
+         * `ctx.storage.deleteAfterCommit(key)` rides on this rating and gets no
+         * key of its own: it needs no host primitive beyond the bucket. The
+         * post-commit flush uses `ShardHost.waitUntil` where the host has one and
+         * is awaited inline where it does not, so a host that can serve
+         * `objectStorage` serves the deferral at the same level.
+         */
         objectStorage?: Capability;
 
         /**
@@ -126,6 +151,24 @@ export interface PlatformCapabilities {
          * a scheduler to run the unattended half.
          */
         objectStorageBackups?: Capability;
+
+        /**
+         * The CDC changelog's cold tier: rows a retention sweep is about to
+         * destroy are written to an object-storage bucket first
+         * (`LUNORA_CDC_ARCHIVE`), and a consumer whose cursor has fallen below
+         * the retained window is served from there instead of being told to
+         * re-seed.
+         *
+         * Distinct from `objectStorage` because it needs the bucket to do one
+         * thing a plain byte store need not: resume a key-ordered listing from a
+         * position (`list({ startAfter })`). Without it the read-back re-lists
+         * the prefix from the front every time and stops finding the range it
+         * needs once enough segments precede the cursor — which fails as a
+         * refusal rather than a gap, but fails permanently and silently, so a
+         * host that cannot seek should say `unsupported` here rather than
+         * inherit `objectStorage`'s rating.
+         */
+        objectStorageCdcArchive?: Capability;
 
         /** Pipelines / streaming data. */
         pipelines?: Capability;
@@ -220,8 +263,12 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         objectStorage: { level: "native", note: "R2" },
         objectStorageBackups: {
-            level: "native",
-            note: "`lunora backup create|list|restore --bucket` writes NDJSON snapshots + a manifest sidecar per snapshot through the admin storage routes (checksum-verified upload, admin-gated object read), and `backupCron`/`backupStore` runs the same layout unattended on a Cron Trigger. Both are bounded by what a single request body / a Worker isolate can hold, not by R2",
+            level: "emulated",
+            note: "`lunora backup create|list|restore --bucket` writes NDJSON snapshots + a manifest sidecar per snapshot through the admin storage routes (checksum-verified upload, admin-gated object read), and `backupCron`/`backupStore` runs the same layout unattended on a Cron Trigger. Both are bounded by what a single request body / a Worker isolate can hold, not by R2. `emulated` because every part of that is Lunora's — R2 supplies a bucket, and Cloudflare has no backup product being consumed here; the snapshot format, the manifest, the checksum gate and the retention report are all ours",
+        },
+        objectStorageCdcArchive: {
+            level: "emulated",
+            note: "R2 supplies the bucket and the `startAfter` listing the segment keys are indexed on; everything above that is Lunora's — the segment format, the archive-before-trim ordering the sweep defers behind `waitUntil`, and the de-overlapping read-back. The platform has no notion of a changelog to tier, so this is not a product being consumed",
         },
         keyValueStore: { level: "native", note: "Workers KV" },
         vectorStore: {
@@ -230,6 +277,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: { level: "native", note: "Workers AI" },
         browser: { level: "native", note: "Browser Rendering" },
+        images: { level: "native", note: "Cloudflare Images binding" },
         containers: {
             level: "native",
             note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container image serves",
@@ -239,6 +287,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
         hyperdrive: { level: "native", note: "Cloudflare Hyperdrive" },
+        httpCache: {
+            level: "native",
+            note: "The colo cache via caches.default. Worker-generated responses are NOT stored by it automatically — the runtime has to caches.default.put() them — and it honours Vary for Accept-Encoding only, so a varying response has to fold those header values into the cache key itself. A 206, a Vary: *, or a Set-Cookie-bearing response is refused by put()",
+        },
         identityProxy: {
             level: "native",
             note: "Cloudflare Access. A policy attached to the Worker covers its custom domains, routes, workers.dev and preview URLs at once, and the authenticated identity arrives on the execution context as ctx.access — no header to verify, and nothing a request can forge to manufacture one. A hostname-scoped Access application instead stamps the Cf-Access-Jwt-Assertion header, which needs no host support at all",
@@ -348,6 +400,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "The commands work unchanged, but the bucket underneath is createNodeR2Bucket — a directory on the same machine the CLI runs on, so a bucket-backed backup here is not the separate failure domain it is on Cloudflare. The scheduled half additionally needs this host's scheduler, which exists but is not a shipping target",
         },
+        objectStorageCdcArchive: {
+            level: "emulated",
+            note: "createNodeR2Bucket implements the `startAfter` seek the segment index needs, so the read-back behaves as it does on R2. Same caveat as the backups above: the bucket is a directory on the machine running the host, so archiving the changelog here moves it off SQLite but not off the disk that would take the shard with it",
+        },
         objectStorage: {
             level: "emulated",
             note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys fold the way the host filesystem folds them, so `A` and `a` are one object on a case-insensitive volume where real R2 keeps two. No multipart uploads, no presigned URLs",
@@ -356,6 +412,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
         ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
+        images: { level: "unsupported", note: "No Images-equivalent binding implemented" },
         containers: {
             level: "unsupported",
             note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec to run a command in either",
@@ -365,6 +422,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         mail: { level: "unsupported", note: "@lunora/mail's queue-backed sends need a queues binding, which this target does not provide" },
         secrets: { level: "unsupported", note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars)" },
         hyperdrive: { level: "unsupported", note: "No connection-pooling binding implemented" },
+        httpCache: {
+            level: "unsupported",
+            note: "Nothing sits in front of this host to cache its responses, and Node exposes no Web Cache API global — the runtime's REST edge cache finds no HttpCacheLike here and degrades to emitting Cache-Control alone, which browsers and any CDN in front still honour",
+        },
         identityProxy: {
             level: "unsupported",
             note: "Nothing sits in front of this host to authenticate callers, so it never populates the execution context's access identity. @lunora/cloudflare-access still works here through its Cf-Access-Jwt-Assertion fallback, which is a plain header check and needs no host support",

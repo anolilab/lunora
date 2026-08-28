@@ -15,6 +15,7 @@ PostHog browser analytics is initialized globally for the TanStack Start docs si
     Change the region or the path in one layer and you must change the other. There is no shared constant; the comments in each file point at the other.
 
 - **Environment:** Real values are set in `.env` (gitignored); the variable names are documented in `.env.example`. `VITE_PUBLIC_POSTHOG_HOST` is **not** the ingestion host — ingestion is the proxy path above. It only feeds `ui_host`, which drives the "view in PostHog" links the toolbar renders.
+- **Consent:** the init opts out of capture and of device persistence by default and runs `cookieless_mode: "on_reject"`, so nothing is stored on the device before the visitor answers the banner. `AnalyticsProvider` carries the c15t decision across by calling `applyMeasurementConsent`; it must not call `init` itself, because posthog-js treats a second `init` as a no-op and the settings above would silently never apply.
 - **Identity:** `identify()` was skipped. This is an unauthenticated documentation/marketing site with no login, registration, logout, session, or application user model, so no stable identity source was available to wire.
 - **Error tracking:** `capture_exceptions: true` is set on the global init. No additional error boundary or manual route-level capture was added.
 
@@ -76,6 +77,7 @@ Still unverified by anything:
 
 - [ ] **Verify delivery in a deploy preview.** Trigger each of the four actions and confirm the events arrive and populate the dashboard. Specifically confirm `/pr/posthog/static/*` and `/pr/posthog/*` return 200 with PostHog content and not the SSR HTML shell — that check is what defect 1 slipped past.
 - [ ] Set `VITE_PUBLIC_POSTHOG_PROJECT_TOKEN` and `VITE_PUBLIC_POSTHOG_HOST` in every deploy environment, not only local `.env`. Names are in `.env.example`.
+- [ ] **Enable "Cookieless server hash mode" in the PostHog project settings.** `cookieless_mode: "on_reject"` counts pre-consent and rejected visitors through PostHog's server-side daily-salted hash; without the project setting those events are dropped rather than counted, so every visitor who has not yet answered the banner is invisible.
 - [ ] Confirm the Netlify plan permits proxy rewrites to an external host; if not, the `/pr/posthog` design cannot work and `api_host` should point at `VITE_PUBLIC_POSTHOG_HOST` directly, accepting that ad blockers will then drop a share of events.
 - [ ] Run the full production build and the test suite; update any mocks or fixtures affected by the new `capture()` calls in `src/pages/cloud/index.tsx`, `src/pages/home/sections/hero.tsx`, `src/pages/start/install-command.tsx`, `src/pages/packages/detail.tsx`, and `src/components/sections/agent-panel.tsx`.
 - [ ] Decide the fate of this report file (see Known limitations), and stage the integration deliberately — several of the touched files are shared with other in-flight work in this checkout, so `git add -A` is the wrong move here.

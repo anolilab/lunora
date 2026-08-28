@@ -21,7 +21,7 @@ export interface R2S3Credentials {
 
 /** Options for {@link Storage.getPresignedUrl}. */
 export interface PresignedUrlOptions {
-    /** Seconds the URL stays valid; clamped to [1, 604800]. Default 900. */
+    /** Seconds the URL stays valid: 1 to 604800 (7 days); an out-of-range value throws. Default 900. */
     expiresInSeconds?: number;
     /** HTTP method the URL authorizes. Default `GET`. */
     method?: "GET" | "PUT";
@@ -136,10 +136,10 @@ export interface Storage {
 
     /**
      * Read a stored object's metadata (size, content-type, sha256, upload time,
-     * custom metadata) without fetching its body. Returns `null` when the object
-     * is absent. Backed by an R2 HEAD (`bucket.head`) when available, falling
-     * back to a 0-length ranged `get()` otherwise. Mirrors Convex's
-     * `ctx.storage.getMetadata`.
+     * custom metadata) without fetching its body, as a flat serializable shape.
+     * Returns `null` when the object is absent. A projection of
+     * {@link Storage.head}, so it makes the same single body-free read. Mirrors
+     * Convex's `ctx.storage.getMetadata`.
      */
     getMetadata: (key: string) => Promise<ObjectMetadata | null>;
 
@@ -153,6 +153,20 @@ export interface Storage {
     getPresignedUrl: (key: string, options?: PresignedUrlOptions) => Promise<string>;
     getSignedUrl: (key: string, options?: SignedUrlOptions) => Promise<string>;
     getUrl: (key: string) => string;
+
+    /**
+     * Read an object's R2 metadata WITHOUT its body — `size` (the full object
+     * size), `etag`, `httpMetadata`, `checksums`, plus the `sha256`/`sha256Base64`
+     * projection `download()` adds. Returns `null` when the object is absent.
+     *
+     * Backed by an R2 HEAD when the binding exposes one, falling back to a
+     * 0-length ranged `get()` otherwise. Prefer this over `download()` whenever
+     * only the metadata is wanted — notably to resolve a `Range` header, where a
+     * plain `download()` starts a full-object body transfer that is then thrown
+     * away. {@link Storage.getMetadata} is the flat, serializable projection of
+     * the same read.
+     */
+    head: (key: string) => Promise<R2ObjectLike | null>;
     list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }>;
 
     /**

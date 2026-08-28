@@ -5,6 +5,7 @@ import { createContext, use, useState } from "react";
 
 import { useT } from "../../../i18n/i18n-context";
 import { adminRef, callOptions, dispatchByKind, errorMessage, fireAndForget } from "../../../lib/internal";
+import restDispatch from "../../../lib/rest-dispatch";
 import type { ApiOperation } from "./openapi-model";
 import { exampleForSchema } from "./schema-view";
 
@@ -92,29 +93,9 @@ const OperationRunProvider = ({ children, operation }: OperationRunProviderProps
         const startedAt = performance.now();
 
         try {
-            let value: unknown;
-
-            if (operation.functionPath === undefined) {
-                // Plain REST route: best-effort fetch of the path with a JSON body.
-                const hasBody = operation.method !== "GET" && operation.method !== "HEAD";
-                const fetchResponse = await fetch(operation.httpPath, {
-                    body: hasBody ? JSON.stringify(parsedArgs) : undefined,
-                    headers: hasBody ? { "content-type": "application/json" } : undefined,
-                    method: operation.method,
-                });
-
-                // Read the body once, then parse — a Response stream can't be read
-                // twice, so `.json().catch(() => .text())` would throw on a non-JSON body.
-                const text = await fetchResponse.text();
-
-                try {
-                    value = JSON.parse(text);
-                } catch {
-                    value = text;
-                }
-            } else {
-                value = await dispatchByKind(client, operation.kind, adminRef(operation.functionPath), parsedArgs, callOptions(shardKey));
-            }
+            const value: unknown = await (operation.functionPath === undefined
+                ? restDispatch(operation, parsedArgs, client.url, client.getAuthToken())
+                : dispatchByKind(client, operation.kind, adminRef(operation.functionPath), parsedArgs, callOptions(shardKey)));
 
             setResponse(value);
             setDurationMs(Math.round(performance.now() - startedAt));

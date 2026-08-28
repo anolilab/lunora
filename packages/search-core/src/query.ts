@@ -20,7 +20,6 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { SearchAnalyzer } from "./analyzer";
-import { splitSearchTokens } from "./text";
 
 /**
  * One page of search results, structurally identical to the runtime's generic
@@ -36,18 +35,6 @@ interface SearchPage {
     isDone: boolean;
     page: Record<string, unknown>[];
 }
-
-/** Base64 for cursor text. Kept local so this package stays free of engine imports. */
-const toBase64 = (text: string): string => {
-    const bytes = new TextEncoder().encode(text);
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
-
-    return btoa(binary);
-};
 
 const fromBase64 = (encoded: string): string => {
     const binary = atob(encoded);
@@ -108,16 +95,20 @@ export const buildFtsMatch = (tokens: ReadonlyArray<string>): string =>
     tokens.map((token, index) => (index === tokens.length - 1 ? `"${token}"*` : `"${token}"`)).join(" AND ");
 
 /**
- * Score a document's indexed text against the query tokens with AND semantics:
- * every non-final token must appear exactly, the final token matches as a
- * prefix. Returns 0 (no match) unless all tokens are present; otherwise the sum
- * of occurrences, giving a coarse term-frequency relevance order — the ranking
- * the inverted index reproduces in SQL as `SUM(occurrences)`.
+ * Score a document's analyzed token stream against the query tokens with AND
+ * semantics: every non-final token must appear exactly, the final token matches
+ * as a prefix. Returns 0 (no match) unless all tokens are present; otherwise the
+ * sum of occurrences, giving a coarse term-frequency relevance order — the
+ * ranking the inverted index reproduces in SQL as `SUM(occurrences)`.
+ *
+ * Takes the token array rather than the document text on purpose. The caller
+ * (the DO's no-FTS5 fallback scan) already has to analyze the document to know
+ * what the other layouts would have stored, so a text-shaped entry point made it
+ * join those tokens into a string and re-run the entire fold + match + filter
+ * pipeline to split them apart again — per candidate row, up to the scan cap.
+ * Pair this with `analyzedSearchTokens`.
  */
-export const scoreDocument = (text: string, tokens: ReadonlyArray<string>, analyzer: SearchAnalyzer): number => {
-    // The document side keeps repeats: occurrences are the score.
-    const documentTokens = splitSearchTokens(text, analyzer);
-
+export const scoreTokens = (documentTokens: ReadonlyArray<string>, tokens: ReadonlyArray<string>): number => {
     if (documentTokens.length === 0) {
         return 0;
     }
@@ -304,7 +295,7 @@ export const searchPageScan = (plan: SearchPagePlan): number => Math.min(plan.of
  * it opaque, matching the keyset cursors elsewhere so callers never learn to
  * parse one.
  */
-export const encodeSearchCursor = (offset: number): string => toBase64(`search:${String(offset)}`);
+export const encodeSearchCursor = (offset: number): string => btoa(`search:${String(offset)}`);
 
 /**
  * Decode a search page cursor back to its offset. Returns `undefined` for

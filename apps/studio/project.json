@@ -5,7 +5,7 @@
         "lint:eslint": {
             "cache": true,
             "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
-            "command": "eslint ."
+            "command": "eslint . --max-warnings=0"
         },
         "lint:eslint:fix": {
             "cache": true,

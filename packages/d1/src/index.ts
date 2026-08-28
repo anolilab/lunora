@@ -19,7 +19,7 @@ export {
     runD1GlobalTableMigrations,
     runD1RankMigrations,
     runD1SearchMigrations,
-    trimD1CdcChanges,
+    sweepD1CdcRetention,
 } from "./d1-ctx-db";
 export type {
     FacetGlobalColumnOptions,
@@ -38,3 +38,4 @@ export { d1QueryTag, emitD1QueryCost, readD1QueryCost } from "./query-metrics";
 export type { D1RetryOptions } from "./retry";
 export { D1TimeoutError, isTransientD1Error, retryingExec, withD1Retry } from "./retry";
 export { default as sqliteDialect } from "./sqlite-dialect";
+export { applyCdcChanges } from "@lunora/shard-engine";

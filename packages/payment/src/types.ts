@@ -7,7 +7,6 @@
 
 /**
  * ISO-4217 currency code (uppercase, 3 letters). Not enumerated — provider coverage varies.
- * @experimental
  */
 // eslint-disable-next-line sonarjs/redundant-type-aliases -- a documented semantic alias, intentional
 export type CurrencyCode = string;
@@ -17,7 +16,6 @@ export type CurrencyCode = string;
  *
  * `minorUnits` is a `bigint`, which is **not** JSON-serializable — cross the RPC/wire boundary
  * with the `toMoneyJSON` / `fromMoneyJSON` helpers (see `./money`).
- * @experimental
  */
 export interface Money {
     readonly currency: CurrencyCode;

@@ -22,6 +22,17 @@ const DEFAULT_OG_IMAGE = `${SITE_URL}${OG_FALLBACK_PATH}`;
 const isFallbackImage = (value?: null | string): boolean =>
     typeof value !== "string" || value.trim() === "" || value === OG_FALLBACK_PATH || value === DEFAULT_OG_IMAGE;
 
+/**
+ * A post's own cover art as an absolute URL, or `undefined` when it has none.
+ *
+ * Every consumer of frontmatter `image` goes through this, because each one
+ * that did not repeated a bug: string-concatenating `SITE_URL` mangles an
+ * absolute `image:` into `https://lunora.sh/https://…`, and a plain truthiness
+ * test treats the shared `/og-default.jpg` as real art — which is what put one
+ * image on six posts. `new URL` handles both site-relative and absolute values.
+ */
+const coverImageUrl = (value?: null | string): string | undefined => (isFallbackImage(value) ? undefined : new URL(value ?? "", SITE_URL).href);
+
 interface SeoOptions {
     canonical?: string;
     description?: string;
@@ -74,4 +85,4 @@ export const createSeoHead = (options: SeoOptions): { links: Record<string, stri
 
 export const createJsonLd = (data: Record<string, unknown>): string => JSON.stringify({ "@context": "https://schema.org", ...data });
 
-export { DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, isFallbackImage, SITE_NAME, SITE_URL };
+export { coverImageUrl, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, isFallbackImage, SITE_NAME, SITE_URL };

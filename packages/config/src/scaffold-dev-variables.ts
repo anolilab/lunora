@@ -6,14 +6,8 @@ import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 
-import {
-    DEV_VARS_EXAMPLE_FILE,
-    DEV_VARS_FILE,
-    DEV_VARS_NEWLINE,
-    parseDevVariableEntries,
-    splitDevVariableLine,
-    unquoteDevVariable,
-} from "./dev-variables-format";
+import { isSecretKeyName } from "../../../shared/secret-key";
+import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_NEWLINE, parseDevVariableEntries, parseDevVariableLine } from "./dev-variables-format";
 import type { SecretEntry } from "./package-secrets-registry";
 import { CORE_SECRETS, PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 
@@ -38,9 +32,6 @@ const requiredSecrets = (packageNames: ReadonlyArray<string>): SecretEntry[] => 
 
 /** Bytes of entropy per generated secret — 32 bytes → 64 hex chars (matches `openssl rand -hex 32`). */
 const SECRET_BYTES = 32;
-
-/** A key whose value is a secret we should generate rather than copy from the example. */
-const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
 
 /**
  * Markers that flag a value as a fill-me-in placeholder rather than a usable
@@ -116,8 +107,6 @@ const isPlaceholderValue = (value: string): boolean => {
     });
 };
 
-const isPlaceholder = (rawValue: string): boolean => isPlaceholderValue(unquoteDevVariable(rawValue.trim()));
-
 /** Default secret generator — 64 hex chars, like `openssl rand -hex 32`. */
 const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString("hex");
 
@@ -130,7 +119,7 @@ const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString(
  */
 const PROVIDER_SECRET_KEYS: ReadonlySet<string> = new Set(
     [...CORE_SECRETS, ...Object.values(PACKAGE_SECRETS_REGISTRY).flat()]
-        .filter((entry) => SECRET_KEY.test(entry.key) && entry.placeholderValue.startsWith("<"))
+        .filter((entry) => isSecretKeyName(entry.key) && entry.placeholderValue.startsWith("<"))
         .map((entry) => entry.key),
 );
 
@@ -140,7 +129,7 @@ const PROVIDER_SECRET_KEYS: ReadonlySet<string> = new Set(
  * `LUNORA_ADMIN_TOKEN`, `STORAGE_SIGNING_SECRET`. False for provider-issued keys
  * ({@link PROVIDER_SECRET_KEYS}) and any non-secret key.
  */
-const isMintableSecretKey = (key: string): boolean => SECRET_KEY.test(key) && !PROVIDER_SECRET_KEYS.has(key);
+const isMintableSecretKey = (key: string): boolean => isSecretKeyName(key) && !PROVIDER_SECRET_KEYS.has(key);
 
 /**
  * The fresh secret to substitute for an example `key=value` entry, or `undefined`
@@ -155,8 +144,8 @@ const isMintableSecretKey = (key: string): boolean => SECRET_KEY.test(key) && !P
  * minting a random value for one would be actively wrong (the provider would
  * reject it) and would hide the misconfiguration.
  */
-const generatedSecretFor = (key: string, rawValue: string, randomHex: (bytes: number) => string): string | undefined =>
-    isMintableSecretKey(key) && isPlaceholder(rawValue) ? randomHex(SECRET_BYTES) : undefined;
+const generatedSecretFor = (key: string, value: string, randomHex: (bytes: number) => string): string | undefined =>
+    isMintableSecretKey(key) && isPlaceholderValue(value) ? randomHex(SECRET_BYTES) : undefined;
 
 /** Mint a fresh strong secret value — 64 hex chars (32 bytes), like `openssl rand -hex 32`. */
 const generateSecretValue = (randomHex: (bytes: number) => string = defaultRandomHex): string => randomHex(SECRET_BYTES);
@@ -169,7 +158,7 @@ const generateSecretValue = (randomHex: (bytes: number) => string = defaultRando
  */
 const fillSecretLines = (content: string, randomHex: (bytes: number) => string, filledKeys: string[]): string[] =>
     content.split(DEV_VARS_NEWLINE).map((line) => {
-        const parsed = splitDevVariableLine(line);
+        const parsed = parseDevVariableLine(line);
         const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex) : undefined;
 
         if (!parsed || secret === undefined) {
@@ -222,6 +211,30 @@ interface AugmentPlan {
 }
 
 /**
+ * Render `value` for interpolation into a double-quoted `.dev.vars` entry.
+ *
+ * `parseDevVariableLine` runs dotenv's own parser, which EXPANDS `\n` and `\r`
+ * inside a double-quoted example value. Re-emitting that expansion verbatim
+ * would put a physical line break inside the entry, and every rewrite here is
+ * line-oriented (`env set` / `env unset` replace whole lines), so the tail would
+ * be left behind as an orphaned fragment. Re-escaping puts the value back in the
+ * form dotenv expands to exactly what it read.
+ *
+ * A literal `"` or `\` has no such form — dotenv does not unescape `\"`, so
+ * there is no way to spell one inside a double-quoted value. Rather than emit a
+ * line whose quote closes early and silently truncates the value, those render
+ * empty for the developer to fill in, which is what an example placeholder is
+ * for anyway.
+ */
+const renderExampleValue = (value: string): string => {
+    if (value.includes('"') || value.includes("\\")) {
+        return "";
+    }
+
+    return value.replaceAll("\r", String.raw`\r`).replaceAll("\n", String.raw`\n`);
+};
+
+/**
  * Plan how to top up an existing `.dev.vars` from the example: every example key
  * not already present becomes an appended line (secret placeholders filled with
  * fresh random hex, other values copied). Pure — no I/O. Empty `missingKeys`
@@ -241,7 +254,7 @@ const planDevVariablesAugment = (input: {
     const missingKeys: string[] = [];
 
     for (const line of input.exampleContent.split(DEV_VARS_NEWLINE)) {
-        const parsed = splitDevVariableLine(line);
+        const parsed = parseDevVariableLine(line);
 
         if (!parsed || present.has(parsed.key)) {
             continue;
@@ -252,7 +265,7 @@ const planDevVariablesAugment = (input: {
         missingKeys.push(parsed.key);
 
         if (secret === undefined) {
-            additions.push(`${parsed.key}="${unquoteDevVariable(parsed.value)}"`);
+            additions.push(`${parsed.key}="${renderExampleValue(parsed.value)}"`);
         } else {
             generatedKeys.push(parsed.key);
             additions.push(`${parsed.key}="${secret}"`);
@@ -511,7 +524,7 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
         devVariablesPath,
         (currentContent) => planDevVariablesAugment({ existingContent: currentContent, exampleContent, randomHex: deps.randomHex }).additions,
     );
-    const writtenKeys = written.map((line) => splitDevVariableLine(line)?.key).filter((key): key is string => key !== undefined);
+    const writtenKeys = written.map((line) => parseDevVariableLine(line)?.key).filter((key): key is string => key !== undefined);
 
     // A concurrent writer may have landed every missing key between our plan and
     // the CAS append, leaving nothing for us to write. Report that as an
@@ -631,7 +644,7 @@ const planDevSecretsFill = (input: { existingContent: string; randomHex?: (bytes
     const lines = fillSecretLines(input.existingContent, randomHex, filledKeys);
 
     // 2. Append any missing core secret (a present-but-empty one is already
-    //    handled by the fill pass — every CORE_SECRETS key matches SECRET_KEY).
+    //    handled by the fill pass — every CORE_SECRETS key is secret-named).
     const present = new Set(parseDevVariableEntries(input.existingContent).map((entry) => entry.key));
     const addedKeys: string[] = [];
     const additions: string[] = [];

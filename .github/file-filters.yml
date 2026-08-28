@@ -8,7 +8,14 @@
 # `failure`/`cancelled`.
 
 # Anything that can affect a package's build/test graph.
+#
+# The workflow and this file are listed per the self-listing rule above: the test job
+# carries the assertion that some matrix leg still runs on an FTS5-capable Node, so a PR
+# that drops that leg by editing the matrix must not be able to skip the job that would
+# have caught it.
 packages: &packages
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
     - "**/tsconfig*.json"
     - "pnpm-lock.yaml"
     - "pnpm-workspace.yaml"
@@ -60,12 +67,25 @@ dependency_manifests:
 
 # Files a generator owns are regenerated and diffed. The generators read package
 # manifests and project metadata, so any of those can stale a committed output.
+# `packages/codegen` is the emitter behind every example's committed
+# `lunora/_generated` tree — an emit change stales all 13 at once and matches none
+# of the manifest globs above, which is how they drifted unnoticed.
 generated_files:
     - "**/package.json"
     - "**/project.json"
     - "apps/docs/src/data/packages-metadata.json"
     - "apps/docs/scripts/generate-*.js"
     - "scripts/generate-*.js"
+    - "scripts/check-generated-files.mjs"
+    - "packages/codegen/**"
+    - "examples/**"
+    # Self-listed, per the rule at the top of this file: the job's own workflow now
+    # carries a `build:packages` step the codegen sweep cannot run without. A PR that
+    # edited only `lint.yml` to drop it would match `frontend_lintable` (so eslint
+    # still ran) but not this filter, so the generated-files job would be skipped and
+    # its required check would stay green while the guard it protects was removed.
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
 
 yaml_lintable:
     - "**/*.yml"

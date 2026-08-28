@@ -28,6 +28,7 @@ import { join } from "@visulima/path";
 import { Spinner } from "@visulima/spinner";
 import { Project } from "ts-morph";
 
+import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -533,9 +534,6 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger): void => {
     );
 };
 
-/** A `.dev.vars` key whose value is a secret (vs. a plain config var like a URL). Module-scoped to avoid recompilation. */
-const SECRET_LIKE_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
-
 /** The secret keys this project requires on the deployed worker: its packages' + any secret-typed local var. */
 const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
     let packages: ReadonlyArray<string> = [];
@@ -558,7 +556,7 @@ const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
             // a non-secret var (e.g. a URL) belongs in wrangler.jsonc `vars`, not secrets.
             fromLocal = parseDevVariableEntries(readFileSync(devVariablesPath, "utf8"))
                 .map((entry) => entry.key)
-                .filter((key) => SECRET_LIKE_KEY.test(key));
+                .filter((key) => isSecretKeyName(key));
         }
     } catch {
         // Unreadable .dev.vars → packages-only.

@@ -83,7 +83,8 @@ seam from the root); consumers import everything from the root `@lunora/sql-stor
 - Migration runners (each takes `(exec, schema, dialect)`, or `(exec, dialect)`
   for CDC): `runSqlGlobalTableMigrations`, `runSqlAggregateMigrations`,
   `runSqlRankMigrations`, `runSqlSearchMigrations`, `runSqlCdcMigration`.
-- CDC log helpers: `readSqlCdcChanges`, `trimSqlCdcChanges`.
+- CDC log helpers: `readSqlCdcChanges`, `readSqlCdcChangedTables`,
+  `readSqlCdcFloor`, `sweepSqlCdcRetention`.
 - Value codec building blocks a dialect reuses for `encode`/`decode`:
   `sqliteEncode`, `sqliteDecode`, `decodeBigint`, `tryJsonParse`,
   `effectiveColumnKind`.

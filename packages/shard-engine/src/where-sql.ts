@@ -19,17 +19,19 @@ import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
-import { sqliteInList, WORKERD_SQLITE_LIMITS } from "./drizzle";
+import { WORKERD_SQLITE_LIMITS } from "./drizzle";
+import type { WhereFragments } from "./where-fragments";
+import { drizzleFragments } from "./where-fragments";
 import type { FieldOperators, WhereInput } from "./where-types";
 import { RELATION_EXISTS_KEY } from "./where-types";
 
 /** Maps a logical field name to its dialect SQL reference (already a drizzle `SQL`). */
-type FieldRefSql = (field: string) => SQL;
+type FieldRefSql<T> = (field: string) => T;
 
 /** Maps a JS value to its bound storage form (boolean → 1/0, etc.). */
 type SerializeValue = (value: unknown) => unknown;
 
-interface WhereSqlStrategy {
+interface WhereSqlStrategy<T = SQL> {
     /**
      * Dialect substring test, given the field reference and the bound search
      * term. Absent ⇒ SQLite's `instr(lower(ref), lower(term)) > 0`.
@@ -46,13 +48,13 @@ interface WhereSqlStrategy {
      * column collation (`LOCATE`, case-insensitive by default), Postgres' is
      * case-sensitive (`strpos`).
      */
-    containsExpr?: (reference: SQL, term: SQL) => SQL;
+    containsExpr?: (reference: T, term: T) => T;
 
-    fieldRef: FieldRefSql;
+    fieldRef: FieldRefSql<T>;
 
     /**
      * Dialect `IN` / `NOT IN` rendering over an already-serialized value list.
-     * Absent ⇒ SQLite's {@link sqliteInList}, which switches a wide list to a
+     * Absent ⇒ SQLite's bounded `sqliteInList`, which switches a wide list to a
      * single `json_each` parameter.
      *
      * Defaulted to the bounded form rather than to a literal `IN (?, ?, …)` for
@@ -68,7 +70,7 @@ interface WhereSqlStrategy {
      * tree, so several `in` filters in one `where` cannot add up past the cap
      * the way a fixed per-list threshold lets them.
      */
-    inList?: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => SQL;
+    inList?: (reference: T, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => T;
 
     /**
      * Optional correlated-EXISTS push-down hook: compiles a {@link RELATION_EXISTS_KEY}
@@ -81,9 +83,12 @@ interface WhereSqlStrategy {
      * concept; typing it here would couple the shared compiler to a single store.
      * The supplier casts it at its own boundary (where it owns the type).
      */
-    relationExists?: (request: unknown) => SQL;
+    relationExists?: (request: unknown) => T;
     serialize: SerializeValue;
 }
+
+/** Placeholder budget for an `in` list when the tree holds only one — the whole statement's share. */
+const IN_LIST_DEFAULT_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
 
 const OPERATOR_KEYS = ["eq", "ne", "lt", "lte", "gt", "gte", "in", "notIn", "isNull", "contains"] as const;
 const OPERATOR_KEY_SET = new Set<string>(OPERATOR_KEYS);
@@ -106,33 +111,40 @@ const isOperatorObject = (value: unknown): value is FieldOperators => {
  * literally, so a client-supplied `%` or `a%b%c%…` is just text rather than a
  * live pattern.
  */
-const compileContains = (reference: SQL, value: unknown, strategy: WhereSqlStrategy): SQL => {
-    const term = sql`${strategy.serialize(value)}`;
+const compileContains = <T>(reference: T, value: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T => {
+    const term = fragments.value(strategy.serialize(value));
 
-    return strategy.containsExpr ? strategy.containsExpr(reference, term) : sql`instr(lower(${reference}), lower(${term})) > 0`;
+    return strategy.containsExpr ? strategy.containsExpr(reference, term) : fragments.contains(reference, term);
 };
 
-const compileComparator = (reference: SQL, operator: string, comparator: string, value: unknown, strategy: WhereSqlStrategy): SQL => {
+const compileComparator = <T>(
+    reference: T,
+    operator: string,
+    comparator: string,
+    value: unknown,
+    strategy: WhereSqlStrategy<T>,
+    fragments: WhereFragments<T>,
+): T => {
     // `= NULL` / `<> NULL` never match; map null comparisons to IS [NOT] NULL.
     if (value === null) {
-        return operator === "ne" ? sql`${reference} IS NOT NULL` : sql`${reference} IS NULL`;
+        return fragments.nullCheck(reference, operator === "ne");
     }
 
-    return sql`${reference} ${sql.raw(comparator)} ${strategy.serialize(value)}`;
+    return fragments.binary(reference, comparator, strategy.serialize(value));
 };
 
-const compileInList = (reference: SQL, keyword: "IN" | "NOT IN", value: unknown, strategy: WhereSqlStrategy): SQL => {
+const compileInList = <T>(reference: T, keyword: "IN" | "NOT IN", value: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T => {
     const items = Array.isArray(value) ? value : [];
 
     if (items.length === 0) {
         // `IN ()` is a syntax error: an empty set matches nothing, its complement everything.
-        return keyword === "IN" ? sql`0 = 1` : sql`1 = 1`;
+        return fragments.constant(keyword === "NOT IN");
     }
 
     const serialized = items.map((item) => strategy.serialize(item));
     const negated = keyword === "NOT IN";
 
-    return (strategy.inList ?? sqliteInList)(reference, serialized, negated);
+    return strategy.inList ? strategy.inList(reference, serialized, negated) : fragments.inList(reference, serialized, negated, IN_LIST_DEFAULT_BUDGET);
 };
 
 /** The `IN` / `NOT IN` rendering a dialect with no bounded list form uses: one bound placeholder per item. */
@@ -145,9 +157,9 @@ const literalInList = (reference: SQL, items: ReadonlyArray<unknown>, negated: b
     return negated ? sql`${reference} NOT IN (${list})` : sql`${reference} IN (${list})`;
 };
 
-const compileFieldOperators = (reference: SQL, operators: FieldOperators, strategy: WhereSqlStrategy): SQL[] => {
+const compileFieldOperators = <T>(reference: T, operators: FieldOperators, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T[] => {
     const record = operators as Record<string, unknown>;
-    const clauses: SQL[] = [];
+    const clauses: T[] = [];
 
     for (const operator of OPERATOR_KEYS) {
         if (!(operator in record)) {
@@ -158,13 +170,13 @@ const compileFieldOperators = (reference: SQL, operators: FieldOperators, strate
         const comparator = BINARY_COMPARATORS[operator];
 
         if (comparator) {
-            clauses.push(compileComparator(reference, operator, comparator, value, strategy));
+            clauses.push(compileComparator(reference, operator, comparator, value, strategy, fragments));
         } else if (operator === "isNull") {
-            clauses.push(value ? sql`${reference} IS NULL` : sql`${reference} IS NOT NULL`);
+            clauses.push(fragments.nullCheck(reference, !value));
         } else if (operator === "contains") {
-            clauses.push(compileContains(reference, value, strategy));
+            clauses.push(compileContains(reference, value, strategy, fragments));
         } else {
-            clauses.push(compileInList(reference, operator === "in" ? "IN" : "NOT IN", value, strategy));
+            clauses.push(compileInList(reference, operator === "in" ? "IN" : "NOT IN", value, strategy, fragments));
         }
     }
 
@@ -172,18 +184,18 @@ const compileFieldOperators = (reference: SQL, operators: FieldOperators, strate
 };
 
 /** Compile a single `field: value` pair — operator object or equality shorthand. */
-const compileField = (field: string, value: unknown, strategy: WhereSqlStrategy): SQL[] => {
+const compileField = <T>(field: string, value: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T[] => {
     const reference = strategy.fieldRef(field);
 
     if (isOperatorObject(value)) {
-        return compileFieldOperators(reference, value, strategy);
+        return compileFieldOperators(reference, value, strategy, fragments);
     }
 
     if (value === null) {
-        return [sql`${reference} IS NULL`];
+        return [fragments.nullCheck(reference, false)];
     }
 
-    return [sql`${reference} = ${strategy.serialize(value)}`];
+    return [fragments.binary(reference, "=", strategy.serialize(value))];
 };
 
 /**
@@ -207,7 +219,7 @@ const compileField = (field: string, value: unknown, strategy: WhereSqlStrategy)
  * Solves the same shape of problem as `unionAll` in `./drizzle`, which nests the
  * compound-`SELECT` chain against its own ceiling.
  */
-const joinClauses = (clauses: SQL[], connector: "AND" | "OR"): SQL | undefined => {
+const joinClauses = <T>(clauses: T[], connector: "AND" | "OR", fragments: WhereFragments<T>): T | undefined => {
     // Both halves of a split are non-empty and strictly smaller, so the
     // recursion always reaches this case.
     if (clauses.length <= 1) {
@@ -216,34 +228,38 @@ const joinClauses = (clauses: SQL[], connector: "AND" | "OR"): SQL | undefined =
 
     const middle = Math.floor(clauses.length / 2);
 
-    return sql`(${joinClauses(clauses.slice(0, middle), connector)}) ${sql.raw(connector)} (${joinClauses(clauses.slice(middle), connector)})`;
+    return fragments.connect(
+        joinClauses(clauses.slice(0, middle), connector, fragments) as T,
+        joinClauses(clauses.slice(middle), connector, fragments) as T,
+        connector,
+    );
 };
 
-const compileGroup = (value: unknown, connector: "AND" | "OR", strategy: WhereSqlStrategy): SQL | undefined => {
+const compileGroup = <T>(value: unknown, connector: "AND" | "OR", strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T | undefined => {
     const branches = Array.isArray(value) ? value : [];
-    const parts: SQL[] = [];
+    const parts: T[] = [];
 
     for (const branch of branches) {
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with compileNode
-        const compiled = compileNode((branch ?? {}) as WhereInput, strategy);
+        const compiled = compileNode((branch ?? {}) as WhereInput, strategy, fragments);
 
-        if (compiled) {
+        if (compiled !== undefined) {
             parts.push(compiled);
         }
     }
 
     // An OR over zero satisfiable branches matches nothing; an empty AND matches everything.
     if (parts.length === 0) {
-        return connector === "OR" ? sql`0 = 1` : undefined;
+        return connector === "OR" ? fragments.constant(false) : undefined;
     }
 
-    return joinClauses(parts, connector);
+    return joinClauses(parts, connector, fragments);
 };
 
 const STRUCTURAL_KEYS = new Set<string>(["AND", "NOT", "OR", RELATION_EXISTS_KEY]);
 
 /** Compile a structural key (`AND`/`OR`/`NOT`/`__relationExists`) → its SQL, or `undefined` when the branch is vacuous. */
-const compileStructuralKey = (key: string, value: unknown, strategy: WhereSqlStrategy): SQL | undefined => {
+const compileStructuralKey = <T>(key: string, value: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T | undefined => {
     if (key === RELATION_EXISTS_KEY) {
         if (!strategy.relationExists) {
             throw new LunoraError("INTERNAL", "encountered a relation EXISTS marker without a relationExists strategy hook");
@@ -254,30 +270,30 @@ const compileStructuralKey = (key: string, value: unknown, strategy: WhereSqlStr
 
     if (key === "NOT") {
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with compileNode
-        const inner = compileNode((value ?? {}) as WhereInput, strategy);
+        const inner = compileNode((value ?? {}) as WhereInput, strategy, fragments);
 
-        return inner ? sql`NOT (${inner})` : undefined;
+        return inner === undefined ? undefined : fragments.negate(inner);
     }
 
-    return compileGroup(value, key as "AND" | "OR", strategy);
+    return compileGroup(value, key as "AND" | "OR", strategy, fragments);
 };
 
-const compileNode = (where: WhereInput, strategy: WhereSqlStrategy): SQL | undefined => {
-    const clauses: SQL[] = [];
+const compileNode = <T>(where: WhereInput, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T | undefined => {
+    const clauses: T[] = [];
 
     for (const [key, value] of Object.entries(where)) {
         if (STRUCTURAL_KEYS.has(key)) {
-            const compiled = compileStructuralKey(key, value, strategy);
+            const compiled = compileStructuralKey(key, value, strategy, fragments);
 
-            if (compiled) {
+            if (compiled !== undefined) {
                 clauses.push(compiled);
             }
         } else {
-            clauses.push(...compileField(key, value, strategy));
+            clauses.push(...compileField(key, value, strategy, fragments));
         }
     }
 
-    return joinClauses(clauses, "AND");
+    return joinClauses(clauses, "AND", fragments);
 };
 
 /**
@@ -326,16 +342,21 @@ const countLists = (node: unknown): number => {
  * Compile a structural {@link WhereInput} into a drizzle `SQL` predicate, or
  * `undefined` when the input imposes no constraint (empty `where`).
  */
-export const compileWhereSql = (where: WhereInput | undefined, strategy: WhereSqlStrategy): SQL | undefined => {
+export const compileWhereSql = <T = SQL>(
+    where: WhereInput | undefined,
+    strategy: WhereSqlStrategy<T>,
+    // Defaulted so `@lunora/sql-store` — which wants exactly this — passes
+    // nothing and is unaffected by the parameterisation.
+    fragments: WhereFragments<T> = drizzleFragments as unknown as WhereFragments<T>,
+): T | undefined => {
     if (!where || Object.keys(where).length === 0) {
         return undefined;
     }
 
-    const inList = strategy.inList ?? sqliteInList;
     const listCount = countLists(where);
 
     if (listCount === 0) {
-        return compileNode(where, strategy);
+        return compileNode(where, strategy, fragments);
     }
 
     // Split the statement's list budget across however many lists the tree
@@ -346,7 +367,14 @@ export const compileWhereSql = (where: WhereInput | undefined, strategy: WhereSq
     // the procedure's own arg validation is what bounds that.
     const perList = Math.max(1, Math.floor(WHERE_LIST_PARAM_BUDGET / listCount));
 
-    return compileNode(where, { ...strategy, inList: (reference, items, negated) => inList(reference, items, negated, perList) });
+    // Rebinding `inList` is how the per-list budget reaches the leaf. A strategy
+    // that supplied its own hook keeps it (bound to the budget); one that did not
+    // gets the builder's default, bound the same way.
+    const inList =
+        strategy.inList ??
+        ((reference: T, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => fragments.inList(reference, items, negated, budget ?? perList));
+
+    return compileNode(where, { ...strategy, inList: (reference, items, negated) => inList(reference, items, negated, perList) }, fragments);
 };
 
 export { literalInList };

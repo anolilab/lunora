@@ -361,12 +361,21 @@ export default createConfig(
     // Tailwind v4 global stylesheet: the @lunora app entry uses Tailwind directives
     // that the css plugin's layer/property/important opinions fight. Don't rewrite the
     // whole stylesheet into @layer — turn off the three opinion rules for CSS.
+    //
+    // `@property` is the one at-rule allowed past `use-baseline`'s "widely available"
+    // threshold, and it costs nothing here: Tailwind v4 already sets this site's browser
+    // floor at Safari 16.4 / Chrome 111 / Firefox 128 and emits `@property` into the
+    // compiled output itself, so every browser that can render the site at all supports
+    // it (Baseline 2024). It is also load-bearing — registering `--strip-a`/`--strip-b`
+    // as `<color>` is what makes the `strip-hue` animation interpolate instead of step.
+    // Everything else stays at the default "widely" threshold.
     {
         files: ["**/*.css"],
         rules: {
-            "css/use-layers": "off",
-            "css/no-invalid-properties": "off",
             "css/no-important": "off",
+            "css/no-invalid-properties": "off",
+            "css/use-baseline": ["warn", { allowAtRules: ["property"] }],
+            "css/use-layers": "off",
         },
     },
     // `jsdoc/text-escaping` escapes `<` and `&` in doc comments into HTML entities and

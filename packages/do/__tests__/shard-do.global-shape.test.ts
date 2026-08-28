@@ -109,6 +109,44 @@ class FlakyGlobalShard extends GlobalShapeShard {
     }
 }
 
+/**
+ * A {@link GlobalShapeShard} that also reports a global changelog, so a test can
+ * drive the fast path: `changedTables` is what the next tick will see, and it is
+ * consumed (emptied) on read exactly as a real cursor advance would consume it.
+ */
+class ChangeFeedGlobalShard extends GlobalShapeShard {
+    /** Tables the NEXT tick will be told changed. Emptied when a tick reads it, mirroring a cursor that advances once per pass. */
+    public changedTables: string[] = ["things"];
+
+    /** Membership reads that actually reached the backend — the skip path's whole purpose is to keep this from growing. */
+    public reads = 0;
+
+    public failNextRead = false;
+
+    private cursor = 0;
+
+    protected override readGlobalChangedTables(): Promise<{ cursor: number; tables: string[] } | undefined> {
+        const tables = [...this.changedTables];
+
+        this.changedTables = [];
+        this.cursor += 1;
+
+        return Promise.resolve({ cursor: this.cursor, tables });
+    }
+
+    protected override readGlobalShapeRows(): Promise<ShapeRow[]> {
+        this.reads += 1;
+
+        if (this.failNextRead) {
+            this.failNextRead = false;
+
+            return Promise.reject(new Error("global backend unavailable"));
+        }
+
+        return super.readGlobalShapeRows();
+    }
+}
+
 let harness: ReturnType<typeof createSqliteExec>;
 const alarmBox: { scheduled: null | number } = { scheduled: null };
 
@@ -144,6 +182,13 @@ const pokeOps = (ws: FakeWebSocket): { key: string; op: string; value?: Record<s
 
 const frameTypes = (ws: FakeWebSocket): string[] => ws.sent.map((raw) => (JSON.parse(raw) as { type: string }).type);
 
+/** The `reset` flag on every `pokePart` the socket received, in order. */
+const partResets = (ws: FakeWebSocket): (boolean | undefined)[] =>
+    ws.sent
+        .map((raw) => JSON.parse(raw) as { reset?: boolean; type: string })
+        .filter((frame) => frame.type === "pokePart")
+        .map((frame) => frame.reset);
+
 describe("shardDO global-shape poll tier", () => {
     beforeEach(() => {
         harness = createSqliteExec();
@@ -178,6 +223,36 @@ describe("shardDO global-shape poll tier", () => {
         ]);
         // The poll alarm is armed so the runtime will call `alarm()` to refresh.
         expect(alarmBox.scheduled).not.toBeNull();
+    });
+
+    /**
+     * Defect #1 — a `.global()` shape re-seeds in FULL on every (re)subscribe, at
+     * the same epoch and with no `baseCheckpoint`, so neither client-side guard
+     * fires. The seed is inserts-only, so unless it says `reset` on the wire a
+     * reconnecting tab merges it into what it still holds and keeps rendering
+     * rows that were deleted while it was away — for the life of the tab.
+     */
+    it("flags the seed as a reset but never the poll-tick diff", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        sockets.push(ws);
+
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        await subscribeShape(shard, ws);
+
+        expect(partResets(ws)).toStrictEqual([true]);
+
+        ws.sent.length = 0;
+        shard.rows = [{ doc: { _id: "t1", label: "b" }, id: "t1" }];
+        await shard.alarm();
+
+        // A poll-tick diff IS incremental — flagging it would make the client
+        // throw away rows the diff never mentions.
+        expect(partResets(ws)).toStrictEqual([undefined]);
     });
 
     it("fails an over-cap global shape closed: error frame, no poke, no armed alarm", async () => {
@@ -370,6 +445,97 @@ describe("shardDO global-shape poll tier", () => {
         expect(boom.sent).toStrictEqual([]);
         // ...and the alarm re-arms despite the failure, so polling survives.
         expect(alarmBox.scheduled).not.toBeNull();
+    });
+
+    it("skips a tick whose changelog reports no change to the shape's table", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ChangeFeedGlobalShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        sockets.push(ws);
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        await subscribeShape(shard, ws);
+
+        ws.sent.length = 0;
+
+        // First tick adopts the cursor (nothing to compare against yet).
+        await shard.alarm();
+
+        const afterFirst = shard.reads;
+
+        // `changedTables` is now empty, so the next tick can prove `things` did not
+        // move — and must not drain its membership to establish that.
+        await shard.alarm();
+
+        expect(shard.reads).toBe(afterFirst);
+        expect(pokeOps(ws)).toStrictEqual([]);
+    });
+
+    it("re-reads unconditionally on the tick after a contained failure", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ChangeFeedGlobalShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        sockets.push(ws);
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        await subscribeShape(shard, ws);
+        await shard.alarm();
+        ws.sent.length = 0;
+
+        // A change lands, and the read for it fails. The tick's cursor has already
+        // consumed the changelog rows that reported it, so nothing will ever mark
+        // `things` changed again — without a forced resync this socket would hold a
+        // stale membership until GLOBAL_SHAPE_RESYNC_MS elapsed.
+        shard.rows = [{ doc: { _id: "t1", label: "a2" }, id: "t1" }];
+        shard.changedTables = ["things"];
+        shard.failNextRead = true;
+        await shard.alarm();
+
+        expect(pokeOps(ws)).toStrictEqual([]);
+
+        // The next tick reports NO changed tables, and the update still lands.
+        await shard.alarm();
+
+        expect(pokeOps(ws)).toStrictEqual([{ key: "t1", op: "update", table: "things", value: expect.objectContaining({ label: "a2" }) }]);
+    });
+
+    it("never shares one tick's global read between two identities", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new FlakyGlobalShard(makeState(sockets), {});
+        const alice = createFakeWebSocket();
+
+        alice.attachment = { subs: {}, userId: "alice" };
+
+        const bob = createFakeWebSocket();
+
+        bob.attachment = { subs: {}, userId: "bob" };
+        sockets.push(alice, bob);
+
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        await subscribeShape(shard, alice);
+        await subscribeShape(shard, bob);
+        alice.sent.length = 0;
+        bob.sent.length = 0;
+
+        // The per-tick read cache exists to collapse duplicate reads, but the
+        // `.global()` writer is built per caller — an app's own `d1` factory may
+        // scope rows by identity — so two identities are never the same read.
+        // `bob`'s read fails; if the cache had keyed on the predicate alone,
+        // `alice`'s rows would have been handed to him.
+        shard.failUserId = "bob";
+        shard.rows = [{ doc: { _id: "t1", label: "a2" }, id: "t1" }];
+        alarmBox.scheduled = null;
+
+        await shard.alarm();
+
+        expect(pokeOps(alice)).toStrictEqual([{ key: "t1", op: "update", table: "things", value: expect.objectContaining({ label: "a2" }) }]);
+        expect(bob.sent).toStrictEqual([]);
     });
 
     it("contains a throwing resolveShape on an alarm tick and still re-arms", async () => {

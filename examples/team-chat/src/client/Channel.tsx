@@ -57,9 +57,34 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
 
         const timer = globalThis.setInterval(beat, HEARTBEAT_MS);
 
+        // `leave` says goodbye for the TAB, so it hangs off `pagehide` rather than
+        // off this effect's cleanup.
+        //
+        // Cleanup runs on every re-run of the effect, not only when the tab goes
+        // away — and under StrictMode React deliberately runs mount, cleanup, mount
+        // back to back. Wired to cleanup, that issued heartbeat, leave, heartbeat as
+        // three separate RPCs over `POST /_lunora/rpc`, which carries no ordering
+        // guarantee between requests. Whenever the leave landed last it deleted the
+        // row the second heartbeat had just written, and that member vanished from
+        // the roster until the next beat 15 seconds later.
+        //
+        // That is what made the presence assertion in the team-chat e2e fail
+        // intermittently, seeing 0 or 1 of 2 members while the messages those same
+        // members had just exchanged rendered fine.
+        //
+        // On `pagehide` there is no remount to race. Switching channels no longer
+        // sends an explicit goodbye and ages out of the old roster via
+        // PRESENCE_TTL_MS instead — which is what that TTL is for, and why the
+        // staleness cut already lives on the client.
+        const goodbye = (): void => {
+            void leave({ channelId, sessionId }, { shardKey: channelId });
+        };
+
+        globalThis.addEventListener("pagehide", goodbye);
+
         return () => {
             globalThis.clearInterval(timer);
-            void leave({ channelId, sessionId }, { shardKey: channelId });
+            globalThis.removeEventListener("pagehide", goodbye);
         };
     }, [channelId, displayName, heartbeat, leave, sessionId]);
 

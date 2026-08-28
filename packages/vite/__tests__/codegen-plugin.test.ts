@@ -98,6 +98,12 @@ describe("codegen-plugin", () => {
     });
 
     afterEach(() => {
+        // Unconditional, not trailing statements inside a test body: a failed
+        // assertion would skip those, leaving `LUNORA_CODEGEN=0` set for every
+        // remaining test in the file — all of which would then skip codegen and
+        // fail for a reason unrelated to what actually broke.
+        vi.unstubAllEnvs();
+        vi.restoreAllMocks();
         rmSync(workdir, { force: true, recursive: true });
     });
 
@@ -134,6 +140,109 @@ describe("codegen-plugin", () => {
 
             expect(dataModel).toContain("export interface Doc_messages");
             expect(dataModel).toContain("export interface Doc_users");
+        });
+
+        it("serve: LUNORA_CODEGEN=0 writes nothing and registers no codegen watcher", () => {
+            expect.assertions(4);
+
+            // The CLI spawns this dev server as a child process that re-parses its
+            // own argv, so `--no-codegen` arrives as env or not at all.
+            writeFixture(workdir);
+            vi.stubEnv("LUNORA_CODEGEN", "0");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
+            (plugin.buildStart as (this: unknown) => void).call(undefined);
+
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+
+            // No watcher registration: gating the RUN would still build or refresh
+            // the whole ts-morph program on every save, then read the skipped result
+            // as "codegen threw" and drop the cached Project — disabling codegen
+            // would cost more than leaving it on.
+            const handlers: string[] = [];
+            const logged: string[] = [];
+            const server = {
+                config: {
+                    logger: {
+                        error: () => {},
+                        info: (message: string) => {
+                            logged.push(message);
+                        },
+                        warn: () => {},
+                    },
+                },
+                environments: {},
+                hot: { send: () => {} },
+                watcher: {
+                    add: () => {},
+                    on: (event: string) => {
+                        handlers.push(event);
+                    },
+                },
+            };
+
+            (plugin.configureServer as (this: unknown, s: unknown) => void).call(undefined, server);
+
+            // The config-drift watcher (wrangler.jsonc / lunora.json → restart) is a
+            // separate registration further down `configureServer` and must survive:
+            // only the codegen handlers go. Enabled, "change" is registered twice.
+            expect(handlers.filter((event) => event === "change")).toHaveLength(1);
+            expect(logged.join(" ")).toContain("codegen watch disabled");
+
+            // Positive control: with codegen on, the same call registers the codegen
+            // handler alongside the config one — so the count above discriminates.
+            vi.unstubAllEnvs();
+
+            const enabledHandlers: string[] = [];
+
+            (codegenPlugin(makeOptions(workdir)).configureServer as (this: unknown, s: unknown) => void).call(undefined, {
+                ...server,
+                watcher: {
+                    add: () => {},
+                    on: (event: string) => {
+                        enabledHandlers.push(event);
+                    },
+                },
+            });
+
+            expect(enabledHandlers.filter((event) => event === "change")).toHaveLength(2);
+        });
+
+        it("build: LUNORA_CODEGEN=0 is ignored, so the ERROR-advisory gate still fails the build", async () => {
+            expect.assertions(2);
+
+            // `--no-codegen` is a DEV-WATCH switch. Honouring it in build mode would
+            // skip generation AND the only thing that fails a build on an ERROR-level
+            // advisory — an app shipping against a surface its target cannot serve,
+            // CI green the whole way, from a variable someone exported in a shell
+            // profile. Same fixture as the gate test below, with the env set.
+            writeFixture(workdir);
+
+            const badSchema = SCHEMA_SOURCE.replace(
+                `.index("by_channel", ["channelId"]),`,
+                `.index("by_channel", ["channelId"])\n        .index("by_bogus", ["doesNotExist"]),`,
+            );
+
+            writeFileSync(join(workdir, "lunora", "schema.ts"), badSchema, "utf8");
+            vi.stubEnv("LUNORA_CODEGEN", "0");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+
+            const buildContext = {
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            };
+
+            await expect((plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext)).rejects.toThrow(
+                /ERROR-level.*index_references_unknown_field/u,
+            );
+
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(true);
         });
 
         it("vite build fails when codegen reports an ERROR-level advisory (index_references_unknown_field)", async () => {

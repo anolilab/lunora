@@ -9,7 +9,31 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `lunorash`
 
+### `ACTION_CACHE_DEFAULT_TTL_MS` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ACTION_CACHE_TABLE` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ActionBuilder` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ActionCacheComponent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ActionCacheContext` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ActionCacheDatabase` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ActionCacheFunctions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -81,6 +105,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DOCUMENT_HISTORY_REDACTED_FIELDS` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DOCUMENT_HISTORY_TABLE` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DailySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -97,7 +129,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DeferredDeleteFlushResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DefineActionCacheOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DefineComponentOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DefineDocumentHistoryOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -122,6 +166,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `DefineStorageRuleInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryComponent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryEntry` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryFunctions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -453,6 +509,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MutationStorage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MutatorDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -713,6 +773,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageObjectHead` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageOperation` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -957,6 +1021,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `actionCacheExtension` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `allowAll` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -985,6 +1053,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `cacheKeyFor` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `clampLimit` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1009,11 +1081,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
+### `defineActionCache` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineAggregateIndex` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineComponent` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineDocumentHistory` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1094,6 +1174,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `deny` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `documentHistoryExtension` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `flushDeferredDeletes` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1184,6 +1272,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 ### `v` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `withDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
 
 ## `lunorash/client`
 
@@ -2233,6 +2325,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `SearchBackfillProgress` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `SessionDO` (class)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2301,6 +2397,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `UNVOUCHABLE_DEP` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `ValidatorLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2330,6 +2430,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `assertShapeShardable` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `backfillSearchIndexes` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2390,6 +2494,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `isSourceDue` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `markUnvouchableReads` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2520,6 +2628,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `isLunoraError` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `raise` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
@@ -3218,6 +3330,14 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `ExecutionContextLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `HttpCacheLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `HttpCacheQueryOptions` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -4205,6 +4325,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `ShardCaller` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ShardCallerIdentity` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4571,7 +4695,31 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ## `lunorash/server`
 
+### `ACTION_CACHE_DEFAULT_TTL_MS` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ACTION_CACHE_TABLE` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ActionBuilder` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ActionCacheComponent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ActionCacheContext` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ActionCacheDatabase` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ActionCacheFunctions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -4643,6 +4791,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DOCUMENT_HISTORY_REDACTED_FIELDS` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DOCUMENT_HISTORY_TABLE` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DailySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -4659,7 +4815,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DeferredDeleteFlushResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DefineActionCacheOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DefineComponentOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DefineDocumentHistoryOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -4684,6 +4852,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `DefineStorageRuleInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryComponent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryEntry` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DocumentHistoryFunctions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5015,6 +5195,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MutationStorage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MutatorDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5275,6 +5459,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageObjectHead` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageOperation` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5519,6 +5707,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `actionCacheExtension` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `allowAll` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5547,6 +5739,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `cacheKeyFor` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `clampLimit` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5571,11 +5767,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
+### `defineActionCache` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineAggregateIndex` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineComponent` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineDocumentHistory` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5656,6 +5860,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `deny` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `documentHistoryExtension` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `flushDeferredDeletes` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5746,6 +5958,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 ### `v` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `withDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
 
 ## `lunorash/server/data-model`
 
@@ -6885,6 +7101,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MutationStorage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `OnDeleteAction` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7022,6 +7242,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageMetadata` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageObjectHead` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

@@ -2,6 +2,8 @@ import { LunoraError } from "@lunora/errors";
 import type { Infer, Validator } from "@lunora/values";
 import { optionalInner } from "@lunora/values";
 
+import { isSecretKeyName } from "../../../shared/secret-key";
+
 /**
  * Typed, lazily-validated env accessor — the Lunora answer to void's
  * `defineEnv`. Validates `env` per key against a map of `v.*` validators, masks
@@ -75,30 +77,38 @@ const EMBEDDED_PREFIXED_TOKEN_LONG = /\b(?:AKIA|AIza)[\w./+-]+|Bearer\s+[\w./+-]
  * leaks verbatim. We redact only the password segment, keeping scheme/user/host
  * for diagnostics.
  *
- * Leading `\b` anchors the match at a word boundary so the engine cannot
- * backtrack into the preceding non-word context, preventing super-linear runtime
- * (scslre S5852). The scheme character class covers valid URI-scheme
- * continuation characters (so schemes such as the postgres and mongodb
- * variants match); the user/password class covers alphanumerics plus dot,
- * percent-encoding, plus and hyphen.
+ * Anchored on the literal `://`, and the scheme is not matched at all.
+ *
+ * Matching it was the whole problem. An unbounded `[\w.+-]*` before `://` is
+ * quadratic — `\b` limits which offsets are tried, but a payload of alternating
+ * word/non-word characters (`.a.a.a…`) opens a boundary at every other position,
+ * and at each one the run reached the end of the string before failing to find
+ * `://`. This function is documented as safe to call on request bodies and thrown
+ * errors, so that input is attacker-controlled: a 128KB body cost 4.8 SECONDS.
+ *
+ * Length-bounding the scheme fixed the cost and introduced a quieter bug — a
+ * credential whose scheme exceeded the bound stopped being redacted at all,
+ * failing OPEN on the one thing this function exists to prevent. That is the same
+ * trap the user and password runs are deliberately left unbounded to avoid.
+ *
+ * Anchoring on `://` removes both. The scheme is only ever echoed back into the
+ * replacement, never validated, so there is nothing to gain by matching it: the
+ * engine finds candidates from a literal substring instead of scanning from every
+ * word boundary. Measured on the same 128KB payload: 4.8s unbounded, 6ms bounded,
+ * **0ms** here — and a 40-character scheme redacts correctly.
+ *
+ * The user run is `*`, not `+`: `redis://:password@host` and `amqps://:pw@broker`
+ * are ordinary usernameless credential URLs, and requiring a username left their
+ * passwords in the clear.
+ *
+ * The user/password class covers alphanumerics plus dot, percent-encoding, plus
+ * and hyphen. Both runs stay unbounded on purpose — a bound either could exceed
+ * would silently stop redacting a real credential.
  */
-const URL_CREDENTIAL = /\b([a-z][\w.+-]*:\/\/[\w.%+-]+):[\w.%+-]+@/gu;
+const URL_CREDENTIAL = /:\/\/([\w.%+-]*):[\w.%+-]+@/gu;
 
 /** The fixed placeholder substituted for any redacted secret. */
 const REDACTED = "[redacted]";
-
-/**
- * Keys whose **value** is a secret. Mirrors `@lunora/config`'s `.dev.vars`
- * scaffolder regex (`packages/config/src/scaffold-dev-variables.ts`, `SECRET_KEY`)
- * so the runtime validator and the scaffolder agree on what "looks secret". Kept
- * as a small local copy rather than importing `@lunora/config` — `@lunora/server`
- * is the app runtime and must not take a build/CLI-layer dependency on the config
- * package. If you change this, change it there too.
- *
- * Anchored at the end of the key (`…SECRET`, `…_TOKEN`) so `STRIPE_SECRET_KEY`
- * and `API_TOKEN` match while an innocuous `SECRETARY` does not.
- */
-const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
 
 /** Whether a value (already a string) looks like a credential by prefix or entropy. */
 const looksLikeSecretValue = (value: string): boolean => {
@@ -146,7 +156,7 @@ const redactSecrets = (message: string): string => {
     });
 
     // Redact only the password segment (between `:` and `@`), keeping scheme/user/host.
-    out = out.replaceAll(URL_CREDENTIAL, (_match, prefix: string) => `${prefix}:${REDACTED}@`);
+    out = out.replaceAll(URL_CREDENTIAL, (_match, user: string) => `://${user}:${REDACTED}@`);
 
     // Known-prefix credential tokens anywhere, any length (no entropy floor).
     out = out.replaceAll(EMBEDDED_PREFIXED_TOKEN_SHORT, REDACTED);
@@ -155,7 +165,7 @@ const redactSecrets = (message: string): string => {
     out = out.replaceAll(KEYED_VALUE, (match: string, ...groups: unknown[]) => {
         const named = groups.at(-1) as { key?: string } | undefined;
 
-        return named?.key !== undefined && SECRET_KEY.test(named.key) ? `${named.key}=${REDACTED}` : match;
+        return named?.key !== undefined && isSecretKeyName(named.key) ? `${named.key}=${REDACTED}` : match;
     });
 
     out = out.replaceAll(HIGH_ENTROPY_TOKEN, REDACTED);
@@ -178,7 +188,7 @@ const redactSecrets = (message: string): string => {
 const redactValueForKey = (message: string, key: string, raw: unknown): string => {
     const masked = redactSecrets(message);
 
-    if (typeof raw === "string" && raw !== "" && SECRET_KEY.test(key)) {
+    if (typeof raw === "string" && raw !== "" && isSecretKeyName(key)) {
         return masked.replaceAll(raw, REDACTED);
     }
 

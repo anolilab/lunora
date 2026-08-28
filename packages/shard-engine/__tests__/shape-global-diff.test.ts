@@ -123,10 +123,58 @@ describe(buildPokeFrames, () => {
 
         expect(frames.map((frame) => JSON.parse(frame) as unknown)).toStrictEqual([
             { baseCheckpoint: 3, epoch: "e1", pokeId: "poke-1", type: "pokeStart" },
-            { pokeId: "poke-1", rowsPatch: [{ key: "t1", op: "insert", table: "things", value: { _id: "t1" } }], shapeId: "s1", type: "pokePart" },
-            { pokeId: "poke-1", rowsPatch: [{ key: "u1", op: "delete", table: "others" }], shapeId: "s2", type: "pokePart" },
+            {
+                baseCheckpoint: 3,
+                pokeId: "poke-1",
+                rowsPatch: [{ key: "t1", op: "insert", table: "things", value: { _id: "t1" } }],
+                shapeId: "s1",
+                type: "pokePart",
+            },
+            { baseCheckpoint: 3, pokeId: "poke-1", rowsPatch: [{ key: "u1", op: "delete", table: "others" }], shapeId: "s2", type: "pokePart" },
             { checkpoint: 7, epoch: "e1", pokeId: "poke-1", type: "pokeEnd" },
         ]);
+    });
+
+    // Defect #1: a full re-seed is inserts-only, so a client that splices it onto
+    // a stale view keeps every row that left the shape while it was disconnected.
+    // The seed therefore has to be distinguishable from a delta ON THE WIRE.
+    it("marks a full-membership part with reset, per shape, alongside a delta part in the same poke", () => {
+        expect.assertions(2);
+
+        const frames = buildPokeFrames(
+            [
+                { reset: true, rowsPatch: [{ key: "t1", op: "insert", table: "things", value: { _id: "t1" } }], shapeId: "seeded" },
+                { rowsPatch: [{ key: "u1", op: "delete", table: "others" }], shapeId: "delta" },
+            ],
+            { baseCheckpoint: undefined, checkpoint: 7, epoch: "e1", lastMutationId: undefined, pokeId: "poke-1" },
+        );
+
+        const parts = frames.map((frame) => JSON.parse(frame) as { reset?: boolean; shapeId?: string }).filter((frame) => frame.shapeId !== undefined);
+
+        expect(parts[0]).toStrictEqual(expect.objectContaining({ reset: true, shapeId: "seeded" }));
+        // `reset` is never stamped on a delta part — the client must splice it.
+        expect(parts[1]).not.toStrictEqual(expect.objectContaining({ reset: true }));
+    });
+
+    // Defect #6: every shape on a socket has its OWN delivered-through cursor, so
+    // the base has to travel per part; a poke-level base would fit at most one.
+    it("lets a part's own baseCheckpoint override the poke-level fallback", () => {
+        expect.assertions(1);
+
+        const frames = buildPokeFrames(
+            [
+                { baseCheckpoint: 11, rowsPatch: [], shapeId: "s1" },
+                { rowsPatch: [], shapeId: "s2" },
+            ],
+            { baseCheckpoint: 3, checkpoint: 7, epoch: "e1", lastMutationId: undefined, pokeId: "poke-1" },
+        );
+
+        const bases = frames
+            .map((frame) => JSON.parse(frame) as { baseCheckpoint?: number; shapeId?: string })
+            .filter((frame) => frame.shapeId !== undefined)
+            .map((frame) => frame.baseCheckpoint);
+
+        expect(bases).toStrictEqual([11, 3]);
     });
 
     it("stamps the client watermark as lastMutationId on every pokePart when supplied", () => {

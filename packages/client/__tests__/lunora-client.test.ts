@@ -1408,7 +1408,123 @@ describe("lunoraClient", () => {
             expect(received.at(-1)).toStrictEqual([{ _id: "z" }]);
         });
 
-        it("falls back to full replacement when a delta can't merge into the cached shape", () => {
+        it("holds the resume cursor until the last frame of a delta run arrives", () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            // The other half of the server-side contract pinned in
+            // `@lunora/shard-engine`'s subscription-frames suite: a delta run has
+            // no `pokeStart`/`pokeEnd` envelope, so the cursor rides only its last
+            // frame. A socket that dies mid-run must therefore leave the client
+            // resuming from BEFORE the run, or the server answers its `sinceSeq`
+            // with "already current" and the half-applied list is never re-sent.
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            const first = latestSocket();
+
+            first.open();
+
+            const subId = firstSub(first).id as string;
+
+            first.receive({ cursor: 10, data: [{ _id: "a" }, { _id: "b" }, { _id: "c" }], id: subId, type: "data" });
+            // Frame 1 of a 3-frame run; the socket dies before frames 2 and 3.
+            first.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: subId, type: "delta" });
+
+            expect(received.at(-1)).toStrictEqual([{ _id: "b" }, { _id: "c" }]);
+
+            first.triggerClose();
+            vi.advanceTimersByTime(15);
+
+            const second = latestSocket();
+
+            second.open();
+
+            const resumed = firstSub(second) as { query: { sinceSeq?: number } };
+
+            expect(resumed.query.sinceSeq).toBe(10);
+
+            // …and the last frame of a completed run does move it.
+            second.receive({ cursor: 13, delta: { key: "b", op: "delete", table: "messages" }, id: subId, type: "delta" });
+            second.triggerClose();
+            vi.advanceTimersByTime(15);
+
+            const third = latestSocket();
+
+            third.open();
+
+            expect((firstSub(third) as { query: { sinceSeq?: number } }).query.sinceSeq).toBe(13);
+
+            client.close();
+            vi.useRealTimers();
+        });
+
+        it("does not replay a resume cursor it holds no value behind", () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            // A checkpoint can get ahead of the value: a cross-tab FOLLOWER's
+            // `settled` broadcast advances its cursor even though the leader's
+            // `data` frames landed before it joined. The frame handler below
+            // reaches the same state directly. Replaying that cursor as
+            // `sinceSeq` gets a bare `resume` back — no data — so the
+            // subscription would hang empty forever.
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const first = latestSocket();
+
+            first.open();
+
+            const subId = firstSub(first).id as string;
+
+            // Cursor advances with NO value behind it.
+            first.receive({ cursor: 10, epoch: "e1", id: subId, type: "settled" });
+            first.triggerClose();
+            vi.advanceTimersByTime(15);
+
+            const second = latestSocket();
+
+            second.open();
+
+            const resubscribe = firstSub(second) as { query: { sinceEpoch?: string; sinceSeq?: number } };
+
+            expect(resubscribe.query.sinceSeq).toBeUndefined();
+            expect(resubscribe.query.sinceEpoch).toBeUndefined();
+
+            // With a value behind it the cursor IS replayed — the guard is about
+            // the missing value, not about distrusting `settled`.
+            second.receive({ cursor: 11, data: [], id: subId, type: "data" });
+            second.triggerClose();
+            vi.advanceTimersByTime(15);
+
+            const third = latestSocket();
+
+            third.open();
+
+            expect((firstSub(third) as { query: { sinceSeq?: number } }).query.sinceSeq).toBe(11);
+
+            client.close();
+            vi.useRealTimers();
+        });
+
+        it("publishes a delta that arrives with no cached base instead of re-subscribing", () => {
             expect.assertions(2);
 
             const client = new LunoraClient({
@@ -1428,14 +1544,66 @@ describe("lunoraClient", () => {
             const sub = firstSub(socket);
 
             socket.receive({ id: sub.id, type: "ack" });
-            // Cached value is a scalar aggregate, not an id-keyed list.
-            socket.receive({ data: { count: 0 }, id: sub.id, type: "data" });
-            // A structured delta can't splice into a non-array; the opaque delta
-            // payload replaces the cached value (historical behaviour).
-            socket.receive({ delta: { key: "a", op: "insert", row: { _id: "a" }, table: "messages" }, id: sub.id, type: "delta" });
 
-            expect(received[0]).toStrictEqual({ count: 0 });
-            expect(received[1]).toStrictEqual({ key: "a", op: "insert", row: { _id: "a" }, table: "messages" });
+            // No `data` frame first, and no `cursor` on the delta — this is the
+            // legacy `ShardDO.broadcastDelta` fan-out, which stamps neither. An
+            // absent base is NOT a merge failure: there is nothing to merge into
+            // and nothing to corrupt, and because no cursor moves, publishing the
+            // change strands nothing. Treating it as unmergeable would turn every
+            // broadcast to an unseeded subscriber into a re-subscribe.
+            socket.receive({ delta: { key: "m-1", op: "insert", row: { id: "m-1", text: "hi" }, table: "messages:list" }, id: sub.id, type: "delta" });
+
+            expect(received).toStrictEqual([{ key: "m-1", op: "insert", row: { id: "m-1", text: "hi" }, table: "messages:list" }]);
+
+            // …and it did NOT ask for a fresh snapshot.
+            expect(wireFrames(socket).filter((frame) => frame.type === "subscribe")).toHaveLength(1);
+
+            client.close();
+        });
+
+        it("re-subscribes for a snapshot (and never publishes the raw envelope) when a delta can't merge into the cached shape", () => {
+            expect.assertions(4);
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            try {
+                const client = new LunoraClient({
+                    fetch: async () => jsonResponse({ result: null }),
+                    url: "https://app.example",
+                    WebSocket: createMockWebSocket(),
+                });
+
+                const received: unknown[] = [];
+
+                client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+                const socket = latestSocket();
+
+                socket.open();
+
+                const sub = firstSub(socket);
+
+                socket.receive({ id: sub.id, type: "ack" });
+                // Cached value is a scalar aggregate, not an id-keyed list.
+                socket.receive({ cursor: 4, data: { count: 0 }, id: sub.id, type: "data" });
+                // A structured delta can't splice into a non-array. Publishing the
+                // delta envelope itself as the query's value would render
+                // `{ key, op, table, row }` to every subscriber — and the frame also
+                // carries a cursor, so nothing would ever reconcile it.
+                socket.receive({ cursor: 5, delta: { key: "a", op: "insert", row: { _id: "a" }, table: "messages" }, id: sub.id, type: "delta" });
+
+                expect(received).toStrictEqual([{ count: 0 }]);
+
+                // Recovery: a fresh subscribe frame with NO `sinceSeq`, so the
+                // server answers with a full snapshot rather than a bare `resume`.
+                const frames = socket.sent.filter((frame) => (JSON.parse(frame) as { type?: string }).type === "subscribe");
+
+                expect(frames).toHaveLength(2);
+                expect((JSON.parse(frames[1] as string) as { query: { sinceSeq?: number } }).query.sinceSeq).toBeUndefined();
+                expect(warn).toHaveBeenCalledTimes(1);
+            } finally {
+                warn.mockRestore();
+            }
         });
     });
 

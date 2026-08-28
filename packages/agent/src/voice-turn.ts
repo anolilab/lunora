@@ -10,15 +10,24 @@ const PCM_CHANNELS = 1;
 const PCM_BITS_PER_SAMPLE = 16;
 
 /**
- * Sentence boundary — a run of terminal punctuation followed by whitespace.
+ * Sentence terminator — one of `.!?` immediately followed by whitespace.
  * Trailing whitespace is required (no end-of-buffer alternative) so a delta that
  * momentarily ends at punctuation isn't cut mid-sentence before the next delta
- * arrives; the incomplete trailing remainder is flushed once at end-of-turn. The
- * two character classes (`[^.!?]` and `[.!?]`) are disjoint, so no input can
- * backtrack across them; the ReDoS heuristic is a false positive.
+ * arrives; the incomplete trailing remainder is flushed once at end-of-turn.
+ *
+ * Two fixed-width atoms, so the scan is linear. The previous spelling led with
+ * `[^.!?]*`, and the disjoint-classes argument for it was about the wrong hazard:
+ * disjoint classes rule out CATASTROPHIC (exponential) backtracking, but the
+ * engine still retries the failing `[.!?]+` at every position the star gives back,
+ * at every start offset — quadratic per call. {@link takeSentences} runs on the
+ * whole accumulated buffer once per streamed delta, so a reply with no terminator
+ * (a code block, a URL list, a table — ordinary model output) made the turn
+ * cubic: a 20k-character reply measured 156 SECONDS of CPU, inside the DO.
  */
-// eslint-disable-next-line sonarjs/slow-regex -- disjoint char classes make this linear; see the note above
-const SENTENCE_BOUNDARY = /[^.!?]*[.!?]+\s+/u;
+const SENTENCE_TERMINATOR = /[.!?]\s/u;
+
+/** Whitespace run following a terminator, consumed by hand so the match stays fixed-width. */
+const WHITESPACE = /\s/u;
 
 /**
  * A control frame the server sends the client as a JSON text message (audio
@@ -209,18 +218,30 @@ const pcmToWav = (
 const takeSentences = (buffer: string): { rest: string; sentences: string[] } => {
     const sentences: string[] = [];
     let rest = buffer;
-    let match = SENTENCE_BOUNDARY.exec(rest);
+    let match = SENTENCE_TERMINATOR.exec(rest);
 
-    while (match && match[0].length > 0) {
-        const consumed = match[0];
-        const sentence = consumed.trim();
+    while (match) {
+        // Cut through the terminator and the whitespace run after it. Sliced by
+        // the match's END OFFSET, not by its length: the old code used
+        // `rest.slice(consumed.length)` while the match could begin past 0 — any
+        // `.` not followed by whitespace (a decimal, a version, a filename, an
+        // `e.g.`) pushed the match right, so the text before it was dropped from
+        // the sentence and the tail was spoken twice. "See v1.2 here. Next one."
+        // came out as "2 here. here. Next one."
+        let end = match.index + 1;
+
+        while (end < rest.length && WHITESPACE.test(rest[end] ?? "")) {
+            end += 1;
+        }
+
+        const sentence = rest.slice(0, end).trim();
 
         if (sentence.length > 0) {
             sentences.push(sentence);
         }
 
-        rest = rest.slice(consumed.length);
-        match = SENTENCE_BOUNDARY.exec(rest);
+        rest = rest.slice(end);
+        match = SENTENCE_TERMINATOR.exec(rest);
     }
 
     return { rest, sentences };

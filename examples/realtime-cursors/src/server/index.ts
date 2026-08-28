@@ -21,7 +21,7 @@ export default {
             // Demo/local default: this app has no auth, so shard access is left
             // OPEN (any caller may target any shard) and data is protected by
             // per-row RLS. A PRODUCTION sharded app must gate this instead — e.g.
-            // `authorizeShard: (identity, shardKey) => identity?.userId === ownerOf(shardKey)`.
+            // `authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === ownerOf(shardKey)`.
             worker = createWorker({ allowUnauthenticatedShardAccess: true, openApiSpec, shardDO: env.SHARD });
         }
 

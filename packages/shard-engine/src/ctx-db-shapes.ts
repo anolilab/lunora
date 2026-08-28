@@ -8,10 +8,11 @@
  *
  * - **Seed** ({@link selectShapeRows}): the full current rowset a fresh
  * subscription replicates — one insert poke.
- * - **Per-flush membership** ({@link selectShapeMemberIds}): of the rows a write
- * just changed, which still satisfy the predicate — so the poke emits an upsert
- * for in-set ids and a delete for the rest (a row that left the set, or a delete
- * whose membership is unknowable from the op alone).
+ * - **Per-flush membership + enrichment** ({@link selectShapeMembers}): of the
+ * rows a write just changed, those that still satisfy the predicate, WITH their
+ * current documents — so the poke emits an upsert for in-set ids and a delete
+ * for the rest (a row that left the set, or a delete whose membership is
+ * unknowable from the op alone), and never decodes a document it may not ship.
  *
  * Both go through the single `compileWhereSql` compiler the query/RLS paths
  * already use (`json_extract` field refs, `serializeSqlValue` literals), so a
@@ -96,20 +97,47 @@ export const selectShapeRows = (sql: SqlExec, table: string, effectiveWhere: Whe
 };
 
 /**
- * Of the rows identified by `ids`, the subset that still satisfies
- * `effectiveWhere` — the per-flush membership probe. Returns a set so the poke
- * builder can split the changed ids into in-set (upsert) and out-of-set
- * (delete) with an O(1) lookup. An empty `ids` short-circuits to an empty set
- * (a flush that changed nothing this shape cares about).
+ * Of the rows identified by `ids`, those that still satisfy `effectiveWhere`,
+ * keyed by id and carrying the decoded document — the per-flush membership
+ * probe AND the diff's late-enrichment read in one statement.
+ *
+ * The two used to be separate: the poke builder read every changed row's full
+ * post-image out of the op-log first, then ran an id-only probe to decide which
+ * of those documents it was allowed to ship. That decoded N documents to keep
+ * the M ≤ N that survived, and the surviving values came from the op-log while
+ * their membership came from this table — two sources for one row. Selecting the
+ * document here settles both from the same read: a row absent from the result
+ * is out of the set (upsert nothing, `delete` the key), and a row present is a
+ * member whose current value is right here, already filtered by the predicate
+ * the caller is allowed to see through.
+ *
+ * An empty `ids` short-circuits to an empty map (a flush that changed nothing
+ * this shape cares about) without touching the store.
  */
-export const selectShapeMemberIds = (sql: SqlExec, table: string, effectiveWhere: WhereInput | undefined, ids: ReadonlyArray<string>): Set<string> => {
+export const selectShapeMembers = (
+    sql: SqlExec,
+    table: string,
+    effectiveWhere: WhereInput | undefined,
+    ids: ReadonlyArray<string>,
+): Map<string, Record<string, unknown>> => {
+    const members = new Map<string, Record<string, unknown>>();
+
     if (ids.length === 0) {
-        return new Set<string>();
+        return members;
     }
 
     const whereClause = composeWhere(effectiveWhere, idInClause(ids));
 
-    const rows = runDrizzle<{ id: string }>(sql, dsql`SELECT id FROM ${dsql.identifier(table)}${whereClause}`).toArray();
+    const rows = runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(table)}${whereClause}`).toArray();
 
-    return new Set(rows.map((row) => row.id));
+    for (const row of rows) {
+        const doc = rowToDocument(row);
+        const { id } = row;
+
+        if (doc !== undefined && typeof id === "string") {
+            members.set(id, doc);
+        }
+    }
+
+    return members;
 };

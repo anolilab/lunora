@@ -173,7 +173,7 @@ const text = (value: unknown): string | undefined => {
  * anything else re-throws, so a genuinely broken executor is not silently
  * papered over.
  */
-const ensureAuthAuditTable = async (executor: SqlExecutor): Promise<void> => {
+const ensureAuthAuditTableUncached = async (executor: SqlExecutor): Promise<void> => {
     await executor.run(
         `CREATE TABLE IF NOT EXISTS "${AUTH_AUDIT_TABLE}" (
             seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,6 +199,34 @@ const ensureAuthAuditTable = async (executor: SqlExecutor): Promise<void> => {
             throw error;
         }
     }
+};
+
+/**
+ * Single-flight per executor reference: after the first call, the DDL above
+ * (whose `ALTER` throws-and-swallows on every re-run) never re-executes for the
+ * same long-lived executor — the Workers isolate-reuse case, where the audit
+ * hook's `config.executor` lives for the isolate. Distinct executor objects
+ * targeting the same DB do NOT share an entry, so a fresh executor still
+ * self-provisions. Mirrors `migrate.ts`'s `migrating` WeakMap.
+ */
+const ensured = new WeakMap<SqlExecutor, Promise<void>>();
+
+const ensureAuthAuditTable = (executor: SqlExecutor): Promise<void> => {
+    const inFlight = ensured.get(executor);
+
+    if (inFlight) {
+        return inFlight;
+    }
+
+    const run = ensureAuthAuditTableUncached(executor);
+
+    ensured.set(executor, run);
+
+    // On rejection, evict so a transiently-failing first call doesn't poison
+    // the executor forever. The caller still sees the original rejection.
+    run.catch(() => ensured.delete(executor));
+
+    return run;
 };
 
 /**
@@ -310,7 +338,18 @@ const readAuthAuditLog = async (executor: SqlExecutor, options: ReadAuthAuditOpt
         const detail = text(row["detail"]);
 
         if (detail !== undefined) {
-            base.detail = JSON.parse(detail) as Record<string, unknown>;
+            try {
+                const parsed: unknown = JSON.parse(detail);
+
+                // Keep only a plain object — `JSON.parse("42")` succeeds but is
+                // not a `Record`; anything else leaves `detail` absent.
+                if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+                    base.detail = parsed as Record<string, unknown>;
+                }
+            } catch {
+                // A hand-written or truncated cell must not take down the whole
+                // read; the entry stays, minus its detail payload.
+            }
         }
 
         return base;
