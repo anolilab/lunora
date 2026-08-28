@@ -1,3 +1,19 @@
+## @lunora/do [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.107...@lunora/do@1.0.0-alpha.108) (2026-08-28)
+
+### Bug Fixes
+
+* close nine copied-helper divergences across eight packages ([#522](https://github.com/anolilab/lunora/issues/522)) ([a2455bb](https://github.com/anolilab/lunora/commit/a2455bb0f58b9873633504c3f1e9bfeb44a5870e))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/observability:** upgraded to 1.0.0-alpha.47
+* **@lunora/platform:** upgraded to 1.0.0-alpha.20
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.25
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.46
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.41
+
 ## @lunora/do [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.106...@lunora/do@1.0.0-alpha.107) (2026-08-28)
 
 
