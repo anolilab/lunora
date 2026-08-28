@@ -46,17 +46,31 @@ const markWorkerReadyWhenServing = async (options: {
     const timeoutMs = resolveReadyTimeoutMs(options.readyTimeoutMs);
     const deadline = Date.now() + timeoutMs;
 
-    while (!signal.aborted && Date.now() < deadline) {
+    // Read through a call, not the property: narrowing from the loop condition
+    // would otherwise convince TypeScript that `aborted` is still false after the
+    // await, which is exactly the window this has to check.
+    const cancelled = (): boolean => signal.aborted;
+
+    while (!cancelled() && Date.now() < deadline) {
         let answered = false;
 
         try {
             // eslint-disable-next-line no-await-in-loop -- readiness polling: each tick re-samples the socket
-            answered = await probe(origin);
+            answered = await probe(origin, signal);
         } catch {
             // A probe is allowed to reject; "never rejects" is this function's
             // contract, not its collaborator's. The caller floats this promise,
             // so letting one through would surface as an unhandled rejection
             // that takes down the dev server the probe only meant to observe.
+        }
+
+        // Re-checked AFTER the await, not just at the loop head: a probe resolves
+        // on its own schedule, so a `true` can land once teardown has already
+        // aborted or the deadline has already passed. Stamping then records a
+        // readiness the caller had stopped asking for — on a record it is about
+        // to clear, or after the timeout it was promised.
+        if (cancelled() || Date.now() >= deadline) {
+            break;
         }
 
         if (answered) {
@@ -81,7 +95,7 @@ const markWorkerReadyWhenServing = async (options: {
 
     // Only worth saying when we ran out of patience. A cancelled probe means the
     // server is shutting down, where a warning about readiness is noise.
-    if (!signal.aborted) {
+    if (!cancelled()) {
         logger.warn(
             `server did not answer on ${origin} within ${String(Math.round(timeoutMs / 1000))}s — ` +
                 `.lunora/dev.json will have no readyAt, so anything polling for readiness will keep waiting. ` +

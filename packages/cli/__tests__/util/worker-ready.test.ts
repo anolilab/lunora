@@ -185,6 +185,67 @@ describe("markWorkerReadyWhenServing", () => {
         }
     });
 
+    it("ignores a probe that answers true only AFTER abort", async () => {
+        expect.assertions(2);
+
+        // A probe resolves on its own schedule, so a `true` can land once
+        // teardown has already aborted. Stamping then records a readiness the
+        // caller had stopped asking for, on a record it is about to clear.
+        const workdir = projectWithStartedServer();
+        const { logger } = silentLogger();
+        const controller = new AbortController();
+
+        try {
+            const recorded = await markWorkerReadyWhenServing({
+                cwd: workdir,
+                logger,
+                origin: "http://localhost:8787",
+                probe: async () => {
+                    controller.abort();
+
+                    return true;
+                },
+                signal: controller.signal,
+            });
+
+            expect(recorded).toBe(false);
+            expect(readDevServerState(workdir)?.readyAt).toBeUndefined();
+        } finally {
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("ignores a probe that answers true only AFTER the deadline", async () => {
+        expect.assertions(2);
+
+        // Same shape against the timeout: having told the caller it gave up, it
+        // must not then stamp readiness a moment later.
+        const workdir = projectWithStartedServer();
+        const { logger } = silentLogger();
+
+        try {
+            const recorded = await markWorkerReadyWhenServing({
+                cwd: workdir,
+                logger,
+                origin: "http://localhost:8787",
+                probe: async () => {
+                    await new Promise((resolve) => {
+                        setTimeout(resolve, 20);
+                    });
+
+                    return true;
+                },
+                readyTimeoutMs: 5,
+                signal: new AbortController().signal,
+            });
+
+            expect(recorded).toBe(false);
+            expect(readDevServerState(workdir)?.readyAt).toBeUndefined();
+        } finally {
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
     it("does not stamp a record another process has since claimed", async () => {
         expect.assertions(2);
 

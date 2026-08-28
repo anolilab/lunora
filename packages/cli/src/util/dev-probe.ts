@@ -27,8 +27,14 @@ const ATTEMPT_TIMEOUT_MS = 1000;
 /** Env overriding {@link DEFAULT_READY_TIMEOUT_MS}. */
 const READY_TIMEOUT_ENV = "LUNORA_DEV_READY_TIMEOUT_MS";
 
-/** Readiness probe seam — tests swap the real HTTP probe out. */
-type ReadinessProbe = (origin: string) => Promise<boolean>;
+/**
+ * Readiness probe seam — tests swap the real HTTP probe out.
+ *
+ * The optional `signal` lets a caller cancel an attempt already in flight. Its
+ * absence is why a teardown used to leave one request dangling for up to
+ * {@link ATTEMPT_TIMEOUT_MS} after the dev server had been told to stop.
+ */
+type ReadinessProbe = (origin: string, signal?: AbortSignal) => Promise<boolean>;
 
 /**
  * The caller-facing ready timeout: an explicit value, else
@@ -66,11 +72,16 @@ const resolveReadyTimeoutMs = (explicit?: number): number => {
  * or an OAuth provider would make the dev machine call that host on every start.
  * A liveness check must not follow anyone anywhere.
  */
-const defaultProbe = async (origin: string): Promise<boolean> => {
+const defaultProbe = async (origin: string, signal?: AbortSignal): Promise<boolean> => {
     try {
+        // The per-attempt budget AND the caller's cancellation, whichever fires
+        // first: the timeout alone bounds a stalled server, but only the caller's
+        // signal ends an attempt the moment the thing being probed is shutting
+        // down.
+        const attempt = AbortSignal.timeout(ATTEMPT_TIMEOUT_MS);
         const response = await fetch(new URL("/_lunora/status", origin), {
             redirect: "manual",
-            signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+            signal: signal === undefined ? attempt : AbortSignal.any([signal, attempt]),
         });
 
         // Undici keeps the socket checked out until an unread body is GC'd.
