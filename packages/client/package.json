@@ -106,6 +106,9 @@
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
     },
+    "peerDependencies": {
+        "@lunora/runtime": ">=1.0.0-alpha.76 <2.0.0-0"
+    },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
     }

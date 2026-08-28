@@ -75,6 +75,10 @@
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
+    "peerDependencies": {
+        "@lunora/server": ">=1.0.0-alpha.24 <2.0.0-0",
+        "@lunora/values": ">=1.0.0-alpha.7 <2.0.0-0"
+    },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
     }

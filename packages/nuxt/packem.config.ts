@@ -28,11 +28,17 @@ const runtimeEntries = readdirSync("src/runtime", { recursive: true })
 // eslint-disable-next-line import/no-unused-modules -- consumed by packem CLI
 export default defineConfig({
     runtime: "node",
-    failOnWarn: false,
     emitCJS: false,
     emitESM: true,
     declaration: true,
     entries: [esmEntry("src/module.ts"), esmEntry("src/server.ts"), ...runtimeEntries],
+    // Ship `.mjs`, not `.js`. In a `"type": "module"` package Node has to find,
+    // read and parse the nearest package.json to classify a `.js` file before it
+    // can execute it; `.mjs` is self-describing and skips that on every load.
+    // packem only infers the extension from the exports map for AUTO-detected
+    // entries — this package declares `entries` explicitly (the `runtime/` files
+    // must ship file-to-file for Nitro), so the extension has to be stated here.
+    outputExtensionMap: { cjs: "cjs", esm: "mjs" },
     rollup: {
         dts: {
             oxc: true,

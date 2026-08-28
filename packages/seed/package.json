@@ -78,6 +78,7 @@
     },
     "peerDependencies": {
         "@lunora/server": ">=1.0.0-alpha.24 <2.0.0-0",
+        "@lunora/testing": ">=1.0.0-alpha.131 <2.0.0-0",
         "@lunora/values": ">=1.0.0-alpha.7 <2.0.0-0"
     },
     "engines": {

@@ -63,7 +63,6 @@
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.25",
         "@lunora/observability": "1.0.0-alpha.47",
-        "@lunora/platform": "1.0.0-alpha.20",
         "@lunora/platform-cloudflare": "1.0.0-alpha.25",
         "@lunora/shard-engine": "1.0.0-alpha.46",
         "drizzle-orm": "catalog:drizzle"
@@ -73,6 +72,7 @@
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/bindings": "1.0.0-alpha.41",
+        "@lunora/platform": "1.0.0-alpha.20",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

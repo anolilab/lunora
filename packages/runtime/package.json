@@ -82,6 +82,15 @@
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
     },
+    "peerDependencies": {
+        "@lunora/shard-engine": ">=1.0.0-alpha.24 <2.0.0-0",
+        "@lunora/workflow": ">=1.0.0-alpha.24 <2.0.0-0"
+    },
+    "peerDependenciesMeta": {
+        "@lunora/workflow": {
+            "optional": true
+        }
+    },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
     }

@@ -61,11 +61,11 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.25",
         "@lunora/server": "1.0.0-alpha.92"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/errors": "1.0.0-alpha.25",
         "@lunora/values": "1.0.0-alpha.32",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

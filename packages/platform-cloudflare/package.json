@@ -71,6 +71,9 @@
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
+    "peerDependencies": {
+        "@cloudflare/workers-types": ">=4.0.0"
+    },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
     }
