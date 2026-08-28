@@ -10,9 +10,11 @@
  * MySQL `JSON`/`TINYINT`) would find them silently unused. Do not rely on that
  * seam without first routing the core through it.
  */
+import { LunoraError } from "@lunora/errors";
 import type { ValidatorLike } from "@lunora/shard-engine";
 
 import { effectiveKind } from "../../../shared/effective-kind";
+import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown): unknown => {
@@ -39,7 +41,20 @@ export const sqliteEncode = (value: unknown): unknown => {
         return new Uint8Array(value);
     }
 
-    return JSON.stringify(value);
+    // Wire-encode a composite so a nested `bigint`/bytes leaf survives. A bare
+    // `JSON.stringify` threw an untyped `TypeError` on `{ n: 1n }` (surfacing as
+    // an opaque 500) and silently flattened `{ b: <ArrayBuffer> }` to `{"b":{}}`
+    // — data destroyed with no error at all. `encodeWire` is identity for pure
+    // JSON, so an ordinary document stores byte-identically to before and
+    // existing rows still read back unchanged.
+    try {
+        return needsWireEncoding(value) ? JSON.stringify(encodeWire(value)) : JSON.stringify(value);
+    } catch (error: unknown) {
+        // `encodeWire` throws a bare `TypeError` for a non-plain object and a
+        // `RangeError` past its depth cap; re-thrown typed so the writer names
+        // what it could not store, matching the shard twin.
+        throw new LunoraError("BAD_REQUEST", `this value cannot be stored: ${error instanceof Error ? error.message : String(error)}`);
+    }
 };
 
 /** Parse `raw` as JSON, returning `raw` unchanged when it is not valid JSON. */
@@ -111,12 +126,12 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
         case "any":
         case "from":
         case "union": {
-            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[")) ? tryJsonParse(raw) : raw;
+            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[")) ? decodeWire(tryJsonParse(raw)) : raw;
         }
         case "array":
         case "object":
         case "record": {
-            return typeof raw === "string" ? tryJsonParse(raw) : raw;
+            return typeof raw === "string" ? decodeWire(tryJsonParse(raw)) : raw;
         }
         case "bigint": {
             return decodeBigint(raw);

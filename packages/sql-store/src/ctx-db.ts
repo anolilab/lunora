@@ -91,6 +91,7 @@ import {
     readAggregateValue,
     relationHooks,
     resolveRankPartition,
+    resolveRankSeekTuple,
     resolveRelationPredicates,
     resolveWith,
     runRowValidators,
@@ -3505,12 +3506,26 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const whereClauses: SQL[] = [];
 
-            if (partitionFromWhere) {
+            // A pre-encoded `partitionKey` from the cross-shard coordinator pins
+            // the partition directly; shard-local callers omit it and the
+            // partition resolves from `where`. This side read only the `where`
+            // form, so a coordinator-issued page silently scanned every partition.
+            if (typeof rankPageOptions.partitionKey === "string") {
+                whereClauses.push(sql`${sql.identifier("__partition__")} = ${rankPageOptions.partitionKey}`);
+            } else if (partitionFromWhere) {
                 whereClauses.push(sql`${sql.identifier("__partition__")} = ${encodePartitionKey(index.partitionBy ?? [], partitionFromWhere)}`);
             }
 
-            if (rankPageOptions.cursor) {
-                const seek = buildRankCursorSeek(dialect.name, rankColumns, decodeCursor(rankPageOptions.cursor));
+            // `after` wins over `cursor`, sharing the shard twin's resolver: the
+            // cross-shard coordinator forwards a structured `{ partitionKey,
+            // sortValues, rowId }` key, and this side read only `cursor`. A caller
+            // paging with `after` got page one every time — an `after` loop never
+            // terminated — with no error, because both fields sit on the SHARED
+            // `RankPageOptions` and the facade forwards the object verbatim.
+            const seekTuple = resolveRankSeekTuple(rankPageOptions);
+
+            if (seekTuple !== undefined) {
+                const seek = buildRankCursorSeek(dialect.name, rankColumns, seekTuple);
 
                 if (seek !== undefined) {
                     whereClauses.push(seek);

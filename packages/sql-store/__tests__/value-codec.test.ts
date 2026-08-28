@@ -3,6 +3,32 @@ import { describe, expect, it } from "vitest";
 
 import { decodeBigint, effectiveColumnKind, sqliteDecode, sqliteEncode, tryJsonParse } from "../src/value-codec";
 
+describe("nested wire-typed values", () => {
+    it("round-trips a bigint and bytes nested inside a composite column", () => {
+        expect.assertions(2);
+
+        // A bare `JSON.stringify` threw an untyped `TypeError` on a nested bigint
+        // (surfacing as an opaque 500) and flattened nested bytes to `{}` — data
+        // destroyed with no error at all. The shard twin round-trips both.
+        const withBigint = sqliteEncode({ n: 1n });
+
+        expect(sqliteDecode(withBigint, "object")).toStrictEqual({ n: 1n });
+
+        const bytes = new Uint8Array([1, 2, 3]).buffer;
+        const decoded = sqliteDecode(sqliteEncode({ b: bytes }), "object") as { b: ArrayBuffer };
+
+        expect(new Uint8Array(decoded.b)).toStrictEqual(new Uint8Array([1, 2, 3]));
+    });
+
+    it("stores an ordinary composite byte-identically to plain JSON", () => {
+        expect.assertions(1);
+
+        // `encodeWire` is identity for pure JSON, so existing rows keep their
+        // stored form and still read back unchanged.
+        expect(sqliteEncode({ a: 1, b: [true, "x"], c: null })).toBe(JSON.stringify({ a: 1, b: [true, "x"], c: null }));
+    });
+});
+
 describe("sqliteEncode", () => {
     it("maps booleans to 1/0", () => {
         expect.assertions(2);
