@@ -332,5 +332,5 @@ const computeRankPage = (deps: RankPageDeps, tableName: string, indexName: strin
     return { continueCursor, directions, hasMore, rows };
 };
 
-export { computeRankPage, hydrateDocsById };
+export { computeRankPage, hydrateDocsById, resolveRankSeekTuple };
 export type { RankPageComputation, RankPageDeps };

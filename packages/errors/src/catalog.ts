@@ -298,6 +298,7 @@ export const ERROR_CATALOG = {
     BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },
     CROSS_SHARD_RANK_UNSUPPORTED: { status: 400, title: "Cross-shard rank() is unsupported" },
     FORBIDDEN_FANOUT: { status: 403, title: "Fan-out forbidden" },
+    GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },

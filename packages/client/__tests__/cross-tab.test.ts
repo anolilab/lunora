@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { TabCoordinator } from "../src/cross-tab";
 import { LunoraClient } from "../src/lunora-client";
+import type { SubscriptionError } from "../src/subscription";
 import { SubscriptionRegistry } from "../src/subscription";
 import type { FunctionReference } from "../src/types";
 
@@ -369,6 +370,135 @@ describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", ()
 });
 
 describe("tabCoordinator — subscription-data/subscription-settled wire frames (CLIENT-01)", () => {
+    it("re-announces the leader's connection status when a new tab claims leadership", async () => {
+        expect.assertions(2);
+
+        // `emitConnectionStatus` fires only on a CHANGE and `onBecomeLeader`
+        // announces once, so a tab opened later heard nothing and sat on
+        // `leaderStatus === undefined` — `computeStatus()` answering "idle" while
+        // the app was live, and never producing the transitioned-to-connected
+        // edge that flushes an offline queue.
+        const channelName = `test-cross-tab-${crypto.randomUUID()}`;
+        let answered = 0;
+        const leader = new TabCoordinator({
+            channelName,
+            heartbeatInterval: HEARTBEAT_INTERVAL_MS,
+            leaderTimeout: LEADER_TIMEOUT_MS,
+            onLeaderClaimAnswered: () => {
+                answered += 1;
+            },
+        });
+        const newcomer = new BroadcastChannel(channelName);
+
+        try {
+            leader.start();
+            await delay(LEADER_TIMEOUT_MS + 20);
+
+            expect(leader.isLeader()).toBe(true);
+
+            newcomer.postMessage({ tabId: "zzz-newcomer", ts: Date.now(), type: "claim-leadership" });
+            await vi.waitFor(() => {
+                if (answered === 0) {
+                    throw new Error("leader has not answered the claim yet");
+                }
+            });
+
+            expect(answered).toBe(1);
+        } finally {
+            newcomer.close();
+            leader.stop();
+        }
+    });
+
+    it("delivers a leader-broadcast subscription error to a follower's onSubscriptionError", async () => {
+        expect.assertions(2);
+
+        // `broadcastSubscriptionError` shipped with no caller, so this handler
+        // was unreachable: a `subscribe(..., { onError })` on a follower tab
+        // never fired for a server-side rejection (an RLS denial, a failed admin
+        // gate) and the query sat empty with nothing reported.
+        const channelName = `test-cross-tab-${crypto.randomUUID()}`;
+        const received: { error: SubscriptionError; key: string }[] = [];
+        const follower = new TabCoordinator({
+            channelName,
+            heartbeatInterval: HEARTBEAT_INTERVAL_MS,
+            leaderTimeout: LEADER_TIMEOUT_MS,
+            onSubscriptionError: (key, error) => {
+                received.push({ error, key });
+            },
+        });
+        const leader = new BroadcastChannel(channelName);
+
+        leader.postMessage({ error: { code: "FORBIDDEN", message: "rls denied" }, key: "posts:list|{}", type: "subscription-error" });
+        await vi.waitFor(() => {
+            if (received.length === 0) {
+                throw new Error("no subscription-error delivered yet");
+            }
+        });
+
+        expect(received).toHaveLength(1);
+        expect(received[0]?.error.code).toBe("FORBIDDEN");
+
+        leader.close();
+        follower.stop();
+    });
+
+    it("stamps a broadcast subscription error with the identity it was raised under, not one an onError callback switched to", async () => {
+        expect.assertions(2);
+
+        // `fanSubscriptionError` runs subscriber `onError` callbacks
+        // synchronously, and signing out/in is a natural reaction to an
+        // auth-shaped rejection. Reading the fingerprint after that fan stamps
+        // the frame with the identity that REPLACED the one the error was raised
+        // under — and `identity` is exactly what a follower trusts to decide the
+        // frame is theirs, so tabs on the new identity would accept a rejection
+        // belonging to the old session.
+        const stamped: (string | null | undefined)[] = [];
+        const spy = vi
+            .spyOn(TabCoordinator.prototype, "broadcastSubscriptionError")
+            .mockImplementation((_key: string, _error: SubscriptionError, identity?: string | null) => {
+                stamped.push(identity);
+            });
+
+        vi.spyOn(TabCoordinator.prototype, "isLeader").mockReturnValue(true);
+
+        const constructed: string[] = [];
+        const client = new LunoraClient({
+            crossTabSync: true,
+            fetch: vi.fn<typeof fetch>(async () => jsonResponse({ value: null })),
+            url: TEST_URL,
+            WebSocket: createMockWebSocket(constructed),
+        });
+
+        try {
+            client.setAuthToken("token-1", "user-1");
+
+            const before = client.currentIdentity();
+
+            client.subscribe(fnRef("q:list"), {}, () => undefined, {
+                onError: () => {
+                    // The switch that used to win the race.
+                    client.setAuthToken("token-2", "user-2");
+                },
+            });
+
+            // Drive a server-side subscription rejection into the client.
+            const internals = client as unknown as {
+                handleErrorMessage: (message: { id?: string; message?: string; type: "error" }) => void;
+                subscriptions: { all: () => { id: string }[] };
+            };
+
+            internals.handleErrorMessage({ id: internals.subscriptions.all()[0]?.id, message: "rls denied", type: "error" });
+
+            expect(client.currentIdentity()).not.toBe(before);
+            expect(stamped).toStrictEqual([before]);
+        } finally {
+            spy.mockRestore();
+            vi.restoreAllMocks();
+            client.close();
+        }
+    });
+
     it("broadcastSubscriptionData/broadcastSubscriptionSettled carry cursor/epoch on the wire when supplied, and omit them when not", async () => {
         expect.assertions(4);
 

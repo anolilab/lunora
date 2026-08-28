@@ -1,3 +1,16 @@
+## @lunora/workflow [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.35...@lunora/workflow@1.0.0-alpha.36) (2026-08-28)
+
+### Documentation
+
+* repair 404 package links, and document .source() in the hyperdrive readme ([#501](https://github.com/anolilab/lunora/issues/501)) ([d519ac2](https://github.com/anolilab/lunora/commit/d519ac23f2bd8ddf5a10af5db11f141e8728babf))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/values:** upgraded to 1.0.0-alpha.32
+* **@lunora/server:** upgraded to 1.0.0-alpha.92
+
 ## @lunora/workflow [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.34...@lunora/workflow@1.0.0-alpha.35) (2026-08-26)
 
 

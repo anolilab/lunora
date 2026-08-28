@@ -340,7 +340,16 @@ const createReferenceHost = (): ReferenceHost => {
 
             return result;
         } catch (error) {
-            database.exec("ROLLBACK");
+            try {
+                database.exec("ROLLBACK");
+            } catch {
+                // A failed rollback (a handle closed mid-transaction by a teardown
+                // racing an in-flight mutation, or inner work that already ended
+                // the transaction) must not mask the original throw — the caller
+                // needs the real failure, not the cleanup's. `@lunora/testing`'s
+                // harness copy of this guards it; the two host copies did not.
+            }
+
             throw error;
         }
     };

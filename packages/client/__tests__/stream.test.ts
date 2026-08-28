@@ -230,6 +230,27 @@ describe("stream", () => {
     // --- LunoraClient.stream() integration tests --------------------------------
 
     describe("lunoraClient.stream()", () => {
+        it("fails fast on a tab that holds no socket instead of hanging forever", async () => {
+            expect.assertions(1);
+
+            // `ensureSocket` returns before creating a connection whenever this
+            // tab is not the cross-tab leader — which includes the window every
+            // `crossTabSync` client spends as a follower before it self-promotes.
+            // Both send branches were guarded on a connection existing, so this
+            // case fell off the end: the stream was recorded and its iterable
+            // returned having sent nothing and queued nothing, and the consumer
+            // never yielded, never errored and never completed. Cross-tab relays
+            // only subscription frames, so a follower genuinely has no stream
+            // path — the honest answer is a named failure, not a hang.
+            const client = new LunoraClient({ crossTabSync: true, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const iterable = client.stream(fnRef<number>("metrics:tick"), {});
+
+            await expect(iterable[Symbol.asyncIterator]().next()).rejects.toMatchObject({ code: "STREAM_DISCONNECTED" });
+
+            client.close();
+        });
+
         it("opens a WS, sends a stream frame, and yields chunks until complete", async () => {
             expect.assertions(3);
 
@@ -397,6 +418,50 @@ describe("stream", () => {
             expect(resume?.generation).toBe(1234);
 
             iterable.cancel();
+            client.close();
+        });
+
+        it("queues the unsubscribe when a started durable stream is cancelled while disconnected", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const iterable = client.stream(fnRef<number>("chat:answer"), {});
+
+            const first = latestSocket();
+
+            first.open();
+
+            const { id } = first.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>).find((f) => f.type === "stream") as { id: string };
+
+            // A seq-bearing chunk marks the run durable — it now outlives the
+            // socket, and the server keeps producing and persisting it.
+            first.receive({ data: 1, generation: 1234, id, seq: 1, type: "chunk" });
+
+            // Socket drops. The disconnect path queues a resume frame.
+            first.close();
+
+            // Consumer gives up while still disconnected. Dropping the cancel here
+            // is right for an ephemeral run but leaks a durable one: the resume
+            // frame is removed and nothing else ever tells the server to stop.
+            iterable.cancel();
+
+            vi.runOnlyPendingTimers();
+
+            const second = latestSocket();
+
+            second.open();
+
+            const frames = second.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+            const unsubscribeAt = frames.findIndex((f) => f.type === "unsubscribe" && f.id === id);
+
+            expect(unsubscribeAt).toBeGreaterThanOrEqual(0);
+            // And no resume may be sent for a run we just cancelled.
+            expect(frames.some((f) => f.type === "stream" && f.id === id)).toBe(false);
+            // Teardown has to precede anything that could restart it.
+            expect(frames.slice(0, unsubscribeAt).some((f) => f.type === "stream")).toBe(false);
+
             client.close();
         });
 

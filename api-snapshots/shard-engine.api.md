@@ -3276,6 +3276,12 @@ const armRestore: (storage: PitrStorage, args: PitrRestoreArgs) => Promise<Omit<
 const assertFlatPredicate: (where: WhereInput | undefined, schema: ResolveContext["schema"], tableName: string, op: string) => void;
 ```
 
+### `assertNoExplicitUndefined` (const)
+
+```ts
+const assertNoExplicitUndefined: (op: "patch" | "replace", document: Record<string, unknown>) => void;
+```
+
 ### `assertReadonly` (const)
 
 ```ts
@@ -4439,6 +4445,15 @@ const reprojectionTables: (schema: SchemaLike) => string[];
 
 ```ts
 const resolveRankPartition: (index: RankIndexDefinitionLike, where: Record<string, unknown> | undefined) => Record<string, unknown> | undefined;
+```
+
+### `resolveRankSeekTuple` (const)
+
+```ts
+const resolveRankSeekTuple: (options: {
+    after?: RankPageRowKey;
+    cursor?: null | string;
+}) => unknown[] | undefined;
 ```
 
 ### `resolveRelationPredicates` (const)
