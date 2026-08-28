@@ -1,3 +1,14 @@
+## @lunora/container [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.35...@lunora/container@1.0.0-alpha.36) (2026-08-28)
+
+### Documentation
+
+* repair 404 package links, and document .source() in the hyperdrive readme ([#501](https://github.com/anolilab/lunora/issues/501)) ([d519ac2](https://github.com/anolilab/lunora/commit/d519ac23f2bd8ddf5a10af5db11f141e8728babf))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+
 ## @lunora/container [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.34...@lunora/container@1.0.0-alpha.35) (2026-08-26)
 
 
