@@ -3384,9 +3384,6 @@ importers:
       '@lunora/observability':
         specifier: 1.0.0-alpha.47
         version: link:../observability
-      '@lunora/platform':
-        specifier: workspace:*
-        version: link:../platform
       '@lunora/platform-cloudflare':
         specifier: 1.0.0-alpha.25
         version: link:../platform-cloudflare
@@ -3409,6 +3406,9 @@ importers:
       '@lunora/bindings':
         specifier: workspace:*
         version: link:../bindings
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@types/node':
         specifier: catalog:types
         version: 26.2.0
@@ -5022,9 +5022,6 @@ importers:
       '@visulima/vite-overlay':
         specifier: catalog:vite
         version: 2.0.12(ai@7.0.59(zod@4.4.3))(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-      ts-morph:
-        specifier: catalog:tooling
-        version: 28.0.0
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -5044,6 +5041,9 @@ importers:
       jsonc-parser:
         specifier: catalog:vite
         version: 3.3.1
+      ts-morph:
+        specifier: catalog:tooling
+        version: 28.0.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
