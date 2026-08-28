@@ -4,9 +4,10 @@ import { join } from "node:path";
 import type { Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { calleeName, enclosingExportName } from "../argument-taint";
+import { enclosingExportName } from "../argument-taint";
 import type { IdentityClaimReadIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { calleeName } from "./callee";
 import { IDENTITY_FILENAME } from "./identity";
 
 /**

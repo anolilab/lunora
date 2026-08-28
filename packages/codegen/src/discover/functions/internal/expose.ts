@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import type { ExposeCacheIR, ValidatorIR } from "../../../ir";
 import { parseObjectShape } from "../../../parse-validator";
-import { builderChainSteps } from "../../ast";
+import { builderChainSteps } from "../../builder-chain";
 
 /** Read a property off an object literal as a string literal, or `undefined` when absent / not statically readable. */
 const stringProperty = (literal: ObjectLiteralExpression, name: string): string | undefined => {

@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { calleeName, enclosingExportName } from "../argument-taint";
+import { enclosingExportName } from "../argument-taint";
 import type { FailOpenGuardIR } from "../ir";
 import { collectCallRows, limitNameOf } from "./ast";
+import { calleeName } from "./callee";
 
 /**
  * Protective middleware factories that expose a `failOpen` escape hatch, mapped

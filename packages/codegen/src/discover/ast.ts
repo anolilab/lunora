@@ -5,7 +5,6 @@ import type { CallExpression, Expression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
-import { isServerSurfaceModule } from "../module-specifiers";
 
 /** Strips a trailing `.ts` extension from a relative source path. */
 const TS_EXTENSION_RE: RegExp = /\.ts$/u;
@@ -297,137 +296,6 @@ const unwrapToCallExpression = (node: Node | undefined): CallExpression | undefi
     return current && Node.isCallExpression(current) ? current : undefined;
 };
 
-/**
- * Local names an import binds for `exportedName` in a source file.
- *
- * Purely syntactic — no `getSymbol()`, no type checker. Deliberate on two
- * counts: these detectors have to keep working under degraded type info (their
- * whole reason for matching by name), and they run on every `.use(...)`
- * argument of every chain, where resolving a symbol per callee is real
- * type-checker work on a hot path. Scanning a file's import declarations is a
- * handful of syntactic children by comparison.
- *
- * Deliberately NOT cached per source file. ts-morph reuses the `SourceFile`
- * object when a file is overwritten or refreshed, so a cache keyed on it serves
- * the previous content's aliases — which is a wrong answer about whether a
- * procedure declares a policy, traded for a saving this scan does not need.
- */
-const importAliases = (sourceFile: SourceFile, exportedName: string): Set<string> => {
-    const aliases = new Set<string>();
-
-    for (const declaration of sourceFile.getImportDeclarations()) {
-        if (!isServerSurfaceModule(declaration.getModuleSpecifierValue())) {
-            continue;
-        }
-
-        for (const specifier of declaration.getNamedImports()) {
-            if (specifier.getNameNode().getText() === exportedName) {
-                aliases.add(specifier.getAliasNode()?.getText() ?? specifier.getName());
-            }
-        }
-    }
-
-    return aliases;
-};
-
-/**
- * True when a call's `callee` names `expectedName` — literally, or through an
- * import alias.
- *
- * The middleware detectors (`isRlsCall`, `isMaskCall`) match by NAME rather than
- * by import origin on purpose: it keeps them working when ts-morph has degraded
- * type info, where an origin check resolves to nothing and would drop every
- * policy. The plain text comparison alone missed `import { rls as rowLevel }`
- * though, so an aliased import read as unrelated middleware — `usesRls: false`,
- * no policies in the inspector, and the dispatch lint suppressed for that
- * target. The asymmetry made it worse: `classifyProcedureCall` DOES resolve
- * aliases, so the same file's procedure classified correctly while its policy
- * evidence vanished.
- *
- * The alias hop is additive: the text match still answers first, so degraded
- * type info behaves exactly as before. It does gate on the module specifier,
- * unlike the text match — these signals SUPPRESS lints as well as enable them
- * (`usesRls` short-circuits `rls-uncovered-table` and
- * `normalize-id-used-as-authorization`), so trusting an unrelated library's
- * `rls` would silence a real finding. The text match's own false positives are
- * pre-existing and left alone; this hop does not add to them.
- */
-const resolvesToImportedName = (callee: Node, expectedName: string): boolean => {
-    if (Node.isPropertyAccessExpression(callee)) {
-        return callee.getName() === expectedName;
-    }
-
-    if (!Node.isIdentifier(callee)) {
-        return false;
-    }
-
-    const text = callee.getText();
-
-    return text === expectedName || importAliases(callee.getSourceFile(), expectedName).has(text);
-};
-
-/** One `.method(...)` step of a builder chain, in terminal-to-root order. */
-interface BuilderChainStep {
-    /** The step call itself — `.use(rls(p))`, `.input({...})`, `.output(v)`. */
-    call: CallExpression;
-    /** The step's method name. */
-    name: string;
-}
-
-/**
- * Walk a builder chain leftward from `receiver`, collecting each `.method(...)`
- * step and the expression the chain bottoms out at.
- *
- * This walk was written out longhand in eight places, in three dialects that
- * disagreed about whether to unwrap `(x)` / `x as T` and about what a
- * non-property-access callee means — so a cast mid-chain was invisible to some
- * callers and fatal to others, and a fix applied to one dialect left the rest
- * drifting. One walk, one unwrapping policy, one termination policy.
- *
- * Steps come back TERMINAL-FIRST (the order the chain reads leftward), which is
- * what the "last one written wins" rules downstream depend on: the first
- * `.output()` seen is the last one authored.
- *
- * `root` is the non-call expression the chain ends at, or `undefined` when a
- * step's callee was not a property access. Collapsing those two cases is safe —
- * every caller only ever asks whether `root` is a specific identifier, and a
- * half-walked chain never yields one.
- */
-const walkBuilderChain = (receiver: Node): { root: Node | undefined; steps: BuilderChainStep[] } => {
-    const steps: BuilderChainStep[] = [];
-    let current: Node | undefined = unwrapExpression(receiver);
-
-    while (current && Node.isCallExpression(current)) {
-        const callee = unwrapExpression(current.getExpression());
-
-        if (!callee || !Node.isPropertyAccessExpression(callee)) {
-            return { root: undefined, steps };
-        }
-
-        steps.push({ call: current, name: callee.getName() });
-        current = unwrapExpression(callee.getExpression());
-    }
-
-    return { root: current, steps };
-};
-
-/** The `.method(...)` steps of a builder chain, terminal-first. */
-const builderChainSteps = (receiver: Node): BuilderChainStep[] => walkBuilderChain(receiver).steps;
-
-/**
- * The first argument of every `<method>(<callee>(...))` step in the chain — the
- * shape `.use(rls(...))` / `.use(mask(...))` take. `callee` is matched through
- * {@link resolvesToImportedName}, so an import alias counts.
- */
-const wrappedCallsInChain = (receiver: Node, method: string, callee: string): CallExpression[] =>
-    builderChainSteps(receiver)
-        .filter((step) => step.name === method)
-        .map((step) => step.call.getArguments()[0])
-        .filter(
-            (argument): argument is CallExpression =>
-                argument !== undefined && Node.isCallExpression(argument) && resolvesToImportedName(argument.getExpression(), callee),
-        );
-
 /** Resolve the `export default` expression, following one `const x = …; export default x` indirection. */
 const defaultExportExpression = (source: SourceFile): Expression | undefined => {
     const assignment = source.getExportAssignment((declaration) => !declaration.isExportEquals());
@@ -497,19 +365,16 @@ const stringPropertyFor =
     };
 
 export {
-    builderChainSteps,
     collectCallRows,
     defaultExportExpression,
     enclosingExportName,
     handlerOf,
     isContextIdentifier,
-    isDatabaseCall,
     limitNameOf,
     listLunoraSourceFiles,
     lunoraRelativePath,
     propertyInitializer,
     readTargetOf,
-    resolvesToImportedName,
     stringPropertyFor,
     stringPropertyOf,
     tableArgumentOf,
@@ -517,6 +382,4 @@ export {
     TS_EXTENSION_RE,
     unwrapExpression,
     unwrapToCallExpression,
-    walkBuilderChain,
-    wrappedCallsInChain,
 };

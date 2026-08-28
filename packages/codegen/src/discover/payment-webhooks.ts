@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { calleeName, enclosingExportName } from "../argument-taint";
+import { enclosingExportName } from "../argument-taint";
 import type { PaymentWebhookIR } from "../ir";
 import { collectCallRows } from "./ast";
+import { calleeName } from "./callee";
 
 /**
  * Payment-adapter factories that accept a `webhookToleranceSeconds` replay

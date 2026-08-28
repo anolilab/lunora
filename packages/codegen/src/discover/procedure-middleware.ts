@@ -4,6 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { calleeName } from "./callee";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -106,21 +107,6 @@ interface Protections {
     usesRls: boolean;
 }
 
-/** The callee name of a call expression — bare identifier or property access — or `undefined`. */
-const calleeNameOf = (call: CallExpression): string | undefined => {
-    const callee = call.getExpression();
-
-    if (Node.isIdentifier(callee)) {
-        return callee.getText();
-    }
-
-    if (Node.isPropertyAccessExpression(callee)) {
-        return callee.getName();
-    }
-
-    return undefined;
-};
-
 /**
  * Fold a `protectPublic({ rateLimit, captcha })` bundle into the protection flags
  * it sets by reading which keys its object-literal argument declares — the bundle
@@ -180,7 +166,7 @@ const NO_PROTECTIONS: Protections = { usesCaptcha: false, usesEmailGate: false, 
  */
 const useStepProtections = (useArgument: TsNode): Protections => {
     const argument = resolveUseArgumentCall(useArgument);
-    const name = argument ? calleeNameOf(argument) : undefined;
+    const name = argument ? calleeName(argument.getExpression()) : undefined;
 
     if (argument && name === "protectPublic") {
         const bundle = protectPublicFlags(argument);
@@ -317,7 +303,7 @@ const AI_GENERATION_CALLEES = new Set(["generateObject", "generateText", "stream
 
 /** True when `call` is any AI generation helper, bounded or not. */
 const isAiGeneration = (call: CallExpression): boolean => {
-    const callee = calleeNameOf(call);
+    const callee = calleeName(call.getExpression());
 
     return callee !== undefined && AI_GENERATION_CALLEES.has(callee);
 };
@@ -332,7 +318,7 @@ const isAiGeneration = (call: CallExpression): boolean => {
  * spread source — so it fails open too, matching the sibling config readers.
  */
 const isUnboundedAiGeneration = (call: CallExpression): boolean => {
-    const name = calleeNameOf(call);
+    const name = calleeName(call.getExpression());
 
     if (name === undefined || !AI_GENERATION_CALLEES.has(name)) {
         return false;

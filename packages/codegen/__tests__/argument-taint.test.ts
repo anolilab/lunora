@@ -3,7 +3,6 @@ import { Project, SyntaxKind } from "ts-morph";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
-    calleeName,
     enclosingExportName,
     isArgumentDerived,
     isRequestInputDerived,
@@ -13,6 +12,7 @@ import {
     referencesRequestInput,
     singleHopInitializer,
 } from "../src/argument-taint";
+import { calleeName } from "../src/discover/callee";
 
 let project: Project;
 let fileCounter: number;

@@ -10,7 +10,7 @@
 import type { ArrowFunction, CallExpression, FunctionExpression, Node as TsNode } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { builderChainSteps, wrappedCallsInChain } from "../ast";
+import { builderChainSteps, wrappedCallsInChain } from "../builder-chain";
 
 /** A function whose body we can inspect — an inline arrow or function expression handler. */
 type InspectableHandler = ArrowFunction | FunctionExpression;

@@ -1,8 +1,9 @@
 import type { CallExpression, Project } from "ts-morph";
 
-import { calleeName, enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { ImageDeliveryUrlAccessIR } from "../ir";
 import { collectCallRows, propertyInitializer } from "./ast";
+import { calleeName } from "./callee";
 
 /**
  * The IR row for a `buildImageDeliveryUrl({ key, … })` call whose `key` is

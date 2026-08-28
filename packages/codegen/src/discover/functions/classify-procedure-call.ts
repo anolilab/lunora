@@ -1,8 +1,9 @@
 import type { CallExpression, Identifier } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { isServerSurfaceModule } from "../../module-specifiers";
-import { unwrapExpression, walkBuilderChain } from "../ast";
+import { unwrapExpression } from "../ast";
+import { walkBuilderChain } from "../builder-chain";
+import { resolveCalleeKind } from "../callee";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
@@ -32,60 +33,6 @@ const LIFECYCLE_FACTORIES: Record<string, LifecycleMoment> = {
     onDisconnect: "disconnect",
     onQueryChange: "reactor",
     onShardInit: "init",
-};
-
-/**
- * Module specifiers a registration factory (`query`/`mutation`/`action`/their
- * `internal*` twins) may legitimately come from — see
- * {@link isServerSurfaceModule} for the three accepted forms and why omitting one
- * silently drops the function from `LUNORA_FUNCTIONS` instead of erroring.
- */
-const isLunoraSurfaceModule = isServerSurfaceModule;
-
-/**
- * Resolve a callee identifier through its import declaration, returning the
- * **imported** name (i.e. the name as exported from `@lunora/server` or the
- * generated `_generated/server` re-export). This handles aliasing like
- * `import { query as q }` where the call site uses `q` but the registration kind
- * is `query`. Returns `undefined` when the identifier is not imported from the
- * Lunora surface, so we don't accidentally pick up a local `const query = ...`.
- */
-const resolveCalleeKind = (identifier: Identifier): string | undefined => {
-    const symbol = identifier.getSymbol();
-
-    // No type-checker info at all (no tsconfig wired up). Fall back to the
-    // surface text — preserves the prior behaviour for users that haven't
-    // configured ts-morph with a real project.
-    if (!symbol) {
-        return identifier.getText();
-    }
-
-    const declarations = symbol.getDeclarations();
-
-    for (const declaration of declarations) {
-        if (!Node.isImportSpecifier(declaration)) {
-            continue;
-        }
-
-        const importDeclaration = declaration.getImportDeclaration();
-        const moduleSpecifier = importDeclaration.getModuleSpecifierValue();
-
-        // Only trust identifiers imported from the Lunora surface (the public
-        // package or the generated `_generated/server` re-export).
-        if (!isLunoraSurfaceModule(moduleSpecifier)) {
-            return undefined;
-        }
-
-        // `import { query as q }` → declaration.getNameNode() is `query`,
-        // declaration.getAliasNode() is `q`. The kind we care about is the
-        // exported name, not the local alias.
-        return declaration.getNameNode().getText();
-    }
-
-    // Symbol exists but no `@lunora/server` import specifier among its
-    // declarations — it's a local binding (`const query = ...`) or imported
-    // from somewhere else. Reject so we don't pick it up as a registration.
-    return undefined;
 };
 
 /**
@@ -232,23 +179,23 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
         return undefined;
     }
 
-    const calleeName = resolveCalleeKind(callee);
+    const exportedName = resolveCalleeKind(callee);
 
-    if (!calleeName) {
+    if (!exportedName) {
         return undefined;
     }
 
-    if (FUNCTION_KINDS.has(calleeName)) {
-        return { kind: calleeName, visibility: "public" };
+    if (FUNCTION_KINDS.has(exportedName)) {
+        return { kind: exportedName, visibility: "public" };
     }
 
-    const internalKind = INTERNAL_FACTORIES[calleeName];
+    const internalKind = INTERNAL_FACTORIES[exportedName];
 
     if (internalKind) {
         return { kind: internalKind, visibility: "internal" };
     }
 
-    const lifecycle = LIFECYCLE_FACTORIES[calleeName];
+    const lifecycle = LIFECYCLE_FACTORIES[exportedName];
 
     if (lifecycle) {
         // A lifecycle hook is an internal mutation tagged with its socket side;

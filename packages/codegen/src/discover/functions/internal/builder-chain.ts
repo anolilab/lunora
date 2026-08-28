@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import type { ValidatorIR } from "../../../ir";
 import { parseObjectShape, parseValidator } from "../../../parse-validator";
-import { builderChainSteps } from "../../ast";
+import { builderChainSteps } from "../../builder-chain";
 import unwrapHandlerReturn from "../unwrap-handler-return";
 
 /**

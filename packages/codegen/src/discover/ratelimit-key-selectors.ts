@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { calleeName, enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { RatelimitKeySelectorIR } from "../ir";
 import { collectCallRows, limitNameOf, propertyInitializer } from "./ast";
+import { calleeName } from "./callee";
 
 /** The `@lunora/ratelimit` middleware factories whose third argument carries a `key` selector. */
 const RATELIMIT_CALLEES = new Set(["dbRateLimit", "rateLimit"]);

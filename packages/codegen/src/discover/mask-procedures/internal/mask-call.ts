@@ -2,7 +2,8 @@ import type { CallExpression, Node as TsNode } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { MaskColumnMetadataIR } from "../../../ir";
-import { resolvesToImportedName, wrappedCallsInChain } from "../../ast";
+import { wrappedCallsInChain } from "../../builder-chain";
+import { resolvesToImportedName } from "../../callee";
 
 /**
  * True when `node` is a `CallExpression` whose callee resolves to the name

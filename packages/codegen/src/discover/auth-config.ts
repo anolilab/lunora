@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { calleeName, enclosingExportName } from "../argument-taint";
+import { enclosingExportName } from "../argument-taint";
 import type { AuthConfigIR } from "../ir";
 import { collectCallRows, propertyInitializer } from "./ast";
+import { calleeName } from "./callee";
 
 /** Whether `node` is the literal `true` keyword. */
 const isTrueLiteral = (node: TsNode | undefined): boolean => node?.getKind() === SyntaxKind.TrueKeyword;

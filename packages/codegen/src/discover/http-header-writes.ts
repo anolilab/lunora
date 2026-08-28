@@ -4,6 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { enclosingExportName, isRequestInputDerived, referencesRequestInput, singleHopInitializer } from "../argument-taint";
 import type { HttpHeaderWriteIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { calleeName } from "./callee";
 import type { InspectableHandler } from "./functions/chain";
 import { inlineHandler } from "./functions/chain";
 
@@ -19,15 +20,6 @@ const SANITIZER_CALLEES = new Set(["btoa", "encodeURI", "encodeURIComponent", "i
 
 /** The `Headers` mutation methods whose second argument is a header value. */
 const HEADER_MUTATORS = new Set(["append", "set"]);
-
-/** The simple name of a call/new callee: the identifier text, or the member name of a property access. */
-const calleeName = (callee: TsNode): string => {
-    if (Node.isIdentifier(callee)) {
-        return callee.getText();
-    }
-
-    return Node.isPropertyAccessExpression(callee) ? callee.getName() : "";
-};
 
 /** The literal value of a string-literal / no-substitution-template key node, else `""`. */
 const staticHeaderName = (node: TsNode | undefined): string => {
@@ -52,7 +44,7 @@ const sanitizesRequestInput = (root: TsNode, requestName: string): boolean => {
         ? [root, ...root.getDescendantsOfKind(SyntaxKind.CallExpression)]
         : root.getDescendantsOfKind(SyntaxKind.CallExpression);
 
-    return calls.some((call) => SANITIZER_CALLEES.has(calleeName(call.getExpression())) && referencesRequestInput(call, requestName));
+    return calls.some((call) => SANITIZER_CALLEES.has(calleeName(call.getExpression()) ?? "") && referencesRequestInput(call, requestName));
 };
 
 /**

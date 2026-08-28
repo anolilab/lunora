@@ -22,8 +22,15 @@ const REFERENCE_ROOTS = new Set(["api", "internal"]);
 
 type HandlerFunction = ArrowFunction | FunctionExpression;
 
-/** The simple callee name of a call expression, or `undefined`. */
-const calleeName = (call: CallExpression): string | undefined => {
+/**
+ * The name of a call whose callee is a BARE IDENTIFIER, or `undefined`.
+ *
+ * Deliberately not the shared `calleeName`, which also answers for a property
+ * access (`queues.defineQueue(...)` → `"defineQueue"`). The handler factories
+ * this gates on are only ever called bare, and accepting a member name would
+ * let an unrelated `x.defineQueue(...)` register a privileged dispatch.
+ */
+const bareCalleeName = (call: CallExpression): string | undefined => {
     const expression = call.getExpression();
 
     return Node.isIdentifier(expression) ? expression.getText() : undefined;
@@ -291,7 +298,7 @@ const dispatchesInSourceFile = (sourceFile: SourceFile, relativePath: string): P
     const found: PrivilegedDispatchIR[] = [];
 
     for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const name = calleeName(call);
+        const name = bareCalleeName(call);
 
         if (name === undefined || !HANDLER_FACTORIES.has(name)) {
             continue;
