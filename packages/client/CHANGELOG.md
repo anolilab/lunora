@@ -1,3 +1,17 @@
+## @lunora/client [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.60...@lunora/client@1.0.0-alpha.61) (2026-08-28)
+
+### Bug Fixes
+
+* close nine copied-helper divergences across eight packages ([#522](https://github.com/anolilab/lunora/issues/522)) ([a2455bb](https://github.com/anolilab/lunora/commit/a2455bb0f58b9873633504c3f1e9bfeb44a5870e))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/do:** upgraded to 1.0.0-alpha.108
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.79
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.46
+
 ## @lunora/client [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.59...@lunora/client@1.0.0-alpha.60) (2026-08-26)
 
 ### Performance Improvements
