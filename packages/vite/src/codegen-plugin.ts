@@ -376,10 +376,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // invalidation loop below target the wrong (empty) directory.
     let absoluteGeneratedDirectory = resolve(options.projectRoot, options.generatedDir);
 
-    // When the project's `postcodegen` last finished — see {@link HOOK_SETTLE_MS}.
-    // Plugin-scoped, not server-scoped: `buildStart` runs the hook too, and the
-    // watcher registered in `configureServer` has to ignore what that one wrote.
+    // When the project's `postcodegen` last finished, and whether one is running
+    // right now — see {@link HOOK_SETTLE_MS}. Plugin-scoped, not server-scoped:
+    // `buildStart` runs the hook too, and the watcher registered in
+    // `configureServer` has to ignore what that one wrote.
     let hookSettledAt = 0;
+    let hookRunning = false;
 
     // Captured in configureServer and used to push overlay events. Undefined in
     // build mode (vite build) — the overlay callbacks are never wired up then.
@@ -462,10 +464,19 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 // unfinished. Only after a run that produced output — a hook over
                 // a tree codegen did not write edits the previous run's files.
                 //
-                // `blockingMessage` is what fails a build; a failing hook reports
-                // (from inside `runPostCodegenHook`) and does not, matching the
-                // advisory policy one branch below.
-                const hook = await runPostCodegenHook({ cwd: options.projectRoot, logger });
+                // `hookRunning` (not just the settle window) for the whole call:
+                // the window is armed only once the hook RESOLVES, so a hook that
+                // writes early and runs longer than it would leave its own event
+                // unfiltered for the watcher `configureServer` registers.
+                hookRunning = true;
+
+                let hook;
+
+                try {
+                    hook = await runPostCodegenHook({ cwd: options.projectRoot, logger });
+                } finally {
+                    hookRunning = false;
+                }
 
                 // Armed only when a hook actually RAN. Arming it on every
                 // regeneration would deafen the watcher for the window after each
@@ -473,6 +484,16 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 // `postcodegen`, which is nearly all of them.
                 if (hook.ran) {
                     hookSettledAt = Date.now();
+                }
+
+                // A build must not ship output the project's own post-step could
+                // not finish — the same reason `lunora build`/`deploy` abort on it,
+                // and the whole point of running the hook here. Dev stays
+                // log-only (the hook already reported), matching the advisory
+                // policy one branch below: interrupting the dev server on a hook
+                // the next save may fix is the worse loop.
+                if (command === "build" && hook.error !== undefined) {
+                    this.error(hook.error);
                 }
             }
 
@@ -667,11 +688,31 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     // would serve the unfinished copy for the hook's duration.
                     // Failures are reported inside the hook and never end the watch
                     // loop: the next edit is the chance to fix it.
-                    const hook = await runPostCodegenHook({ cwd: options.projectRoot, logger: serverLogger });
+                    // See the `buildStart` call for why the flag brackets the whole
+                    // call rather than relying on the settle window alone.
+                    hookRunning = true;
+
+                    let hook;
+
+                    try {
+                        hook = await runPostCodegenHook({ cwd: options.projectRoot, logger: serverLogger });
+                    } finally {
+                        hookRunning = false;
+                    }
 
                     // Armed only when a hook actually RAN — see HOOK_SETTLE_MS.
                     if (hook.ran) {
                         hookSettledAt = Date.now();
+                    }
+
+                    // Stop short of the reload when the post-step failed: the
+                    // output on disk is exactly what the hook exists to finish, so
+                    // pushing it to the client serves the unfinished copy. Leaving
+                    // the previous modules in place keeps the app on the last
+                    // version that WAS finished until the next save fixes it. The
+                    // hook already reported why, and the watch loop stays alive.
+                    if (hook.error !== undefined) {
+                        return;
                     }
 
                     invalidateGenerated();
@@ -746,10 +787,18 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return;
                 }
 
-                // …and skip the window after the project's `postcodegen` ran, so
-                // a hook that rewrites a schema-directory file doesn't read as a
-                // developer's save. See HOOK_SETTLE_MS.
-                if (Date.now() - hookSettledAt < HOOK_SETTLE_MS) {
+                // …and skip anything the project's `postcodegen` wrote, so a hook
+                // that rewrites a schema-directory file doesn't read as a
+                // developer's save: while it runs, and for a settle window after
+                // it exits. See HOOK_SETTLE_MS.
+                if (hookRunning || Date.now() - hookSettledAt < HOOK_SETTLE_MS) {
+                    // Drop a debounce an earlier event already scheduled too —
+                    // otherwise the hook's first write still lands a queued rerun.
+                    if (debounceTimer) {
+                        clearTimeout(debounceTimer);
+                        debounceTimer = undefined;
+                    }
+
                     return;
                 }
 

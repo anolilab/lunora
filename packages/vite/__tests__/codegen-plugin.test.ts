@@ -1336,6 +1336,26 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
         });
 
+        it("does not push a reload when the hook failed", async () => {
+            expect.assertions(2);
+
+            // The output on disk is exactly what the hook exists to finish, so
+            // pushing it serves the unfinished copy. Leaving the previous modules
+            // in place keeps the app on the last version that WAS finished.
+            writeFixture(workdir);
+            vi.mocked(runPostCodegenHook).mockResolvedValue({ error: "`postcodegen` exited 1", ran: true });
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server, workerSend } = makeStubServer();
+
+            wireServer(plugin, server);
+            changeListenerFor(server)(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+            expect(workerSend).not.toHaveBeenCalled();
+        });
+
         it("resumes regenerating once the settle window has passed", async () => {
             expect.assertions(1);
 

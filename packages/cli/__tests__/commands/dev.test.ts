@@ -492,6 +492,7 @@ describe("lunora dev", () => {
                         close: async () => {
                             codegenClosed = true;
                         },
+                        ready: Promise.resolve(),
                         watchAvailable: true,
                     };
                 },
@@ -530,7 +531,7 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: { ...silentLogger(), warn: (message) => warnings.push(message) },
                 startCodegen: () => {
-                    return { close: async () => {}, watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -614,7 +615,7 @@ describe("lunora dev", () => {
                 },
                 logger: silentLogger(),
                 startCodegen: () => {
-                    return { close: async () => {}, watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -652,7 +653,7 @@ describe("lunora dev", () => {
                 },
                 remote: true,
                 startCodegen: () => {
-                    return { close: async () => {}, watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -715,7 +716,7 @@ describe("lunora dev", () => {
                 findFreePort: async () => 8787,
                 logger: silentLogger(),
                 startCodegen: () => {
-                    return { close: async () => {}, watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -877,7 +878,7 @@ describe("lunora dev", () => {
                 },
                 logger,
                 startCodegen: () => {
-                    return { close: async () => {}, watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };

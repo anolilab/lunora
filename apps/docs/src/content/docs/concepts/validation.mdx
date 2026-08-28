@@ -163,9 +163,12 @@ than at compile time.
     | `v.number()` | `.min()` `.max()` `.int()` `.positive()`                       |
     | `v.array()`  | `.min()` `.max()` (item count)                                 |
 
-- **`.safeParse()` returns a different shape.** `{ ok, value }` on success and
-  `{ ok: false, error }` on failure — not zod's `{ success, data }`. `.parse()`
-  matches zod. Code that reads `.success` compiles and is always `undefined`.
+- **`.safeParse()` returns a different shape.** `{ ok: true, value }` on success
+  and `{ ok: false, error }` on failure — not zod's `{ success, data }`.
+  `.parse()` matches zod. Reading `.success` off the result is a type error, so
+  ported code fails to compile rather than silently taking the wrong branch —
+  unless the value has been widened to `any`, where it reads as `undefined` and
+  every check falls through to the failure path.
 - **`.default(x)` is a column default, not an argument coercion.** It declares
   what the database writes when a field is absent on insert; it does **not**
   fill a missing value in during `parse`. Reading a defaulted field out of

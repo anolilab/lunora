@@ -178,6 +178,53 @@ describe("startCodegenWatch", () => {
             rmSync(workdir, { force: true, recursive: true });
         });
 
+        it("does not retrigger itself when a SLOW hook writes before it exits", async () => {
+            expect.assertions(1);
+
+            codegenSucceeds();
+
+            // The settle window alone cannot cover this: it is armed only once the
+            // hook RESOLVES, so a hook that writes early and runs longer than the
+            // window leaves its own event unfiltered. Every realistic
+            // `postcodegen` — a `tsc`, a patch script — is in that class, which
+            // makes this the common case rather than the exotic one, and it loops
+            // forever rather than costing one extra run.
+            const workdir = projectWithPostCodegen();
+            const calls: unknown[] = [];
+            const slowWritingSpawner = async (): Promise<{ code: number }> => {
+                calls.push(1);
+                writeFileSync(join(workdir, "touched-by-hook.ts"), `// ${String(calls.length)}`, "utf8");
+
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 500);
+                });
+
+                return { code: 0 };
+            };
+
+            const handle = startCodegenWatch({
+                debounceMs: 0,
+                logger: silentLogger().logger,
+                lunoraDirectory: ".",
+                projectRoot: workdir,
+                spawner: slowWritingSpawner,
+            });
+
+            // `close()` in a `finally`: a regression here IS the runaway loop, and
+            // leaving the watcher live on a failed assertion hangs the whole run
+            // rather than reporting one red test.
+            try {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 1500);
+                });
+
+                expect(calls).toHaveLength(1);
+            } finally {
+                await handle.close();
+                rmSync(workdir, { force: true, recursive: true });
+            }
+        });
+
         it("is a no-op for a project that declares no postcodegen script", async () => {
             expect.assertions(1);
 

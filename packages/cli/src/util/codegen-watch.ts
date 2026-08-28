@@ -48,11 +48,14 @@ const DEFAULT_DEBOUNCE_MS = 100;
  * is a package-manager subprocess every ~100ms for as long as `lunora dev` is
  * up.
  *
- * The known ceiling: this only covers writes the hook makes before it exits and
- * within the window. A hook that writes from a detached background process, or
- * later than this, still loops. Closing that properly means watching only the
- * files codegen actually reads rather than the whole subtree — worth doing if
- * anyone hits it, not worth pre-building.
+ * This window covers only the writes that land as the hook EXITS; the writes it
+ * makes while running are covered by the separate `hookRunning` flag, because a
+ * window armed on resolve cannot filter an event that arrived before it.
+ *
+ * The known ceiling: a hook that writes from a detached background process, or
+ * later than this window after exiting, still loops. Closing that properly means
+ * watching only the files codegen actually reads rather than the whole subtree —
+ * worth doing if anyone hits it, not worth pre-building.
  */
 const HOOK_SETTLE_MS = 300;
 
@@ -69,12 +72,8 @@ const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
  * as well, without leaving an argument order for the next parameter to get
  * wrong.
  */
-const runOnce = async (
-    options: Pick<CodegenWatcherOptions, "apiSpec" | "jsonLogs" | "logger" | "projectRoot" | "spawner" | "target">,
-    lunoraDirectory: string,
-    reason: string,
-): Promise<boolean> => {
-    const { apiSpec, jsonLogs, logger, projectRoot, spawner, target } = options;
+const runOnce = (options: Pick<CodegenWatcherOptions, "apiSpec" | "logger" | "projectRoot" | "target">, lunoraDirectory: string, reason: string): boolean => {
+    const { apiSpec, logger, projectRoot, target } = options;
 
     try {
         const result = runCodegen({ apiSpec, lunoraDirectory, projectRoot, target });
@@ -87,22 +86,10 @@ const runOnce = async (
     } catch (error: unknown) {
         logger.error(renderCodegenFailure(error, reason));
 
-        // No hook on a failed run: `postcodegen` exists to finish generated
-        // output, and running it over a tree codegen did not write is the one
-        // way to make a bad state worse.
         return false;
     }
 
-    // `stdoutToStderr` for the same reason `deploy` passes it: `lunora dev`
-    // turns on JSON logging whenever an AI agent is detected, not only under an
-    // explicit flag, and the hook's stdout is otherwise inherited onto the same
-    // fd the NDJSON stream writes to — any script that prints corrupts it.
-    // A failure is reported by the hook itself and deliberately not acted on
-    // here: unlike `prepare`/`deploy` the dev loop must keep running, because the
-    // next edit is the chance to fix it.
-    const hook = await runPostCodegenHook({ cwd: projectRoot, logger, spawner, stdoutToStderr: jsonLogs });
-
-    return hook.ran;
+    return true;
 };
 
 /**
@@ -130,9 +117,20 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     // coalescing for free from the event loop.
     let closed = false;
     let running = false;
+    let hookRunning = false;
     let pending: string | undefined;
     let settledAt = 0;
     let idle: Promise<void> = Promise.resolve();
+
+    // Resolves when the STARTUP run — codegen plus the project's `postcodegen` —
+    // has finished, so a caller can hold off work that reads generated output.
+    // `runCodegen` itself is synchronous and completes before `startCodegenWatch`
+    // returns; the hook is not, and it is the step that FINISHES the output, so
+    // without this a dev server can bundle the unfinished copy.
+    let resolveReady: () => void;
+    const ready = new Promise<void>((resolve) => {
+        resolveReady = resolve;
+    });
 
     const enqueue = (reason: string): void => {
         if (closed) {
@@ -156,16 +154,51 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
                     pending = undefined;
 
-                    // Sequential on purpose — the whole point is that two hooks
-                    // never overlap, so the await belongs inside the loop.
-                    // eslint-disable-next-line no-await-in-loop -- serializing runs IS the invariant; a parallel version would let one hook read output another is mid-write
-                    const hookRan = await runOnce(options, lunoraDirectory, next);
+                    // No hook on a failed run: `postcodegen` exists to finish
+                    // generated output, and running it over a tree codegen did
+                    // not write is the one way to make a bad state worse.
+                    if (!runOnce(options, lunoraDirectory, next)) {
+                        continue;
+                    }
 
-                    // Only arm the settle window when a hook actually ran —
-                    // otherwise every regeneration would deafen the watcher to
-                    // real edits for no reason.
-                    if (hookRan) {
-                        settledAt = Date.now();
+                    // `hookRunning` covers the hook's whole lifetime, not just
+                    // the window after it. The settle window alone is armed only
+                    // once the hook RESOLVES, so a hook that writes early and
+                    // runs longer than the window leaves its own event
+                    // unfiltered — it queues a rerun, whose hook writes again,
+                    // forever. Every realistic `postcodegen` (a `tsc`, a patch
+                    // script) takes longer than the window, so that is the common
+                    // case, not the exotic one. The window still covers the
+                    // writes that land as the hook exits.
+                    hookRunning = true;
+
+                    try {
+                        // `stdoutToStderr` for the same reason `deploy` passes
+                        // it: `lunora dev` turns on JSON logging whenever an AI
+                        // agent is detected, not only under an explicit flag, and
+                        // the hook's stdout is otherwise inherited onto the same
+                        // fd the NDJSON stream writes to.
+                        //
+                        // A failure is reported by the hook itself and
+                        // deliberately not acted on here: unlike
+                        // `prepare`/`deploy` the dev loop must keep running,
+                        // because the next edit is the chance to fix it.
+                        // eslint-disable-next-line no-await-in-loop -- serializing runs IS the invariant; a parallel version would let one hook read output another is mid-write
+                        const hook = await runPostCodegenHook({
+                            cwd: options.projectRoot,
+                            logger: options.logger,
+                            spawner: options.spawner,
+                            stdoutToStderr: options.jsonLogs,
+                        });
+
+                        // Armed only when a hook actually ran — otherwise every
+                        // regeneration would deafen the watcher to real edits for
+                        // no reason.
+                        if (hook.ran) {
+                            settledAt = Date.now();
+                        }
+                    } finally {
+                        hookRunning = false;
                     }
                 }
             } catch (error: unknown) {
@@ -176,6 +209,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 options.logger.error(`codegen watch: ${error instanceof Error ? error.message : String(error)}`);
             } finally {
                 running = false;
+                resolveReady();
             }
         })();
     };
@@ -192,6 +226,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
                 return idle;
             },
+            ready,
             watchAvailable: false,
         };
     };
@@ -214,10 +249,18 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 return;
             }
 
-            // …and skip the window after a `postcodegen` run, so a hook that
-            // writes anywhere else under `lunora/` doesn't retrigger it either.
-            // See HOOK_SETTLE_MS.
-            if (Date.now() - settledAt < HOOK_SETTLE_MS) {
+            // …and skip anything a `postcodegen` run wrote, so a hook that
+            // touches a file under `lunora/` doesn't retrigger it either: while it
+            // runs, and for a settle window after it exits. See HOOK_SETTLE_MS.
+            if (hookRunning || Date.now() - settledAt < HOOK_SETTLE_MS) {
+                // Also drop a debounce an earlier event already scheduled —
+                // otherwise the hook's first write still lands a queued rerun on
+                // the way in.
+                if (timer) {
+                    clearTimeout(timer);
+                    timer = undefined;
+                }
+
                 return;
             }
 
@@ -255,6 +298,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
             // mid-write, on an inherited stdout.
             return idle;
         },
+        ready,
         watchAvailable: true,
     };
 };
@@ -292,6 +336,19 @@ export interface CodegenWatcherHandle {
      * watcher detached can ignore it.
      */
     close: () => Promise<void>;
+
+    /**
+     * Resolves once the startup regeneration — codegen AND the project's
+     * `postcodegen` — has finished.
+     *
+     * Await it before starting anything that reads generated output. `runCodegen`
+     * is synchronous and has already run by the time `startCodegenWatch` returns,
+     * but the hook is the step that FINISHES that output, so a worker spawned
+     * without waiting can bundle the unfinished copy. Resolves (never rejects)
+     * even when codegen or the hook failed — both report for themselves, and a
+     * dev server still has to come up.
+     */
+    ready: Promise<void>;
 
     /**
      * `true` when the platform supports recursive watch and the loop is active.

@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { PackageManagerProbe } from "../../src/util/detect-package-manager";
-import { addArgsFor, detectInstalledManagers, detectPackageManager, execArgsFor, runScriptCommand } from "../../src/util/detect-package-manager";
+import type { PackageManagerProbe } from "../src/package-manager";
+import { addArgsFor, detectInstalledManagers, detectPackageManager, execArgsFor, runScriptCommand } from "../src/package-manager";
 
 describe(detectInstalledManagers, () => {
     it("keeps INSTALL_PREFERENCE order and drops managers the probe rejects", () => {

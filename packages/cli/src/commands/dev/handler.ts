@@ -1058,6 +1058,13 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         }
 
         handles.studio = await startStudioBestEffort(options, plan, cwd, logger);
+
+        // After the studio start, so the two overlap, but before the worker below:
+        // the startup `postcodegen` is what FINISHES generated output, and a
+        // wrangler bundle taken while it is still running is the unfinished copy.
+        // `runCodegen` itself already completed inside `startCodegenWatch`.
+        await handles.codegen?.ready;
+
         const studioUrl = handles.studio?.url;
 
         // A Vite/meta-framework was detected: nudge the user to their framework
