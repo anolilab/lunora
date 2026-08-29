@@ -21,7 +21,7 @@ lunora init [name] [-t <template>]      # scaffold a new project (default: react
 lunora add <auth|email>                 # add a feature to the current project
 lunora view [--remote]                  # open the Lunora studio in your browser
 lunora docs [section]                   # open the docs site in your browser
-lunora info [--json]                    # print versions, wrangler summary, schema overview
+lunora info [--json] [--bindings]       # versions + wrangler summary; --bindings for the manifest
 lunora doctor [--format <pretty|json>]  # preflight the project (bindings, placeholders, secrets)
 lunora registry <add|list|view|build>   # component registry
 lunora rules <install|check>            # install the AI agent skills into .agents/skills/
@@ -46,7 +46,7 @@ lunora insights [--shard <key>]         # write-conflict / error / latency hot-s
 lunora reset [--all] [--yes]            # clear local Miniflare state
 
 # Deploy
-lunora prepare [--api-spec <spec>]      # codegen + wrangler validation — for CI
+lunora prepare [--api-spec <spec>]      # every pre-deploy gate, without deploying — for CI
 lunora build [--out-dir <dir>]          # bundle the worker to disk without deploying
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
               [--migrate] [--prebuilt]  #   --preview uploads a version (no live traffic)
@@ -169,6 +169,28 @@ lunora info
 lunora info --json
 ```
 
+#### `--bindings`: what this Worker needs provisioned
+
+`--bindings` narrows the command to one question a machine asks — the binding
+manifest. It is the same document `lunora build --emit-bindings` hands a deployer
+and `lunora dev` writes for a task runner, from the same derivation, so those
+consumers cannot be told different things.
+
+```bash
+lunora info --bindings                  # bindings, crons and var NAMES
+lunora info --bindings --json           # the manifest itself
+lunora info --bindings --out reqs.json  # write it
+```
+
+The manifest is a pure function of the project, so this answers without starting
+a dev server or producing a bundle — which is what a supervisor planning a
+multi-worker graph needs _before_ it starts anything. It never carries variable
+values, only their names.
+
+A project with no readable `wrangler.jsonc` exits non-zero rather than reporting
+an empty manifest: "this Worker needs nothing" is a claim a deployer acts on by
+provisioning nothing. `--out` without `--bindings` is an error.
+
 ### `lunora doctor`
 
 A read-only preflight over the current project. It reports pass / warn / fail for:
@@ -275,6 +297,27 @@ lunora dev status         # URL, PID, uptime (add --json for a machine-readable 
 lunora dev logs           # captured output of a background run (--lines n, 0 = all)
 lunora dev stop           # SIGTERM, SIGKILL escalation after 10s; clears the record
 ```
+
+#### Files a supervisor reads
+
+Every `lunora dev` start writes two files into the gitignored `.lunora/`, and
+names both in its startup banner:
+
+| File                        | Carries                                                            |
+| --------------------------- | ------------------------------------------------------------------ |
+| `.lunora/dev.json`          | live state — URL, PID, and `readyAt` once the server first answers |
+| `.lunora/dev-bindings.json` | the binding manifest, plus the origin it serves on                 |
+
+`readyAt` is what separates "the process exists" from "it is accepting
+requests" — the rest of the record is written before anything is listening.
+`lunora dev status` reports it as `ready` or `starting`, and `--json` carries
+`ready` / `readyAt`, so a task runner can gate a dependent step on a fact rather
+than a guessed sleep. A missing `readyAt` means _not ready yet_, never _never_.
+
+`--emit-bindings <file>` moves the manifest elsewhere, and naming a path also
+makes a derivation failure fatal — a named path means something is waiting on it.
+See [Monorepos and external IaC](/docs/concepts/monorepos-and-iac) for the full
+supervisor workflow.
 
 When an AI coding agent is detected (Claude Code, Cursor, Codex, Gemini CLI,
 Cline, …) background mode and JSON logging turn on automatically, so agent
@@ -459,9 +502,25 @@ lunora deployments promote <version-id> --yes # send 100% of traffic to a versio
 
 ### `lunora prepare`
 
-Same pipeline as `lunora deploy` but stops before `wrangler deploy`, with no
-Vite step and no network traffic. Use it in CI to catch codegen drift and
-`wrangler.jsonc` validation errors before the deploy job runs.
+Literally the same pipeline as `lunora deploy`, stopped before anything ships —
+one implementation, so what `prepare` accepts is what `deploy` accepts. No Vite
+step, no container image build, no `wrangler` invocation, no network traffic.
+
+It runs, and fails on, every pre-deploy gate:
+
+- codegen, its `postcodegen` hook, and platform-portability diagnostics
+- **ERROR-level advisories** (CI-default; `--no-strict-advisories` opts out)
+- the schema-drift gate — breaking schema changes with no new migration
+- binding provisioning into `wrangler.jsonc`
+- a placeholder D1 `database_id`, localhost origins in `vars`, missing container
+  sources, and an unavailable Docker daemon when Dockerfile containers are
+  declared
+- `wrangler.jsonc` validation
+
+<Callout type="info">
+    Earlier versions checked less than `deploy` did, so `prepare` could report "project is ready to deploy" for a project the deploy then refused. If you pinned
+    a CI job to the old behaviour, expect it to start failing on exactly the things the deploy would have.
+</Callout>
 
 ### `lunora verify`
 
