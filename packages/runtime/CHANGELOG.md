@@ -1,3 +1,9 @@
+## @lunora/runtime [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.80...@lunora/runtime@1.0.0-alpha.81) (2026-08-29)
+
+### Bug Fixes
+
+* **runtime:** stop export from silently skipping every shard-local row ([#527](https://github.com/anolilab/lunora/issues/527)) ([f2541e3](https://github.com/anolilab/lunora/commit/f2541e3b0f130469cef49edbbbeed184f2e1c28a))
+
 ## @lunora/runtime [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.79...@lunora/runtime@1.0.0-alpha.80) (2026-08-29)
 
 ### ⚠ BREAKING CHANGES
