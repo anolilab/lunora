@@ -151,6 +151,20 @@ const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo
  *
  * Pure and side-effect-free, so the panel can call it inside a `useMemo` and it
  * unit-tests without a client.
+ *
+ * **This is the only place in the product that runs `RUNTIME_LINTS`**, so the
+ * context assembled here decides which of them can fire at all. Three do:
+ * `hot_shard` and `fan_out_breadth` off `shardTraffic`, `index_utilization` off
+ * `indexHits` + `tableScans`.
+ *
+ * `constraint_validator` cannot. It reads `context.tableSamples` (sampled rows,
+ * to catch dangling FKs, nulls in non-optional columns, and duplicate values on a
+ * unique index) and `context.schema`, and this call site has neither — `schema`
+ * is passed as `{ tables: [] }` and no sample feed exists. It is NOT redundant
+ * with anything else the panel shows, so it is a real check that never runs
+ * rather than a duplicate; giving it inputs means a per-table row-sampling read
+ * on every Advisors load, which is a cost worth deciding on deliberately rather
+ * than adding by reflex. Add both together or the lint stays silent.
  */
 const deriveRuntimeAdvisories = (inputs: RuntimeAdvisoryInputs): AdvisorRow[] => {
     const inDoIndexHits = reconcileIndexHits(inputs.declaredIndexes ?? [], inputs.indexHits ?? []);
