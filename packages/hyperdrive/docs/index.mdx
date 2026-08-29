@@ -385,6 +385,54 @@ lower-level pieces are also exported:
 - `createHyperdriveGlobalCtxDb({ engine, exec, ...storeOptions })` is the
   general factory the two convenience constructors call.
 
+## Vector search on your own Postgres
+
+`.vectorize()` normally writes through to a Cloudflare Vectorize binding. If you
+have already moved the relational tier onto your own Postgres, that split is
+awkward: full-text search runs natively (see `strategy: "native"` above) while
+vectors alone still reach for a Cloudflare service.
+
+`createPgVectorIndex` closes it. The shard takes
+`vectors: (env) => Record<string, VectorizeIndexLike>`, and everything above that
+— the write-through sync hook, `ctx.vectors`, codegen — is written against the
+interface rather than the provider, so a `pgvector` index drops in where the
+binding went:
+
+```ts title="src/server/index.ts"
+import { createPgVectorIndex } from "@lunora/hyperdrive/global";
+
+createShardDO({
+    vectors: () => ({
+        posts_search: createPgVectorIndex({ client, dimensions: 768, name: "posts_search" }),
+    }),
+});
+```
+
+Nothing else changes: `.vectorize()` in the schema, `ctx.vectors.query(...)` in a
+function, and the automatic write-through sync all behave the same.
+
+The table (`__vec_<name>` by default), the `vector` extension, and an HNSW index
+in the metric's operator class are provisioned lazily on first use — every
+statement is `IF NOT EXISTS`, so it is safe against a live table. The connecting
+role needs to be able to run `CREATE EXTENSION vector`; on a managed Postgres
+where it cannot, install the extension once out-of-band and the statement becomes
+a no-op.
+
+<Callout type="warn">
+    Three deliberate differences from Vectorize. **Metadata filters are equality
+    only** (JSONB containment) — a comparison operator like `{ views: { $gt: 10 } }`
+    throws rather than being dropped, because a silently ignored filter returns
+    confidently wrong neighbours. **`returnMetadata: "indexed"` behaves as
+    `"all"`**, since Postgres indexes the whole JSONB document. And **`mutationId`
+    is a local counter**: Vectorize's is a handle for an async mutation queue,
+    while a Postgres write is already durable when its promise resolves.
+</Callout>
+
+`metric` picks the distance operator and the matching index operator class —
+`cosine` (default), `euclidean`, or `dot-product`. `score` is reported the way
+Vectorize reports it: cosine similarity (1 = identical), raw L2 distance
+(0 = identical), or the plain inner product.
+
 ## Non-goals
 
 - **No CDC / logical replication.** Lunora does not ingest your Postgres
@@ -408,13 +456,14 @@ lower-level pieces are also exported:
 
 From `@lunora/hyperdrive/global` (reactive `.global()` backend):
 
-| Export                                             | Purpose                                                        |
-| -------------------------------------------------- | -------------------------------------------------------------- |
-| `createPostgresGlobalCtxDb(client, options)`       | Build a reactive Postgres `.global()` writer (`globalDb`)      |
-| `createMysqlGlobalCtxDb(connection, options)`      | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`) |
-| `createHyperdriveGlobalCtxDb({ engine, exec, … })` | General factory the two convenience constructors call          |
-| `buildPgExec(client)` / `buildMysqlExec(conn)`     | Wrap a driver as the store's `SqlExec`                         |
-| `postgresDialect` / `mysqlDialect`                 | The engine dialects                                            |
+| Export                                              | Purpose                                                            |
+| --------------------------------------------------- | ------------------------------------------------------------------ |
+| `createPostgresGlobalCtxDb(client, options)`        | Build a reactive Postgres `.global()` writer (`globalDb`)          |
+| `createMysqlGlobalCtxDb(connection, options)`       | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`)     |
+| `createHyperdriveGlobalCtxDb({ engine, exec, … })`  | General factory the two convenience constructors call              |
+| `buildPgExec(client)` / `buildMysqlExec(conn)`      | Wrap a driver as the store's `SqlExec`                             |
+| `postgresDialect` / `mysqlDialect`                  | The engine dialects                                                |
+| `createPgVectorIndex({ client, name, dimensions })` | A `pgvector`-backed index for `ctx.vectors` (no Vectorize binding) |
 
 ## See also
 

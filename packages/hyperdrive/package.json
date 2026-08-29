@@ -65,6 +65,7 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.26",
+        "@lunora/platform": "1.0.0-alpha.21",
         "@lunora/shard-engine": "1.0.0-alpha.47",
         "@lunora/sql-store": "1.0.0-alpha.100",
         "drizzle-orm": "catalog:drizzle"
@@ -72,6 +73,7 @@
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@electric-sql/pglite": "catalog:sql",
+        "@electric-sql/pglite-pgvector": "catalog:sql",
         "@electric-sql/pglite-socket": "catalog:sql",
         "@types/node": "catalog:types",
         "@types/pg": "catalog:sql",

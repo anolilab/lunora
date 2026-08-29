@@ -1,4 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
+import { vector } from "@electric-sql/pglite-pgvector";
 import type { SqlExec } from "@lunora/sql-store";
 
 import type { RowClient } from "../../src/global-exec";
@@ -28,8 +29,14 @@ interface PgliteHarness {
     query: (sql: string, parameters?: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
 }
 
-const createPgliteHarness = async (): Promise<PgliteHarness> => {
-    const database = new PGlite();
+/**
+ * `pgvector` is loaded as a PGlite extension rather than being always-on: the
+ * engine only exposes the `vector` type and its distance operators once the
+ * extension module is registered at construction, so a suite that needs
+ * `createPgVectorIndex` has to ask for it here. Everything else is unchanged.
+ */
+const createPgliteHarness = async (options: { vector?: boolean } = {}): Promise<PgliteHarness> => {
+    const database = options.vector === true ? new PGlite({ extensions: { vector } }) : new PGlite();
 
     await database.waitReady;
 

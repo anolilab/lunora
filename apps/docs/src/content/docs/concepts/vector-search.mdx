@@ -211,3 +211,23 @@ export const ShardDO = createShardDO({
 
 Omit the thunk and `ctx.vectors` throws a descriptive "no vectors configured"
 error on first use.
+
+### Backing an index with your own Postgres
+
+The thunk's values are typed as `VectorizeIndexLike`, not as the binding itself —
+so a Vectorize binding is one implementation, not the only one. An app already on
+[Hyperdrive](/docs/packages/hyperdrive) can serve the same index from `pgvector`
+and skip the binding entirely:
+
+```ts
+import { createPgVectorIndex } from "@lunora/hyperdrive/global";
+
+export const ShardDO = createShardDO({
+    vectors: () => ({ "docs-body": createPgVectorIndex({ client, dimensions: 768, name: "docs_body" }) }),
+});
+```
+
+The schema, the write-through sync, and `ctx.vectors` are unchanged — only where
+the vectors live moves. See
+[Vector search on your own Postgres](/docs/packages/hyperdrive#vector-search-on-your-own-postgres)
+for the provisioning details and the three deliberate differences from Vectorize.
