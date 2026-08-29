@@ -88,9 +88,11 @@ Need observed signal from a live shard, aggregated by the Studio backend.
 | `fan_out_breadth`      | warn      | A shard group with enough active shards that a cross-shard read over it would approach the per-invocation internal-subrequest ceiling.                                            |
 
 <Callout type="warn">
-    `constraint_validator` is declared but does not currently run. It needs sampled rows from each table, and the Studio does not gather them — reading a sample
-    of every table on each Advisors load is a real cost, and it has not been taken. Nothing else checks these constraints, so treat dangling foreign keys, nulls
-    in non-optional columns, and duplicates on a unique index as **unchecked** today rather than as clean.
+    `constraint_validator` is declared but does not currently run, and it is missing **two** inputs, not one. It needs sampled rows from each table, which the
+    Studio does not gather (reading a sample of every table on each Advisors load is a real cost, and it has not been taken) — and it needs the schema, which
+    the Studio passes as `{ tables: [] }`, so it cannot resolve a table's columns, relations, or unique indexes either. Supplying samples alone would not
+    activate it. Nothing else checks these constraints, so treat dangling foreign keys, nulls in non-optional columns, and duplicates on a unique index as
+    **unchecked** today rather than as clean.
 </Callout>
 
 ## Running advisors

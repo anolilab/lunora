@@ -3,7 +3,17 @@ import { describe, expect, it } from "vitest";
 import type { AdvisorShardTraffic, LintContext } from "../src";
 import { ALL_LINTS, fanOutBreadth, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
 
-/** A minimal context with an empty schema — runtime lints read only the observed-signal fields. */
+/**
+ * A minimal context with an empty schema.
+ *
+ * NOT because runtime lints ignore `schema` — `constraint_validator` reads it,
+ * along with `tableSamples`. This base deliberately supplies neither, which is
+ * why the tests below cover only the four observed-signal lints; a
+ * `constraint_validator` case has to build its own context. The comment that
+ * used to sit here claimed runtime lints read observed signal only, and that
+ * assumption is exactly what let the studio ship `schema: { tables: [] }` and
+ * leave the lint silent in production.
+ */
 const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
     return { schema: { tables: [] }, ...overrides };
 };

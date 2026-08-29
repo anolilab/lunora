@@ -54,11 +54,18 @@ row's shard key from the deployed schema and fans the batches out per shard, so
 a dump taken before the edit lands on the right DOs after it.
 
 <Callout type="warn">
-    This is not an online migration. The table is unavailable between step 2 and step 4, so take the write window deliberately — a maintenance flag, or a quiet
-    hour. Snapshot first: [Backups](/docs/concepts/backups) covers point-in-time recovery, and a sharding migration is exactly the change you want it for.
+    This is not an online migration. The table is unavailable from step 1 through step 5, and the dump is inside that window rather than before it. Take the
+    window deliberately: a maintenance flag, or a quiet hour. Snapshot first: [Backups](/docs/concepts/backups) covers point-in-time recovery, and a sharding
+    migration is exactly the change you want it for.
 </Callout>
 
-1. **Dump the table while it still lives in the root DO.** `_id` and
+1. **Stop writes to the table.** Do this _before_ the dump, not after. Export
+   walks the table with keyset pagination — successive live reads, not one
+   snapshot — so a row inserted behind the cursor is never dumped, and step 6
+   then deletes it from the root DO. That is the one way this procedure loses
+   data.
+
+2. **Dump the table while it still lives in the root DO.** `_id` and
    `_creationTime` survive the round trip, so relations and
    `_creationTime`-ordered pagination are preserved.
 
@@ -66,8 +73,7 @@ a dump taken before the edit lands on the right DOs after it.
     lunora export --tables messages --out messages.ndjson --prod --url <url>
     ```
 
-2. **Stop writes to the table**, then add `.shardBy()` and deploy. The
-   schema-drift gate blocks this deploy on purpose — a shard-mode change is
+3. **Add `.shardBy()` and deploy.** The schema-drift gate blocks this deploy on purpose — a shard-mode change is
    breaking — so pass `--allow-schema-drift` once you are running these steps
    deliberately.
 
@@ -75,17 +81,17 @@ a dump taken before the edit lands on the right DOs after it.
     lunora codegen && lunora deploy --allow-schema-drift
     ```
 
-3. **Load the dump back.** `--verify` checks row parity and fails non-zero on a
+4. **Load the dump back.** `--verify` checks row parity and fails non-zero on a
    mismatch, so a partial import is loud.
 
     ```bash
     lunora import messages.ndjson --prod --url <url> --yes --verify
     ```
 
-4. **Resume writes.** Confirm placement in the Studio's **Data** page — its
+5. **Resume writes.** Confirm placement in the Studio's **Data** page — its
    shard picker shows what actually landed where.
 
-5. **Reclaim the root DO's copies.** They are still there, and they are what you
+6. **Reclaim the root DO's copies.** They are still there, and they are what you
    sharded to get rid of. In the Studio's **Data** page set the shard key to
    `__root__`, open the table, and use **Clear table**; it deletes through the
    schema-aware writer in bounded batches, so search/aggregate/rank companions
@@ -93,7 +99,7 @@ a dump taken before the edit lands on the right DOs after it.
    resume, not during the window.
 
 <Callout type="info">
-    Admin reads and writes are addressed to a **shard**, not routed by the schema, which is why step 5 still reaches rows your application can no longer see.
+    Admin reads and writes are addressed to a **shard**, not routed by the schema, which is why step 6 still reaches rows your application can no longer see.
     `lunora migrate` is the exception and cannot help here: a `defineMigration` transform runs inside one shard's Durable Object and can only `replace` the row
     it was handed, so it can neither write to another shard nor delete a row. It is the right tool for a backfill within a shard, and the wrong one for moving
     rows between shards.
@@ -129,14 +135,18 @@ still on the DO's ledger. The export/import round trip moves them, because
 `lunora import` routes each row by the deployed schema: a table the schema now
 declares `.global()` goes to D1 instead of a shard.
 
-One extra step, and it is the one that fails loudly if you skip it. A DO
-provisions tables on demand; **D1 does not**. The table needs its `CREATE TABLE`
-generated and applied before any row can land:
+One extra step, and it is quiet rather than loud. The D1 **table** itself is
+provisioned lazily — `ensureMigrated` runs `CREATE TABLE IF NOT EXISTS` before
+the first read or write, so an import into a never-written `.global()` table
+succeeds. Its declared **indexes** are not: `lunora migrate generate` emits those,
+and the deploy applies them. Import before that and a `unique` index does not
+exist yet, so duplicates the constraint would have rejected are accepted without
+a word.
 
 ```bash
+# stop writes first — export is keyset pagination over live reads, not a snapshot
 lunora export --tables users --out users.ndjson --prod --url <url>
-# stop writes
-lunora migrate generate add_users_global   # emits the D1 DDL — .global() only
+lunora migrate generate add_users_global   # emits the D1 DDL, indexes included
 lunora codegen && lunora deploy --allow-schema-drift   # applies the SQL, then publishes
 lunora import users.ndjson --prod --url <url> --yes --verify
 # resume writes, then clear the table at shard __root__ in the Studio
