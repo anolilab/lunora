@@ -1,3 +1,24 @@
+## @lunora/cli [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.205...@lunora/cli@1.0.0-alpha.206) (2026-08-29)
+
+### Features
+
+* **cli:** let dev be a participant — readiness signal + binding manifest ([#523](https://github.com/anolilab/lunora/issues/523)) ([5d2c2ab](https://github.com/anolilab/lunora/commit/5d2c2abc56878f9c884115c41731144f6a41fcca))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.99
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.42
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.140
+* **@lunora/config:** upgraded to 1.0.0-alpha.173
+* **@lunora/container:** upgraded to 1.0.0-alpha.37
+* **@lunora/d1:** upgraded to 1.0.0-alpha.98
+* **@lunora/errors:** upgraded to 1.0.0-alpha.26
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.97
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.80
+* **@lunora/seed:** upgraded to 1.0.0-alpha.93
+* **@lunora/testing:** upgraded to 1.0.0-alpha.133
+
 ## @lunora/cli [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.204...@lunora/cli@1.0.0-alpha.205) (2026-08-28)
 
 
