@@ -104,7 +104,10 @@ knowing before you plan a change around it:
 
 That second one rules it out for adopting `.shardBy()` on a table that already
 has rows — re-homing them is an export/import round trip, not a transform. See
-[Migrating a populated table](/docs/concepts/sharding#migrating-a-populated-table).
+[Migrating a populated table](/docs/concepts/sharding#migrating-a-populated-table),
+and [Migrating a populated table to D1](/docs/concepts/sharding#migrating-a-populated-table-to-d1)
+for the `.global()` variant, which adds a `migrate generate` step because D1 needs
+its `CREATE TABLE` before a row can land.
 
 The admin surface is the exception, and the reason that procedure works: admin
 reads and writes are addressed to a **shard** rather than routed by the schema,

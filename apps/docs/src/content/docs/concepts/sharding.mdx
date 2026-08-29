@@ -120,6 +120,39 @@ bookmark via the `x-d1-bookmark` header for read-your-writes consistency.
 users: defineTable({ email: v.string(), name: v.string() }).global().index("by_email", ["email"], { unique: true });
 ```
 
+### Migrating a populated table to D1
+
+Adding `.global()` to a table that already has rows has the same shape as
+[adopting `.shardBy()`](#migrating-a-populated-table) — the edit changes where
+_future_ rows go, and the ones already in `__root__` stay put, unreadable and
+still on the DO's ledger. The export/import round trip moves them, because
+`lunora import` routes each row by the deployed schema: a table the schema now
+declares `.global()` goes to D1 instead of a shard.
+
+One extra step, and it is the one that fails loudly if you skip it. A DO
+provisions tables on demand; **D1 does not**. The table needs its `CREATE TABLE`
+generated and applied before any row can land:
+
+```bash
+lunora export --tables users --out users.ndjson --prod --url <url>
+# stop writes
+lunora migrate generate add_users_global   # emits the D1 DDL — .global() only
+lunora codegen && lunora deploy --allow-schema-drift   # applies the SQL, then publishes
+lunora import users.ndjson --prod --url <url> --yes --verify
+# resume writes, then clear the table at shard __root__ in the Studio
+```
+
+<Callout type="warn">
+    Going global is a one-way trip for atomicity, not just a storage move: a mutation that writes both a sharded table and a `.global()` one is **not** writing
+    both atomically. Make that call before the migration, not after — reversing it is the same round trip again.
+</Callout>
+
+Everything else carries over from the shard-adoption procedure: the schema-drift
+gate blocks the deploy on purpose (a shard-mode change is breaking), `_id` and
+`_creationTime` survive the round trip, and the root DO's leftover copies are
+cleared last, from the Studio's **Data** page with the shard key set to
+`__root__`.
+
 ## Cross-shard reads
 
 `ctx.db.query("messages").collect()` against a `.shardBy()` table that
