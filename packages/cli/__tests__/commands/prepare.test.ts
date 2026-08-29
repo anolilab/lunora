@@ -171,7 +171,7 @@ describe("lunora prepare", () => {
     });
 
     it("blocks on a D1 placeholder id, exactly as deploy does", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         // This asserted the opposite until `prepare` and `deploy` were made one
         // pipeline: prepare reported "project is ready to deploy" for a project
@@ -204,6 +204,10 @@ describe("lunora prepare", () => {
         // And it names the fix, rather than leaving the user to discover it at
         // deploy time.
         expect(result.error).toContain("wrangler d1 create");
+        // Worded for the command the operator actually ran. These checks are
+        // shared with `deploy`, and a blocked `prepare` naming a command nobody
+        // typed reads as a bug in the tool rather than a problem in the project.
+        expect(result.error?.startsWith("prepare blocked:")).toBe(true);
     });
 
     it("syncs code-first cron schedules into wrangler.jsonc triggers.crons", async () => {

@@ -301,7 +301,7 @@ const isLocalImagePath = (image: string): boolean => image.startsWith("./") || i
  * wrangler fail mid-deploy with an opaque engine error. Returns `undefined`
  * when no local image build is needed or Docker is available.
  */
-const checkContainerDockerPreflight = (cwd: string, logger: Logger, dockerAvailable: DockerProbe): string | undefined => {
+const checkContainerDockerPreflight = (cwd: string, logger: Logger, dockerAvailable: DockerProbe, command: PreDeployCommand = "deploy"): string | undefined => {
     const localImages = (readWranglerShape(cwd)?.containers ?? []).filter((entry) => typeof entry?.image === "string" && isLocalImagePath(entry.image));
 
     if (localImages.length === 0 || dockerAvailable()) {
@@ -309,7 +309,7 @@ const checkContainerDockerPreflight = (cwd: string, logger: Logger, dockerAvaila
     }
 
     const message =
-        `deploy blocked: wrangler.jsonc declares ${String(localImages.length)} container(s) built from a local Dockerfile, but no Docker-compatible ` +
+        `${command} blocked: wrangler.jsonc declares ${String(localImages.length)} container(s) built from a local Dockerfile, but no Docker-compatible ` +
         `engine is available. Start Docker (or Colima), or point the container's \`image\` at a pre-built registry reference. ` +
         `Note: container images must target linux/amd64.`;
 
@@ -338,12 +338,12 @@ const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsS
  * Registry images have no local source, so they're skipped. Returns the first
  * error message, or `undefined` when all sources exist (or none are local).
  */
-const checkContainerSourcesExist = (cwd: string, logger: Logger): string | undefined => {
+const checkContainerSourcesExist = (cwd: string, logger: Logger, command: PreDeployCommand = "deploy"): string | undefined => {
     for (const container of discoverContainerInfo(cwd, "lunora").containers) {
         const { image } = container;
 
         if (image.kind === "dockerfile" && !existsSync(join(cwd, image.dockerfilePath))) {
-            const message = `deploy blocked: container "${container.exportName}" references a Dockerfile at "${image.dockerfilePath}" that does not exist. Create it or fix the \`image\` path in lunora/containers.ts.`;
+            const message = `${command} blocked: container "${container.exportName}" references a Dockerfile at "${image.dockerfilePath}" that does not exist. Create it or fix the \`image\` path in lunora/containers.ts.`;
 
             logger.error(message);
 
@@ -351,7 +351,7 @@ const checkContainerSourcesExist = (cwd: string, logger: Logger): string | undef
         }
 
         if (image.kind === "build" && !existsSync(join(cwd, image.buildDir))) {
-            const message = `deploy blocked: container "${container.exportName}" references a Railpack build directory "${image.buildDir}" that does not exist. Create it or fix the \`image.build\` path in lunora/containers.ts.`;
+            const message = `${command} blocked: container "${container.exportName}" references a Railpack build directory "${image.buildDir}" that does not exist. Create it or fix the \`image.build\` path in lunora/containers.ts.`;
 
             logger.error(message);
 
@@ -1020,7 +1020,7 @@ const runCodegenStep = async (
  * — those cases fall through to the validator). Extracted from `runDeployCommand`
  * to keep its cognitive complexity within the 15-node budget.
  */
-const checkD1Placeholder = (cwd: string, logger: Logger): string | undefined => {
+const checkD1Placeholder = (cwd: string, logger: Logger, command: PreDeployCommand = "deploy"): string | undefined => {
     const placeholderBinding = findD1PlaceholderBinding(cwd);
 
     if (placeholderBinding === undefined) {
@@ -1028,7 +1028,7 @@ const checkD1Placeholder = (cwd: string, logger: Logger): string | undefined => 
     }
 
     const message =
-        `deploy blocked: the "${placeholderBinding}" D1 binding has a placeholder database_id ` +
+        `${command} blocked: the "${placeholderBinding}" D1 binding has a placeholder database_id ` +
         `("${D1_PLACEHOLDER_ID}"). Run \`wrangler d1 create <name>\` to create the database, ` +
         `then replace the placeholder in wrangler.jsonc with the real id before deploying.`;
 
@@ -1046,7 +1046,7 @@ const checkD1Placeholder = (cwd: string, logger: Logger): string | undefined => 
  * clean (or when wrangler.jsonc is absent/unparseable — the validator handles
  * that).
  */
-const checkLocalhostOriginVariables = (cwd: string, logger: Logger): string | undefined => {
+const checkLocalhostOriginVariables = (cwd: string, logger: Logger, command: PreDeployCommand = "deploy"): string | undefined => {
     const variables = readWranglerShape(cwd)?.vars;
 
     if (!variables) {
@@ -1060,7 +1060,7 @@ const checkLocalhostOriginVariables = (cwd: string, logger: Logger): string | un
     }
 
     const message =
-        `deploy blocked: ${offenders.join(", ")} in wrangler.jsonc point at localhost. A deployed Worker can't reach a loopback ` +
+        `${command} blocked: ${offenders.join(", ")} in wrangler.jsonc point at localhost. A deployed Worker can't reach a loopback ` +
         `address, so this silently breaks scheduled-job dispatch / auth callbacks. Set each to the deployed worker's public URL ` +
         `(or move it to a secret with \`wrangler secret put\`) before deploying.`;
 
@@ -1208,48 +1208,43 @@ const finalizeSuccessfulDeploy = async (
 };
 
 /**
+ * Which command a shared gate is speaking for.
+ *
+ * These checks are reached from both `lunora deploy` and `lunora prepare`, and a
+ * blocked `prepare` naming a command the operator never ran reads as a bug in
+ * the tool rather than a problem in the project.
+ */
+type PreDeployCommand = "deploy" | "prepare";
+
+/**
  * The read-only half of the pre-deploy gates: the D1-placeholder hard-block, the
  * localhost-origin var check, and the container source + Docker preflights.
  * Returns the first error message, or `undefined` when all pass.
  *
- * Split from {@link runPreDeployGates} so `lunora prepare` can run the CHECKS
- * without the build: the other half pushes container images, which a command
- * whose whole job is "tell me whether this would deploy" must not do.
+ * Separate from the container BUILD so `lunora prepare` can run the checks
+ * without it: building pushes images, which a command whose whole job is "tell me
+ * whether this would deploy" must not do. `executeDeploy` runs both.
  */
-const runPreDeployChecks = (cwd: string, options: DeployCommandOptions): string | undefined => {
-    const d1Error = checkD1Placeholder(cwd, options.logger);
+const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command: PreDeployCommand): string | undefined => {
+    const d1Error = checkD1Placeholder(cwd, options.logger, command);
 
     if (d1Error !== undefined) {
         return d1Error;
     }
 
-    const localhostOriginError = checkLocalhostOriginVariables(cwd, options.logger);
+    const localhostOriginError = checkLocalhostOriginVariables(cwd, options.logger, command);
 
     if (localhostOriginError !== undefined) {
         return localhostOriginError;
     }
 
-    const sourceError = checkContainerSourcesExist(cwd, options.logger);
+    const sourceError = checkContainerSourcesExist(cwd, options.logger, command);
 
     if (sourceError !== undefined) {
         return sourceError;
     }
 
-    return checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable);
-};
-
-/**
- * Every gate that must pass before `wrangler deploy` — the read-only checks plus
- * the Railpack `{ build }` build+push step.
- */
-const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Promise<string | undefined> => {
-    const checkError = runPreDeployChecks(cwd, options);
-
-    if (checkError !== undefined) {
-        return checkError;
-    }
-
-    return buildContainerImages(cwd, options);
+    return checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable, command);
 };
 
 /**
@@ -1460,7 +1455,7 @@ const completeDeploy = async ({
  */
 const runPreDeployPipeline = async (
     options: DeployCommandOptions,
-    command: "deploy" | "prepare",
+    command: PreDeployCommand,
 ): Promise<{
     codegen?: CodegenResult;
     error?: string;
@@ -1539,7 +1534,7 @@ const runPreDeployPipeline = async (
 
     await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env);
 
-    const checkError = runPreDeployChecks(cwd, options);
+    const checkError = runPreDeployChecks(cwd, options, command);
 
     if (checkError !== undefined) {
         return { error: checkError, target, validation: empty };
