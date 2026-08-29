@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.140...@lunora/codegen@1.0.0-alpha.141) (2026-08-29)
+
+### Bug Fixes
+
+* **runtime:** stop export from silently skipping every shard-local row ([#527](https://github.com/anolilab/lunora/issues/527)) ([f2541e3](https://github.com/anolilab/lunora/commit/f2541e3b0f130469cef49edbbbeed184f2e1c28a))
+
 ## @lunora/codegen [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.139...@lunora/codegen@1.0.0-alpha.140) (2026-08-29)
 
 ### ⚠ BREAKING CHANGES
