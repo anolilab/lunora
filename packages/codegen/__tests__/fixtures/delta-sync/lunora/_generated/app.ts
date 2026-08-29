@@ -202,6 +202,8 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.listSchemaTables = () => ["notes", "boards"];
+
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);
 

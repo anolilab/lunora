@@ -56,6 +56,15 @@ interface EmitAppOptions {
     identity?: IdentityIR;
     /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers) to the Cloudflare data-residency jurisdiction. */
     jurisdiction?: JurisdictionIR;
+
+    /**
+     * Every table the schema declares. Emitted as a literal `listSchemaTables`
+     * so export can answer "every table" with a real list: shard discovery is
+     * driven by the table list, so an export naming no tables reaches no shards.
+     * A literal (rather than a read off the imported `schema`) keeps this working
+     * for apps with no `.global()` tables, which never import `schema` at all.
+     */
+    tableNames: ReadonlyArray<string>;
     /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
     useUmbrella: boolean;
 
@@ -588,6 +597,15 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
 
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
+    // Export's answer to "every table". Shard discovery unions each named table's
+    // live shard keys, so an export that names none discovers none — which is how
+    // `lunora export` with no `--tables`, and the scheduled backup with
+    // `backupTables` omitted, used to write a file holding only `.global()` rows.
+    // Emitted for every app (a literal, so it needs no `schema` import) and skipped
+    // only for an empty schema, where it would be an empty array anyway.
+    ...(options.tableNames.length > 0
+        ? [`        options.listSchemaTables = () => [${options.tableNames.map((table) => JSON.stringify(table)).join(", ")}];`]
+        : []),
     ...(options.hasScheduler
         ? [
               `        if (this.schedulerDeclaration) {

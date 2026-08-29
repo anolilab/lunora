@@ -216,6 +216,8 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.listSchemaTables = () => ["documents"];
+
         options.logArchive = resolveLogArchiveFromEnv(env);
 
         // Captured before the branch so the narrowing survives — reading
