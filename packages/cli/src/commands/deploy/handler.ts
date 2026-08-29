@@ -1208,13 +1208,15 @@ const finalizeSuccessfulDeploy = async (
 };
 
 /**
- * Run the gates that must pass before `wrangler deploy`: the D1-placeholder
- * hard-block, the Dockerfile-container Docker preflight, and the Railpack
- * `{ build }` build+push step. Returns the first error message, or `undefined`
- * when all pass. Extracted from {@link executeDeploy} to keep its complexity
- * bounded.
+ * The read-only half of the pre-deploy gates: the D1-placeholder hard-block, the
+ * localhost-origin var check, and the container source + Docker preflights.
+ * Returns the first error message, or `undefined` when all pass.
+ *
+ * Split from {@link runPreDeployGates} so `lunora prepare` can run the CHECKS
+ * without the build: the other half pushes container images, which a command
+ * whose whole job is "tell me whether this would deploy" must not do.
  */
-const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Promise<string | undefined> => {
+const runPreDeployChecks = (cwd: string, options: DeployCommandOptions): string | undefined => {
     const d1Error = checkD1Placeholder(cwd, options.logger);
 
     if (d1Error !== undefined) {
@@ -1233,10 +1235,18 @@ const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Pr
         return sourceError;
     }
 
-    const dockerError = checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable);
+    return checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable);
+};
 
-    if (dockerError !== undefined) {
-        return dockerError;
+/**
+ * Every gate that must pass before `wrangler deploy` — the read-only checks plus
+ * the Railpack `{ build }` build+push step.
+ */
+const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Promise<string | undefined> => {
+    const checkError = runPreDeployChecks(cwd, options);
+
+    if (checkError !== undefined) {
+        return checkError;
     }
 
     return buildContainerImages(cwd, options);
@@ -1429,16 +1439,46 @@ const completeDeploy = async ({
     return { ...finalized, deployment, healthCheck };
 };
 
-const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
+/**
+ * Everything both `lunora prepare` and `lunora deploy` must do before anything
+ * ships: resolve the target, run codegen (with its post-hook, platform
+ * diagnostics and ERROR-advisory gate), gate on schema drift, provision the
+ * bindings the code implies, run the read-only pre-deploy checks, and validate
+ * the resulting wrangler config.
+ *
+ * Shared because it was written twice. `prepare` had its own copy of the same
+ * five steps and the two had already drifted in the direction that matters: only
+ * deploy gated on ERROR-level advisories, so a CI job could run `lunora prepare`,
+ * go green, and still be rejected by the deploy it was meant to pre-check. They
+ * also provisioned differently — deploy reconciled inline, prepare went through
+ * `DeployDriver.provision` — so "prepare then deploy" could reconcile twice by
+ * two routes.
+ *
+ * Stops before the container BUILD and the wrangler invocation, which is exactly
+ * the line between the two commands: `prepare` answers "would this deploy?"
+ * without pushing an image or a bundle.
+ */
+const runPreDeployPipeline = async (
+    options: DeployCommandOptions,
+    command: "deploy" | "prepare",
+): Promise<{
+    codegen?: CodegenResult;
+    error?: string;
+    reblessSchemaBaseline?: () => void;
+    schemaDrift?: { blocked: boolean; reason: string };
+    target?: string;
+    validation: DeployCommandResult["validation"];
+}> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
     const strictAdvisories = resolveStrictAdvisories(options);
+    const empty = { problems: [], wranglerPath: undefined };
 
-    // Resolved ONCE, and before anything writes. Deploy rewrites `_generated/*`
-    // and may mutate `wrangler.jsonc` well before it reaches the wrangler step,
-    // so validating at the point of driver use would leave those side effects
-    // behind on an unknown target. Resolving here also means `lunora.json`'s
-    // `target` reaches the driver, not just the `--target` flag.
+    // Resolved ONCE, and before anything writes. This rewrites `_generated/*`
+    // and may mutate `wrangler.jsonc` well before the wrangler step, so
+    // validating at the point of driver use would leave those side effects behind
+    // on an unknown target. Resolving here also means `lunora.json`'s `target`
+    // reaches the driver, not just the `--target` flag.
     const resolvedTarget = resolveTargetOrError(cwd, options.target);
 
     if (resolvedTarget.target === undefined) {
@@ -1448,7 +1488,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         // `--format json` mode, so a bare return exits 1 in silence.
         options.logger.error(message);
 
-        return abortResult(message);
+        return { error: message, validation: empty };
     }
 
     const { target } = resolvedTarget;
@@ -1468,35 +1508,30 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         );
 
         if (codegenStep.error !== undefined) {
-            return abortResult(codegenStep.error);
+            return { error: codegenStep.error, target, validation: empty };
         }
 
         codegen = codegenStep.result;
     }
 
-    // Schema-drift gate: block when the schema has breaking changes (dropped/
-    // retyped/now-required field, dropped table/index/relation, re-shard, …) and
-    // no NEW `defineMigration` was added since the committed baseline. Mirrors the
-    // D1-placeholder guard's early-abort + actionable message. Skipped on
-    // `--skip-codegen` (no fresh snapshot to gate on).
-    //
-    // The baseline re-bless is DEFERRED: `gate.rebless` is invoked only after a
-    // successful `wrangler deploy` (below), so a deploy that fails after this
-    // point never advances the committed baseline past a breaking change that
-    // never shipped — which would silently defeat the gate on the retry.
     let reblessSchemaBaseline: (() => void) | undefined;
 
     if (codegen !== undefined) {
         const gate = runSchemaDriftGate({
             allowDrift: options.allowSchemaDrift === true,
             codegen,
-            command: "deploy",
+            command,
             logger: options.logger,
             updateBaseline: options.updateSchemaBaseline === true,
         });
 
         if (gate.blocked) {
-            return abortResult("schema drift gate blocked deploy", { schemaDrift: { blocked: true, reason: gate.reason } });
+            return {
+                error: `schema drift gate blocked ${command}`,
+                schemaDrift: { blocked: true, reason: gate.reason },
+                target,
+                validation: empty,
+            };
         }
 
         reblessSchemaBaseline = gate.rebless;
@@ -1504,29 +1539,57 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
 
     await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env);
 
+    const checkError = runPreDeployChecks(cwd, options);
+
+    if (checkError !== undefined) {
+        return { error: checkError, target, validation: empty };
+    }
+
+    // `--env <name>` validates the env-scoped view — a binding present only at
+    // the top level is a real gap for that environment (non-inheritable; see
+    // wrangler-validator.ts's NON_INHERITABLE_KEYS).
+    const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
+
+    if (reportWranglerProblems(validation, options.logger)) {
+        return { error: "wrangler validation failed", target, validation };
+    }
+
+    return { codegen, reblessSchemaBaseline, target, validation };
+};
+
+const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
+    const interactive = isInteractive(options);
+
+    const pipeline = await runPreDeployPipeline(options, "deploy");
+
+    if (pipeline.error !== undefined) {
+        // A validation failure carries its problem list; every earlier abort
+        // shares the empty-validation shape, optionally with the drift verdict.
+        if (pipeline.validation.problems.length > 0) {
+            return { code: 1, descriptor: undefined, error: pipeline.error, validation: pipeline.validation };
+        }
+
+        const extra = pipeline.schemaDrift === undefined ? undefined : { schemaDrift: pipeline.schemaDrift };
+
+        return abortResult(pipeline.error, extra);
+    }
+
+    const { reblessSchemaBaseline, validation } = pipeline;
+    const target = pipeline.target as string;
+
     const migratePreflightError = validateMigrateDeployPreflight(options);
 
     if (migratePreflightError !== undefined) {
         return abortResult(migratePreflightError);
     }
 
-    // Pre-wrangler gates: the D1 placeholder hard-block, the Dockerfile-container
-    // Docker preflight, and the Railpack `{ build }` build+push step. Each aborts
-    // with a directed message rather than letting wrangler fail opaquely later.
-    const preflightError = await runPreDeployGates(cwd, options);
+    // The build half of the pre-deploy gates. The read-only checks already ran in
+    // the shared pipeline; this pushes container images, so it is deploy-only.
+    const buildError = await buildContainerImages(cwd, options);
 
-    if (preflightError !== undefined) {
-        return abortResult(preflightError);
-    }
-
-    // `--env <name>` validates the env-scoped view — a binding present only
-    // at the top level is a real gap for that environment (non-inheritable;
-    // see wrangler-validator.ts's NON_INHERITABLE_KEYS), and the deploy that
-    // follows targets exactly this environment via `wrangler deploy --env`.
-    const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
-
-    if (reportWranglerProblems(validation, options.logger)) {
-        return { code: 1, descriptor: undefined, error: "wrangler validation failed", validation };
+    if (buildError !== undefined) {
+        return abortResult(buildError);
     }
 
     // Non-blocking secret-drift reminder: `wrangler deploy` never pushes
@@ -1653,4 +1716,4 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
 
 export { execute };
 export type { DeployCommandOptions, DeployCommandResult, DeployedIdentity };
-export { runDeployCommand };
+export { runDeployCommand, runPreDeployPipeline };
