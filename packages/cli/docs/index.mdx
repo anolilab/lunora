@@ -300,13 +300,19 @@ lunora dev stop           # SIGTERM, SIGKILL escalation after 10s; clears the re
 
 #### Files a supervisor reads
 
-Every `lunora dev` start writes two files into the gitignored `.lunora/`, and
-names both in its startup banner:
+`lunora dev` writes into the gitignored `.lunora/`, and names in its startup
+banner, whichever of these it produced:
 
-| File                        | Carries                                                            |
-| --------------------------- | ------------------------------------------------------------------ |
-| `.lunora/dev.json`          | live state — URL, PID, and `readyAt` once the server first answers |
-| `.lunora/dev-bindings.json` | the binding manifest, plus the origin it serves on                 |
+| File                                    | Carries                                                            |
+| --------------------------------------- | ------------------------------------------------------------------ |
+| `.lunora/dev.json`                      | live state — URL, PID, and `readyAt` once the server first answers |
+| `.lunora/dev-bindings.json` _(default)_ | the binding manifest, plus the origin it serves on                 |
+
+The manifest path is a default, not a fixed location — `--emit-bindings <file>`
+writes it elsewhere. And it is skipped entirely for a project with no readable
+`wrangler.jsonc`, since there is nothing to derive it from. So poll for it with
+your own timeout rather than blocking forever on a file this project may never
+produce; the banner names the path that was actually written.
 
 `readyAt` is what separates "the process exists" from "it is accepting
 requests" — the rest of the record is written before anything is listening.
@@ -314,8 +320,8 @@ requests" — the rest of the record is written before anything is listening.
 `ready` / `readyAt`, so a task runner can gate a dependent step on a fact rather
 than a guessed sleep. A missing `readyAt` means _not ready yet_, never _never_.
 
-`--emit-bindings <file>` moves the manifest elsewhere, and naming a path also
-makes a derivation failure fatal — a named path means something is waiting on it.
+Naming a path with `--emit-bindings` also makes a derivation failure fatal, where
+the default write skips quietly: a named path means something is waiting on it.
 See [Monorepos and external IaC](/docs/concepts/monorepos-and-iac) for the full
 supervisor workflow.
 
