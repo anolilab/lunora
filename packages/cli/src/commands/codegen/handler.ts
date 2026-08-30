@@ -1,6 +1,6 @@
 import type { Finding } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import { inferLunoraBindings } from "@lunora/config";
+import { applyLintIgnores, detectLintTools, inferLunoraBindings } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectExportGaps, collectWranglerSecretVariables } from "@lunora/config/cloudflare";
 
@@ -10,6 +10,7 @@ import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveTargetOrError } from "../../util/deploy-target";
+import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
@@ -204,6 +205,33 @@ const warnAboutExportGaps = async (projectRoot: string, logger: Logger): Promise
     }
 };
 
+/**
+ * Keep the project's linters and formatters skipping what codegen just wrote.
+ *
+ * `init` offers this and `add` re-applies it, which covers a project scaffolded
+ * by Lunora. It missed the projects that adopted Lunora INTO an existing
+ * codebase — they never run `init`, so nothing ever told their linter about
+ * `_generated/`, and the first `lint` after adoption buries the real findings
+ * under thousands of generated-file errors. Every such project runs codegen.
+ *
+ * Deliberately on the COMMAND, not in `runCodegen`: the dev watcher calls the
+ * library directly on every save, and re-reading four config files per keystroke
+ * to write nothing is not worth it. Once per explicit `lunora codegen` is.
+ *
+ * Detection-driven with no prompt, like `add`: the tools present in the project
+ * answer the question, and every writer is idempotent, so the common case is
+ * silent. Best-effort — a lint config this cannot safely edit is reported as
+ * something to paste, never a failed codegen.
+ */
+const syncLintIgnores = (projectRoot: string, logger: Logger): void => {
+    try {
+        reportLintIgnoreOutcomes(applyLintIgnores(projectRoot, detectLintTools(projectRoot)), logger);
+    } catch {
+        // Generated output is written and valid; a linter that could not be
+        // taught about it is not a reason to fail the run.
+    }
+};
+
 /** `lunora codegen` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(async ({ cwd, logger, options }) => {
     const result = runCodegenCommand({
@@ -226,7 +254,10 @@ const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(as
     // signal rather than `result.error`, which is also set for a platform
     // diagnostic raised AFTER a successful emit, where the warning still applies.
     if (result.outputDirectory !== "") {
-        await warnAboutExportGaps(cwd, loggerForFormat(options.format, logger));
+        const commandLogger = loggerForFormat(options.format, logger);
+
+        syncLintIgnores(cwd, commandLogger);
+        await warnAboutExportGaps(cwd, commandLogger);
     }
 
     return { code: result.error === undefined && result.failedAdvisories === 0 ? 0 : 1 };

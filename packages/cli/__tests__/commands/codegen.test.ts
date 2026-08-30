@@ -337,6 +337,32 @@ describe("lunora codegen", () => {
             await expect(runExecute()).resolves.not.toMatch(/is not exported by the worker entry/u);
         });
 
+        it("teaches the project's linter to skip the generated output", async () => {
+            expect.assertions(2);
+
+            // `init` offers this and `add` re-applies it, which covers a project
+            // Lunora scaffolded. A project that adopted Lunora INTO an existing
+            // codebase never runs either, so nothing told its linter about
+            // `_generated/` and the first lint buried real findings under
+            // thousands of generated-file errors. Every project runs codegen.
+            seedWorkflow('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
+            // A linter already configured, and nothing that ever ran `lunora init`
+            // to tell it about `_generated/` — what an existing codebase adopting
+            // Lunora looks like. Detected from the config file rather than a
+            // manifest, so this fixture does not also have to satisfy codegen's
+            // required-add-on check.
+            writeFileSync(join(workdir, ".prettierrc"), JSON.stringify({ semi: true }), "utf8");
+            writeFileSync(join(workdir, ".prettierignore"), "dist\n", "utf8");
+
+            await runExecute();
+
+            const ignored = readFileSync(join(workdir, ".prettierignore"), "utf8");
+
+            expect(ignored).toContain("_generated");
+            // Idempotent: the pre-existing entry is preserved, not replaced.
+            expect(ignored).toContain("dist");
+        });
+
         it("says so when the check itself could not run, instead of reading as clean", async () => {
             expect.assertions(2);
 
