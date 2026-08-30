@@ -1,3 +1,4 @@
+import { estimateModelCost } from "@lunora/ai";
 import type { Telemetry } from "ai";
 
 import type { OtlpAttribute, OtlpAttributeValue } from "../../../../shared/otlp";
@@ -217,9 +218,24 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
                 const gateway = summarizeGatewayTelemetry(result);
 
                 if (gateway) {
-                    pushAttribute(attributes, "gen_ai.usage.cost", gateway.cost);
                     pushAttribute(attributes, "gen_ai.response.cached", gateway.cached);
                     pushAttribute(attributes, "cf.aig.log_id", gateway.logId);
+                }
+
+                // A provider-reported cost always wins; without a gateway the cost
+                // is derived from token usage and the price table, so spend stays
+                // visible off Cloudflare too. The two are never conflated — the
+                // source is stamped alongside, exactly as the RAG embed span does.
+                const reportedCost = gateway?.cost;
+                const cost =
+                    reportedCost ??
+                    (typeof modelId === "string"
+                        ? estimateModelCost(modelId, { inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens })
+                        : undefined);
+
+                if (cost !== undefined) {
+                    pushAttribute(attributes, "gen_ai.usage.cost", cost);
+                    pushAttribute(attributes, "lunora.usage.cost.source", reportedCost === undefined ? "estimated" : "provider");
                 }
 
                 if (recordInputs) {

@@ -1,17 +1,19 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import type { ColumnMeta, FilterClause, TableInfo, TablesColumnsResult } from "../../lib/admin";
+import type { ColumnMeta, FilterClause, TableInfo, TablePage, TablesColumnsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
+import { advisorSchemaFromColumns } from "../../lib/cascade-schema";
 import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
 import { maskRow } from "../../lib/mask-preview";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
 import { useSqlAssistant } from "../sql/hooks/use-sql-assistant";
 import { backRelationKey, backRelationsFor } from "./back-relations";
+import { CascadePreviewDialog, MAX_ROWS_PER_TABLE } from "./cascade-preview";
 import DataBrowserPage from "./data-browser-page";
 import DataFacets from "./data-facets";
 import { GenerateRowsDialog } from "./generate-rows-dialog";
@@ -116,6 +118,9 @@ const DEFAULT_PAGE_SIZE = 50;
 const NO_TABLES: ReadonlyArray<TableInfo> = [];
 
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
+
+/** Bounded page read the cascade preview counts related rows with. */
+const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 
 /**
  * The table-list sidebar header: the schema/source switch (when the browser is
@@ -304,6 +309,9 @@ export const DataBrowser = ({
     // Which overlay is open. Separate from the render preferences above: these five
     // fields are read here and nowhere else, and `onInspect` is read only by the page.
     const inspection = useRowInspection();
+
+    // The row awaiting a cascade-impact confirmation, or null when none is open.
+    const [cascadePreviewRowId, setCascadePreviewRowId] = useState<null | string>(null);
     const { closeExpandedCell, closeInspect, expandedCell, inspecting, onExpandCell } = inspection;
 
     const client = useLunora();
@@ -401,6 +409,30 @@ export const DataBrowser = ({
         startEdit: startCellEdit,
     };
 
+    // Row deletion goes through the cascade-impact preview: the delete itself only
+    // runs once the operator has seen which related rows the FK graph says are
+    // impacted. The dialog IS the confirmation step, which is why the grid's row
+    // button opens it directly rather than confirming first.
+    const openCascadePreview = (id: null | string): void => {
+        if (id !== null) {
+            setCascadePreviewRowId(id);
+        }
+    };
+
+    const confirmCascadeDelete = (): void => {
+        browser.onRowDelete(cascadePreviewRowId);
+    };
+
+    // Bounded per-table read the preview counts impacted rows with: the FK value it
+    // searches for is the parent row's id. Reads the DEBOUNCED shard, the one the
+    // rows on screen came from.
+    const readCascadePage = async (table: string, search: string): Promise<TablePage> =>
+        (await client.query(
+            READ_TABLE_PAGE,
+            { filters: [], limit: MAX_ROWS_PER_TABLE, offset: 0, orderBy: [], search, table },
+            callOptions(queryShardKey),
+        )) as TablePage;
+
     // The foreign-key context passed alongside it: the column → table map plus the
     // navigate/preview handlers a ref cell needs.
     // `maskViewFor` (not `preferences.maskView`) because the hover preview renders a
@@ -460,6 +492,7 @@ export const DataBrowser = ({
                         onAskAiFilter={askAiFilter}
                         onInspect={inspection.onInspect}
                         onOpenGenerateRows={onOpenGenerateRows}
+                        onRowDelete={openCascadePreview}
                         onSaveQuery={saveCurrentQuery}
                         page={page}
                         preferences={preferences}
@@ -481,6 +514,19 @@ export const DataBrowser = ({
                     onNavigate={handleNavigateRef}
                     refs={page.refs}
                     row={maskRow(inspecting, preferences.maskView)}
+                />
+            )}
+
+            {cascadePreviewRowId !== null && selectedTable !== null && (
+                <CascadePreviewDialog
+                    onClose={() => {
+                        setCascadePreviewRowId(null);
+                    }}
+                    onConfirm={confirmCascadeDelete}
+                    readPage={readCascadePage}
+                    rowId={cascadePreviewRowId}
+                    schema={advisorSchemaFromColumns(columnsByTable)}
+                    table={selectedTable}
                 />
             )}
 

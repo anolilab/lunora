@@ -6,8 +6,9 @@ import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
-import type { AuditEntry, FunctionCallStat, MetricsSnapshot, SecurityAuditResult, SubscriptionsResult } from "../../lib/admin";
+import type { AuditEntry, CacheStats, FunctionCallStat, MetricsSnapshot, SecurityAuditResult, SubscriptionsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { fireAndForget, formatBytes } from "../../lib/internal";
 import { cn } from "../../lib/utils";
@@ -24,6 +25,28 @@ interface HomePanelProps {
     /** Shard key the health digest targets on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
+
+/**
+ * The cache line under the Database-size card. Three distinct states, none of
+ * them blank: the reactive query cache is not enabled for this app, it is
+ * enabled but has served nothing yet, or it has a real hit rate. A blank footer
+ * conflated the first two — an app with no cache looked exactly like one whose
+ * cache was doing nothing.
+ */
+const cacheFooterText = (t: TFunction, cache: CacheStats | null | undefined): string => {
+    // `null` is the shard saying "no reactive cache configured"; `undefined` is a
+    // metrics payload that carries no `cache` key at all — an older shard, or any
+    // response shaped before the field existed. Both mean "nothing to report", and
+    // this value is untrusted JSON off the admin wire, so the absent case has to be
+    // handled here rather than assumed away by the declared type.
+    if (cache === null || cache === undefined) {
+        return t("cache not enabled");
+    }
+
+    const samples = cache.hits + cache.misses;
+
+    return samples === 0 ? t("no cache traffic yet") : `${Math.round((cache.hits / samples) * 100).toString()}% ${t("cache hit")}`;
+};
 
 /** Format a millisecond duration compactly (`24ms`, `1.2s`). */
 const formatMs = (ms: number): string => {
@@ -372,8 +395,9 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
     const errorSeries = bucketSeries(metrics?.history, "errors");
     const avgLatency = averageLatencyMs(functions);
     const maxLatency = Math.max(0, ...functions.map((function_) => function_.maxDurationMs));
-    const cache = metrics?.cache;
-    const cacheHitRate = cache != null && cache.hits + cache.misses > 0 ? Math.round((cache.hits / (cache.hits + cache.misses)) * 100) : null;
+    // Undefined only while the snapshot is still loading; once it resolves the
+    // footer always says something.
+    const cacheFooter = metrics === null ? undefined : cacheFooterText(t, metrics.cache);
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-home">
@@ -386,11 +410,7 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
                     label={t("Avg latency")}
                     value={avgLatency === null ? "—" : formatMs(avgLatency)}
                 />
-                <StatCard
-                    footer={cacheHitRate === null ? undefined : `${String(cacheHitRate)}% ${t("cache hit")}`}
-                    label={t("Database size")}
-                    value={formatBytes(metrics?.databaseSize ?? null)}
-                />
+                <StatCard footer={cacheFooter} label={t("Database size")} value={formatBytes(metrics?.databaseSize ?? null)} />
             </div>
 
             {/* Cloudflare bindings the app wires (KV / R2 / Vectorize) — count + names. */}
@@ -453,4 +473,5 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
     );
 };
 
+export { cacheFooterText };
 export type { HomePanelProps };

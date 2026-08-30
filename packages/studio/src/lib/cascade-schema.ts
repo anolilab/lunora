@@ -10,15 +10,50 @@
 
 import type { AdvisorRelation, AdvisorSchema } from "@lunora/advisor";
 
+import type { ColumnMeta } from "./admin";
+
+/**
+ * Build the cascade graph's input from what the studio can actually see: the
+ * `describeTables` column metadata every data-browser session already loads.
+ *
+ * `ColumnMeta.ref` names the FK target of a `v.id("target")` column, which is
+ * the edge the impact walk follows. It does NOT carry the declared `onDelete`
+ * action — that lives in the schema and is not on the admin wire — so every
+ * relation here is emitted with `onDelete` UNSET, and the preview renders those
+ * edges as "action not declared to the studio" rather than claiming a cascade it
+ * cannot verify. A feeder that does know the action (a real
+ * {@link AdvisorSchema}) sets it and the preview labels each edge exactly.
+ */
+const advisorSchemaFromColumns = (columnsByTable: Readonly<Record<string, ReadonlyArray<ColumnMeta>>>): AdvisorSchema => {
+    return {
+        tables: Object.entries(columnsByTable).map(([name, columns]) => {
+            return {
+                fields: columns.map((column) => column.name),
+                indexes: [],
+                name,
+                relations: columns
+                    .filter((column) => column.ref !== undefined)
+                    .map((column): AdvisorRelation => {
+                        return { field: column.name, kind: "one", name: column.name, references: column.ref as string, table: name };
+                    }),
+            };
+        }),
+    };
+};
+
 /**
  * Build a map from `parentTable → relations that point at it from child tables`.
  * A cascade impact walk starts at the deleted table and follows these "who
  * references me?" edges — the inverse of the FK direction.
  *
- * Only `cascade` and `restrict` relations are included; `set null` rows are not
- * deleted (the FK field is nulled), so they don't appear in a cascade impact
- * tree. The map is keyed by the **referenced** table (the parent being deleted)
- * and values are the relations declared on the **referencing** (child) table.
+ * `set null` relations are excluded: those rows are not deleted (the FK field is
+ * nulled), so they are not part of a delete's impact. Everything else is kept —
+ * `cascade` and `restrict` because they decide whether the child row dies or
+ * blocks the delete, and an edge with NO declared action because that is the
+ * case an operator most needs to see: the child row survives holding an FK to a
+ * row that no longer exists. The map is keyed by the **referenced** table (the
+ * parent being deleted) and values are the relations declared on the
+ * **referencing** (child) table.
  */
 const buildCascadeMap = (schema: AdvisorSchema): Map<string, AdvisorRelation[]> => {
     const map = new Map<string, AdvisorRelation[]>();
@@ -31,8 +66,10 @@ const buildCascadeMap = (schema: AdvisorSchema): Map<string, AdvisorRelation[]> 
             }
 
             // `set null` relations don't delete child rows — the FK field is set to
-            // null instead. Exclude them: only cascade and restrict affect row existence.
-            if (relation.onDelete === "set null" || relation.onDelete === undefined) {
+            // null instead — so they are not part of the delete's impact. An edge
+            // with no declared action IS kept: those rows are left pointing at a
+            // deleted parent, which is exactly what the preview exists to show.
+            if (relation.onDelete === "set null") {
                 continue;
             }
 
@@ -79,4 +116,4 @@ const walkCascade = <T extends { children: T[] }>(root: T, predicate: (node: T) 
 };
 
 export type { AdvisorRelation, AdvisorSchema } from "@lunora/advisor";
-export { buildCascadeMap, walkCascade };
+export { advisorSchemaFromColumns, buildCascadeMap, walkCascade };

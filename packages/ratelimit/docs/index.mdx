@@ -221,14 +221,19 @@ bucket) otherwise.
 
 ## Pluggable stores
 
-Persistence is a `RateLimitStore` (`get`/`set`/`delete`, sync or async). Three
-are shipped:
+Persistence is a `RateLimitStore` (`get`/`set`/`delete`, sync or async):
 
-| Factory                   | Backing                                                            | Use when                                                              |
-| ------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| `createMemoryStore()`     | An in-process `Map`. The default when no `store` is given.         | Single-DO/process limits where state needn't survive eviction.        |
-| `createSqlStore({ sql })` | `state.storage.sql` (workerd `SqlStorage`, also `node:sqlite`).    | Durable per-DO state that survives hibernation, and you have raw SQL. |
-| `createDbStore({ db })`   | A Lunora table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL.  |
+| Factory                         | Backing                                                            | Use when                                                                               |
+| ------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `createMemoryStore()`           | An in-process `Map`. The default when no `store` is given.         | Single-DO/process limits where state needn't survive eviction.                         |
+| `createSqlStore({ sql })`       | `state.storage.sql` (workerd `SqlStorage`, also `node:sqlite`).    | Durable per-DO state that survives hibernation, and you have raw SQL.                  |
+| `createDbStore({ db })`         | A Lunora table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL.                   |
+| `createReadOnlyDbStore({ db })` | The same table through a **query** context's reader `ctx.db`.      | Showing remaining quota from a query — `getValue`/`check` only; `limit`/`reset` throw. |
+
+`createReadOnlyDbStore` exists so a remaining-quota display does not have to cast
+a query's `ctx.db` to the writer type. `getValue` and `check` project the stored
+value forward to the current clock, which is a pure read; only `limit`/`reset`
+write, and those reject with a message naming `createDbStore` as the fix.
 
 `createSqlStore` creates its table (default `_lunora_rate_limits`) if missing.
 `createDbStore` expects a table you declare in your schema with a key column and
@@ -249,6 +254,41 @@ export const rateLimits = defineTable({
     Inside a Durable Object the input gate serializes the limiter's read-modify-write against storage, so both SQL- and ORM-backed stores are atomic against
     concurrent calls without an explicit transaction. Driving `createSqlStore` outside a DO, you own serialization yourself.
 </Callout>
+
+## Token budgets
+
+A request limit is the wrong shape for an LLM: one call can cost a hundred
+tokens or a hundred thousand, so "20 calls a minute" bounds nothing that
+matters. `tokenBudget` binds one named limit whose unit is model tokens (or
+cents) and spends it **in arrears**, which is how tokens actually work — the
+cost is only known once the call returns.
+
+```ts
+import { tokenBudget } from "@lunora/ratelimit";
+
+const budget = tokenBudget(limiter, "tokens");
+const allowed = await budget.check(userId);
+
+if (!allowed.ok) {
+    throw new LunoraError("RATE_LIMITED", `token budget exhausted; retry in ${String(allowed.retryAfter)}ms`);
+}
+
+const { text, usage } = await generateText({ model: ctx.ai.model(), prompt });
+
+await budget.record(userId, usage?.totalTokens ?? 0);
+
+return text;
+```
+
+`check` runs before the call and consumes nothing: a tenant whose bucket is
+already empty (or negative, from an expensive previous call) is turned away.
+`record` runs after it — always, including when the call **threw**, since a
+failed generation that consumed input tokens still has to be paid for. The
+charge is a reservation, so the bucket may go negative: the tokens are already
+spent, and the next call is refused until the debt refills away. A charge larger
+than the limit's own ceiling is clamped to it rather than rejected, so the one
+oversized call the budget exists to catch cannot escape it by being too big to
+record.
 
 ## Plugin form
 

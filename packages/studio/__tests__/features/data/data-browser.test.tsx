@@ -781,7 +781,8 @@ describe("dataBrowser — editable", () => {
         await openMessages(mock);
 
         fireEvent.click(screen.getByTestId("db-delete-m1"));
-        fireEvent.click(screen.getByTestId("db-delete-m1-confirm"));
+        // The cascade-impact preview IS the confirmation step for a row delete.
+        fireEvent.click(await screen.findByTestId("cascade-confirm"));
 
         await waitFor(() => {
             if (!mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)) {
@@ -792,6 +793,21 @@ describe("dataBrowser — editable", () => {
         const call = mock.query.mock.calls.find((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ id: "m1", op: "delete", table: "messages" });
+    });
+
+    it("shows the cascade-impact preview before deleting, and deletes nothing until it is confirmed", async () => {
+        expect.assertions(2);
+
+        const mock = createEditableClient();
+
+        await openMessages(mock);
+
+        fireEvent.click(screen.getByTestId("db-delete-m1"));
+
+        // The preview opens instead of the delete running: an operator must see
+        // which related rows go with the row before the write is issued.
+        await expect(screen.findByTestId("cascade-panel")).resolves.not.toBeNull();
+        expect(mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
     });
 
     it("inserts a new row from the editor", async () => {

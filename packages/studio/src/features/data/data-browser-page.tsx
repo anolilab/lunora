@@ -151,6 +151,7 @@ const DataBrowserPage = ({
     onAskAiFilter,
     onInspect,
     onOpenGenerateRows,
+    onRowDelete,
     onSaveQuery,
     page,
     preferences,
@@ -178,6 +179,13 @@ const DataBrowserPage = ({
     /** Open a row's detail drawer. From `useRowInspection`, whose other fields the page never reads. */
     readonly onInspect: (row: TableRow | null) => void;
     readonly onOpenGenerateRows: () => void;
+
+    /**
+     * Delete one row by id. Passed explicitly rather than read off `browser`
+     * because the host wraps `browser.onRowDelete` in the cascade-impact preview
+     * — the delete only runs once the operator confirms it there.
+     */
+    readonly onRowDelete: (id: null | string) => void;
     readonly onSaveQuery: (name: string) => void;
     /** The loaded page. Non-null by construction — the parent renders this only once a page has arrived. */
     readonly page: TablePage;
@@ -307,7 +315,7 @@ const DataBrowserPage = ({
                 editable={editable}
                 highlight={browser.filter}
                 mask={preferences.maskView}
-                onDelete={browser.onRowDelete}
+                onDelete={onRowDelete}
                 onEdit={browser.onRowEdit}
                 onInspect={onInspect}
                 onTogglePin={preferences.onTogglePin}

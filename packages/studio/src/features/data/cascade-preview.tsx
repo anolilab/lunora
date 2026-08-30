@@ -74,6 +74,26 @@ const CascadeBadge = ({ table }: { table: string }): ReactElement => (
 );
 
 /**
+ * The badge for an edge whose `onDelete` the feeder did not report. The rows are
+ * still impacted — they keep an FK to a row that will no longer exist — but the
+ * studio must not claim they cascade when it cannot see the declared action.
+ */
+const UndeclaredBadge = ({ table }: { table: string }): ReactElement => (
+    <span className="rounded bg-muted px-1 text-muted-foreground" data-testid={`cascade-undeclared-${table}`}>
+        references — no delete action declared
+    </span>
+);
+
+/** Pick the badge for a node from the relation that produced it. */
+const nodeBadge = (node: CascadeNode): ReactElement => {
+    if (node.relation === undefined || node.relation.onDelete === "cascade") {
+        return <CascadeBadge table={node.table} />;
+    }
+
+    return node.isRestrict ? <RestrictBadge table={node.table} /> : <UndeclaredBadge table={node.table} />;
+};
+
+/**
  * One line of the cascade tree: an indented row showing the table, row count,
  * restrict/cascade badge, and any cap note.
  */
@@ -87,7 +107,7 @@ const CascadeRow = ({ depth, node }: { depth: number; node: CascadeNode }): Reac
             )}
             <span className="font-medium text-foreground">{node.table}</span>
             <span className="text-muted-foreground">({node.rowCount.toString()} rows)</span>
-            {node.isRestrict ? <RestrictBadge table={node.table} /> : <CascadeBadge table={node.table} />}
+            {nodeBadge(node)}
             {node.capNote !== undefined && (
                 <span className="italic text-muted-foreground" data-testid={`cascade-cap-${node.table}`}>
                     ({node.capNote})

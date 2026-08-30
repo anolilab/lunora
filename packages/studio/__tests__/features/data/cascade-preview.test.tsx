@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CascadePreviewDialog } from "../../../src/features/data/cascade-preview";
 import type { AdvisorSchema } from "../../../src/lib/cascade-schema";
-import { buildCascadeMap, walkCascade } from "../../../src/lib/cascade-schema";
+import { advisorSchemaFromColumns, buildCascadeMap, walkCascade } from "../../../src/lib/cascade-schema";
 
 // ── Fixture schemas ──────────────────────────────────────────────────────────
 
@@ -175,11 +175,57 @@ describe("buildCascadeMap", () => {
         expect(map.get("comments")?.[0]?.table).toBe("replies");
     });
 
+    it("keeps an edge whose onDelete was never declared", () => {
+        expect.assertions(2);
+
+        // The studio's own feeder (`describeTables`) reports FK targets but not the
+        // declared action. Dropping those edges left the preview showing "no
+        // related rows" for a table that has children — the operator's cue that
+        // something is downstream disappears exactly when it matters.
+        const map = buildCascadeMap({
+            tables: [
+                { fields: ["title"], indexes: [], name: "posts", relations: [] },
+                {
+                    fields: ["postId"],
+                    indexes: [],
+                    name: "comments",
+                    relations: [{ field: "postId", kind: "one", name: "postId", references: "posts", table: "comments" }],
+                },
+            ],
+        });
+
+        expect(map.get("posts")?.[0]?.table).toBe("comments");
+        expect(map.get("posts")?.[0]?.onDelete).toBeUndefined();
+    });
+
     it("handles a cycle schema without throwing", () => {
         expect.assertions(1);
 
         // The map build itself is pure — it should not loop.
         expect(() => buildCascadeMap(CYCLE_SCHEMA)).not.toThrow();
+    });
+});
+
+describe("advisorSchemaFromColumns", () => {
+    it("turns v.id ref columns into relations with no declared onDelete", () => {
+        expect.assertions(3);
+
+        const schema = advisorSchemaFromColumns({
+            comments: [
+                { name: "_id", optional: false, pk: true, type: "id" },
+                { name: "postId", optional: false, ref: "posts", type: "id" },
+                { name: "text", optional: false, type: "string" },
+            ],
+            posts: [{ name: "title", optional: false, type: "string" }],
+        });
+
+        const comments = schema.tables.find((table) => table.name === "comments");
+
+        expect(comments?.relations).toHaveLength(1);
+        expect(comments?.relations[0]).toMatchObject({ field: "postId", kind: "one", references: "posts", table: "comments" });
+        // Never invented: the admin wire carries no `onDelete`, and claiming a
+        // cascade the studio cannot see would be a lie in a destructive dialog.
+        expect(comments?.relations[0]?.onDelete).toBeUndefined();
     });
 });
 

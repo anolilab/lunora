@@ -28,6 +28,17 @@ describe("lookupModelPrice", () => {
         expect(lookupModelPrice("@cf/baai/bge-m3")).toStrictEqual({ input: 0.012 });
     });
 
+    it("prices the generation models the docs' examples use, with an output price", () => {
+        expect.assertions(3);
+
+        // A chat span carried NO cost at all off an AI Gateway while the table held
+        // embedding models only — the estimator's fallback existed but every
+        // `defineAgent` example's model missed it.
+        expect(lookupModelPrice("@cf/meta/llama-3.3-70b-instruct-fp8-fast")?.output).toBeGreaterThan(0);
+        expect(lookupModelPrice("@cf/meta/llama-3.1-8b-instruct")?.output).toBeGreaterThan(0);
+        expect(lookupModelPrice("gpt-5")?.output).toBeGreaterThan(0);
+    });
+
     it("returns undefined for a model it does not cover", () => {
         expect.assertions(1);
 

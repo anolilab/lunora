@@ -56,6 +56,44 @@ const MAX_SPAN_EVENTS = 128;
 const MAX_SPAN_LINKS = 128;
 
 /**
+ * Same bound for the attribute bag, for the same reason: `setAttribute` in a loop
+ * (`span.setAttribute(`row.${id}`, status)` over a result set) is the identical
+ * unbounded-growth failure through a different door, and a high-cardinality bag is
+ * what destroys a collector's aggregate views. OTel's default attribute limit is
+ * 128 too. Keeps the FIRST N keys; a write to a key already present always lands,
+ * so a bounded set of attributes stays updatable no matter how full the bag is.
+ */
+const MAX_SPAN_ATTRIBUTES = 128;
+
+/**
+ * Merge normalized fields into a span's attribute bag, dropping NEW keys once
+ * {@link MAX_SPAN_ATTRIBUTES} is reached. Shared by all three attribute writers so
+ * the bound cannot be bypassed through one of them.
+ */
+const assignBoundedAttributes = (attributes: Record<string, LogFields[string]>, fields: LogFields | undefined): void => {
+    if (fields === undefined) {
+        return;
+    }
+
+    let size = Object.keys(attributes).length;
+
+    for (const [key, value] of Object.entries(fields)) {
+        const isNew = !Object.hasOwn(attributes, key);
+
+        if (isNew && size >= MAX_SPAN_ATTRIBUTES) {
+            continue;
+        }
+
+        if (isNew) {
+            size += 1;
+        }
+
+        // eslint-disable-next-line no-param-reassign -- documented mutate-in-place contract (see jsdoc above): the caller owns the bag and all three writers merge into it
+        attributes[key] = value;
+    }
+};
+
+/**
  * Redact an outbound URL for a span attribute: scheme, host, and path, with the
  * query string and any userinfo dropped.
  *
@@ -373,7 +411,7 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }, ca
             // no special casing downstream. `evaluationAttributes` throws on an
             // empty name / non-finite score — caller misuse, so it surfaces in the
             // body rather than being silently dropped.
-            Object.assign(collected.attributes, normalizeLogFields(evaluationAttributes(evaluation)));
+            assignBoundedAttributes(collected.attributes, normalizeLogFields(evaluationAttributes(evaluation)));
         },
         recordException: (error) => {
             // The OTel-conventional `exception` event. `exception.stacktrace` is
@@ -390,10 +428,10 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }, ca
             });
         },
         setAttribute: (key, value) => {
-            Object.assign(collected.attributes, normalizeLogFields({ [key]: value }));
+            assignBoundedAttributes(collected.attributes, normalizeLogFields({ [key]: value }));
         },
         setAttributes: (fields) => {
-            Object.assign(collected.attributes, normalizeLogFields(fields));
+            assignBoundedAttributes(collected.attributes, normalizeLogFields(fields));
         },
     };
 
@@ -580,10 +618,34 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             // trace tree. The probe returns `undefined` off-CF / on older compat /
             // unsampled, in which case this is a safe no-op.
             if (fuseHostSpans === true && resolveHostTracing !== undefined) {
-                const cfTracing = await resolveHostTracing();
+                // Guarded, like every other host interaction here: `runRecorded` is
+                // the ARGUMENT to `enterSpan`, so a probe rejection or an
+                // `enterSpan` throw would mean the handler body never runs at all —
+                // telemetry silently swallowing a user's mutation. On any failure
+                // fall through to the un-bridged path, which is the exact prior
+                // behavior.
+                let bodyStarted = false;
 
-                if (cfTracing !== undefined && typeof cfTracing.enterSpan === "function") {
-                    return await cfTracing.enterSpan(name, (span) => runRecorded(span));
+                try {
+                    const cfTracing = await resolveHostTracing();
+
+                    if (cfTracing !== undefined && typeof cfTracing.enterSpan === "function") {
+                        return await cfTracing.enterSpan(name, (span) => {
+                            bodyStarted = true;
+
+                            return runRecorded(span);
+                        });
+                    }
+                } catch (error_) {
+                    // Only a failure BEFORE the body started is ours to swallow —
+                    // then the un-bridged path below runs it exactly once. Once the
+                    // body has started, the rejection is the handler's own error
+                    // (`ctx.trace` re-throws those untouched) and re-running would
+                    // execute the user's mutation twice.
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `bodyStarted` is set inside the `enterSpan` callback, which TS's control-flow analysis cannot see, so it narrows to its initializer here. The guard is what stops a handler error being swallowed and the user's mutation re-run.
+                    if (bodyStarted) {
+                        throw error_;
+                    }
                 }
             }
 
@@ -597,6 +659,16 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
 export interface TracedFetchDeps {
     /** The trace the CLIENT spans belong to. */
     anchor: TraceAnchor;
+
+    /**
+     * Whether to record a failed fetch's error message verbatim rather than
+     * redacted. Same dev-only escape hatch as {@link TracerDeps.captureRaw}, and
+     * the same reason: a `fetch` TypeError embeds the request URL, so a key in a
+     * query string would otherwise reach the collector in the clear on the very
+     * span whose `url.full` is scrubbed by `redactUrl`.
+     */
+    captureRaw?: boolean;
+
     /** Function path the spans are attributed to. */
     functionPath: string;
 
@@ -641,7 +713,7 @@ export type ContextFetch = (input: Request | string | URL, init?: RequestInit) =
  * control.
  */
 export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): ContextFetch => {
-    const { anchor, functionPath, propagate = true, record, shardKey, userId } = deps;
+    const { anchor, captureRaw = false, functionPath, propagate = true, record, shardKey, userId } = deps;
 
     return async (input: Request | string | URL, init?: RequestInit): Promise<Response> => {
         const spanId = otlpRandomHex(8);
@@ -676,7 +748,14 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
 
             return response;
         } catch (error_) {
-            error = { message: error_ instanceof Error ? error_.message : String(error_), type: toErrorType(error_) };
+            // Redacted like every other span error: a `fetch` failure message
+            // routinely embeds the full request URL (query string included), and
+            // this is the span pipeline — the one sink with third-party fan-out.
+            // Shipping it raw here would leak exactly what `redactUrl` strips off
+            // `url.full` two lines below.
+            const rawMessage = error_ instanceof Error ? error_.message : String(error_);
+
+            error = { message: redactArgs(rawMessage, captureRaw) as string, type: toErrorType(error_) };
 
             throw error_;
         } finally {
