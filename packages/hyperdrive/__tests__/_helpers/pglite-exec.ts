@@ -30,13 +30,13 @@ interface PgliteHarness {
 }
 
 /**
- * `pgvector` is loaded as a PGlite extension rather than being always-on: the
- * engine only exposes the `vector` type and its distance operators once the
- * extension module is registered at construction, so a suite that needs
- * `createPgVectorIndex` has to ask for it here. Everything else is unchanged.
+ * `pgvector` is registered unconditionally: PGlite only exposes the `vector` type
+ * and its distance operators when the extension module is passed at construction,
+ * and gating that behind a flag put a per-suite mode into the one helper every
+ * hyperdrive suite goes through — to save a wasm registration nothing measured.
  */
-const createPgliteHarness = async (options: { vector?: boolean } = {}): Promise<PgliteHarness> => {
-    const database = options.vector === true ? new PGlite({ extensions: { vector } }) : new PGlite();
+const createPgliteHarness = async (): Promise<PgliteHarness> => {
+    const database = new PGlite({ extensions: { vector } });
 
     await database.waitReady;
 

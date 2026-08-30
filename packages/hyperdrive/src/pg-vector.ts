@@ -21,7 +21,8 @@
  * Postgres kept getting pulled back to a Cloudflare binding for vectors alone.
  *
  * **Provisioning is lazy**, mirroring the global store's `ensureMigrated`: the
- * extension, table and ANN index are created on first use and cached as the
+ * extension, the table, the ANN index and the two filter indexes are created on
+ * first use and cached as the
  * resolving promise, so concurrent first callers share one round trip. Every
  * statement is `IF NOT EXISTS`, so it is safe to run against a live table.
  *
@@ -49,15 +50,6 @@ import type {
 
 import { isBareIdentifier } from "../../../shared/bare-identifier";
 import type { SqlClient } from "./types";
-
-/**
- * Postgres truncates identifiers at 63 bytes, and the longest name this module
- * derives is `__vec_` + name + `__ann_` + `vector_cosine_ops` — 29 characters of
- * fixed affixes. Anything longer than the remainder would truncate two distinct
- * indexes onto one name, and the second `CREATE INDEX IF NOT EXISTS` would
- * silently no-op.
- */
-const MAX_NAME_LENGTH = 34;
 
 /** pgvector's HNSW index tops out here; the `vector` type itself allows far more. */
 const MAX_HNSW_DIMENSIONS = 2000;
@@ -93,6 +85,10 @@ const DEFAULT_TOP_K = 5;
  * negating it here would inverted every score against a real binding while
  * leaving the ordering identical: silent, and invisible to an ordering test.
  */
+/** Affixes every derived identifier is built from; the name budget is what they leave. */
+const TABLE_PREFIX = "__vec_";
+const ANN_INFIX = "__ann_";
+
 interface MetricWiring {
     /** Distance operator used for both ORDER BY and the score projection. */
     operator: string;
@@ -102,13 +98,24 @@ interface MetricWiring {
     score: (distance: number) => number;
 }
 
-const METRICS = new Map<VectorMetric, MetricWiring>(
-    Object.entries({
-        cosine: { operator: "<=>", operatorClass: "vector_cosine_ops", score: (distance) => 1 - distance },
-        "dot-product": { operator: "<#>", operatorClass: "vector_ip_ops", score: (distance) => distance },
-        euclidean: { operator: "<->", operatorClass: "vector_l2_ops", score: (distance) => distance },
-    }) as [VectorMetric, MetricWiring][],
-);
+const METRICS: Record<VectorMetric, MetricWiring> = {
+    cosine: { operator: "<=>", operatorClass: "vector_cosine_ops", score: (distance) => 1 - distance },
+    "dot-product": { operator: "<#>", operatorClass: "vector_ip_ops", score: (distance) => distance },
+    euclidean: { operator: "<->", operatorClass: "vector_l2_ops", score: (distance) => distance },
+};
+
+/** Postgres' identifier limit. Longer names are truncated, silently. */
+const IDENTIFIER_BYTES = 63;
+
+/**
+ * Derived, not asserted: the longest identifier this module builds is
+ * `__vec_<name>__ann_<operatorClass>`, so the room left for `name` is whatever
+ * the affixes do not take. Computing it means adding a metric with a longer
+ * operator class cannot quietly push two index names onto the same truncated
+ * string, where the second `CREATE INDEX IF NOT EXISTS` would no-op.
+ */
+const MAX_NAME_LENGTH =
+    IDENTIFIER_BYTES - TABLE_PREFIX.length - ANN_INFIX.length - Math.max(...Object.values(METRICS).map((wiring) => wiring.operatorClass.length));
 
 /** Options for {@link createPgVectorIndex}. */
 interface PgVectorIndexOptions {
@@ -158,10 +165,26 @@ const assertContainmentFilter = (filter: Record<string, unknown>, name: string):
         );
     };
 
+    /**
+     * `JSON.stringify` silently drops undefined, function and symbol values. Each
+     * one narrows the containment document — `{ tenant: () => {} }` becomes `{}`,
+     * which matches every row that has metadata at all. That fails OPEN, across
+     * tenants, so it is rejected rather than trusted to be unreachable: `filter` is
+     * typed `Record<string, unknown>`, so a class instance or an object carrying a
+     * method reaches here without TypeScript objecting.
+     */
+    const assertSerialisable = (value: unknown, path: string): void => {
+        if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+            reject(`has a value at "${path}" that JSON cannot represent, which would widen the filter to match every row`, path);
+        }
+    };
+
     const walk = (value: unknown, path: string): void => {
+        assertSerialisable(value, path);
+
         if (Array.isArray(value)) {
-            for (const entry of value) {
-                walk(entry, path);
+            for (const [position, entry] of value.entries()) {
+                walk(entry, `${path}[${String(position)}]`);
             }
 
             return;
@@ -176,28 +199,18 @@ const assertContainmentFilter = (filter: Record<string, unknown>, name: string):
                 reject("uses a comparison operator", path);
             }
 
-            // Same trap as the top level, one layer down: `JSON.stringify` drops an
-            // undefined value, so `{ author: { role: undefined } }` narrows to
-            // `{"author":{}}` — which matches every row that has an `author` object
-            // at all, rather than the one the caller asked for.
-            if (nested === undefined) {
-                reject(`has an undefined value at "${key}"`, path);
-            }
-
-            walk(nested, path);
+            walk(nested, `${path}.${key}`);
         }
     };
 
     for (const [key, value] of Object.entries(filter)) {
-        if (key.includes(".")) {
-            reject("uses Vectorize's dot-addressed nested syntax, which JSONB containment cannot express", key);
+        // Vectorize's own operators are legal at the top level too.
+        if (key.startsWith("$")) {
+            reject("uses a comparison operator", key);
         }
 
-        // `JSON.stringify` would drop an undefined value, turning the filter into
-        // `{}` — which matches every row that HAS metadata and silently excludes
-        // the rows that do not. Neither is what the caller asked for.
-        if (value === undefined) {
-            reject("is undefined", key);
+        if (key.includes(".")) {
+            reject("uses Vectorize's dot-addressed nested syntax, which JSONB containment cannot express", key);
         }
 
         walk(value, key);
@@ -209,8 +222,8 @@ const assertContainmentFilter = (filter: Record<string, unknown>, name: string):
  * this allowlist is the only thing standing between `name` and raw DDL.
  *
  * The length cap is not cosmetic: Postgres truncates identifiers at 63 bytes, and
- * this module derives `<table>__ann_<opclass>` and `<table>__ns` from the same
- * root. Past the cap those suffixes truncate away, two different indexes collapse
+ * this module derives `<table>__ann_<opclass>`, `<table>__ns` and `<table>__meta`
+ * from the same root. Past the cap those suffixes truncate away, two different indexes collapse
  * onto one name, and `CREATE INDEX IF NOT EXISTS` silently no-ops the second.
  */
 const safeIdentifier = (value: string): string => {
@@ -242,16 +255,14 @@ const safeIdentifier = (value: string): string => {
  */
 const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike => {
     const { client, dimensions, metric = "cosine", name } = options;
-    const table = `__vec_${safeIdentifier(name)}`;
-    // `metric` is a closed union at the type level, so this guard is for a JS
-    // caller (or a widened config) passing a string the map has no wiring for.
-    const wiring = METRICS.get(metric);
-
-    if (wiring === undefined) {
+    const table = `${TABLE_PREFIX}${safeIdentifier(name)}`;
+    // Closed union at the type level, so this guard is only for a JS caller (or a
+    // widened config) passing a string the table has no wiring for.
+    if (!(metric in METRICS)) {
         throw new TypeError(`@lunora/hyperdrive: pgvector index "${name}" got an unknown metric "${metric}" — expected cosine, euclidean, or dot-product`);
     }
 
-    const { operator, operatorClass, score } = wiring;
+    const { operator, operatorClass, score } = METRICS[metric];
 
     if (!Number.isInteger(dimensions) || dimensions <= 0) {
         throw new TypeError(`@lunora/hyperdrive: pgvector index "${name}" needs a positive integer \`dimensions\` — got ${String(dimensions)}`);
@@ -302,16 +313,14 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
                 // operator, so a bare `__ann` would let `IF NOT EXISTS` no-op
                 // against a stale index and quietly demote every query to a
                 // sequential scan — the exact failure this index prevents.
-                `CREATE INDEX IF NOT EXISTS "${table}__ann_${operatorClass}" ON "${table}" USING hnsw (embedding ${operatorClass})`,
-                // Both filterable columns are indexed so the planner can answer a
-                // filter EXACTLY — a bitmap scan plus a sort over the matching rows.
-                // Without them the only usable path is the ANN index, and pgvector
-                // applies `WHERE` AFTER scanning it: a filter matching a small slice
-                // starves the result set and the caller gets a short page with no
-                // error. Session GUCs (`hnsw.iterative_scan`) are the documented
-                // alternative and were tried first — they cannot be relied on here,
-                // because `SqlClient` exposes one statement at a time and a pooled
-                // client may run the SET and the SELECT on different sessions.
+                `CREATE INDEX IF NOT EXISTS "${table}${ANN_INFIX}${operatorClass}" ON "${table}" USING hnsw (embedding ${operatorClass})`,
+                // These make the filtered query's CTE cheap; `query` is what makes it
+                // CORRECT. Indexes alone cannot: the planner costs the ANN scan
+                // against the bitmap path and sometimes picks the ANN one, which
+                // post-filters and returns a short page. Session GUCs
+                // (`hnsw.iterative_scan`) were the other candidate and are unusable
+                // here — `SqlClient` exposes one statement at a time, so a pooled
+                // client can run the SET and the SELECT on different sessions.
                 `CREATE INDEX IF NOT EXISTS "${table}__ns" ON "${table}" (namespace)`,
                 `CREATE INDEX IF NOT EXISTS "${table}__meta" ON "${table}" USING gin (metadata)`,
             ]) {
@@ -348,11 +357,17 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
 
         await ensure();
 
+        // Postgres rejects `ON CONFLICT ... DO UPDATE` when one statement touches the
+        // same id twice (SQLSTATE 21000), while Vectorize simply takes the last
+        // write. Collapse duplicates here so a repeated id is a no-op difference
+        // rather than a hard error the caller never sees from a real binding.
+        const deduped = [...new Map(vectors.map((vector) => [vector.id, vector])).values()];
+
         const parameters: unknown[] = [];
         // See `query` — `push` returns the 1-based bind index, so placeholder and
         // value cannot drift, and a new column is one edit rather than three.
         const bind = (value: unknown): string => `$${String(parameters.push(value))}`;
-        const rows = vectors.map(
+        const rows = deduped.map(
             (vector) =>
                 // eslint-disable-next-line unicorn/no-null -- a SQL bind needs a real NULL; `undefined` is sent as a missing bind
                 `(${bind(vector.id)}, ${bind(vector.namespace ?? null)}, ${bind(vectorLiteral(vector.values))}::vector, ` +
@@ -416,13 +431,20 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
         },
 
         async query(vector: ReadonlyArray<number>, queryOptions?: VectorizeQueryOptions): Promise<VectorizeMatches> {
-            await ensure();
-
             const topK = queryOptions?.topK ?? DEFAULT_TOP_K;
 
             if (!Number.isInteger(topK) || topK <= 0) {
                 throw new TypeError(`@lunora/hyperdrive: pgvector index "${name}" needs a positive integer \`topK\` — got ${String(topK)}`);
             }
+
+            if (queryOptions?.filter !== undefined && Object.keys(queryOptions.filter).length > 0) {
+                assertContainmentFilter(queryOptions.filter, name);
+            }
+
+            // Provision only after the cheap guards pass — an invalid `topK` or an
+            // unsupported filter should not create an extension, a table and three
+            // indexes on the way to throwing.
+            await ensure();
 
             const wantValues = queryOptions?.returnValues === true;
             const wantMetadata = (queryOptions?.returnMetadata ?? "none") !== "none";
@@ -441,7 +463,6 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
             }
 
             if (queryOptions?.filter !== undefined && Object.keys(queryOptions.filter).length > 0) {
-                assertContainmentFilter(queryOptions.filter, name);
                 where.push(`metadata @> ${bind(JSON.stringify(queryOptions.filter))}::jsonb`);
             }
 
@@ -455,16 +476,28 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
                 projection.push("embedding::text AS embedding");
             }
 
+            // A filtered query resolves the filter FIRST, in a materialized CTE, and
+            // orders exactly over what survives. Leaving both to the planner is not
+            // an option: pgvector post-filters after the ANN scan, so when the cost
+            // model prefers the HNSW index a selective filter starves the page —
+            // measured at 20k rows / 40 namespaces, `topK: 5` returned ONE row, and
+            // smaller `topK` is worse, so the default shape is the broken one. The
+            // btree/GIN indexes below make the CTE cheap; they cannot make the
+            // choice deterministic, which is why this is a query shape and not an
+            // index. Unfiltered queries keep the plain ANN path.
+            const source = where.length > 0 ? `(SELECT * FROM "${table}" WHERE ${where.join(" AND ")})` : `"${table}"`;
+            const statement =
+                where.length > 0
+                    ? `WITH filtered AS MATERIALIZED ${source} SELECT ${projection.join(", ")} FROM filtered ORDER BY ${distance} LIMIT ${bind(topK)}`
+                    : `SELECT ${projection.join(", ")} FROM "${table}" ORDER BY ${distance} LIMIT ${bind(topK)}`;
+
             const rows = await client.query<{
                 distance: number | string;
                 embedding?: string;
                 id: string;
                 metadata?: Record<string, unknown> | null;
                 namespace: null | string;
-            }>(
-                `SELECT ${projection.join(", ")} FROM "${table}" ${where.length > 0 ? `WHERE ${where.join(" AND ")} ` : ""}ORDER BY ${distance} LIMIT ${bind(topK)}`,
-                parameters,
-            );
+            }>(statement, parameters);
 
             const matches = rows.map((row) => {
                 return {

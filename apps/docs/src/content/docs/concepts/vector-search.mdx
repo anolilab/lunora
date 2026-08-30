@@ -224,11 +224,19 @@ import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import { createPgVectorIndex } from "@lunora/hyperdrive/global";
 import postgres from "postgres";
 
+// Built once — `vectors` runs on every dispatch.
+let docsBody: ReturnType<typeof createPgVectorIndex> | undefined;
+
 export const ShardDO = createShardDO({
     vectors: (env) => {
-        const client = fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE).connectionString));
+        docsBody ??= createPgVectorIndex({
+            client: fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE).connectionString)),
+            dimensions: 768,
+            metric: "cosine",
+            name: "docs_body",
+        });
 
-        return { "docs-body": createPgVectorIndex({ client, dimensions: 768, metric: "cosine", name: "docs_body" }) };
+        return { "docs-body": docsBody };
     },
 });
 ```

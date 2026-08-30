@@ -11,6 +11,8 @@
  * @experimental
  */
 
+import { isBareIdentifier } from "../../../../shared/bare-identifier";
+
 /**
  * Run one statement and return its rows.
  *
@@ -21,8 +23,6 @@
  * May be synchronous: a Durable Object's SQLite is, and forcing it through a
  * promise would add a microtask per row batch for nothing.
  */
-import { isBareIdentifier } from "../../../../shared/bare-identifier";
-
 type RagSqlExec = (sql: string, parameters: ReadonlyArray<unknown>) => Promise<ReadonlyArray<Record<string, unknown>>> | ReadonlyArray<Record<string, unknown>>;
 
 /** A comma-separated `?` placeholder list for `count` bound parameters. */

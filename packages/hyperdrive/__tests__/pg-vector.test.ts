@@ -22,7 +22,7 @@ let harness: PgliteHarness;
 
 describe("createPgVectorIndex", () => {
     beforeEach(async () => {
-        harness = await createPgliteHarness({ vector: true });
+        harness = await createPgliteHarness();
     });
 
     afterEach(async () => {
@@ -120,41 +120,52 @@ describe("createPgVectorIndex", () => {
     });
 
     /**
-     * The regression that matters most and is the least visible: pgvector applies
-     * `WHERE` AFTER scanning the HNSW index, so a selective filter starves the
-     * result set — the caller gets a short (or empty) page with no error, which
-     * reads exactly like "nothing is similar".
+     * The regression that matters most and is the least visible.
      *
-     * Two things make this reproducible, and both are load-bearing. First, the
-     * filter is on `metadata`, not `namespace`: the `__ns` btree lets the planner
-     * answer a namespace filter with a bitmap scan plus an exact sort, which is
-     * correct and hides the defect, while `metadata` has no such index so the ANN
-     * path is the one taken. Second, `enable_seqscan = off` plus `ANALYZE` — at
-     * this size an exact sequential scan is cheaper, and also correct.
+     * pgvector applies `WHERE` AFTER scanning the HNSW index, so when the planner
+     * picks that index a selective filter starves the page — the caller gets fewer
+     * than `topK` rows, with no error. `query` avoids it by resolving the filter in
+     * a materialized CTE and ordering exactly over what survives.
      *
-     * Verified both ways: with the widening removed this returns 1 of 10.
+     * SCALE IS THE TEST. At a few hundred rows the planner prefers a bitmap scan
+     * plus an exact sort, which is correct and hides the defect entirely — two
+     * earlier versions of this test passed against the broken code for that reason.
+     * 6 000 rows over 40 namespaces is where the cost model flips to the ANN scan.
+     *
+     * Verified against the pre-fix query shape at this size: `topK: 5` returned 1
+     * row. Note the inversion — a SMALLER `topK` is more broken, so the default
+     * shape (`DEFAULT_TOP_K`, a sharded table, no explicit topK) is the worst case.
      */
-    it("returns a full page when a metadata filter matches a small slice of a large index", async () => {
-        expect.assertions(2);
+    it("returns a full page when a filter is selective and the table is big enough to prefer the ANN index", async () => {
+        expect.assertions(4);
 
         const store = index({ name: "tenants" });
-        const rows = Array.from({ length: 400 }, (_, position) => {
+        const rows = Array.from({ length: 6000 }, (_, position) => {
             return {
                 id: `doc-${String(position)}`,
-                metadata: { tenant: `t${String(position % 40)}` },
-                values: [1, position / 400, 0],
+                metadata: { tenant: `ten${String(position % 40)}` },
+                namespace: `ten${String(position % 40)}`,
+                values: [1, position / 6000, (position % 7) / 7],
             };
         });
 
-        await store.upsert(rows);
-        // Stats, then force the ANN path the widening exists for.
+        for (let cursor = 0; cursor < rows.length; cursor += 1000) {
+            // eslint-disable-next-line no-await-in-loop -- sequential batches keep the statement under Postgres' bind-parameter cap
+            await store.upsert(rows.slice(cursor, cursor + 1000));
+        }
+
         await harness.query('ANALYZE "__vec_tenants"');
-        await harness.query("SET enable_seqscan = off");
 
-        const scoped = await store.query([1, 0, 0], { filter: { tenant: "t7" }, topK: 10 });
+        // The default topK is the worst case, so pin it explicitly as well.
+        const byNamespace = await store.query([1, 0, 0], { namespace: "ten7", topK: 5 });
+        const byMetadata = await store.query([1, 0, 0], { filter: { tenant: "ten7" }, topK: 5 });
+        const defaulted = await store.query([1, 0, 0], { namespace: "ten7" });
 
-        expect(scoped.matches).toHaveLength(10);
-        expect(scoped.matches.every((match) => match.id.startsWith("doc-"))).toBe(true);
+        expect(byNamespace.matches).toHaveLength(5);
+        expect(byMetadata.matches).toHaveLength(5);
+        expect(defaulted.matches).toHaveLength(5);
+        // And the RIGHT rows, not merely five of them.
+        expect(byNamespace.matches.every((match) => match.namespace === "ten7")).toBe(true);
     });
 
     it("filters on metadata equality", async () => {
@@ -178,7 +189,7 @@ describe("createPgVectorIndex", () => {
      * vectors" — the silent wrong answer this guard exists to prevent.
      */
     it("rejects filters it cannot honour instead of silently returning nothing", async () => {
-        expect.assertions(5);
+        expect.assertions(9);
 
         const store = index();
 
@@ -191,9 +202,16 @@ describe("createPgVectorIndex", () => {
         await expect(store.query([1, 0, 0], { filter: { tags: [{ $in: ["a"] }] } })).rejects.toThrow(/comparison operator/);
         // Vectorize's dot-addressed nested key; `@>` would look for a literal "author.role".
         await expect(store.query([1, 0, 0], { filter: { "author.role": "admin" } })).rejects.toThrow(/dot-addressed/);
-        // `JSON.stringify` drops an undefined value, so this would narrow to
-        // `{"author":{}}` and match every row that has an `author` object at all.
-        await expect(store.query([1, 0, 0], { filter: { author: { role: undefined } } })).rejects.toThrow(/undefined/);
+        // Every one of these is dropped by `JSON.stringify`, narrowing the filter
+        // toward `{}` — which matches every row that has metadata at all. They fail
+        // OPEN, across tenants, which is why they are rejected rather than trusted
+        // to be unreachable: `filter` is `Record<string, unknown>`.
+        await expect(store.query([1, 0, 0], { filter: { author: { role: undefined } } })).rejects.toThrow(/JSON cannot represent/);
+        await expect(store.query([1, 0, 0], { filter: { tenant: () => "x" } })).rejects.toThrow(/JSON cannot represent/);
+        await expect(store.query([1, 0, 0], { filter: { tenant: Symbol("x") } })).rejects.toThrow(/JSON cannot represent/);
+        await expect(store.query([1, 0, 0], { filter: { tags: [undefined, "z"] } })).rejects.toThrow(/JSON cannot represent/);
+        // A `$` operator at the TOP level is Vectorize-legal shape too.
+        await expect(store.query([1, 0, 0], { filter: { $gt: 5 } })).rejects.toThrow(/comparison operator/);
     });
 
     it("omits metadata and values unless the caller asks", async () => {
@@ -224,6 +242,23 @@ describe("createPgVectorIndex", () => {
         const result = await store.query([1, 0, 0], { returnMetadata: "indexed", topK: 1 });
 
         expect(result.matches[0]?.metadata).toStrictEqual({ lang: "en" });
+    });
+
+    it("takes the last write when one batch repeats an id, as Vectorize does", async () => {
+        expect.assertions(1);
+
+        const store = index();
+
+        // `ON CONFLICT ... DO UPDATE` errors (SQLSTATE 21000) if one statement
+        // touches the same id twice; a real binding just keeps the last value.
+        await store.upsert([
+            { id: "dup", metadata: { v: 1 }, values: [1, 0, 0] },
+            { id: "dup", metadata: { v: 2 }, values: [0, 1, 0] },
+        ]);
+
+        const [row] = await store.getByIds(["dup"]);
+
+        expect(row?.metadata).toStrictEqual({ v: 2 });
     });
 
     it("upsert overwrites while insert leaves an existing id alone", async () => {

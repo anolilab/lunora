@@ -403,11 +403,20 @@ import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import { createPgVectorIndex } from "@lunora/hyperdrive/global";
 import postgres from "postgres";
 
+// Built once, not per request: `vectors` is called on every dispatch, and a fresh
+// index object means a fresh provisioning memo — five extra round trips each time.
+let index: ReturnType<typeof createPgVectorIndex> | undefined;
+
 createShardDO({
     vectors: (env) => {
-        const client = fromPostgresJs(postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString));
+        index ??= createPgVectorIndex({
+            client: fromPostgresJs(postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString)),
+            dimensions: 768,
+            metric: "cosine",
+            name: "posts_search",
+        });
 
-        return { posts_search: createPgVectorIndex({ client, dimensions: 768, metric: "cosine", name: "posts_search" }) };
+        return { posts_search: index };
     },
 });
 ```
@@ -424,11 +433,18 @@ where it cannot, install the extension once out-of-band and the statement become
 a no-op.
 
 <Callout type="warn">
-    Three deliberate differences from Vectorize. **Metadata filters are equality
-    only** (JSONB containment) — a comparison operator like `{ views: { $gt: 10 } }`,
-    Vectorize's dot-addressed `"author.role"` syntax, or an `undefined` value all
-    throw rather than being dropped, because a silently ignored filter returns
-    confidently wrong neighbours. **`returnMetadata: "indexed"` behaves as
+    Four deliberate differences from Vectorize. **Metadata filters are JSONB
+    containment** — equality for scalars, but for containers it is containment, not
+    equality: `{ tags: ["x"] }` also matches a row whose tags are `["x", "y"]`, and
+    `{ author: {} }` matches every row carrying an `author` key. A filter value
+    JSON cannot represent (`undefined`, a function, a symbol) is rejected, because
+    dropping it would widen the filter to match every row. A comparison operator — a comparison operator like like `{ views: { $gt: 10 } }` and
+    Vectorize's dot-addressed `"author.role"` syntax throw for the same reason.
+    **`returnMetadata: "indexed"` behaves as `"all"`** — note this defeats a
+    deliberate default: `ctx.vectors` asks for `"indexed"` precisely so a query
+    that opted into nothing does not return every stored field. And **`dimensions`
+    is fixed at first provisioning**: `CREATE TABLE IF NOT EXISTS` no-ops on a
+    later change, so writes fail against the original width. **`returnMetadata: "indexed"` behaves as
     `"all"`**, since Postgres indexes the whole JSONB document. And **`mutationId`
     is a local counter**: Vectorize's is a handle for an async mutation queue,
     while a Postgres write is already durable when its promise resolves.
@@ -458,7 +474,9 @@ run the `SET` and the query on different sessions.)
 `metric` picks the distance operator and the matching index operator class —
 `cosine` (default), `euclidean`, or `dot-product`. `score` is reported the way
 Vectorize reports it: cosine similarity (1 = identical), raw L2 distance
-(0 = identical), or the plain inner product.
+(0 = identical), or the NEGATIVE inner
+dot product — Cloudflare's own convention, where a score of -1000 is more similar
+than -500.
 
 ## Non-goals
 
