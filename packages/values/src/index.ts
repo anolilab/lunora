@@ -20,6 +20,8 @@ export type {
     JsonSchemaFragment,
     MetaOptions,
     NumberColumnValidator,
+    ObjectColumnValidator,
+    ParseOptions,
     SelectShape,
     ServerDefaultContext,
     StringColumnValidator,

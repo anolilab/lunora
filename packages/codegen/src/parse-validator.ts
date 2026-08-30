@@ -121,6 +121,24 @@ const REFINEMENT_MODIFIERS = new Set(["check", "email", "int", "length", "max", 
 const METADATA_MODIFIERS = new Set(["meta"]);
 
 /**
+ * Modifiers that change only how a value is PARSED at runtime, never the
+ * inferred type or the set of accepted values — so the IR passes through
+ * untouched, exactly like a metadata modifier, and the AOT compiler may still
+ * compile the node.
+ *
+ * `.strip()` marks an object as narrowing on purpose, which only has an effect
+ * under `.output()` (where undeclared keys are otherwise an error). Args
+ * validation — the only thing the AOT compiler emits — is unaffected either way,
+ * so there is nothing here for it to model.
+ *
+ * Kept separate from {@link METADATA_MODIFIERS} rather than folded in: that set
+ * is defined as attaching a JSON Schema fragment, and `.strip()` attaches
+ * nothing. Same handling, different reason — and the reason is what the next
+ * person needs.
+ */
+const PARSE_BEHAVIOR_MODIFIERS = new Set(["strip"]);
+
+/**
  * Identifiers currently being followed to their declaration, so a self- or
  * mutually-referential `const` (`const a = b; const b = a;`) terminates instead
  * of recursing forever. Parsing is synchronous and single-threaded, so one
@@ -440,7 +458,7 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     // choosing which list it belongs in — a single `member === …` comparison
     // standing in for one of the sets is how the next addition silently gets the
     // wrong treatment.
-    if (COLUMN_MODIFIERS.has(member) || REFINEMENT_MODIFIERS.has(member) || METADATA_MODIFIERS.has(member)) {
+    if (COLUMN_MODIFIERS.has(member) || REFINEMENT_MODIFIERS.has(member) || METADATA_MODIFIERS.has(member) || PARSE_BEHAVIOR_MODIFIERS.has(member)) {
         const receiver = callee.getExpression();
         const base = Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
 
@@ -454,5 +472,5 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     return parseBuilderMember(member, args, call);
 };
 
-export { COLUMN_MODIFIERS, METADATA_MODIFIERS, parseObjectShape, parseValidator, REFINEMENT_MODIFIERS, setStandardTypeResolver };
+export { COLUMN_MODIFIERS, METADATA_MODIFIERS, PARSE_BEHAVIOR_MODIFIERS, parseObjectShape, parseValidator, REFINEMENT_MODIFIERS, setStandardTypeResolver };
 export type { StandardTypeResolver };

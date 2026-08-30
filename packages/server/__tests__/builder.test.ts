@@ -303,12 +303,46 @@ describe("builder middleware", () => {
 });
 
 describe("builder output", () => {
-    it("parses the handler result through the .output() validator, stripping undeclared keys", async () => {
+    it("rejects a result carrying keys the .output() validator does not declare", async () => {
+        expect.assertions(2);
+
+        // This used to strip `extra` and return `{ count: 1 }`. That is how a
+        // column present in a row goes missing from every response the procedure
+        // serves, with no error anywhere — the failure this asymmetry exists to
+        // stop. On the way IN stripping is right; on the way OUT it deletes data
+        // the server meant to send.
+        const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: 1, extra: "not declared" }) as { count: number });
+
+        await expect(fn.handler({}, {})).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+        // And it names the key, so the fix does not need a debugger.
+        await expect(fn.handler({}, {})).rejects.toThrow(/extra/u);
+    });
+
+    it("strips undeclared keys when .strip() says the narrowing is deliberate", async () => {
         expect.assertions(1);
 
-        const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: 1, extra: "stripped" }) as { count: number });
+        // Trimming an internal field off a row before it reaches a client is a
+        // real use of `.output()`. It stays available — it just has to be said,
+        // so a reviewer can tell it apart from a forgotten column.
+        const fn = c.query.output(v.object({ count: v.number() }).strip()).query(() => ({ count: 1, passwordHash: "secret" }) as { count: number });
 
         await expect(fn.handler({}, {})).resolves.toEqual({ count: 1 });
+    });
+
+    it("leaves .strip() off the original validator when a shared const is narrowed", async () => {
+        expect.assertions(2);
+
+        // `.strip()` returns a new validator rather than mutating in place: the
+        // shape may be a const reused across procedures, and flipping it there
+        // would silently change what every other holder parses.
+        const shared = v.object({ count: v.number() });
+        const narrowed = shared.strip();
+
+        const strict = c.query.output(shared).query(() => ({ count: 1, extra: "x" }) as { count: number });
+        const lenient = c.query.output(narrowed).query(() => ({ count: 1, extra: "x" }) as { count: number });
+
+        await expect(strict.handler({}, {})).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+        await expect(lenient.handler({}, {})).resolves.toEqual({ count: 1 });
     });
 
     it("re-tags an .output() mismatch as an internal error, not a client 400", async () => {
