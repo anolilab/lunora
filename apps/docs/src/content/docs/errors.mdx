@@ -24,9 +24,13 @@ if (isLunoraError(error)) {
 }
 ```
 
-`isLunoraError` matches structurally, on a string `code` plus a numeric
-`status`, so it also recognises errors rebuilt from the wire, where `instanceof`
-cannot be trusted.
+`isLunoraError` matches structurally: an `Error` instance carrying the
+`type: "VisulimaError"` brand, a string `code`, and a numeric `status`. All
+three are required — the brand is what tells a real Lunora error apart from a
+foreign one that happens to have a `code`/`status` pair, so
+`Object.assign(new Error(message), { code, status })` does **not** pass.
+Matching on the shape rather than on `instanceof` is what lets it also
+recognise errors rebuilt from the wire, where the prototype is lost.
 
 ## Request errors
 

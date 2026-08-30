@@ -85,7 +85,6 @@ const buildMigrationAuth = (env: Env): LunoraAuth => createAuth({ ...authOptions
 
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
-        d1: env.DB,
         // `openApiSpec` (regenerated on every `lunora/` change) backs the
         // studio's always-current API-reference tab.
         openApiSpec,

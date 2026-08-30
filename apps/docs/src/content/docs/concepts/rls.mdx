@@ -131,9 +131,10 @@ single in-memory candidate row and has no fetcher, so a relation predicate in an
 a flat column check (or a read policy) instead. `rank`/`rankPage` likewise
 reject them: their `where` only pins a partition, so a relation predicate there
 would silently drop. They are also bounded: an overly broad `some: {}` that
-collects more than `maxRelationKeys` child keys fails closed with a descriptive
-error rather than silently truncating the `IN (...)` set (a same-shard `EXISTS`
-push-down lifts this cap, since it needs no key list).
+collects more than 5,000 child keys (the `maxRelationKeys` cap) fails closed
+with a descriptive error rather than silently truncating the `IN (...)` set. A
+same-shard `EXISTS` push-down lifts the cap entirely, since it needs no key
+list — so keeping the relation co-located is the way past it.
 
 ### Typed authoring
 
