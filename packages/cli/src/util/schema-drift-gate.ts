@@ -183,6 +183,9 @@ const runSchemaDriftGate = (options: {
         baseline: baseline.status === "ok" ? baseline.snapshot : undefined,
         command,
         current: codegen.schemaSnapshot,
+        // Without this the gate can only count new ids, and an unrelated backfill
+        // waves through a required field added to a different table.
+        migrations: codegen.migrations,
     });
 
     if (decision.blocked) {

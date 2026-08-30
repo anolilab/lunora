@@ -15,9 +15,11 @@
  * data migration — dropped table/field, field-kind change, optional→required,
  * a new REQUIRED field on an existing table, a changed shard mode, a
  * removed/renamed index or relation). The CLI gate (`lunora deploy`/`verify`/
- * `prepare`) blocks a deploy when there is breaking drift AND no NEW migration
- * id has been added since the baseline — the footgun this closes is shipping a
- * schema change that needs a backfill with no migration to perform it.
+ * `prepare`) blocks a deploy when a breaking change is not COVERED by a new
+ * migration — one declared since the baseline that iterates that very table —
+ * and names the `lunora migrate create` command for each table still owed one.
+ * The footgun this closes is shipping a schema change that needs a backfill with
+ * no migration to perform it.
  *
  * Everything here is pure (no I/O) so it is unit-testable; the CLI owns reading
  * and writing the baseline file.
@@ -191,12 +193,41 @@ const remediationFlagLines = (command: string | undefined): string => {
 };
 
 /**
+ * Breaking changes a `defineMigration` provably CANNOT remediate, so a new
+ * migration must never excuse one.
+ *
+ * Both re-home physical storage: a shard-mode flip moves a table's rows to a
+ * different Durable Object, and a jurisdiction change moves every DO to another
+ * region. The per-shard runner only ever `replace`s a row inside the shard it
+ * was handed, so neither is reachable from a transform — the fix is an
+ * export/import round trip or a revert, which is what both summaries already
+ * say. Excusing them would send the operator to the one tool guaranteed not to
+ * work, at the exact moment the gate has their attention.
+ */
+const UNMIGRATABLE_BREAKING_TYPES: ReadonlySet<DriftChange["type"]> = new Set(["changedJurisdiction", "changedShardMode"]);
+
+/** The scaffold command for a table's missing backfill, ready to paste. */
+const scaffoldLine = (table: string): string => `      lunora migrate create backfill_${table.replaceAll(/\W/gu, "_")} --table ${table}`;
+
+/**
  * Decide whether breaking schema drift should block a deploy.
  *
  * Blocks only when the baseline exists (a first-ever capture is never blocking),
- * there is at least one `breaking` change, no NEW migration id was added since
- * the baseline, and the `allowDrift` override is not set. Safe-only drift (or
- * breaking drift accompanied by a new migration id) passes.
+ * there is at least one `breaking` change, no new migration COVERS it, and the
+ * `allowDrift` override is not set. Safe-only drift passes.
+ *
+ * "Covers" is per-table, not per-run: a new migration excuses breaking drift on
+ * the table it iterates, and nothing else. Counting new ids alone let a backfill
+ * on `messages` unblock a required field added to `users` — the gate reported
+ * "accompanied by a migration" for a change that migration would never visit.
+ * The shard-mode diff leans on this gate to justify the studio not shipping a
+ * stranded-rows detector, and that claim only holds if an unrelated migration
+ * cannot wave it through.
+ *
+ * `migrations` carries this run's declared ids and the table each iterates. It
+ * is optional so a caller without the IR keeps working, but the CLI gate always
+ * passes it — and without it nothing is covered, so the block is strictly
+ * tighter, never looser.
  */
 const evaluateSchemaDrift = (options: {
     allowDrift?: boolean;
@@ -204,14 +235,26 @@ const evaluateSchemaDrift = (options: {
     /** The command printing the remediation, so it names only flags that command accepts. */
     command?: string;
     current: SchemaSnapshot;
+    /** This run's declared migrations, so a new one is matched to the table it iterates. */
+    migrations?: ReadonlyArray<{ id: string; table: string }>;
 }): SchemaDriftDecision => {
-    const { allowDrift = false, baseline, command, current } = options;
+    const { allowDrift = false, baseline, command, current, migrations = [] } = options;
     const drift = diffSchemaSnapshots(baseline, current);
     const breaking = drift.changes.filter((change) => change.severity === "breaking");
     const newMigrationIds = current.migrationIds.filter((id) => !(baseline?.migrationIds ?? []).includes(id));
     const decide = (blocked: boolean, reason: string): SchemaDriftDecision => {
         return { blocked, changes: drift.changes, newMigrationIds, reason };
     };
+
+    // Tables a NEW migration iterates. A migration whose `table` is `""` — not a
+    // static string literal, so codegen could not lift it — covers nothing
+    // rather than everything: failing closed keeps an unresolvable declaration
+    // from becoming a blanket override.
+    const coveredTables = new Set(
+        migrations.filter((migration) => newMigrationIds.includes(migration.id) && migration.table !== "").map((migration) => migration.table),
+    );
+    const isCovered = (change: DriftChange): boolean =>
+        !UNMIGRATABLE_BREAKING_TYPES.has(change.type) && change.table !== undefined && coveredTables.has(change.table);
 
     // No drift at all, or a first-ever capture (no baseline to compare against) —
     // never block.
@@ -226,13 +269,26 @@ const evaluateSchemaDrift = (options: {
     }
 
     const breakingSummary = breaking.map((change) => `  - ${change.summary}`).join("\n");
+    const uncovered = breaking.filter((change) => !isCovered(change));
 
-    if (newMigrationIds.length > 0) {
+    if (uncovered.length === 0) {
         return decide(
             false,
-            `breaking schema drift detected, but ${String(newMigrationIds.length)} new migration(s) were added (${newMigrationIds.join(", ")}):\n${breakingSummary}`,
+            `breaking schema drift detected, covered by ${String(newMigrationIds.length)} new migration(s) (${newMigrationIds.join(", ")}):\n${breakingSummary}`,
         );
     }
+
+    // The tables still owed a backfill, in first-seen order so the scaffold lines
+    // mirror the summaries above them. `changedShardMode` names a table but can
+    // never be covered, so it is excluded — printing `migrate create` for it
+    // would contradict its own summary, which sends you to export/import.
+    const owedTables = [
+        ...new Set(
+            uncovered.filter((change) => change.table !== undefined && !UNMIGRATABLE_BREAKING_TYPES.has(change.type)).map((change) => change.table as string),
+        ),
+    ];
+    const uncoveredSummary = uncovered.map((change) => `  - ${change.summary}`).join("\n");
+    const scaffold = owedTables.length === 0 ? "" : `\n\n    Scaffold the missing migration(s):\n${owedTables.map((table) => scaffoldLine(table)).join("\n")}`;
 
     // "Schema drift" means the current schema differs from the last deployed
     // shape — so existing data in production may not match the new type
@@ -240,11 +296,11 @@ const evaluateSchemaDrift = (options: {
     // migration that tells Lunora how to transform existing documents; safe drift
     // (added optional field, new index) can proceed without one.
     const reason =
-        `deploy blocked: ${String(breaking.length)} breaking schema change(s) detected since the last blessed schema baseline — ` +
-        `these changes are incompatible with existing data without a migration:\n${breakingSummary}\n\n` +
+        `deploy blocked: ${String(uncovered.length)} breaking schema change(s) since the last blessed schema baseline are not covered by a new migration — ` +
+        `these changes are incompatible with existing data:\n${uncoveredSummary}\n\n` +
         `To fix:\n` +
         `  • For breaking changes: add a \`defineMigration({ id, table, up })\` in lunora/ for each affected table, ` +
-        `then run \`lunora migrate\` (or \`lunora codegen\`) to apply and re-bless the baseline.\n` +
+        `then run \`lunora migrate\` (or \`lunora codegen\`) to apply and re-bless the baseline.${scaffold}\n` +
         `${remediationFlagLines(command)}Docs: https://lunora.dev/docs/migrations`;
 
     if (allowDrift) {

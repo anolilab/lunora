@@ -220,15 +220,65 @@ describe("schema-drift", () => {
             expect(decision.reason).toContain("changed type");
         });
 
-        it("passes breaking drift when a NEW migration id is present", () => {
+        it("passes breaking drift when a NEW migration covers the affected table", () => {
             expect.assertions(3);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["fix-name-type"]);
-            const decision = evaluateSchemaDrift({ baseline, current });
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "fix-name-type", table: "users" }] });
 
             expect(decision.blocked).toBe(false);
             expect(decision.newMigrationIds).toStrictEqual(["fix-name-type"]);
-            expect(decision.reason).toContain("new migration(s) were added");
+            expect(decision.reason).toContain("covered by");
+        });
+
+        it("blocks when the NEW migration targets a DIFFERENT table than the breaking change", () => {
+            // The hole the per-table match closes: counting new ids alone, a
+            // backfill on `messages` reported the `users` change as
+            // "accompanied by a migration" that would never visit it.
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField }), table("messages", { body: stringField })]), [
+                "backfill-messages",
+            ]);
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "backfill-messages", table: "messages" }] });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("not covered by a new migration");
+        });
+
+        it("blocks a migration whose table codegen could not lift to a literal", () => {
+            expect.assertions(1);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["dynamic"]);
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "dynamic", table: "" }] });
+
+            expect(decision.blocked).toBe(true);
+        });
+
+        it("a shard-mode change stays blocked even with a migration on that very table", () => {
+            // `defineMigration` runs inside one shard and can only replace the row
+            // it was handed, so it can never re-home rows. The studio cites this
+            // block to justify not shipping a stranded-rows detector.
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: { field: "tenantId", kind: "shardBy" } })]), [
+                "rehome-users",
+            ]);
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "rehome-users", table: "users" }] });
+
+            expect(decision.blocked).toBe(true);
+            // …and it must not tell the operator to scaffold the tool that cannot work.
+            expect(decision.reason).not.toContain("lunora migrate create");
+        });
+
+        it("prints a paste-ready scaffold command for each table still owed a backfill", () => {
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
+            const { reason } = evaluateSchemaDrift({ baseline, current, migrations: [] });
+
+            expect(reason).toContain("Scaffold the missing migration(s):");
+            expect(reason).toContain("lunora migrate create backfill_users --table users");
         });
 
         it("passes breaking drift when overridden with allowDrift", () => {

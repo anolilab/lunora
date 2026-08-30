@@ -107,6 +107,7 @@ interface CodegenResult {
         vectors: string;
         workflows: string;
     };
+    migrations: ReadonlyArray<MigrationIR>;
     outputDirectory: string;
     platformDiagnostics: ReadonlyArray<PlatformDiagnostic>;
     queues: ReadonlyArray<QueueIR>;
@@ -1276,6 +1277,10 @@ const evaluateSchemaDrift: (options: {
     baseline: SchemaSnapshot | undefined;
     command?: string;
     current: SchemaSnapshot;
+    migrations?: ReadonlyArray<{
+        id: string;
+        table: string;
+    }>;
 }) => SchemaDriftDecision;
 ```
 
