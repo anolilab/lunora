@@ -79,8 +79,19 @@ export const listByOrg = query
         return (page as unknown as ProjectRow[]).map((row) => toProjectView(row));
     });
 
-/** Resolve a project by its connected GitHub repository (`owner/name`). */
-export const byGithubRepo = query
+/**
+ * Resolve a project by its connected GitHub repository (`owner/name`).
+ *
+ * SYSTEM only. Its one caller is the HMAC-verified GitHub webhook route, but as a
+ * PUBLIC query it was also an unauthenticated oracle on the tenant RPC surface:
+ * post a repository name, learn whether it is deployed here and get back the
+ * internal `organizationId`/`projectId` that own it. Every function that acts on
+ * those ids checks membership, so this was disclosure rather than escalation —
+ * but it is the read an attacker uses to choose a target. Unlike `planForScript`
+ * and the two route resolvers, it carried no "public by design" justification and
+ * sat behind no admin-token gate.
+ */
+export const byGithubRepo = internalQuery
     .input({ repository: boundedString(LIMITS.token) })
     .query(async ({ ctx: context, args: { repository } }): Promise<null | { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string }> => {
         const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });

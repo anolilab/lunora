@@ -37,11 +37,18 @@ describe(runAlertDrain, () => {
         expect(deliveries.map((delivery) => delivery.id)).toStrictEqual(["older", "newer"]);
     });
 
-    it("reads only firing rows, bounded", async () => {
+    it("reads only firing rows past the grace, oldest first, bounded", async () => {
         const findMany = vi.fn<ControlPlaneDatabase["findMany"]>(() => Promise.resolve({ page: [] }));
 
         await runAlertDrain(fakeControlPlaneDb({}, { findMany }), { now });
 
-        expect(findMany).toHaveBeenCalledWith("alerts", { limit: ALERT_DRAIN_MAX, where: { status: "firing" } });
+        // Ordering and the cutoff both belong in the query: filtering after an
+        // unordered page lets a burst of in-grace rows fill it and starve the
+        // oldest undelivered alerts, which is the backlog this sweep exists for.
+        expect(findMany).toHaveBeenCalledWith("alerts", {
+            limit: ALERT_DRAIN_MAX,
+            orderBy: [{ createdAt: "asc" }],
+            where: { createdAt: { lte: now - ALERT_DRAIN_GRACE_MS }, status: "firing" },
+        });
     });
 });

@@ -18,6 +18,7 @@
  * returned alerts.
  */
 import type { ControlPlaneDatabase } from "../store";
+import { drainTable } from "../store";
 import type { AlertChannel, AlertDelivery, MetricObservation, MetricRule, MetricTarget } from "./alerts";
 import { fireMetricRules, METRIC_TARGETS } from "./alerts";
 
@@ -98,10 +99,12 @@ const toMetricRule = (row: AlertRuleRow): MetricRule => {
 export const runAlertSweep = async (database: ControlPlaneDatabase, options: AlertSweepOptions): Promise<AlertSweepResult> => {
     const scanLimit = options.scanLimit ?? DEFAULT_SCAN_LIMIT;
 
-    const { page: rulePage } = await database.findMany("alertRules", {});
+    // Drained: a rule past the page boundary was never evaluated, so its alert
+    // never fired and never cleared — invisibly, since the sweep still succeeded.
+    const ruleRows = await drainTable<AlertRuleRow>(database, "alertRules");
     const rulesByOrg = new Map<string, MetricRule[]>();
 
-    for (const row of rulePage as AlertRuleRow[]) {
+    for (const row of ruleRows) {
         if (row.enabled && METRIC_TARGETS.has(row.target as MetricTarget)) {
             const list = rulesByOrg.get(row.organizationId) ?? [];
 

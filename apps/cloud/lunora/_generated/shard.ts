@@ -3271,24 +3271,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public write emits no structured event"
     },
     {
-        "cacheKey": "procedure_without_structured_event:deploy-keys:recordIngestKey",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `recordIngestKey` (deploy-keys) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "recordIngestKey",
-            "file": "deploy-keys",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
         "cacheKey": "procedure_without_structured_event:deployments:create",
         "categories": [
             "SCHEMA"
@@ -3443,24 +3425,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "level": "INFO",
         "metadata": {
             "exportName": "remove",
-            "file": "domains",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:domains:markVerified",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `markVerified` (domains) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "markVerified",
             "file": "domains",
             "kind": "mutation"
         },
@@ -5035,7 +4999,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "file": "deploy-keys",
         "hasEmailArg": false,
         "kind": "query",
-        "visibility": "public"
+        "visibility": "internal"
     },
     {
         "callsMail": false,
@@ -5053,14 +5017,14 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": true,
+        "usesRateLimit": false,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "recordIngestKey",
         "file": "deploy-keys",
         "hasEmailArg": false,
         "kind": "mutation",
-        "visibility": "public"
+        "visibility": "internal"
     },
     {
         "callsMail": false,
@@ -5503,14 +5467,14 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": true,
+        "usesRateLimit": false,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "markVerified",
         "file": "domains",
         "hasEmailArg": false,
         "kind": "mutation",
-        "visibility": "public"
+        "visibility": "internal"
     },
     {
         "callsMail": false,
@@ -6535,7 +6499,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "file": "projects",
         "hasEmailArg": false,
         "kind": "query",
-        "visibility": "public"
+        "visibility": "internal"
     },
     {
         "callsMail": false,

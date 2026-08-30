@@ -6,7 +6,7 @@ import type { MetricSeries } from "../src/telemetry/metrics-read";
 import { createMetricsReader, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry/metrics-read";
 import type { Id } from "./_generated/dataModel.js";
 import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
-import { assertMember, authorizeTelemetryKey } from "./authz";
+import { assertMember, assertRowInOrg, authorizeTelemetryKey } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
@@ -132,6 +132,13 @@ export const ingest = mutation
 
         if (args.points.length > MAX_METRIC_POINTS) {
             throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_METRIC_POINTS)} points)`);
+        }
+
+        // Caller-supplied, and only its ORG is authorized above — without this a
+        // tenant can attribute its rows to another org's deployment. Reads stay
+        // org-scoped either way; what breaks is per-deployment attribution.
+        if (args.deploymentId !== undefined) {
+            await assertRowInOrg(context, args.deploymentId, args.organizationId, "deployment");
         }
 
         const { now } = context;

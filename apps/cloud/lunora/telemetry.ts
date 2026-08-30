@@ -6,7 +6,7 @@ import { fireCrossedRules, fireMetricRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
-import { authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
+import { assertRowInOrg, authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
@@ -313,6 +313,13 @@ export const ingest = mutation
             }
 
             const { now } = context;
+
+            // Caller-supplied, and only its ORG is authorized above — without this a
+            // tenant can attribute its spans to another org's deployment. Reads stay
+            // org-scoped either way; what breaks is per-deployment attribution.
+            if (args.deploymentId !== undefined) {
+                await assertRowInOrg(context, args.deploymentId, args.organizationId, "deployment");
+            }
 
             // Persist every span as an observation (Traces). Additive to the error
             // fold below — the same OTLP payload feeds both. Best-effort per row so

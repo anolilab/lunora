@@ -10,6 +10,7 @@
 import type { AnalyticsUsageReader } from "../metering/analytics";
 import type { UsageAttribution, UsageRollbackPorts } from "../metering/rollback";
 import type { ControlPlaneDatabase } from "../store";
+import { drainTable } from "../store";
 import type { TeardownPorts } from "./teardown";
 
 interface TeardownRow {
@@ -36,8 +37,10 @@ export const teardownPorts = (database: ControlPlaneDatabase, destroy: TeardownP
     return {
         destroy,
         listPending: async () => {
-            const { page } = await database.findMany("deployments", {});
-            const rows = page as TeardownRow[];
+            // Drained: teardown has to see every deployment, and a single page left
+            // the tail of the fleet permanently un-torn-down — leaking the real
+            // dispatch scripts, tenant D1 and R2 that this sweep exists to reclaim.
+            const rows = await drainTable<TeardownRow>(database, "deployments");
 
             // Aliases that still have a live/superseded/etc (non-destroyed) deployment.
             const aliveAliases = new Set<string>();
@@ -109,10 +112,12 @@ export const usageRollbackPorts = async (
     reader: AnalyticsUsageReader,
     options: { cellName: string; now: number; periodStart: number },
 ): Promise<UsageRollbackPorts> => {
-    const { page: deploymentPage } = await database.findMany("deployments", {});
+    // Drained: this map attributes metered usage to a deployment, so a script
+    // missing from it is usage that lands on nobody's bill.
+    const deploymentRows = await drainTable<AttributionRow>(database, "deployments");
     const byScript = new Map<string, UsageAttribution>();
 
-    for (const row of deploymentPage as AttributionRow[]) {
+    for (const row of deploymentRows) {
         byScript.set(row.scriptName, { deploymentId: row._id, organizationId: row.organizationId });
     }
 

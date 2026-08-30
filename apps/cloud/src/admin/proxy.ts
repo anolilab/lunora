@@ -52,6 +52,22 @@ export const stripTrailingSlashes = (value: string): string => {
     return result;
 };
 
+/**
+ * Path segments the admin proxy will forward, and the verbs it will use.
+ *
+ * An allow-list of SHAPE rather than of names: the tenant's admin surface grows
+ * with the framework, so enumerating routes here would silently break new ones.
+ * What must never vary is that the value stays inside `/_lunora/admin/` — one or
+ * more `a-z0-9_-` segments, no dots, no scheme, no query.
+ */
+const ADMIN_PATH = /^[\w-]+(?:\/[\w-]+)*$/iu;
+
+/** Verbs the studio's admin surface uses. Anything else is a write nobody asked for. */
+const ADMIN_METHODS = new Set(["GET", "POST"]);
+
+/** Whether a caller-supplied admin path is safe to append to the tenant's admin base. */
+const isAdminPath = (path: string): boolean => path.length > 0 && path.length <= 200 && ADMIN_PATH.test(path);
+
 export const proxyAdminRequest = async (request: AdminProxyRequest, deps: AdminProxyDeps): Promise<Response> => {
     await deps.authorize(request.organizationId);
 
@@ -59,6 +75,20 @@ export const proxyAdminRequest = async (request: AdminProxyRequest, deps: AdminP
 
     if (!target) {
         return json(404, { error: "deployment not found" });
+    }
+
+    // The path and method are CALLER-SUPPLIED, and this request carries the
+    // tenant's own admin bearer — so an unvalidated `path` is not a routing
+    // detail, it is a confused deputy. `..` segments normalise away inside the URL
+    // parser, so `../../x` escaped `/_lunora/admin/` and reached any route on the
+    // tenant Worker authenticated as the platform; a caller-chosen verb then
+    // decided whether that was a read or a write.
+    if (!isAdminPath(request.path)) {
+        return json(400, { error: "invalid admin path" });
+    }
+
+    if (!ADMIN_METHODS.has(request.method)) {
+        return json(405, { error: "method not allowed" });
     }
 
     const fetchImpl = deps.fetch ?? globalThis.fetch;

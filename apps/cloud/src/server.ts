@@ -127,8 +127,19 @@ const paymentConfig = (env: ShardEnv): PaymentsFromContextOptions => {
                 authorize: () => true,
                 entitlements: LUNORA_CLOUD_PLANS,
                 observability: (event) => {
+                    // The event TYPE and its correlating ids only — never the payload.
+                    // Provider subscription/checkout events carry customer PII (email,
+                    // name, billing address, country), and this lands in the Workers log
+                    // stream that the tail consumer and any log drain read, with no
+                    // redaction pass applied. The ids are what a billing investigation
+                    // actually needs; the rest is the provider's dashboard's job.
+                    const detail = event as { referenceId?: unknown; subscriptionId?: unknown; type: string };
+
                     // eslint-disable-next-line no-console -- route billing telemetry to logs/metrics/alerts
-                    console.log("[payment]", event.type, event);
+                    console.log("[payment]", detail.type, {
+                        ...(detail.referenceId === undefined ? {} : { referenceId: detail.referenceId }),
+                        ...(detail.subscriptionId === undefined ? {} : { subscriptionId: detail.subscriptionId }),
+                    });
                 },
             },
             key,
@@ -222,6 +233,15 @@ const socialProviders = (env: Env): LunoraAuthOptions["socialProviders"] => {
 
 let worker: ReturnType<typeof createWorker> | null = null;
 let auth: LunoraAuth | null = null;
+
+/**
+ * The in-flight (or settled) auth bootstrap for this isolate.
+ *
+ * Separate from {@link auth} because the instance becomes visible the moment it is
+ * assigned, while readiness also requires the schema migration to have finished —
+ * two different facts that a single nullable instance cannot distinguish.
+ */
+let authReady: Promise<LunoraAuth> | null = null;
 
 // The deploy API (`POST /v1/deploy`), mounted as the lowest-priority matcher.
 // Created once so its per-cell scheduler persists across requests.
@@ -742,14 +762,26 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
 
 export default {
     async fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
-        if (!auth) {
+        // Initialize ONCE, and await the same promise on every concurrent request.
+        //
+        // The previous form assigned `auth` and then awaited the migration, so on a
+        // cold isolate every request that arrived during that await saw a non-null
+        // `auth`, skipped this block, and queried tables the migration had not
+        // finished creating — surfacing as a raw database error rather than an auth
+        // one. Holding the promise rather than the instance is what makes "ready"
+        // and "assigned" the same moment.
+        authReady ??= (async (): Promise<LunoraAuth> => {
             // Runtime auth instance uses the SQL adapter; a throwaway instance on
             // the raw D1 drives the one-time schema migration (better-auth Kysely).
             const requestOrigin = new URL(request.url).origin;
+            const instance = createAuth({ ...authOptions(env, requestOrigin), database: lunoraD1Adapter(env.DB as never) });
 
-            auth = createAuth({ ...authOptions(env, requestOrigin), database: lunoraD1Adapter(env.DB as never) });
             await ensureMigrated(createAuth({ ...authOptions(env, requestOrigin), database: env.DB as never }));
-        }
+
+            return instance;
+        })();
+
+        auth = await authReady;
 
         worker ??= buildWorker(env);
 

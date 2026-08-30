@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -38,6 +38,17 @@ interface ProjectRow {
 const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u;
 
 /** Add a hostname to a project (owner/admin) and mint its TXT verification token. */
+/** Whether a redirect target is an absolute http(s) URL — the only form the dispatcher may echo as a `Location`. */
+const isRedirectTarget = (value: string): boolean => {
+    try {
+        const { protocol } = new URL(value);
+
+        return protocol === "http:" || protocol === "https:";
+    } catch {
+        return false;
+    }
+};
+
 export const add = mutation
     .use(rateLimit("provision"))
     .input({
@@ -64,6 +75,14 @@ export const add = mutation
 
         if (!HOSTNAME_PATTERN.test(hostname)) {
             throw new LunoraError("BAD_REQUEST", "not a valid hostname");
+        }
+
+        // `redirectTo` is echoed to the eyeball as a 308 `Location` by the
+        // dispatcher, so an unvalidated value turns a custom domain into an open
+        // redirect pointing anywhere — including `javascript:` in clients that
+        // still honour it. Only absolute http(s) targets are accepted.
+        if (arguments_.redirectTo !== undefined && !isRedirectTarget(arguments_.redirectTo)) {
+            throw new LunoraError("BAD_REQUEST", "redirectTo must be an absolute http(s) URL");
         }
 
         const txtToken = randomSecret();
@@ -124,12 +143,25 @@ export const remove = mutation
     });
 
 /**
- * Record a verification outcome (member-called via the edge verify route,
- * which performs the actual DNS lookups). Also stores the Cloudflare custom-
- * hostname id once the 🌐 provisioning path creates it.
+ * Record a verification outcome. SYSTEM only — dispatched by the edge verify
+ * route, which performs the DNS lookups whose result this stores. Also stores the
+ * Cloudflare custom-hostname id once the 🌐 provisioning path creates it.
+ *
+ * **`internalMutation`, and that is the whole security property.** This was a
+ * public mutation taking `verified` as a caller-supplied boolean, so the DNS
+ * proof in the edge route was decorative: anyone who could reach RPC could skip
+ * the route and assert their own verification. Combined with `add` — which
+ * validates hostname SYNTAX only — and the globally unique `by_hostname` index,
+ * an owner/admin of any entitled org could claim a hostname they do not own,
+ * permanently lock its real owner out of the platform, mark it verified, and have
+ * `routeForHostname` serve their script (or a redirect to anywhere) for traffic
+ * arriving on it.
+ *
+ * The org check still runs, because an internal function is only as scoped as its
+ * caller: the route passes the caller's `organizationId` and this confirms the
+ * domain row belongs to it.
  */
-export const markVerified = mutation
-    .use(rateLimit("machine"))
+export const markVerified = internalMutation
     .input({
         customHostnameId: v.optional(boundedString(LIMITS.id)),
         id: v.id("domains"),
@@ -137,7 +169,6 @@ export const markVerified = mutation
         verified: v.boolean(),
     })
     .mutation(async ({ ctx: context, args: { customHostnameId, id, organizationId, verified } }): Promise<void> => {
-        await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "domain");
 
         await context.db.patch(id, {

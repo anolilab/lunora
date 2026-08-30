@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/server";
 import { isDeployCapable } from "../src/deploy/capability";
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -282,7 +282,7 @@ const findActiveIngestKey = (rows: IngestKeyRow[]): IngestKeyRow | undefined =>
  * plaintext — or `null` when the org has no ingest key yet. The cipher is inert
  * without the master key, so exposing it to the deploy edge is safe.
  */
-export const ingestKeyCipher = query
+export const ingestKeyCipher = internalQuery
     .input({
         deployKey: boundedString(LIMITS.token),
         organizationId: v.id("organizations"),
@@ -299,10 +299,19 @@ export const ingestKeyCipher = query
  * Record a platform-minted ingest key (its hash + envelope-encrypted plaintext),
  * returning the **effective** cipher — the freshly stored one, or a pre-existing
  * one if a concurrent deploy already provisioned it (so a race never injects a
- * token whose hash wasn't stored). Deploy-key authorized.
+ * token whose hash wasn't stored).
+ *
+ * SYSTEM only, and that is load-bearing. `hashedKey` and `encryptedSecret` are
+ * inputs — the token itself is minted at the EDGE, because envelope encryption
+ * needs the master key, which a mutation cannot reach. As a public mutation that
+ * meant the credential was whatever the caller said it was: anyone holding any
+ * live deploy key for the org (including a single-project CI key, since this
+ * authorizes `"org-wide"`) could register an org-wide telemetry credential whose
+ * plaintext they chose. It authenticates every ingest path for the whole org,
+ * shows in the UI as "Telemetry ingest (auto)", and outlives revocation of the
+ * key that created it. Only the deploy route mints these now.
  */
-export const recordIngestKey = mutation
-    .use(rateLimit("sensitive"))
+export const recordIngestKey = internalMutation
     .input({
         deployKey: boundedString(LIMITS.token),
         encryptedSecret: v.object({

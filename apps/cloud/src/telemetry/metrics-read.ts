@@ -20,6 +20,8 @@
 import type { AnalyticsSqlClient } from "@lunora/bindings/analytics";
 import { createAnalyticsSqlClient } from "@lunora/bindings/analytics";
 
+import { KEY_SEPARATOR, quote } from "./ae-sql";
+
 /** One point on a metric's trend line: an epoch-ms bucket start + its bucket-averaged value. */
 export interface MetricSeriesPoint {
     t: number;
@@ -52,9 +54,6 @@ export const DEFAULT_METRICS_BUCKET_MS = 15 * 60 * 1000;
 
 /** Hard cap on distinct series returned (bounds the response + the SVG fan-out). */
 export const MAX_METRIC_SERIES = 50;
-
-/** Escape a string for single-quoted SQL — the AE SQL API takes raw text, no bound params. */
-const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
 /** Inputs to {@link buildMetricSeriesQuery} — a bounded, org-scoped, time-bucketed read. */
 export interface MetricQueryOptions {
@@ -125,7 +124,7 @@ export const foldMetricRows = (rows: ReadonlyArray<Record<string, unknown>>): Me
 
         const kind = asString(row.kind);
         const functionPath = asString(row.functionPath);
-        const key = `${name}\u0000${kind}\u0000${functionPath}`;
+        const key = [name, kind, functionPath].join(KEY_SEPARATOR);
         const point: MetricSeriesPoint = { t: asNumber(row.bucket) * 1000, value: asNumber(row.value) };
 
         const existing = byKey.get(key);

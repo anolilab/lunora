@@ -21,6 +21,8 @@
  * names a field differently, and nothing else changes.
  */
 
+import stripTrailingSlashes from "../lib/strip-trailing-slashes";
+
 const DEFAULT_BASE = "https://api.cloudflare.com/client/v4";
 
 /** A raw billable-usage row (one product × charge period). Shape read defensively via {@link FIELD}. */
@@ -52,16 +54,6 @@ export class BillableUsageAuthError extends Error {
         this.name = "BillableUsageAuthError";
     }
 }
-
-const stripTrailingSlashes = (value: string): string => {
-    let result = value;
-
-    while (result.endsWith("/")) {
-        result = result.slice(0, -1);
-    }
-
-    return result;
-};
 
 /**
  * Read the account's billable usage. Throws {@link BillableUsageAuthError} on

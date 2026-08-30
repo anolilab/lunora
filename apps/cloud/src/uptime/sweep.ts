@@ -13,6 +13,7 @@
  * so this path can't drift from the telemetry ingest path.
  */
 import type { ControlPlaneDatabase } from "../store";
+import { drainTable } from "../store";
 import type { AlertDelivery, FiringRule } from "../telemetry/alerts";
 import { fireCrossedRules, isSafeWebhookUrl } from "../telemetry/alerts";
 import type { UptimeProbe } from "./probe";
@@ -164,10 +165,10 @@ const advanceState = (
 export const runUptimeSweep = async (database: ControlPlaneDatabase, options: UptimeSweepOptions): Promise<UptimeSweepResult> => {
     const probe = options.probe ?? ((url: string) => probeDeployment({ fetch: options.fetch, timeoutMs: options.timeoutMs, url }));
 
-    const { page: deploymentPage } = await database.findMany("deployments", { where: { status: "live" } });
-    const withUrl = (deploymentPage as LiveDeploymentRow[]).filter(
-        (row): row is LiveDeploymentRow & { url: string } => typeof row.url === "string" && row.url !== "",
-    );
+    // Drained: past one page the remaining live deployments were simply never
+    // probed, so uptime silently reported nothing rather than reporting down.
+    const deploymentRows = await drainTable<LiveDeploymentRow>(database, "deployments", { where: { status: "live" } });
+    const withUrl = deploymentRows.filter((row): row is LiveDeploymentRow & { url: string } => typeof row.url === "string" && row.url !== "");
 
     // SSRF gate: a deployment's URL is set by any org member (deployments.updateStatus,
     // no role restriction), and the control plane `fetch`es it from a privileged

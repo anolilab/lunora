@@ -7,6 +7,7 @@
  * identical whichever tier answers. Pure + unit-tested; the D1 read is in the
  * `metrics.series` query.
  */
+import { KEY_SEPARATOR } from "./ae-sql";
 import type { MetricSeries } from "./metrics-read";
 import { DEFAULT_METRICS_BUCKET_MS, MAX_METRIC_SERIES } from "./metrics-read";
 
@@ -42,7 +43,7 @@ const accumulateMetricPoints = (points: ReadonlyArray<StoredMetricPoint>, bucket
         }
 
         const functionPath = point.functionPath ?? "";
-        const key = `${point.name} ${point.kind} ${functionPath}`;
+        const key = [point.name, point.kind, functionPath].join(KEY_SEPARATOR);
         let accumulator = byKey.get(key);
 
         if (accumulator === undefined) {

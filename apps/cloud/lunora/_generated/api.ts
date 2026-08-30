@@ -46,10 +46,8 @@ export interface ApiTypes {
         update: FunctionReference<"mutation", { id: Id<"dashboards">; name?: unknown; organizationId: Id<"organizations">; panels?: Array<{ config: { filter?: string; metricName?: string; stat?: "last" | "first" | "count" }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }> }, Id<"dashboards">>;
     };
     deploy_keys: {
-        ingestKeyCipher: FunctionReference<"query", { deployKey: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
         issue: FunctionReference<"mutation", { capability?: "deploy" | "ingest"; name: unknown; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }, { id: Id<"deployKeys">; key: string; }>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"deployKeys">; capability?: "deploy" | "ingest"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
-        recordIngestKey: FunctionReference<"mutation", { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations"> }, { ciphertext: string; iv: string }>;
         revoke: FunctionReference<"mutation", { id: Id<"deployKeys">; organizationId: Id<"organizations"> }, void>;
         roll: FunctionReference<"mutation", { id: Id<"deployKeys">; organizationId: Id<"organizations"> }, { id: Id<"deployKeys">; key: string; }>;
         verify: FunctionReference<"mutation", { key: unknown }, { deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
@@ -71,7 +69,6 @@ export interface ApiTypes {
         add: FunctionReference<"mutation", { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }, { id: Id<"domains">; txtName: string; txtToken: string; }>;
         get: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, null | { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
         list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
-        markVerified: FunctionReference<"mutation", { customHostnameId?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }, void>;
         remove: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations"> }, void>;
         routeForHostname: FunctionReference<"query", { hostname: unknown }, { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
     };
@@ -122,7 +119,6 @@ export interface ApiTypes {
         requestDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
     };
     projects: {
-        byGithubRepo: FunctionReference<"query", { repository: unknown }, { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: FunctionReference<"mutation", { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }, Id<"projects">>;
         listByOrg: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string; }; slug: string }[]>;
         rename: FunctionReference<"mutation", { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }, void>;
@@ -185,10 +181,17 @@ export interface InternalApiTypes {
     cells: {
         register: FunctionReference<"mutation", { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }, Id<"cells">>;
     };
+    deploy_keys: {
+        ingestKeyCipher: FunctionReference<"query", { deployKey: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
+        recordIngestKey: FunctionReference<"mutation", { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations"> }, { ciphertext: string; iv: string }>;
+    };
     deployments: {
         cleanupExpiredPreviews: FunctionReference<"mutation", {}, { destroyed: number; }>;
         ejectTarget: FunctionReference<"query", { deployKey: unknown; deploymentId: Id<"deployments"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
         pruneSuperseded: FunctionReference<"mutation", {}, { pruned: number; }>;
+    };
+    domains: {
+        markVerified: FunctionReference<"mutation", { customHostnameId?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }, void>;
     };
     fanout: {
         tick: FunctionReference<"mutation", {}, { ok: true; }>;
@@ -210,6 +213,7 @@ export interface InternalApiTypes {
         purgeDeleted: FunctionReference<"mutation", {}, { purged: number; }>;
     };
     projects: {
+        byGithubRepo: FunctionReference<"query", { repository: unknown }, { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         verifyPreviewPassword: FunctionReference<"query", { password: unknown; scriptName: unknown }, { ok: boolean; }>;
     };
     telemetry: {

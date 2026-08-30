@@ -10,6 +10,8 @@
  * the fake-backed tests cover the orchestration, and a real token makes it live.
  */
 
+import stripTrailingSlashes from "../lib/strip-trailing-slashes";
+
 /** A binding to attach in the Workers-for-Platforms script-upload metadata. */
 export type ScriptBinding =
     | { id: string; name: string; type: "d1" }
@@ -75,16 +77,6 @@ interface CloudflareEnvelope {
 }
 
 const DEFAULT_BASE = "https://api.cloudflare.com/client/v4";
-
-const stripTrailingSlashes = (value: string): string => {
-    let result = value;
-
-    while (result.endsWith("/")) {
-        result = result.slice(0, -1);
-    }
-
-    return result;
-};
 
 /**
  * HTTP implementation of {@link CloudflareApi}. Real code against the documented

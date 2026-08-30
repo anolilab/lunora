@@ -7,6 +7,7 @@
  * the mapping and the suspend/recover writes are testable against a fake store).
  */
 import type { ControlPlaneDatabase } from "../store";
+import { drainTable } from "../store";
 import type { OverageFleetPorts, OverageOrgInput } from "./overage";
 import type { PeriodUsage } from "./spend";
 
@@ -45,18 +46,28 @@ export interface OverageReconcileData {
  * ports need.
  */
 export const buildOverageReconcileData = async (database: ControlPlaneDatabase, periodStart: number): Promise<OverageReconcileData> => {
-    const { page: organizationPage } = await database.findMany("organizations", {});
-    const organizations = organizationPage as OrgRow[];
+    // Drained, not single-paged. This is the money path: `findMany` answers one
+    // 1000-row page, so the previous reads silently evaluated an arbitrary slice
+    // of the fleet — orgs past the boundary were never debited, never suspended
+    // when their credits ran out, never un-suspended when topped up, and the sweep
+    // reported success either way. `platformUsage` crosses 1000 rows quickly,
+    // because `rollup` only compacts CLOSED periods, so the truncation bit the
+    // current period first. The identical bug was already fixed in
+    // `lunora/usage.ts`'s spend-cap sweep; `src/` just had no way to express it.
+    const organizations = await drainTable<OrgRow>(database, "organizations");
 
-    const { page: usagePage } = await database.findMany("platformUsage", {});
+    // The period filter belongs in the QUERY — filtering it in JS after a bounded
+    // read is the second half of the same bug, since rows from other periods
+    // consumed the budget that this period's rows needed.
+    const usageRows = await drainTable<UsageRow>(database, "platformUsage", { where: { periodStart } });
     const usageByOrg = new Map<string, PeriodUsage>();
 
     // Only the customer-priced meters are folded in: `overageCreditsOwed` bills
     // requests + CPU, so summing storage or DO duration here would put usage in
     // the bucket that no rate ever converts into credits. The *cap* prices the
     // whole bill (`src/billing/spend.ts`) — that asymmetry is deliberate.
-    for (const row of usagePage as UsageRow[]) {
-        if (row.periodStart !== periodStart || (row.kind !== "requests" && row.kind !== "cpuMs")) {
+    for (const row of usageRows) {
+        if (row.kind !== "requests" && row.kind !== "cpuMs") {
             continue;
         }
 
@@ -66,10 +77,10 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
         usageByOrg.set(row.organizationId, bucket);
     }
 
-    const { page: debitPage } = await database.findMany("overageDebits", {});
+    const debitRows = await drainTable<DebitRow>(database, "overageDebits", { where: { periodStart } });
     const debitedByOrg = new Map<string, number>();
 
-    for (const row of debitPage as DebitRow[]) {
+    for (const row of debitRows) {
         if (row.periodStart === periodStart) {
             debitedByOrg.set(row.organizationId, row.debitedCredits);
         }

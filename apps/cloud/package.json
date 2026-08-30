@@ -14,7 +14,8 @@
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "node node_modules/@lunora/cli/dist/bin.mjs codegen && tsc --noEmit",
         "seed": "node --experimental-strip-types scripts/seed.ts",
-        "test": "vitest run"
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@base-ui/react": "catalog:ui",

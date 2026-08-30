@@ -123,7 +123,12 @@ export const adminTarget = query
             ctx: context,
             args: { deploymentId, organizationId },
         }): Promise<null | { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string }> => {
-            await assertMember(context, organizationId);
+            // Not bare `assertMember`. This resolves the tenant's ADMIN bearer for
+            // the studio proxy, which forwards writes to the tenant's own admin
+            // API — so a `viewer`, whose whole role is read-only, was able to
+            // mutate tenant data through it. Roles are named explicitly here
+            // rather than at the route, because the token is handed out here.
+            await assertMember(context, organizationId, ["owner", "admin", "member"]);
 
             const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
             const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
@@ -377,6 +382,18 @@ export const activate = mutation
         // previously-live releases, which includes a rollout candidate, and leaving
         // the rollout set would keep routing traffic to a script just retired.
         await context.db.patch(deployment.projectId, { activeDeploymentId: id, activeScriptName: deployment.scriptName, rollout: undefined });
+        // `activate` is the CI path — the most frequent pointer swap on the
+        // platform — and it was the only one of the five that wrote no audit row.
+        // "Who moved this project's stable URL, and when" was answerable for a
+        // manual rollback or a promoted canary and unanswerable for an ordinary
+        // release, which is the case incident forensics actually asks about.
+        await context.db.insert("auditLog", {
+            action: "deployment.activate",
+            actorUserId: deployKey ? "deploy-key" : (context.auth.userId ?? "unknown"),
+            createdAt: now,
+            organizationId: deployment.organizationId,
+            target: deployment.scriptName,
+        });
     });
 
 /**

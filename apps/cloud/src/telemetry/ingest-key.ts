@@ -9,7 +9,7 @@
  * its plaintext stored envelope-encrypted so it can be re-injected on every
  * deploy without re-minting (only the hash is ever checked at ingest time).
  */
-import { api } from "../../lunora/_generated/api.js";
+import { internal } from "../../lunora/_generated/api.js";
 import { formatDeployKey, hashDeployKey, randomSecret } from "../deploy/keys";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
 
@@ -57,7 +57,7 @@ export const resolveTelemetryConfig = async (
         return undefined;
     }
 
-    const existing = await context.runQuery<CipherEnvelope | null>(api.deploy_keys.ingestKeyCipher, {
+    const existing = await context.runQuery<CipherEnvelope | null>(internal.deploy_keys.ingestKeyCipher, {
         deployKey: input.key,
         organizationId: input.organizationId,
     });
@@ -72,7 +72,7 @@ export const resolveTelemetryConfig = async (
         const token = formatDeployKey({ organizationId: input.organizationId, secret: randomSecret(), type: "production" });
         const fresh = await encryptSecret(encryptionKey, token);
 
-        cipher = await context.runMutation<CipherEnvelope>(api.deploy_keys.recordIngestKey, {
+        cipher = await context.runMutation<CipherEnvelope>(internal.deploy_keys.recordIngestKey, {
             deployKey: input.key,
             encryptedSecret: fresh,
             hashedKey: await hashDeployKey(token),

@@ -96,8 +96,14 @@ export const snapshot = action
             return EMPTY_VIEW;
         }
 
+        // Newest first, so the cap keeps the releases an operator is actually
+        // looking at. Unordered, an org past the cap got an ARBITRARY subset —
+        // a different one run to run — and the Traffic tab under-reported without
+        // saying so, which bites precisely the large orgs the comment below is
+        // about.
         const { page } = await context.db.deployments.findMany({
             limit: MAX_TRAFFIC_SCRIPTS,
+            orderBy: [{ createdAt: "desc" }],
             where: { organizationId: args.organizationId },
         });
 

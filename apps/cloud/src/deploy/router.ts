@@ -1,6 +1,6 @@
 import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
-import { isLunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 import { RateLimiter } from "@lunora/ratelimit";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
@@ -187,7 +187,7 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
                 installationId: intent.installationId,
                 repository: intent.repository,
             }),
-        resolveProject: (repository) => context.runMutation<null | ProjectResolution>(api.projects.byGithubRepo, { repository }),
+        resolveProject: (repository) => context.runMutation<null | ProjectResolution>(internal.projects.byGithubRepo, { repository }),
         secret: environment.GITHUB_WEBHOOK_SECRET,
     });
 };
@@ -1024,7 +1024,13 @@ const withOtlpIngest = async (
     try {
         return otlpAccepted(await ingest(payload, auth, context), rejectedField);
     } catch (error) {
-        return jsonError(500, error instanceof Error ? error.message : "ingest failed");
+        // `rejected`, not a hardcoded 500. These are the STANDARD OTLP endpoints —
+        // stock OpenTelemetry Collectors, which treat 5xx as non-retryable and drop
+        // the batch. A throttled tenant hitting the 12k/min ingest bucket therefore
+        // lost telemetry permanently instead of backing off on a 429 + Retry-After.
+        // The Lunora-native `/v1/telemetry` route next door already does this, which
+        // is why first-party testing never saw it.
+        return rejected(error, "ingest failed");
     }
 };
 
@@ -1207,7 +1213,7 @@ const handleDomainVerifyRoute = async (request: Request, environment: RouterEnv)
             txtToken: domain.txtToken,
         });
 
-        await context.runMutation(api.domains.markVerified, { id: body.id, organizationId: body.organizationId, verified: result.verified });
+        await context.runMutation(internal.domains.markVerified, { id: body.id, organizationId: body.organizationId, verified: result.verified });
 
         return Response.json(result);
     } catch (error) {
@@ -1259,11 +1265,14 @@ const handleCellRegisterRoute = async (request: Request, environment: RouterEnv)
         return jsonError(500, "lunora context unavailable");
     }
 
-    const authorization = request.headers.get("authorization") ?? "";
-    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+    // Through the shared helper, like its five siblings. `requireAdminToken` was
+    // extracted precisely because the check had been copied per route and one copy
+    // was missing entirely; this route was then written with a sixth inline copy,
+    // which is the same omission waiting to recur.
+    const unauthorized = requireAdminToken(request, environment);
 
-    if (!environment.LUNORA_ADMIN_TOKEN || !constantTimeEqual(token, environment.LUNORA_ADMIN_TOKEN)) {
-        return jsonError(401, "unauthorized");
+    if (unauthorized) {
+        return unauthorized;
     }
 
     let body: { cloudflareAccountId?: unknown; dispatchNamespacePrefix?: unknown; jurisdiction?: unknown; name?: unknown };
@@ -1371,16 +1380,30 @@ export const createDeployRouter = (): HttpRouterLike => {
             // Decrypt the project's stored secrets at the edge and hand them to the
             // deploy spec. No-op when the master key isn't configured.
             resolveSecrets: async ({ key, kind, organizationId, projectId }) => {
-                if (!environment.SECRET_ENCRYPTION_KEY) {
-                    return {};
-                }
-
                 const rows = await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, {
                     deployKey: key,
                     environment: kind,
                     organizationId,
                     projectId,
                 });
+
+                // Read the rows FIRST, then decide. Returning `{}` on a missing master
+                // key meant a control plane whose key was removed, rotated badly, or
+                // never set in one cell shipped tenant Workers with none of their
+                // secrets — silently, reported as a successful release, surfacing
+                // several layers away as the tenant app 500-ing on a missing env var.
+                // With no secrets configured there is nothing to drop and the deploy
+                // is genuinely fine, so only the contradiction fails.
+                if (!environment.SECRET_ENCRYPTION_KEY) {
+                    if (rows.length > 0) {
+                        throw new LunoraError(
+                            "INTERNAL",
+                            `this project has ${String(rows.length)} stored secret(s) but the control plane has no SECRET_ENCRYPTION_KEY to decrypt them — deploying would ship a Worker with none of them`,
+                        );
+                    }
+
+                    return {};
+                }
                 const entries = await Promise.all(
                     rows.map(async (row): Promise<[string, string]> => [
                         row.name,

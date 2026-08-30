@@ -60,9 +60,19 @@ export interface AlertDrainResult {
 
 /** Collect the `firing` alerts that are past the grace window. */
 export const runAlertDrain = async (database: ControlPlaneDatabase, options: { now: number }): Promise<AlertDrainResult> => {
-    const { page } = await database.findMany("alerts", { limit: ALERT_DRAIN_MAX, where: { status: "firing" } });
-    const rows = page as FiringAlertRow[];
+    // Ordered and cutoff-filtered IN THE QUERY. Reading an unordered page and
+    // filtering after meant a burst of in-grace alerts could fill the page and
+    // drain nothing — and the oldest undelivered rows, the ones this sweep exists
+    // to rescue, could starve behind them indefinitely while `skipped` counted a
+    // number nobody reads. `uptime.prune` and `organizations.purgeDeleted` push
+    // both into the query for exactly this reason.
     const cutoff = options.now - ALERT_DRAIN_GRACE_MS;
+    const { page } = await database.findMany("alerts", {
+        limit: ALERT_DRAIN_MAX,
+        orderBy: [{ createdAt: "asc" }],
+        where: { createdAt: { lte: cutoff }, status: "firing" },
+    });
+    const rows = page as FiringAlertRow[];
     const ready = rows.filter((row) => row.createdAt <= cutoff);
 
     return {

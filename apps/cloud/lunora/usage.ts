@@ -6,7 +6,7 @@ import type { UsageTotals } from "../src/billing/usage";
 import { aggregateUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
-import { assertMember, authorizeDeployKey } from "./authz";
+import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
@@ -116,6 +116,15 @@ export const ingest = mutation
 
         if (!Number.isFinite(arguments_.periodStart) || arguments_.periodStart < 0) {
             throw new LunoraError("BAD_REQUEST", "usage periodStart must be a valid timestamp");
+        }
+
+        // The id is caller-supplied and only its ORG is authorized above, so
+        // without this a tenant could attribute its rows to another org's
+        // deployment. Reads stay org-scoped either way — the damage is
+        // attribution, which for the usage ledger is the number a bill is
+        // computed from.
+        if (arguments_.deploymentId !== undefined) {
+            await assertRowInOrg(context, arguments_.deploymentId, arguments_.organizationId, "deployment");
         }
 
         return context.db.insert("platformUsage", {

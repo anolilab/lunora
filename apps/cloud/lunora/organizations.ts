@@ -241,19 +241,50 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
     });
     const due = page as unknown as (OrganizationRow & { deletionRequestedAt?: number })[];
 
+    // EVERY table carrying an `organizationId`, not a hand-kept subset. The list
+    // had drifted to 12 of 25 while the docblock above claimed erasure "across
+    // every org-scoped table" — so a right-to-erasure purge left the org's
+    // telemetry (`observations`, `metricPoints`, `issues`/`incidents` bodies, all
+    // of which can carry end-user data), its live alert destinations, and — the
+    // sharpest one — its envelope-encrypted Cloudflare billing token in
+    // `cloudflareBilling`, orphaned with no org row left to key a future sweep off.
+    //
+    // Two deliberate exceptions to "every table with an organizationId":
+    // `deployments` is NOT hard-deleted here — the block below transitions it to
+    // `destroyed` so the teardown path can still reach the live dispatch script,
+    // D1 and R2; deleting the row first would leak all three. And
+    // `githubInstallations` IS included even though its `organizationId` is
+    // optional, which is why it cannot simply be derived from the schema.
+    //
+    // Kept as an explicit literal rather than derived at runtime because codegen
+    // types `context.db.delete` per table; the guard against it drifting again is
+    // the test that diffs this list against the schema.
     const orgScopedTables = [
+        "alertRuleState",
+        "alertRules",
+        "alerts",
+        "aliasOwnership",
         "auditLog",
         "buildLogs",
         "builds",
+        "cloudflareBilling",
+        "dashboards",
         "deployKeys",
         "domains",
         "githubInstallations",
+        "incidents",
         "invitations",
+        "issues",
         "members",
+        "metricPoints",
+        "observations",
+        "overageDebits",
         "platformUsage",
         "projects",
         "secrets",
         "tenantLogs",
+        "uptimeChecks",
+        "uptimeState",
     ] as const;
 
     for (const organization of due) {
