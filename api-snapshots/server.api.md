@@ -1579,11 +1579,15 @@ interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> 
         args: InferArgs<Args>;
         ctx: Context;
     }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
-    stream: <R>(handler: (options: {
+    stream: [
+        Output
+    ] extends [
+        undefined
+    ] ? <R>(handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
         signal: AbortSignal;
-    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R>;
+    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R> : never;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => QueryBuilder<Context, Args, Output>;
 }

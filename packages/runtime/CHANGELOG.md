@@ -1,3 +1,14 @@
+## @lunora/runtime [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.81...@lunora/runtime@1.0.0-alpha.82) (2026-08-30)
+
+### Documentation
+
+* **sharding:** .global() adoption path; drop a runtime lint that never fired ([#528](https://github.com/anolilab/lunora/issues/528)) ([e390e3f](https://github.com/anolilab/lunora/commit/e390e3f94a7aa7efc031e95411ade96a059a4528))
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.38
+
 ## @lunora/runtime [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.80...@lunora/runtime@1.0.0-alpha.81) (2026-08-29)
 
 ### Bug Fixes

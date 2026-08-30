@@ -1,6 +1,6 @@
 {
     "name": "@lunora/runtime",
-    "version": "1.0.0-alpha.81",
+    "version": "1.0.0-alpha.82",
     "description": "Lunora Worker runtime: the RPC router, shard resolver, and query coordinator",
     "keywords": [
         "cloudflare",
@@ -71,7 +71,7 @@
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/do": "1.0.0-alpha.109",
         "@lunora/shard-engine": "1.0.0-alpha.47",
-        "@lunora/workflow": "1.0.0-alpha.37",
+        "@lunora/workflow": "1.0.0-alpha.38",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

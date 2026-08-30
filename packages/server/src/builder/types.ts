@@ -92,8 +92,14 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
      * async generator (or any function returning an `AsyncIterable<R>`) that
      * yields one chunk per server-pushed frame. The third `signal` argument is
      * tripped when the client cancels — break out of the loop or check
-     * `signal.aborted` between yields. `.output()` does not apply: per-chunk
-     * validation is opt-in via the handler itself.
+     * `signal.aborted` between yields.
+     *
+     * **Unavailable after `.output()`, deliberately.** Chunks are yielded as-is —
+     * there is no per-chunk validation — so `.output(...).stream(...)` used to
+     * compile and quietly enforce nothing, which is worse than not offering the
+     * combination: the author asked for validation and was told yes. Declaring an
+     * output on a stream is now a type error rather than a false promise. Validate
+     * inside the handler, or return the whole payload from `.query()` instead.
      *
      * Pass `{ durable: true }` to make the run outlive the socket that opened
      * it: chunks are persisted as they are produced, so a reload resumes the
@@ -101,10 +107,12 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
      * second client with the same arguments attaches to the same transcript.
      * That is what an LLM response wants; a progress ticker does not need it.
      */
-    stream: <R>(
-        handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
-        options?: StreamOptions,
-    ) => RegisteredStream<Args, R>;
+    stream: [Output] extends [undefined]
+        ? <R>(
+              handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+              options?: StreamOptions,
+          ) => RegisteredStream<Args, R>
+        : never;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
 
     /**
