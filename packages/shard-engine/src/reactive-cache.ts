@@ -146,6 +146,16 @@ class ReactiveCache {
      */
     private monotonic: number = 0;
 
+    /**
+     * Bumped by every invalidation (`invalidate`, `invalidateTable`, `clear`)
+     * whether or not it actually dropped anything. `run` snapshots it before
+     * awaiting the handler and refuses to STORE the result if it moved — see the
+     * comment at that check for the poisoning this prevents. Deliberately global rather than per-key: an invalidation that
+     * dropped nothing has no key to attribute itself to, which is precisely the
+     * case that used to slip through.
+     */
+    private generation: number = 0;
+
     public constructor(options: ReactiveCacheOptions = {}) {
         this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
         this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -189,7 +199,26 @@ class ReactiveCache {
         }
 
         this.misses += 1;
+
+        // Snapshot BEFORE the await: `run()` reads rows and then yields on real
+        // I/O (`ctx.fetch`, a `.global()` D1 read, `ctx.runAction`), and a
+        // mutation can interleave there. The `superseded` handling below covers
+        // an entry APPEARING in that window; this covers an invalidation that
+        // found NOTHING to drop — there is no entry for this key yet — and so
+        // left no trace. Without it we store pre-write rows under a key nothing
+        // will ever invalidate again: stale until LRU eviction or DO restart.
+        const generationAtEntry = this.generation;
+
         const result = await run();
+
+        // The value is still correct for THIS caller (it is what the handler
+        // computed); only memoizing it is unsafe, because we cannot tell whether
+        // the interleaved write touched what the handler read. Skip the store and
+        // let the next call miss.
+        if (this.generation !== generationAtEntry) {
+            return result;
+        }
+
         const bytes = estimateBytes(result);
 
         // A result `estimateBytes` cannot size (a cycle, a function) has no
@@ -257,6 +286,12 @@ class ReactiveCache {
      * for the wired-up consumer.
      */
     public invalidate(table: string, id: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): string[] {
+        // Unconditional, and before any dropping: an invalidation that matches
+        // no entry still has to be visible to an in-flight `run()` — that is the
+        // whole poisoning window. Covers the range path too, since
+        // `dropRangeDeps` is only ever reached from here and `invalidateTable`.
+        this.generation += 1;
+
         const removed: string[] = [];
 
         this.collectAndDrop(depKey(table, id), removed);
@@ -274,6 +309,8 @@ class ReactiveCache {
      * survive.
      */
     public invalidateTable(table: string): string[] {
+        this.generation += 1;
+
         const removed: string[] = [];
         const prefix = `${table}:`;
 
@@ -326,6 +363,7 @@ class ReactiveCache {
 
     /** Drop every cached entry. Used by tests for isolation. */
     public clear(): void {
+        this.generation += 1;
         this.entries.clear();
         this.tableIndex.clear();
         this.rangeIndex.clear();

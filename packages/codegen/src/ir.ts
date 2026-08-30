@@ -836,16 +836,18 @@ export interface NondeterministicCallIR {
 }
 
 /**
- * One Hyperdrive `ctx.sql` access lexically inside a `query`/`mutation` handler
- * — the `hyperdrive_outside_action` advisor lint input. Structurally identical
- * to the advisor's `AdvisorHyperdriveCall` (same field set) so values pass
- * straight through `lintSchema` without conversion, exactly as
- * {@link R2sqlCallIR} does. Only `query`/`mutation` handlers are recorded;
- * `action(...)` is the only context where `ctx.sql` is even typed, so it is the
- * intended home and is skipped.
+ * One `ctx.<property>` access lexically inside a `query`/`mutation` handler —
+ * the feeder shape behind every "action-only surface used outside an action"
+ * advisor lint (`hyperdrive_outside_action` for `ctx.sql`,
+ * `r2sql_outside_action` for `ctx.r2sql`). Structurally identical to the
+ * advisor's `AdvisorHyperdriveCall` / `AdvisorR2sqlCall` (same field set) so
+ * values pass straight through `lintSchema` without conversion, exactly as
+ * {@link NondeterministicCallIR} does. Only `query`/`mutation` handlers are
+ * recorded; `action(...)` is the only context where these surfaces are even
+ * typed, so it is the intended home and is skipped.
  */
-export interface HyperdriveCallIR {
-    /** The accessed `ctx.sql` surface, e.g. `ctx.sql.query` / `ctx.sql`. */
+export interface ContextPropertyCallIR {
+    /** The accessed surface, e.g. `ctx.sql.query` / `ctx.r2sql.from` — the property, suffixed with the method when one is called on it. */
     callee: string;
     /** Export binding name of the function performing the access. */
     exportName: string;
@@ -853,28 +855,7 @@ export interface HyperdriveCallIR {
     file: string;
     /** Which procedure kind the access lives in — only `query`/`mutation` handlers are recorded. */
     kind: "mutation" | "query";
-    /** 1-based line of the access, or `0` when unknown. */
-    line: number;
-}
-
-/**
- * One `ctx.r2sql` access lexically inside a `query`/`mutation` handler — the
- * `r2sql_outside_action` advisor lint input. Structurally identical to the
- * advisor's `AdvisorR2sqlCall` (same field set) so values pass straight through
- * `lintSchema` without conversion, exactly as `NondeterministicCallIR` does.
- * Only `query`/`mutation` handlers are recorded; `action(...)` is the intended
- * home for `ctx.r2sql` and is skipped.
- */
-export interface R2sqlCallIR {
-    /** The accessed `ctx.r2sql` surface, e.g. `ctx.r2sql.query` / `ctx.r2sql.from`. */
-    callee: string;
-    /** Export binding name of the function performing the access. */
-    exportName: string;
-    /** Source file relative to the lunora dir, without extension (the api namespace). */
-    file: string;
-    /** Which procedure kind the access lives in — only `query`/`mutation` handlers are recorded. */
-    kind: "mutation" | "query";
-    /** 1-based line of the access, or `0` when unknown. */
+    /** 1-based line of the access. */
     line: number;
 }
 
@@ -1776,9 +1757,9 @@ export interface FlagSecurityDefaultIR {
  * `__cdc_log`, so a subscribed query is never re-run when a flag flips and keeps
  * serving the branch it last picked; `useFlag` is the reactive path. Structurally
  * identical to the advisor's `AdvisorFlagRead` (same field set) so values pass
- * straight through `lintSchema` without conversion, exactly as `R2sqlCallIR` does.
+ * straight through `lintSchema` without conversion, exactly as `ContextPropertyCallIR` does.
  *
- * Only `query` handlers are recorded — unlike `R2sqlCallIR` / `NondeterministicCallIR`
+ * Only `query` handlers are recorded — unlike `ContextPropertyCallIR` / `NondeterministicCallIR`
  * there is no `kind` field, because `mutation`/`action` handlers run once and have
  * no subscription staleness to warn about, so the feeder drops them rather than
  * handing the lint rows it would discard.

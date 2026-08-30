@@ -421,6 +421,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
     class extends ShardDOBase {
         public constructor(state: ShardDOState, env: unknown) {
             super(state, env, {
+                // Every writer this file builds spreads the ctxDbTuning() slice —
+                // the user-facing ctx and all three admin/maintenance writers — so
+                // the base class can drop its coarse invalidation backstop. Only the
+                // emitter can know that; a hand-written subclass leaves this unset
+                // and keeps the backstop.
+                ctxDbCacheWired: true,
                 ...(config.maxRelationKeys === undefined ? {} : { maxRelationKeys: config.maxRelationKeys }),
                 ...(config.reactiveCache ? { reactiveCache: config.reactiveCache === true ? {} : config.reactiveCache } : {}),
                 ...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),
@@ -677,6 +683,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -722,6 +733,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -778,6 +794,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -807,6 +828,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -842,6 +868,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -870,6 +901,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -900,6 +936,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -933,6 +974,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },

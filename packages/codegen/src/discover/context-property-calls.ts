@@ -1,29 +1,9 @@
 import type { Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import type { ContextPropertyCallIR } from "../ir";
 import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
-
-/**
- * One `ctx.<property>` access lexically inside a `query`/`mutation` handler.
- *
- * The shape every "action-only surface used outside an action" advisor lint
- * consumes — `r2sql_outside_action` and `hyperdrive_outside_action` both take
- * exactly this, and both advisor evidence types (`AdvisorR2sqlCall` /
- * `AdvisorHyperdriveCall`) are structurally identical to it.
- */
-interface ContextPropertyCall {
-    /** The accessed surface, e.g. `ctx.sql.query` — the property, suffixed with the method when one is called on it. */
-    callee: string;
-    /** Export binding name of the function performing the access. */
-    exportName: string;
-    /** Source file relative to the lunora dir, without extension (the api namespace). */
-    file: string;
-    /** Which procedure kind the access lives in. */
-    kind: "mutation" | "query";
-    /** 1-based line of the access. */
-    line: number;
-}
 
 /** One resolved query/mutation handler with its attribution. */
 interface ResolvedProcedure {
@@ -86,8 +66,8 @@ const calleeOf = (access: TsNode, property: string): string | undefined => {
 };
 
 /** `ctx.<property>` access records lexically inside one resolved query/mutation handler. */
-const accessesInHandler = (procedure: ResolvedProcedure, file: string, property: string): ContextPropertyCall[] => {
-    const found: ContextPropertyCall[] = [];
+const accessesInHandler = (procedure: ResolvedProcedure, file: string, property: string): ContextPropertyCallIR[] => {
+    const found: ContextPropertyCallIR[] = [];
 
     for (const access of procedure.handler.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
         const callee = calleeOf(access, property);
@@ -101,8 +81,8 @@ const accessesInHandler = (procedure: ResolvedProcedure, file: string, property:
 };
 
 /** `ctx.<property>` access records across every exported query/mutation in one file. */
-const accessesInSourceFile = (sourceFile: SourceFile, relativePath: string, property: string): ContextPropertyCall[] => {
-    const found: ContextPropertyCall[] = [];
+const accessesInSourceFile = (sourceFile: SourceFile, relativePath: string, property: string): ContextPropertyCallIR[] => {
+    const found: ContextPropertyCallIR[] = [];
 
     for (const statement of sourceFile.getVariableStatements()) {
         if (!statement.isExported()) {
@@ -133,8 +113,8 @@ const accessesInSourceFile = (sourceFile: SourceFile, relativePath: string, prop
  * `discoverNondeterministicCalls` — so a touch in a sibling helper outside the
  * handler is not attributed to the query/mutation. One record per access site.
  */
-const discoverContextPropertyCalls = (project: Project, lunoraDirectory: string, property: string): ContextPropertyCall[] => {
-    const calls: ContextPropertyCall[] = [];
+const discoverContextPropertyCalls = (project: Project, lunoraDirectory: string, property: string): ContextPropertyCallIR[] => {
+    const calls: ContextPropertyCallIR[] = [];
 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
@@ -145,5 +125,4 @@ const discoverContextPropertyCalls = (project: Project, lunoraDirectory: string,
     return calls;
 };
 
-export type { ContextPropertyCall };
-export { discoverContextPropertyCalls };
+export default discoverContextPropertyCalls;

@@ -4810,6 +4810,11 @@ ${vectorNamespaceField}
     const adminWriterPrelude = `            const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -5020,6 +5025,11 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
                             // sibling table needs, and a limit hit here must not block
                             // that sibling from getting its own full budget this tick.
                             const writer = createShardCtxDb({
+                                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                                // import, a CDC apply or a data-migration backfill writes without
+                                // invalidating, and the next query answers from the pre-write snapshot.
+                                ...this.ctxDbTuning(),
                                 broadcast: (delta) => {
                                     this.recordChangedTable(delta.table, delta.indexKeys);
                                 },
@@ -5144,6 +5154,12 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
     const constructorOverride = `
         public constructor(state: ShardDOState, env: unknown) {
             super(state, env, {
+                // Every writer this file builds spreads the ctxDbTuning() slice —
+                // the user-facing ctx and all three admin/maintenance writers — so
+                // the base class can drop its coarse invalidation backstop. Only the
+                // emitter can know that; a hand-written subclass leaves this unset
+                // and keeps the backstop.
+                ctxDbCacheWired: true,
                 ...(config.maxRelationKeys === undefined ? {} : { maxRelationKeys: config.maxRelationKeys }),
                 ...(config.reactiveCache ? { reactiveCache: config.reactiveCache === true ? {} : config.reactiveCache } : {}),
                 ...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),
@@ -5659,6 +5675,11 @@ ${adminWriterPrelude}
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },

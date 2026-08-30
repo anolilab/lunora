@@ -288,6 +288,25 @@ class AppBuilder<Env extends object> {
         return composed;
     }
 
+    /**
+     * One bucket's `Storage`, signing under the name it is registered as.
+     *
+     * `bucketName` is bound into every signed URL's HMAC canonical, so a bucket
+     * that signs as the default's name lets a URL minted for one bucket verify
+     * against another sharing the secret — and multi-bucket verification fails
+     * outright. Hence `"default"` for the bare `ctx.storage` bucket and the
+     * `buckets` key for every other.
+     */
+    private makeStorage(env: Env, declaration: StorageDeclaration<Env>, bucket: R2BucketLike, bucketName: string): Storage {
+        return createStorage({
+            bucket,
+            bucketName,
+            publicBaseUrl: declaration.publicBaseUrl?.(env),
+            s3: declaration.s3?.(env),
+            signingSecret: declaration.signingSecret?.(env),
+        });
+    }
+
     /** Resolve the storage capability (single or multi-bucket) for the DO side. */
     private resolveStorage(env: Env): Storage | undefined {
         const declaration = this.storageDeclaration;
@@ -302,32 +321,18 @@ class AppBuilder<Env extends object> {
             return undefined;
         }
 
-        // `bucketName` is bound into every signed URL's HMAC canonical, so a
-        // bucket that signs as the default's name lets a URL minted for one
-        // bucket verify against another sharing the secret — and multi-bucket
-        // verification fails outright. Each bucket therefore signs under the
-        // name it is registered as: `"default"` for the bare `ctx.storage`
-        // bucket, the `buckets` key for every other.
-        const make = (bucket: R2BucketLike, bucketName: string): Storage =>
-            createStorage({
-                bucket,
-                bucketName,
-                publicBaseUrl: declaration.publicBaseUrl?.(env),
-                s3: declaration.s3?.(env),
-                signingSecret: declaration.signingSecret?.(env),
-            });
         const extraEntries = Object.entries(declaration.buckets ?? {})
             .map(([name, selector]) => [name, selector(env)] as const)
             .filter((entry): entry is [string, R2BucketLike] => Boolean(entry[1]));
 
         if (extraEntries.length === 0) {
-            return make(defaultBucket, "default");
+            return this.makeStorage(env, declaration, defaultBucket, "default");
         }
 
-        const map: Record<string, Storage> = { default: make(defaultBucket, "default") };
+        const map: Record<string, Storage> = { default: this.makeStorage(env, declaration, defaultBucket, "default") };
 
         for (const [name, bucket] of extraEntries) {
-            map[name] = make(bucket, name);
+            map[name] = this.makeStorage(env, declaration, bucket, name);
         }
 
         return createBucketStorage(map, { default: "default" });
@@ -347,32 +352,18 @@ class AppBuilder<Env extends object> {
             return {};
         }
 
-        // `bucketName` is bound into every signed URL's HMAC canonical, so a
-        // bucket that signs as the default's name lets a URL minted for one
-        // bucket verify against another sharing the secret — and multi-bucket
-        // verification fails outright. Each bucket therefore signs under the
-        // name it is registered as: `"default"` for the bare `ctx.storage`
-        // bucket, the `buckets` key for every other.
-        const make = (bucket: R2BucketLike, bucketName: string): Storage =>
-            createStorage({
-                bucket,
-                bucketName,
-                publicBaseUrl: declaration.publicBaseUrl?.(env),
-                s3: declaration.s3?.(env),
-                signingSecret: declaration.signingSecret?.(env),
-            });
         // Held separately from the map so `pick`'s fallback is a plain binding:
         // under `noUncheckedIndexedAccess` a `Record<string, Storage>` lookup —
         // including `buckets.default` — widens to `Storage | undefined`, which
         // would not satisfy `pick`'s declared `Storage` return.
-        const fallbackStorage = make(defaultBucket, "default");
+        const fallbackStorage = this.makeStorage(env, declaration, defaultBucket, "default");
         const buckets: Record<string, Storage> = { default: fallbackStorage };
 
         for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
             const bucket = selector(env);
 
             if (bucket) {
-                buckets[name] = make(bucket, name);
+                buckets[name] = this.makeStorage(env, declaration, bucket, name);
             }
         }
 

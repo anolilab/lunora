@@ -1,7 +1,7 @@
 import type { Project } from "ts-morph";
 
-import type { HyperdriveCallIR } from "../ir";
-import { discoverContextPropertyCalls } from "./context-property-calls";
+import type { ContextPropertyCallIR } from "../ir";
+import discoverContextPropertyCalls from "./context-property-calls";
 
 /**
  * Discover Hyperdrive `ctx.sql` accesses inside exported `query(...)` /
@@ -13,7 +13,7 @@ import { discoverContextPropertyCalls } from "./context-property-calls";
  * `ctx.sql` is typed on `ActionCtx` only, so `action(...)` bodies are skipped by
  * the shared walker — an access there is correct usage, not a finding.
  */
-const discoverHyperdriveCalls = (project: Project, lunoraDirectory: string): HyperdriveCallIR[] =>
+const discoverHyperdriveCalls = (project: Project, lunoraDirectory: string): ContextPropertyCallIR[] =>
     discoverContextPropertyCalls(project, lunoraDirectory, "sql");
 
 export default discoverHyperdriveCalls;

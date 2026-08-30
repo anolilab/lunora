@@ -401,7 +401,7 @@ abstract class ShardDO {
         };
         iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
     };
-    protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R>;
+    protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>, attribution?: QueryAttribution): Promise<R>;
     protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void;
     protected getCtxDbReadRangeHook(): (range: KeyRange) => void;
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
@@ -448,6 +448,7 @@ abstract class ShardDO {
 
 ```ts
 interface ShardDOOptions {
+    ctxDbCacheWired?: boolean;
     maxRelationKeys?: number;
     reactiveCache?: ReactiveCacheOptions;
     relationExistsPushDown?: "always" | "auto" | "never";

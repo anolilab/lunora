@@ -114,3 +114,27 @@ describe("emitApp — reactive cache wiring", () => {
         expect(output).toContain("reactiveCache: this.reactiveCacheConfig,");
     });
 });
+
+describe("emitShard — every writer reaches the cache", () => {
+    // This is what makes `ctxDbCacheWired: true` safe to emit. That flag turns OFF
+    // the coarse invalidation backstop in `recordChangedTable`, on the promise that
+    // no writer skips the cache hooks. When it was emitted while only the
+    // user-facing ctx spread the tuning, the seven admin/maintenance writers —
+    // studio row edits, TTL sweeps, admin import, CDC apply, external-source pulls,
+    // and the data-migration backfill — wrote without invalidating, and the next
+    // query answered from the pre-write snapshot indefinitely.
+    //
+    // Counting rather than matching a fixed list: a writer added later is caught
+    // without anyone remembering to extend this test.
+    it("spreads ctxDbTuning() into every emitted createShardCtxDb call", () => {
+        expect.assertions(2);
+
+        const emitted = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+        const writers = emitted.match(/createShardCtxDb\(\{/gu)?.length ?? 0;
+        const tunings = emitted.match(/\.\.\.this\.ctxDbTuning\(\),/gu)?.length ?? 0;
+
+        expect(writers).toBeGreaterThan(0);
+        expect(tunings).toBe(writers);
+    });
+});
