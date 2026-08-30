@@ -550,9 +550,9 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
 export interface IndexNamesByTable {
     cells: "by_name";
     organizations: "by_slug";
-    members: "by_org_user";
+    members: "by_user" | "by_org_user";
     projects: "by_org_slug" | "by_github_repo";
-    deployments: "by_script" | "by_project" | "by_kind" | "by_alias";
+    deployments: "by_status" | "by_script" | "by_project" | "by_org_created" | "by_kind" | "by_alias";
     aliasOwnership: "by_project" | "by_alias";
     metricPoints: "by_org_name_at" | "by_org_at";
     deployKeys: "by_org" | "by_hash";

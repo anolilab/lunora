@@ -100,17 +100,25 @@ interface RelatedIssue extends TriageIssue {
 
 /**
  * The other error groups raised by `container`, most-frequent first, excluding
- * the incident's own mirror row (`selfHash`). Bounded at the read — the org's
- * issue set for a container is unbounded, and dragging all of it into the isolate
- * just to slice 10 off in the prompt builder is the wrong layer for the cap.
+ * the incident's own mirror row (`selfHash`).
+ *
+ * Bounded and ordered AT THE READ, which is what the previous version of this
+ * comment claimed and the query did not do: it read the default page — up to a
+ * thousand rows — dragged every one into the isolate, sorted there and sliced ten
+ * off, which is exactly the "wrong layer for the cap" the comment warned against.
+ *
+ * `MAX_ISSUES + 1` because one of the rows returned may be the incident's own
+ * mirror, which is filtered out below; asking for exactly ten could hand back
+ * nine.
  */
 const relatedIssues = async (context: ActionContext, organizationId: Id<"organizations">, container: string, selfHash: string): Promise<TriageIssue[]> => {
-    const { page } = await context.db.issues.findMany({ where: { culprit: `container:${container}`, organizationId } });
+    const { page } = await context.db.issues.findMany({
+        limit: MAX_ISSUES + 1,
+        orderBy: [{ count: "desc" }],
+        where: { culprit: `container:${container}`, organizationId },
+    });
 
-    return (page as unknown as RelatedIssue[])
-        .filter((issue) => issue.hash !== selfHash)
-        .toSorted((a, b) => b.count - a.count)
-        .slice(0, MAX_ISSUES);
+    return (page as unknown as RelatedIssue[]).filter((issue) => issue.hash !== selfHash).slice(0, MAX_ISSUES);
 };
 
 /**

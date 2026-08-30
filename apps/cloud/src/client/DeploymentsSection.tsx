@@ -11,6 +11,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ReturnOf } from "@lunora/client";
 import { useMutation, useQuery } from "@lunora/react";
+import { ClientOnly } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -73,6 +74,18 @@ const statusMeta = (status: string): { dot: string; label: string; tone: StatusT
 const elapsedFor = (deployment: Deployment): number =>
     deployment.status === "live" || deployment.status === "superseded" ? deployment.updatedAt - deployment.createdAt : Date.now() - deployment.createdAt;
 
+/**
+ * Render an age like "3s ago" against the wall clock — CLIENT-ONLY by nature.
+ *
+ * This route server-renders. Reading the clock during render meant the server
+ * produced one label and the browser produced another a round trip later, which
+ * is a hydration mismatch — and precisely for the rows that matter, since only a
+ * recent deployment is close enough to the present for the two to disagree. An
+ * hour-old row rendered "1h ago" on both sides and hid the problem.
+ *
+ * Callers pair this with {@link RelativeTime}, which renders an absolute
+ * timestamp on the server pass and swaps to the relative label on the client.
+ */
 const relativeTime = (ms: number): string => {
     const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
 
@@ -94,6 +107,16 @@ const relativeTime = (ms: number): string => {
 
     return `${String(Math.floor(hours / 24))}d ago`;
 };
+
+/**
+ * A timestamp that is absolute on the server and relative in the browser.
+ *
+ * `ClientOnly` renders the fallback during SSR and on the first client pass, so
+ * both sides agree on markup; the relative label appears once hydration is done.
+ * The fallback is the real timestamp rather than a blank, so a reader with
+ * JavaScript still off sees when the deployment was created.
+ */
+const RelativeTime = ({ at }: { at: number }): ReactElement => <ClientOnly fallback={<>{formatDateTime(at)}</>}>{relativeTime(at)}</ClientOnly>;
 
 const formatDuration = (ms: number): string => {
     const seconds = Math.max(0, Math.round(ms / 1000));
@@ -169,7 +192,9 @@ const ProjectHero = ({
                         {deployment.createdBy.charAt(0).toUpperCase()}
                     </span>
                     <span className="truncate">{deployment.createdBy}</span>
-                    <span className="text-muted-foreground">{relativeTime(deployment.createdAt)}</span>
+                    <span className="text-muted-foreground">
+                        <RelativeTime at={deployment.createdAt} />
+                    </span>
                 </span>
                 <span className="flex items-center gap-2">
                     <span className="font-mono text-[10px] tracking-[0.09em] text-muted-foreground uppercase">Ready in</span>

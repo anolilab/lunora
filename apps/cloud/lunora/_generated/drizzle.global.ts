@@ -45,6 +45,7 @@ export const members = sqliteTable("members", {
     role: text("role", { mode: "json" }).$type<"owner" | "admin" | "member" | "viewer">().notNull(),
     userId: text("userId").notNull(),
 }, (t) => ({
+    by_user: index("by_user").on(t.userId),
     by_org_user: index("by_org_user").on(t.organizationId, t.userId),
 }));
 
@@ -99,8 +100,10 @@ export const deployments = sqliteTable("deployments", {
     destroyedAt: real("destroyedAt"),
     teardownAt: real("teardownAt"),
 }, (t) => ({
+    by_status: index("by_status").on(t.status),
     by_script: index("by_script").on(t.scriptName),
     by_project: index("by_project").on(t.projectId),
+    by_org_created: index("by_org_created").on(t.organizationId, t.createdAt),
     by_kind: index("by_kind").on(t.kind),
     by_alias: index("by_alias").on(t.alias),
 }));

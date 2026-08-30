@@ -53,16 +53,27 @@ export const list = query.query(async ({ ctx: context }): Promise<OrganizationRo
     }
 
     const { page: memberships } = await context.db.members.findMany({ where: { userId } });
-    const orgIds = new Set((memberships as unknown as { organizationId: Id<"organizations"> }[]).map((membership) => membership.organizationId));
-    const { page } = await context.db.organizations.findMany();
+    const orgIds = [...new Set((memberships as unknown as { organizationId: Id<"organizations"> }[]).map((membership) => membership.organizationId))];
 
-    return (page as unknown as OrganizationRow[]).filter((organization) => orgIds.has(organization._id));
+    // Fetched BY ID rather than read-all-and-filter. The previous form pulled one
+    // page of every organization on the platform and kept the caller's — which is
+    // not just wasteful but wrong past a page: an org outside the first 1000 was
+    // silently missing from its own member's switcher, with nothing to indicate
+    // the list was truncated. The read now scales with the caller's memberships,
+    // which is what the answer depends on.
+    const organizations = await Promise.all(orgIds.map(async (id) => (await context.db.get(id)) as null | OrganizationRow));
+
+    return organizations.filter((organization): organization is OrganizationRow => organization !== null);
 });
 
 /**
- * Look an organization up by its URL slug. `organizations` is `.global()`, so
- * we read through the facade and match in memory — org volume is tiny, and the
- * `by_slug` unique index still enforces correctness on insert.
+ * Look an organization up by its URL slug.
+ *
+ * Filtered in the QUERY, through the `by_slug` unique index. Reading every
+ * organization and matching in memory was justified by "org volume is tiny",
+ * which is an assumption that fails silently rather than loudly: past one page
+ * the lookup simply returned null, and the member was told their org does not
+ * exist. The index that makes this a point read was already declared.
  */
 export const getBySlug = query.input({ slug: boundedString(LIMITS.id) }).query(async ({ ctx: context, args: { slug } }): Promise<OrganizationRow | null> => {
     const { userId } = context.auth;
@@ -71,8 +82,8 @@ export const getBySlug = query.input({ slug: boundedString(LIMITS.id) }).query(a
         return null;
     }
 
-    const { page } = await context.db.organizations.findMany();
-    const organization = (page as unknown as OrganizationRow[]).find((row) => row.slug === slug) ?? null;
+    const { page } = await context.db.organizations.findMany({ where: { slug } });
+    const organization = (page as unknown as OrganizationRow[])[0] ?? null;
 
     if (!organization) {
         return null;

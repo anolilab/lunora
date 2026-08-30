@@ -84,6 +84,13 @@ const resolveKeyRow = async (context: QueryContext, organizationId: Id<"organiza
  * `ingest`-capability (telemetry-only) key, or (for a project-scoped key) used
  * against another project. Returns the resolved deploy-key id on success.
  *
+ * `scope` is REQUIRED and has no default. It was optional, and omitting it meant
+ * "any project" — so a genuinely org-wide operation and a project-scoped one that
+ * forgot to pass its id were the same call, and the second silently handed a
+ * project-scoped key authority over the whole org. Spelling `"org-wide"` makes
+ * that a decision the author states and a reviewer can see, and makes forgetting
+ * it a type error rather than a quiet widening.
+ *
  * NOTE: telemetry **ingest** must NOT use this — an `ingest` key's whole purpose
  * is to write telemetry, so ingest paths use {@link authorizeTelemetryKey}, which
  * accepts both key kinds. This function is the deploy/admin gate that keeps an
@@ -93,7 +100,7 @@ export const authorizeDeployKey = async (
     context: QueryContext,
     organizationId: Id<"organizations">,
     key: string,
-    projectId?: Id<"projects">,
+    scope: "org-wide" | Id<"projects">,
 ): Promise<Id<"deployKeys">> => {
     const row = await resolveKeyRow(context, organizationId, key);
 
@@ -102,7 +109,7 @@ export const authorizeDeployKey = async (
         throw new LunoraError("FORBIDDEN", "this is a telemetry ingest key, not a deploy key");
     }
 
-    if (row.projectId != null && projectId !== undefined && row.projectId !== projectId) {
+    if (row.projectId != null && scope !== "org-wide" && row.projectId !== scope) {
         throw new LunoraError("FORBIDDEN", "deploy key is not authorized for this project");
     }
 

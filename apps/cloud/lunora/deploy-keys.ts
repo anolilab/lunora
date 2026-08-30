@@ -288,7 +288,7 @@ export const ingestKeyCipher = query
         organizationId: v.id("organizations"),
     })
     .query(async ({ ctx: context, args: { deployKey, organizationId } }): Promise<CipherEnvelope | null> => {
-        await authorizeDeployKey(context, organizationId, deployKey);
+        await authorizeDeployKey(context, organizationId, deployKey, "org-wide");
 
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
 
@@ -313,7 +313,7 @@ export const recordIngestKey = mutation
         organizationId: v.id("organizations"),
     })
     .mutation(async ({ ctx: context, args: { deployKey, encryptedSecret, hashedKey, organizationId } }): Promise<CipherEnvelope> => {
-        await authorizeDeployKey(context, organizationId, deployKey);
+        await authorizeDeployKey(context, organizationId, deployKey, "org-wide");
 
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
         const existing = findActiveIngestKey(page);

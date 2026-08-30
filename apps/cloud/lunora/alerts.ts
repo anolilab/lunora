@@ -227,7 +227,7 @@ export const markDelivered = mutation
         organizationId: v.id("organizations"),
     })
     .mutation(async ({ ctx: context, args: { deployKey, ids, organizationId } }): Promise<{ delivered: number }> => {
-        await authorizeDeployKey(context, organizationId, deployKey);
+        await authorizeDeployKey(context, organizationId, deployKey, "org-wide");
 
         const { now } = context;
 

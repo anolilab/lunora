@@ -56,7 +56,7 @@ describe(authorizeDeployKey, () => {
         const hashedKey = await hashDeployKey(key);
         const context = makeCtx(null, { deployKeys: [{ _id: "dk1", hashedKey, organizationId: "org_1" }] });
 
-        await expect(authorizeDeployKey(context, org, key)).resolves.toBe("dk1");
+        await expect(authorizeDeployKey(context, org, key, "org-wide")).resolves.toBe("dk1");
     });
 
     it("rejects a revoked key", async () => {
@@ -64,7 +64,7 @@ describe(authorizeDeployKey, () => {
         const hashedKey = await hashDeployKey(key);
         const context = makeCtx(null, { deployKeys: [{ _id: "dk1", hashedKey, organizationId: "org_1", revokedAt: 1 }] });
 
-        await expect(authorizeDeployKey(context, org, key)).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(authorizeDeployKey(context, org, key, "org-wide")).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
     it("rejects a key scoped to a different org", async () => {
@@ -72,7 +72,7 @@ describe(authorizeDeployKey, () => {
         const hashedKey = await hashDeployKey(key);
         const context = makeCtx(null, { deployKeys: [{ _id: "dk1", hashedKey, organizationId: "org_2" }] });
 
-        await expect(authorizeDeployKey(context, org, key)).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(authorizeDeployKey(context, org, key, "org-wide")).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
     it("rejects a project-scoped key used against another project (rollback/activate IDOR guard)", async () => {
@@ -86,5 +86,23 @@ describe(authorizeDeployKey, () => {
             code: "FORBIDDEN",
         });
         await expect(authorizeDeployKey(context, org, key, "proj_A" as Parameters<typeof authorizeDeployKey>[3])).resolves.toBe("dk1");
+    });
+
+    /**
+     * `"org-wide"` is what the genuinely org-level callers pass — the ingest-key
+     * pair, usage ingest, alert delivery. It deliberately accepts a project-scoped
+     * key, because those operations have no project to check against.
+     *
+     * The value of spelling it is that it can no longer happen by ACCIDENT. The
+     * scope argument used to be optional and defaulted to exactly this, so a
+     * project-scoped path that forgot it silently widened a project key to the
+     * whole org, with nothing failing and nothing to read in review.
+     */
+    it("accepts a project-scoped key for an explicitly org-wide operation", async () => {
+        const key = "production:org_1|secret";
+        const hashedKey = await hashDeployKey(key);
+        const context = makeCtx(null, { deployKeys: [{ _id: "dk1", hashedKey, organizationId: "org_1", projectId: "proj_A" }] });
+
+        await expect(authorizeDeployKey(context, org, key, "org-wide")).resolves.toBe("dk1");
     });
 });

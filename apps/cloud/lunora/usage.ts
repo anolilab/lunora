@@ -104,7 +104,7 @@ export const ingest = mutation
         quantity: v.number(),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> => {
-        await authorizeDeployKey(context, arguments_.organizationId, arguments_.deployKey);
+        await authorizeDeployKey(context, arguments_.organizationId, arguments_.deployKey, "org-wide");
 
         // The deploy key is tenant-held (CI), so a tenant could otherwise POST a
         // NEGATIVE quantity to deflate its own metered usage and defeat spend-cap

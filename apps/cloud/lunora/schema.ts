@@ -138,7 +138,12 @@ export default defineSchema({
         userId: v.string(),
     })
         .global()
-        .index("by_org_user", ["organizationId", "userId"]),
+        .index("by_org_user", ["organizationId", "userId"])
+        // `organizations.list` resolves "which orgs is this person in" on every
+        // dashboard load. The composite above leads with `organizationId`, so it
+        // cannot serve a filter on `userId` alone — that read scanned the whole
+        // membership table for every signed-in request.
+        .index("by_user", ["userId"]),
 
     projects: defineTable({
         // Blue/green pointer (GAPS.md A1): the deployment currently serving the
@@ -246,9 +251,20 @@ export default defineSchema({
         // Dispatcher resolves a stable alias → the project's active script.
         .index("by_alias", ["alias"])
         .index("by_kind", ["kind"])
+        // Every read that scopes deployments to an ORG went unindexed: the Traffic
+        // tab, the onboarding checklist and the org purge all filtered on
+        // `organizationId` with nothing to serve it, so each scanned every
+        // deployment on the platform. Composite with `createdAt` because the
+        // checklist also orders by it — an ordered read over an unindexed filter
+        // sorts every match to return a handful, and that cost grows with the
+        // whole fleet rather than with the org asking.
+        .index("by_org_created", ["organizationId", "createdAt"])
         .index("by_project", ["projectId"])
         // Dispatcher resolves a request's script id → org plan via this index.
-        .index("by_script", ["scriptName"]),
+        .index("by_script", ["scriptName"])
+        // `pruneSuperseded` reads the superseded rows directly rather than paging
+        // the whole table and filtering after — see its note on page starvation.
+        .index("by_status", ["status"]),
 
     // One-row-per-alias ownership ledger. An alias (the tenant's stable script
     // label) seeds per-deployment D1/R2 resource names + alias→script routing, so
