@@ -22,10 +22,11 @@
  * one and the JSON path is bound, never interpolated.
  */
 
+/* eslint-disable no-restricted-syntax -- every `dsql`…`` here is a drizzle tagged-template SQL builder binding a value, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 import type { SqlExec } from "@lunora/shard-engine";
-import { DOC_COLUMN } from "@lunora/shard-engine";
-
-import { quoteIdentifier } from "../../../shared/quote-identifier";
+import { DOC_COLUMN, renderSql, sqliteInList } from "@lunora/shard-engine";
+import type { SQL } from "drizzle-orm";
+import { sql as dsql } from "drizzle-orm";
 
 /** One reverse edge to count: `table.column` points back at the browsed table. */
 interface BackRelationRequest {
@@ -48,8 +49,15 @@ interface BackRelationCountsResult {
 }
 
 /**
- * Most parent ids counted in one call. A page is capped well below this
- * server-side, so the bound only matters for a hand-built request.
+ * Most parent ids counted in one call.
+ *
+ * The Studio's largest page size is 100, so a normal request is well under this;
+ * the bound only matters for a hand-built one. It is NOT a placeholder budget —
+ * the id list goes through `sqliteInList`, which switches a list wider than half
+ * of workerd's 100-parameter statement cap to a single bound `json_each(?)`
+ * argument. A literal `IN (?, ?, …)` over a 100-row page would exceed that cap
+ * and fail to prepare with `SQLITE_ERROR` on a Durable Object, while passing
+ * locally against stock SQLite's 500,000-variable build.
  */
 const MAX_BACK_RELATION_IDS = 500;
 
@@ -57,16 +65,16 @@ const MAX_BACK_RELATION_IDS = 500;
 const MAX_BACK_RELATIONS = 8;
 
 /** Resolve a column to its SQL expression: a physical column, or a bound `__doc__` JSON path. */
-const columnExpression = (column: string, physical: string[]): undefined | { expression: string; params: unknown[] } => {
+const columnExpression = (column: string, physical: string[]): SQL | undefined => {
     if (physical.includes(column)) {
-        return { expression: quoteIdentifier(column), params: [] };
+        return dsql`${dsql.identifier(column)}`;
     }
 
     if (!physical.includes(DOC_COLUMN)) {
         return undefined;
     }
 
-    return { expression: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`, params: [`$."${column.replaceAll('"', '""')}"`] };
+    return dsql`json_extract(${dsql.identifier(DOC_COLUMN)}, ${`$."${column.replaceAll('"', '""')}"`})`;
 };
 
 /**
@@ -76,7 +84,10 @@ const columnExpression = (column: string, physical: string[]): undefined | { exp
  * table does not have — is SKIPPED rather than throwing: the Studio derives
  * these edges from schema metadata that can legitimately lag the live database
  * (a table dropped since the page loaded), and a whole page should not fail
- * because one optional column cannot be resolved.
+ * because one optional column cannot be resolved. A skip is logged, never
+ * silent: a blank count cell with no error and no log is indistinguishable from
+ * "this row genuinely has no children", which is how a statement that failed to
+ * prepare went unnoticed.
  */
 const readBackRelationCounts = (
     sql: SqlExec,
@@ -96,10 +107,12 @@ const readBackRelationCounts = (
 
         try {
             physical = sql
-                .exec<{ name: string }>(`PRAGMA table_info(${quoteIdentifier(relation.table)})`)
+                .exec<{ name: string }>(renderSql("sqlite", dsql`PRAGMA table_info(${dsql.identifier(relation.table)})`).sql)
                 .toArray()
                 .map((column) => column.name);
-        } catch {
+        } catch (error: unknown) {
+            // eslint-disable-next-line no-console -- intentional operational notice: a skipped edge renders as a blank count cell, which is indistinguishable from "no children" unless the reason is logged
+            console.warn(`[@lunora/do] backRelationCounts: skipping "${relation.table}.${relation.column}" — cannot read its columns:`, error);
             continue;
         }
 
@@ -113,29 +126,35 @@ const readBackRelationCounts = (
             continue;
         }
 
-        const placeholders = ids.map(() => "?").join(", ");
         const counts: Record<string, number> = {};
 
         try {
-            const rows = sql
-                .exec<{ n: number; parent: unknown }>(
-                    `SELECT ${expression.expression} AS parent, COUNT(*) AS n
-                     FROM ${quoteIdentifier(relation.table)}
-                     WHERE ${expression.expression} IN (${placeholders})
-                     GROUP BY parent`,
-                    // The JSON path is bound once per occurrence of the expression.
-                    ...expression.params,
-                    ...expression.params,
-                    ...ids,
-                )
-                .toArray();
+            // `sqliteInList` keeps the statement inside workerd's 100-bound-parameter
+            // cap: a short list renders as `IN (?, …)`, a wide one as a single
+            // `json_each(?)` argument. The FK expression is repeated (SELECT, WHERE and
+            // GROUP BY) and carries a bound JSON path when the column is doc-stored, so its
+            // three copies plus the list must fit that budget together. `GROUP BY`
+            // repeats the expression rather than naming the `parent` alias: a child
+            // table with a real column called `parent` would otherwise bind the
+            // grouping to that column instead of the alias.
+            const rendered = renderSql(
+                "sqlite",
+                dsql`SELECT ${expression} AS ${dsql.identifier("parent")}, COUNT(*) AS ${dsql.identifier("n")}
+                     FROM ${dsql.identifier(relation.table)}
+                     WHERE ${sqliteInList(expression, ids, false)}
+                     GROUP BY ${expression}`,
+            );
+
+            const rows = sql.exec<{ n: number; parent: unknown }>(rendered.sql, ...rendered.params).toArray();
 
             for (const row of rows) {
                 if (typeof row.parent === "string") {
                     counts[row.parent] = row.n;
                 }
             }
-        } catch {
+        } catch (error: unknown) {
+            // eslint-disable-next-line no-console -- intentional operational notice: this is the failure the silent `catch` used to hide, and it blanks the column for the whole page
+            console.warn(`[@lunora/do] backRelationCounts: skipping "${relation.table}.${relation.column}" — the count query failed:`, error);
             continue;
         }
 
@@ -145,5 +164,5 @@ const readBackRelationCounts = (
     return { relations: resolved };
 };
 
-export { MAX_BACK_RELATIONS, readBackRelationCounts };
+export { MAX_BACK_RELATION_IDS, MAX_BACK_RELATIONS, readBackRelationCounts };
 export type { BackRelationCounts, BackRelationCountsResult, BackRelationRequest };

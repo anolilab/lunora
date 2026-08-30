@@ -668,7 +668,10 @@ describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan
             super(state, env, options);
 
             this.writer = createShardContextDatabase({
-                cache: this.reactiveCache,
+                // The slice a generated `buildCtx` spreads in: the cache plus the
+                // relation knobs. Spread FIRST, exactly as the emitter must, so
+                // per-request options below still win.
+                ...this.ctxDbTuning(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: this.getCtxDbReadHook(),
                 onReadRange: this.getCtxDbReadRangeHook(),
@@ -809,5 +812,132 @@ describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan
         await shard.writer.insert("messages", { body: "new", channelId: "A" });
 
         expect(shard.cacheRef()?.size().entries).toBe(0);
+    });
+});
+
+/**
+ * The wiring the reactive cache was unreachable without: the BASE `/rpc`
+ * dispatch path routing a registered `query` through `runCachedQuery`.
+ *
+ * Every codegen-emitted shard is `class extends ShardDOBase` with no constructor
+ * and no cache wrap in `handleRpc`, so before this the cache could only run if a
+ * hand-written subclass did both. The subclass below mirrors what the emitter
+ * actually produces — a plain `handleRpc`, plus the two hooks it overrides —
+ * and asserts the base class does the rest.
+ */
+describe("shardDO + reactiveCache: base dispatch wiring", () => {
+    const REGISTRY: Readonly<Record<string, "action" | "mutation" | "query">> = {
+        "users:create": "mutation",
+        "users:list": "query",
+        "users:notify": "action",
+    };
+
+    class GeneratedLikeShard extends ShardDO {
+        public execCount = new Map<string, number>();
+
+        public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+            this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
+
+            if (REGISTRY[functionPath] === "mutation") {
+                this.recordChangedTable("users");
+
+                return { ok: true };
+            }
+
+            // Stands in for a `ctx.db` read: the same `onRead` hook a generated
+            // `createShardCtxDb` call is handed.
+            this.getCtxDbReadHook()("users", "*scan");
+
+            return { args, rows: [] };
+        }
+
+        /** Test-only: expose the protected slice the emitter spreads into `createShardCtxDb`. */
+        public tuning(): { cache?: unknown; maxRelationKeys?: number; relationExistsPushDown?: string } {
+            return this.ctxDbTuning();
+        }
+
+        /** Test-only: expose the protected `reactiveCache` field for assertions. */
+        public cacheRef(): typeof this.reactiveCache {
+            return this.reactiveCache;
+        }
+
+        // eslint-disable-next-line class-methods-use-this -- test stub override: classifies by `functionPath` alone, no instance state.
+        protected override isQueryFunction(functionPath: string): boolean {
+            return REGISTRY[functionPath] === "query";
+        }
+    }
+
+    const rpc = (shard: GeneratedLikeShard, functionPath: string, args: Record<string, unknown> = {}): Promise<Response> =>
+        shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args, functionPath }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+    it("memoizes a registered query across two /rpc dispatches without the subclass wrapping anything", async () => {
+        expect.assertions(2);
+
+        const shard = new GeneratedLikeShard(createFakeState(), {}, { reactiveCache: {} });
+
+        await rpc(shard, "users:list");
+        await rpc(shard, "users:list");
+
+        expect(shard.execCount.get("users:list")).toBe(1);
+        expect(shard.cacheRef()?.stats().hits).toBe(1);
+    });
+
+    it("never memoizes a non-query: an action's side effects must run on every dispatch", async () => {
+        expect.assertions(1);
+
+        const shard = new GeneratedLikeShard(createFakeState(), {}, { reactiveCache: {} });
+
+        await rpc(shard, "users:notify");
+        await rpc(shard, "users:notify");
+
+        expect(shard.execCount.get("users:notify")).toBe(2);
+    });
+
+    it("stays a pass-through when no reactiveCache is configured", async () => {
+        expect.assertions(1);
+
+        const shard = new GeneratedLikeShard(createFakeState(), {});
+
+        await rpc(shard, "users:list");
+        await rpc(shard, "users:list");
+
+        expect(shard.execCount.get("users:list")).toBe(2);
+    });
+
+    it("a write invalidates the memo even when the subclass never handed the cache to ctx-db", async () => {
+        expect.assertions(2);
+
+        // The backstop in `recordChangedTable`. A subclass whose
+        // `createShardCtxDb` call never took `ctxDbTuning()`'s `cache` has no
+        // per-row invalidation, so without this the second read would be served
+        // from the pre-write snapshot forever.
+        const shard = new GeneratedLikeShard(createFakeState(), {}, { reactiveCache: {} });
+
+        await rpc(shard, "users:list");
+        await shard.handleRpc("users:create", {});
+
+        expect(shard.cacheRef()?.size().entries).toBe(0);
+
+        await rpc(shard, "users:list");
+
+        expect(shard.execCount.get("users:list")).toBe(2);
+    });
+
+    it("carries the relation knobs from ShardDOOptions into the ctx-db slice", () => {
+        expect.assertions(2);
+
+        const tuned = new GeneratedLikeShard(createFakeState(), {}, { maxRelationKeys: 9000, relationExistsPushDown: "never" });
+        const bare = new GeneratedLikeShard(createFakeState(), {});
+
+        expect(tuned.tuning()).toStrictEqual({ maxRelationKeys: 9000, relationExistsPushDown: "never" });
+        // Unset knobs are ABSENT, not `undefined` — spreading the slice must not
+        // clobber an engine default with an explicit undefined.
+        expect(bare.tuning()).toStrictEqual({});
     });
 });

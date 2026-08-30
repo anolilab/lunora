@@ -58,12 +58,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `LogSink` (type)
-
-```ts
-type LogSink = TelemetrySink;
-```
-
 ### `MaskPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -411,6 +405,12 @@ abstract class ShardDO {
     protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void;
     protected getCtxDbReadRangeHook(): (range: KeyRange) => void;
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
+    protected ctxDbTuning(): {
+        cache?: ReactiveCache;
+        maxRelationKeys?: number;
+        relationExistsPushDown?: "always" | "auto" | "never";
+    };
+    protected isQueryFunction(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
     protected transactionHeadroom(): TransactionHeadroomTracker | undefined;
     protected subscriptionHeadroom(): TransactionHeadroomTracker;
@@ -448,7 +448,9 @@ abstract class ShardDO {
 
 ```ts
 interface ShardDOOptions {
+    maxRelationKeys?: number;
     reactiveCache?: ReactiveCacheOptions;
+    relationExistsPushDown?: "always" | "auto" | "never";
 }
 ```
 

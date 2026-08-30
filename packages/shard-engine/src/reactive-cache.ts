@@ -204,6 +204,7 @@ class ReactiveCache {
         // Evaluated AFTER the callback: like `deps`, the read's footprint is
         // only complete once the handler has actually run.
         const readRanges = ranges();
+
         const entry: CacheEntry = {
             bytes,
             deps,
@@ -212,6 +213,24 @@ class ReactiveCache {
             result,
             subscribers: new Set<string>(),
         };
+
+        // `run()` was awaited, so the cache is not the one this call saw on
+        // entry: a concurrent caller for the same key can have landed an entry
+        // (the documented in-flight race), and a write can have invalidated and
+        // repopulated it. Overwriting that blind leaks its byte charge forever
+        // — `totalBytes` only ever decreases through `dropEntry` — leaves the
+        // dep/range buckets pointing at a key whose entry no longer lists them,
+        // and silently discards its subscriber pins, un-pinning a watched query.
+        // Retire it properly and inherit its subscribers instead.
+        const superseded = this.entries.get(key);
+
+        if (superseded) {
+            this.dropEntry(key, superseded);
+
+            for (const subscriber of superseded.subscribers) {
+                entry.subscribers.add(subscriber);
+            }
+        }
 
         this.entries.set(key, entry);
         this.totalBytes += bytes;
