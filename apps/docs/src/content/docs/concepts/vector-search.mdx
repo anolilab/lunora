@@ -236,6 +236,8 @@ export const ShardDO = createShardDO({
             name: "docs_body",
         });
 
+        // Map key mirrors the schema's index name; `name` is the SQL table
+        // identifier, so a hyphenated index name cannot be reused verbatim.
         return { "docs-body": docsBody };
     },
 });

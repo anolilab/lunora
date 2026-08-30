@@ -133,9 +133,13 @@ interface PgVectorIndexOptions {
     metric?: VectorMetric;
 
     /**
-     * Logical index name — the same key used in the shard's `vectors` map. The
-     * backing table name is derived from it rather than configurable, because a
-     * second name for one index is a way to lose data, not a feature.
+     * Names the backing table (`__vec_<name>`), derived rather than configurable —
+     * a second name for one index is a way to lose data, not a feature.
+     *
+     * This is NOT required to equal the key in the shard's `vectors` map, and often
+     * cannot: that key mirrors the schema's `.vectorize({ index })`, which may carry
+     * hyphens (`"docs-body"`), while this must be a bare SQL identifier. Keep it
+     * stable — changing it points the index at a different, empty table.
      */
     name: string;
 }
@@ -176,6 +180,18 @@ const assertContainmentFilter = (filter: Record<string, unknown>, name: string):
     const assertSerialisable = (value: unknown, path: string): void => {
         if (value === undefined || typeof value === "function" || typeof value === "symbol") {
             reject(`has a value at "${path}" that JSON cannot represent, which would widen the filter to match every row`, path);
+        }
+
+        // `JSON.stringify` turns NaN/Infinity into `null`, which silently becomes a
+        // filter for null-valued rows rather than the number the caller meant.
+        if (typeof value === "number" && !Number.isFinite(value)) {
+            reject(`has a non-finite number at "${path}", which JSON turns into null`, path);
+        }
+
+        // And it throws on a bigint — better here, before anything is provisioned,
+        // and with a message naming the field.
+        if (typeof value === "bigint") {
+            reject(`has a bigint at "${path}", which JSON cannot serialise`, path);
         }
     };
 
@@ -257,8 +273,11 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
     const { client, dimensions, metric = "cosine", name } = options;
     const table = `${TABLE_PREFIX}${safeIdentifier(name)}`;
     // Closed union at the type level, so this guard is only for a JS caller (or a
-    // widened config) passing a string the table has no wiring for.
-    if (!(metric in METRICS)) {
+    // widened config) passing a string the table has no wiring for. `hasOwn`, not
+    // `in`: `in` walks the prototype chain, so `"toString"` would pass and then
+    // destructure to an undefined operator — provisioning the extension and table
+    // before the HNSW statement failed on it.
+    if (!Object.hasOwn(METRICS, metric)) {
         throw new TypeError(`@lunora/hyperdrive: pgvector index "${name}" got an unknown metric "${metric}" — expected cosine, euclidean, or dot-product`);
     }
 

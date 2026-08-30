@@ -189,7 +189,7 @@ describe("createPgVectorIndex", () => {
      * vectors" — the silent wrong answer this guard exists to prevent.
      */
     it("rejects filters it cannot honour instead of silently returning nothing", async () => {
-        expect.assertions(9);
+        expect.assertions(11);
 
         const store = index();
 
@@ -212,6 +212,10 @@ describe("createPgVectorIndex", () => {
         await expect(store.query([1, 0, 0], { filter: { tags: [undefined, "z"] } })).rejects.toThrow(/JSON cannot represent/);
         // A `$` operator at the TOP level is Vectorize-legal shape too.
         await expect(store.query([1, 0, 0], { filter: { $gt: 5 } })).rejects.toThrow(/comparison operator/);
+        // JSON turns these into `null`, which filters for null-valued rows instead.
+        await expect(store.query([1, 0, 0], { filter: { score: Number.NaN } })).rejects.toThrow(/non-finite/);
+        // And throws outright on a bigint — caught here, before anything provisions.
+        await expect(store.query([1, 0, 0], { filter: { size: 1n } })).rejects.toThrow(/bigint/);
     });
 
     it("omits metadata and values unless the caller asks", async () => {
@@ -307,7 +311,7 @@ describe("createPgVectorIndex", () => {
     });
 
     it("rejects unsafe or unusable construction arguments", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         expect(() => index({ name: "docs; DROP TABLE users" })).toThrow(/bare SQL identifier/);
         expect(() => index({ dimensions: 0 })).toThrow(/positive integer/);
@@ -318,6 +322,8 @@ describe("createPgVectorIndex", () => {
         // is one over and two names sharing a prefix would collide after truncation.
         expect(() => index({ name: "a".repeat(35) })).toThrow(/at most/);
         expect(() => index({ metric: "manhattan" as never })).toThrow(/unknown metric/);
+        // `in` would walk the prototype chain and let this through to a broken lookup.
+        expect(() => index({ metric: "toString" as never })).toThrow(/unknown metric/);
     });
 
     it("provisions once for concurrent callers, and retries after a transient failure", async () => {
