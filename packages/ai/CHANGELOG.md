@@ -1,3 +1,9 @@
+## @lunora/ai [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.64...@lunora/ai@1.0.0-alpha.65) (2026-08-30)
+
+### Features
+
+* **hyperdrive:** pgvector-backed ctx.vectors, plus a design plan for the embedded runtime ([#530](https://github.com/anolilab/lunora/issues/530)) ([58e0c0c](https://github.com/anolilab/lunora/commit/58e0c0cf154293ef0be8c48683d471b5533559f6))
+
 ## @lunora/ai [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.63...@lunora/ai@1.0.0-alpha.64) (2026-08-29)
 
 ### ⚠ BREAKING CHANGES
