@@ -49,6 +49,7 @@
 import { mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { LunoraError } from "@lunora/errors";
 import type { DirectShardDirectory, ShardHost, ShardKvStore, ShardStub, SocketHost } from "@lunora/platform";
 
 import { createNodeShardKvStore } from "./node-kv-store";
@@ -80,10 +81,10 @@ const SHARD_FILE_SUFFIX = ".sqlite3";
  * an escape and two outputs that fold to the same string are identical.
  *
  * A database file written by an earlier build under the case-preserving
- * encoding keeps its old basename and is no longer resolved for its key. That
- * is a rename away for anyone carrying a dev database across the change; there
- * is no compatibility path here, because reading the old name back is exactly
- * the collision this encoding exists to prevent.
+ * encoding no longer round-trips through this encoding, and the registry
+ * refuses to boot over it — see {@link shardKeyForFile}. There is no
+ * compatibility path here, because reading the old name back is exactly the
+ * collision this encoding exists to prevent.
  *
  * Each disallowed code point is escaped as its **UTF-8 byte sequence** — one
  * `%XX` per byte, uppercase — because `decodeURIComponent` (which
@@ -99,6 +100,49 @@ const encodeShardKey = (key: string): string =>
 
 /** Inverse of {@link encodeShardKey}. */
 const decodeShardKey = (basename: string): string => decodeURIComponent(basename);
+
+/**
+ * The shard key a database file on disk stands for — or a hard failure.
+ *
+ * A basename only names a key if it *round-trips*: `encodeShardKey` of what it
+ * decodes to must be the basename again. `Tenant.sqlite3`, written before
+ * uppercase was escaped, decodes to `Tenant` and so joins the seeded key set —
+ * but `shardFor("Tenant")` opens `%54enant.sqlite3`, a brand-new empty
+ * database. `listShardKeys()` then reports a key whose every fan-out leg reads
+ * zero rows and reports success, over a database still sitting in the same
+ * directory. A migration or an export gets a clean report and no data.
+ *
+ * So this throws rather than skipping the file. Skipping is the same silent
+ * emptiness one step removed: the key vanishes from the fan-out set and the
+ * queries still succeed over nothing. A boot that names the file, the key, and
+ * the exact `mv` costs one restart; the alternative costs an operator their
+ * data with no signal at all.
+ */
+const shardKeyForFile = (directory: string, entry: string): string => {
+    const basename = entry.slice(0, -SHARD_FILE_SUFFIX.length);
+    const path = join(directory, entry);
+    let key: string;
+
+    try {
+        key = decodeShardKey(basename);
+    } catch {
+        throw new LunoraError(
+            "SHARD_UNAVAILABLE",
+            `@lunora/platform-node: shard database "${path}" has a basename that is not valid percent-encoding, so the shard key it holds cannot be recovered. Rename or remove the file.`,
+        );
+    }
+
+    const expected = `${encodeShardKey(key)}${SHARD_FILE_SUFFIX}`;
+
+    if (expected !== entry) {
+        throw new LunoraError(
+            "SHARD_UNAVAILABLE",
+            `@lunora/platform-node: shard database "${path}" was written under an older shard-key encoding. It decodes to shard key "${key}", which this build stores as "${expected}" — so the key would be listed for fan-out while every read opened a new, empty database. Rename it: mv "${path}" "${join(directory, expected)}"`,
+        );
+    }
+
+    return key;
+};
 
 /** The contracts scoped to one shard key. */
 export interface NodeShard {
@@ -181,7 +225,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
 
         for (const entry of readdirSync(options.directory)) {
             if (entry.endsWith(SHARD_FILE_SUFFIX)) {
-                known.add(decodeShardKey(entry.slice(0, -SHARD_FILE_SUFFIX.length)));
+                known.add(shardKeyForFile(options.directory, entry));
             }
         }
     }

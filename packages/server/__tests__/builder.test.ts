@@ -88,6 +88,58 @@ describe(".meta()", () => {
         await expect(guarded.handler({}, {})).resolves.toBe(0);
     });
 
+    // The freeze must land on a COPY. `.meta({ rateLimit: shared })` freezing the
+    // caller's `shared` would turn `shared.hits += 1` into a TypeError in
+    // unrelated module scope — a side effect on data the caller still owns.
+    it("freezes a copy, leaving the caller's own object mutable", () => {
+        expect.assertions(4);
+
+        const shared = { hits: 0 };
+        const declaration = { rateLimit: shared };
+
+        c.query.meta(declaration).query(() => 1);
+
+        expect(Object.isFrozen(shared)).toBe(false);
+        expect(Object.isFrozen(declaration)).toBe(false);
+
+        shared.hits += 1;
+
+        expect(shared.hits).toBe(1);
+
+        // …and the copy did not follow the caller's mutation.
+        expect(Object.isFrozen(shared)).toBe(false);
+    });
+
+    // A `Map`/`Set` survives `Object.freeze` untouched — its entries live in
+    // internal slots — so a middleware could accumulate into the shared
+    // declaration through `.set()` / `.add()` for the isolate's life. The clone
+    // shadows the mutators so the promise holds for every value kind.
+    it("locks a Map/Set in the declaration and copies it away from the caller", async () => {
+        expect.assertions(4);
+
+        const seen = new Set<string>(["a"]);
+        const limits = new Map<string, number>([["signup", 5]]);
+
+        const guarded = c.query
+            .meta({ limits, seen })
+            .use(async ({ ctx, next }) => {
+                const { meta } = ctx as unknown as { meta: { limits: Map<string, number>; seen: Set<string> } };
+
+                expect(() => meta.seen.add("b")).toThrow(TypeError);
+                expect(() => meta.limits.set("signup", 999)).toThrow(TypeError);
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .query(({ ctx }) => (ctx as unknown as { meta: { limits: Map<string, number> } }).meta.limits.get("signup"));
+
+        await expect(guarded.handler({}, {})).resolves.toBe(5);
+
+        // The caller's own collections are copies away, still fully usable.
+        seen.add("b");
+
+        expect([...seen]).toStrictEqual(["a", "b"]);
+    });
+
     it("exposes the metadata to middleware as ctx.meta", async () => {
         expect.assertions(2);
 

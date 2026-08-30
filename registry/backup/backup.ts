@@ -92,7 +92,7 @@ export const snapshot = internalAction
             throw new Error(`backup/snapshot: missing R2 binding "BACKUP_BUCKET" — add it to wrangler.jsonc r2_buckets (see the backup README).`);
         }
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         const perTable: Record<string, number> = {};
         const chunks: string[] = [];
@@ -181,7 +181,7 @@ export const prune = internalAction
             throw new Error(`backup/prune: missing R2 binding "BACKUP_BUCKET" — add it to wrangler.jsonc r2_buckets (see the backup README).`);
         }
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         // Page through every snapshot object. `list` caps a single page at 1000
         // (R2's limit), so follow the cursor until R2 stops reporting `truncated`.

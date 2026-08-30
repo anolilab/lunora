@@ -77,6 +77,8 @@ describe("orchestrateMigration — admin RPC fan-out", () => {
     bench("4 shards", async () => {
         await migrate4.coordinator.orchestrateMigration(migrate4.namespace, {
             args: { direction: "up", id: "backfill" },
+            // The benched registries hold real shard keys; no fallback wanted.
+            defaultShardKey: null,
             functionPath: "__lunora_admin__:runMigration",
             table: "todos",
         });
@@ -85,6 +87,8 @@ describe("orchestrateMigration — admin RPC fan-out", () => {
     bench("16 shards", async () => {
         await migrate16.coordinator.orchestrateMigration(migrate16.namespace, {
             args: { direction: "up", id: "backfill" },
+            // The benched registries hold real shard keys; no fallback wanted.
+            defaultShardKey: null,
             functionPath: "__lunora_admin__:runMigration",
             table: "todos",
         });
@@ -93,10 +97,10 @@ describe("orchestrateMigration — admin RPC fan-out", () => {
 
 describe("orchestrateExport — admin RPC fan-out (1000 rows total)", () => {
     bench("4 shards × 250 rows", async () => {
-        await export4.coordinator.orchestrateExport(export4.namespace, { tables: ["todos"] });
+        await export4.coordinator.orchestrateExport(export4.namespace, { defaultShardKey: null, tables: ["todos"] });
     });
 
     bench("16 shards × 62 rows", async () => {
-        await export16.coordinator.orchestrateExport(export16.namespace, { tables: ["todos"] });
+        await export16.coordinator.orchestrateExport(export16.namespace, { defaultShardKey: null, tables: ["todos"] });
     });
 });

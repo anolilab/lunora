@@ -99,14 +99,14 @@ interface RunExportTapOptions {
 
     /**
      * Shard to drain when registry discovery finds nothing — normally the
-     * worker's `"__root__"`. Forwarded to `orchestrateCdcSync`'s
-     * `withDefaultShard`: a registry only knows the keys an app registers for
-     * its `.shardBy(...)` tables, so on a plain root-DO app discovery is `[]`
-     * and, without this, the tap fans out to no shards and reports
-     * `{ delivered: 0, hasMore: false }` against a full change feed. Omit it to
-     * keep an empty discovery as an empty pass.
+     * worker's `"__root__"` — or `null` to keep an empty discovery as an empty
+     * pass. Forwarded verbatim to `orchestrateCdcSync`, and required for the
+     * same reason it is required there: a registry only knows the keys an app
+     * registers for its `.shardBy(...)` tables, so on a plain root-DO app
+     * discovery is `[]` and a caller that omitted this drained no shards while
+     * reporting `{ delivered: 0, hasMore: false }` against a full change feed.
      */
-    defaultShardKey?: string;
+    defaultShardKey: string | null;
     /** Headers forwarded to each shard (identity / admin bearer). */
     headers?: Record<string, string>;
     /** Base backoff in ms for the first retry (doubles each attempt, capped at `maxBackoffMs`). Defaults to `100`. */

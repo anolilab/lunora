@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { createStorage } from "../../src/create-storage";
 
-const storage = (): ReturnType<typeof createStorage> => createStorage({ bucket: env.BUCKET });
+const storage = (): ReturnType<typeof createStorage> => createStorage({ bucket: env.BUCKET, bucketName: "default" });
 
 describe("createStorage (workerd + Miniflare R2 integration)", () => {
     it("upload then download round-trips bytes through R2", async () => {

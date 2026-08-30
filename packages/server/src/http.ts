@@ -388,7 +388,7 @@ const errorResponse = (error: unknown): Response => {
  * without a body); everything else answers 405 with the required `Allow` header.
  */
 const methodNotAllowed = (state: RouteState, c: Context<LunoraHttpEnv>): Response | undefined => {
-    const {method} = c.req;
+    const { method } = c.req;
 
     if (method === state.method || (state.method === "GET" && method === "HEAD")) {
         return undefined;

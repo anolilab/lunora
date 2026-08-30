@@ -245,7 +245,7 @@ createWorker({
     adminToken: env.LUNORA_ADMIN_TOKEN,
     schedulerDO: env.SCHEDULER, // enables the scheduled-jobs page
     functions: LUNORA_FUNCTIONS, // enables function discovery
-    storageList: createStorage({ bucket: env.FILES }).list, // enables the file browser
+    storageList: createStorage({ bucket: env.FILES, bucketName: "default" }).list, // enables the file browser
 });
 ```
 

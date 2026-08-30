@@ -107,7 +107,7 @@ Calling `prune` with **neither** argument throws — a deliberate guard so a mis
 
 `lunora registry add` **merges** this into any existing `r2_buckets` array (it won't drop buckets you already have), and is idempotent on re-run. Rename `bucket_name` to the R2 bucket you actually created.
 
-Both `snapshot` and `prune` in `lunora/backup/index.ts` read the bucket via `import { env } from "cloudflare:workers"` and hand `env.BACKUP_BUCKET` (cast to `R2BucketLike` and guarded) to `createStorage({ bucket })`. The `cloudflare:workers` types come from your project's `@cloudflare/workers-types` + generated `Env`.
+Both `snapshot` and `prune` in `lunora/backup/index.ts` read the bucket via `import { env } from "cloudflare:workers"` and hand `env.BACKUP_BUCKET` (cast to `R2BucketLike` and guarded) to `createStorage({ bucket, bucketName })`. The `cloudflare:workers` types come from your project's `@cloudflare/workers-types` + generated `Env`.
 
 ## Restore
 

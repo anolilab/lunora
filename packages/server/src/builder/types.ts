@@ -79,8 +79,10 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
      * "pins/create" })` lets ONE generic middleware read the policy it is meant
      * to enforce off `ctx.meta`, where the same policy expressed only as
      * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
-     * `.use()` site. Mirrors tRPC's `.meta()`. The value is deep-frozen: the
-     * same object reaches every request.
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => QueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => QueryBuilder<Context, Args, Infer<V>>;
@@ -137,8 +139,10 @@ export interface MutationBuilder<Context, Args extends ArgsValidator, Output = u
      * "pins/create" })` lets ONE generic middleware read the policy it is meant
      * to enforce off `ctx.meta`, where the same policy expressed only as
      * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
-     * `.use()` site. Mirrors tRPC's `.meta()`. The value is deep-frozen: the
-     * same object reaches every request.
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => MutationBuilder<Context, Args, Output>;
     mutation: [Output] extends [undefined]
@@ -179,8 +183,10 @@ export interface ActionBuilder<Context, Args extends ArgsValidator, Output = und
      * "pins/create" })` lets ONE generic middleware read the policy it is meant
      * to enforce off `ctx.meta`, where the same policy expressed only as
      * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
-     * `.use()` site. Mirrors tRPC's `.meta()`. The value is deep-frozen: the
-     * same object reaches every request.
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => ActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
@@ -214,8 +220,10 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
      * "pins/create" })` lets ONE generic middleware read the policy it is meant
      * to enforce off `ctx.meta`, where the same policy expressed only as
      * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
-     * `.use()` site. Mirrors tRPC's `.meta()`. The value is deep-frozen: the
-     * same object reaches every request.
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => InternalQueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalQueryBuilder<Context, Args, Infer<V>>;
@@ -243,8 +251,10 @@ export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Ou
      * "pins/create" })` lets ONE generic middleware read the policy it is meant
      * to enforce off `ctx.meta`, where the same policy expressed only as
      * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
-     * `.use()` site. Mirrors tRPC's `.meta()`. The value is deep-frozen: the
-     * same object reaches every request.
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => InternalMutationBuilder<Context, Args, Output>;
     mutation: [Output] extends [undefined]
@@ -270,8 +280,10 @@ export interface InternalActionBuilder<Context, Args extends ArgsValidator, Outp
      * "pins/create" })` lets ONE generic middleware read the policy it is meant
      * to enforce off `ctx.meta`, where the same policy expressed only as
      * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
-     * `.use()` site. Mirrors tRPC's `.meta()`. The value is deep-frozen: the
-     * same object reaches every request.
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;

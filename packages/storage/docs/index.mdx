@@ -81,8 +81,11 @@ still queues, and those deletes are flushed when the action finishes.
 
 Build the full `Storage` outside a handler (or to use the object-level reads,
 ranged downloads, and multipart shown below) with
-`createStorage({ bucket, publicBaseUrl?, signingSecret?, s3? })`. The examples
-that follow use such an instance, named `storage`.
+`createStorage({ bucket, bucketName, publicBaseUrl?, signingSecret?, s3? })`.
+`bucketName` is required and has no default — it is bound into every signed
+URL's HMAC, so a bucket signing under the wrong name mints URLs that verify
+against somebody else's bucket. The examples that follow use such an instance,
+named `storage`.
 
 ## Direct upload from an action
 
@@ -199,6 +202,7 @@ credentials, passed as `s3` to `createStorage`:
 ```ts
 const storage = createStorage({
     bucket: env.FILES,
+    bucketName: "files",
     s3: {
         accountId: env.R2_ACCOUNT_ID,
         accessKeyId: env.R2_ACCESS_KEY_ID,

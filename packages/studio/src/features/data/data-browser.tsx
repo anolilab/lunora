@@ -423,13 +423,15 @@ export const DataBrowser = ({
         browser.onRowDelete(cascadePreviewRowId);
     };
 
-    // Bounded per-table read the preview counts impacted rows with: the FK value it
-    // searches for is the parent row's id. Reads the DEBOUNCED shard, the one the
-    // rows on screen came from.
-    const readCascadePage = async (table: string, search: string): Promise<TablePage> =>
+    // Bounded per-table read the preview counts impacted rows with: an EXACT match
+    // on the child's foreign-key column (`column = parent row id`), not the
+    // free-text `search` — that one matches any column containing the id, so a note
+    // quoting the id counted as a cascade victim. Reads the DEBOUNCED shard, the one
+    // the rows on screen came from.
+    const readCascadePage = async (table: string, column: string, value: string): Promise<TablePage> =>
         (await client.query(
             READ_TABLE_PAGE,
-            { filters: [], limit: MAX_ROWS_PER_TABLE, offset: 0, orderBy: [], search, table },
+            { filters: [{ column, operator: "eq", value }], limit: MAX_ROWS_PER_TABLE, offset: 0, orderBy: [], table },
             callOptions(queryShardKey),
         )) as TablePage;
 

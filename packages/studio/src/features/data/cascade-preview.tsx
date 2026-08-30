@@ -44,8 +44,14 @@ interface CascadePreviewProps {
     readonly onClose: () => void;
     /** Called when the operator confirms delete. */
     readonly onConfirm: () => void;
-    /** Async read of a table page (bounded). Used to count/sample matching rows. */
-    readonly readPage: (table: string, search: string) => Promise<TablePage>;
+
+    /**
+     * Async read of a table page (bounded), scoped to one column's exact value.
+     * Used to count/sample the rows whose foreign key points at the parent row —
+     * a substring search over every column would also match rows that merely
+     * mention the id somewhere else, overstating the blast radius.
+     */
+    readonly readPage: (table: string, column: string, value: string) => Promise<TablePage>;
     /** Row id being deleted. */
     readonly rowId: string;
     /** The advisor schema describing all tables and their relations. */
@@ -94,7 +100,9 @@ const nodeBadge = (node: CascadeNode): ReactElement => {
 };
 
 /**
- * One line of the cascade tree: an indented row showing the table, row count,
+ * One line of the cascade tree: an indented row showing the table, the
+ * foreign-key column the edge arrived by (two FKs from the same table to the
+ * same parent are different edges with different counts), row count,
  * restrict/cascade badge, and any cap note.
  */
 const CascadeRow = ({ depth, node }: { depth: number; node: CascadeNode }): ReactElement => (
@@ -106,6 +114,11 @@ const CascadeRow = ({ depth, node }: { depth: number; node: CascadeNode }): Reac
                 </span>
             )}
             <span className="font-medium text-foreground">{node.table}</span>
+            {node.relation !== undefined && (
+                <span className="text-muted-foreground" data-testid={`cascade-col-${node.table}-${node.relation.field}`}>
+                    via {node.relation.field}
+                </span>
+            )}
             <span className="text-muted-foreground">({node.rowCount.toString()} rows)</span>
             {nodeBadge(node)}
             {node.capNote !== undefined && (
@@ -139,14 +152,20 @@ const extractRowId = (row: Record<string, unknown>): string => {
     return "";
 };
 
-/** Fetch a bounded count + sample of rows in `table` that reference `rowId`. */
+/**
+ * Fetch a bounded count + sample of the rows in `table` whose `column` (the
+ * child's foreign key) equals `rowId` — an exact column match, not a free-text
+ * search, so an unrelated row that happens to contain the id in some other field
+ * never inflates the count shown at a destructive step.
+ */
 const fetchRelatedRows = async (
     table: string,
+    column: string,
     rowId: string,
-    readPage: (t: string, search: string) => Promise<TablePage>,
+    readPage: (t: string, c: string, v: string) => Promise<TablePage>,
 ): Promise<{ capNote: string | undefined; rowCount: number; rowIds: string[] }> => {
     try {
-        const page = await readPage(table, rowId);
+        const page = await readPage(table, column, rowId);
         // One pass: `.map().filter(Boolean)` walked the page twice and, worse, did
         // not narrow away the empty ids — `flatMap` does both.
         const rowIds = page.rows.flatMap((r) => extractRowId(r) || []).slice(0, MAX_ROWS_PER_TABLE);
@@ -163,7 +182,9 @@ const fetchRelatedRows = async (
 
 /**
  * Walk the cascade tree and collect data asynchronously. For each related table
- * we issue a bounded count/sample read using the parent row id as a search key.
+ * we issue a bounded count/sample read scoped to that relation's foreign-key
+ * column (`field = parent id`), so the count is the rows that actually reference
+ * the parent — never rows that merely mention its id elsewhere.
  * The walk is bounded by MAX_DEPTH and MAX_ROWS_PER_TABLE to keep the preview
  * fast and never run an unbounded query.
  */
@@ -174,11 +195,11 @@ const resolveCascadeNode = async (
     cascadeMap: Map<string, AdvisorRelation[]>,
     visited: Set<string>,
     depth: number,
-    readPage: (t: string, search: string) => Promise<TablePage>,
+    readPage: (t: string, c: string, v: string) => Promise<TablePage>,
 ): Promise<CascadeNode> => {
     // Root node (the row being deleted) vs a related child node.
     const { capNote, rowCount, rowIds } =
-        relation === undefined ? { capNote: undefined, rowCount: 1, rowIds: [rowId] } : await fetchRelatedRows(table, rowId, readPage);
+        relation === undefined ? { capNote: undefined, rowCount: 1, rowIds: [rowId] } : await fetchRelatedRows(table, relation.field, rowId, readPage);
 
     const isRestrict = relation?.onDelete === "restrict";
     const children: CascadeNode[] = [];

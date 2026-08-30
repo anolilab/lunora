@@ -33,7 +33,7 @@ interface ListOptions {
 ```ts
 interface LunoraStorageOptions {
     bucket: R2BucketLike;
-    bucketName?: string;
+    bucketName: string;
     publicBaseUrl?: string;
     s3?: R2S3Credentials;
     signingSecret?: string;

@@ -303,6 +303,17 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         throw new LunoraError("INTERNAL", "@lunora/storage: `bucket` is required");
     }
 
+    // Same guard for `bucketName`, and it fails here rather than at signing time
+    // on purpose: the previous `?? "default"` fallback meant an omitted name
+    // silently signed every bucket as `"default"`, so a URL minted for one
+    // bucket verified against another sharing the signing secret.
+    if (typeof options.bucketName !== "string" || options.bucketName === "") {
+        throw new LunoraError(
+            "INTERNAL",
+            '@lunora/storage: `bucketName` is required — pass the name this bucket is registered under (`"default"` for a single-bucket app)',
+        );
+    }
+
     const upload = async (key: string, body: UploadBody, uploadOptions: UploadOptions = {}): Promise<{ etag: string; httpEtag: string; key: string }> => {
         validateKey(key);
 
@@ -411,10 +422,8 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         // With a delimiter, R2 puts the rolled-up "folders" in `delimitedPrefixes`
         // and leaves them OUT of `objects` — dropping them made
         // `list("photos/", { delimiter: "/" })` over a bucket full of
-        // `photos/2026/*.png` look like an empty directory. `R2BucketLike.list`
-        // does not declare the field yet (packages/platform/src/bindings.ts), so
-        // it is read structurally until it does.
-        const { delimitedPrefixes } = result as { delimitedPrefixes?: string[] };
+        // `photos/2026/*.png` look like an empty directory.
+        const { delimitedPrefixes } = result;
 
         // Forward R2's `truncated` flag so callers can paginate with a clean
         // `while (truncated)` loop instead of inferring "more" from `cursor`.
@@ -455,7 +464,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
 
         return buildSignedUrl({
             baseUrl: options.publicBaseUrl,
-            bucketName: options.bucketName ?? "default",
+            bucketName: options.bucketName,
             contentType: signedOptions.contentType,
             expiresInSeconds: signedOptions.expiresInSeconds,
             key,

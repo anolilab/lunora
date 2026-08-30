@@ -28,9 +28,12 @@ const fakeCoordinator = (
     },
 ) => {
     const calls: Record<string, number>[] = [];
-    const requests: { defaultShardKey?: string; limit?: number }[] = [];
+    const requests: { defaultShardKey: string | null; limit?: number }[] = [];
     const coordinator = {
-        orchestrateCdcSync: async (_namespace: ShardNamespaceLike, request: { cursors?: Record<string, number>; defaultShardKey?: string; limit?: number }) => {
+        orchestrateCdcSync: async (
+            _namespace: ShardNamespaceLike,
+            request: { cursors?: Record<string, number>; defaultShardKey: string | null; limit?: number },
+        ) => {
             calls.push({ ...request.cursors });
             requests.push({ defaultShardKey: request.defaultShardKey, limit: request.limit });
 
@@ -69,7 +72,7 @@ describe("export-tap — continuous CDC drain", () => {
             };
         });
 
-        const result = await runExportTap({ coordinator, cursorStore: store, shardDO: noopShardDO, sink, tables: ["messages"] });
+        const result = await runExportTap({ coordinator, cursorStore: store, defaultShardKey: null, shardDO: noopShardDO, sink, tables: ["messages"] });
 
         expect(result.delivered).toBe(3);
         expect(result.failures).toEqual([]);
@@ -79,7 +82,7 @@ describe("export-tap — continuous CDC drain", () => {
         expect(store.snapshot()["warehouse"]).toEqual({ "tenant-a": 2, "tenant-b": 5 });
 
         // A second pass resumes from the persisted cursor (no re-scan from zero).
-        await runExportTap({ coordinator, cursorStore: store, shardDO: noopShardDO, sink, tables: ["messages"] });
+        await runExportTap({ coordinator, cursorStore: store, defaultShardKey: null, shardDO: noopShardDO, sink, tables: ["messages"] });
 
         expect(calls[0]).toEqual({});
         expect(calls[1]).toEqual({ "tenant-a": 2, "tenant-b": 5 });
@@ -114,6 +117,7 @@ describe("export-tap — continuous CDC drain", () => {
         const result = await runExportTap({
             coordinator,
             cursorStore: store,
+            defaultShardKey: null,
             initialBackoffMs: 0,
             maxRetries: 2,
             shardDO: noopShardDO,
@@ -155,7 +159,17 @@ describe("export-tap — continuous CDC drain", () => {
             };
         });
 
-        await runExportTap({ coordinator, cursorStore: store, initialBackoffMs: 10, maxRetries: 3, shardDO: noopShardDO, sink, sleep, tables: ["t"] });
+        await runExportTap({
+            coordinator,
+            cursorStore: store,
+            defaultShardKey: null,
+            initialBackoffMs: 10,
+            maxRetries: 3,
+            shardDO: noopShardDO,
+            sink,
+            sleep,
+            tables: ["t"],
+        });
 
         // 2 failures + 1 success = 3 deliver calls, 2 backoff sleeps.
         expect(deliver).toHaveBeenCalledTimes(3);
@@ -269,7 +283,11 @@ describe("export-tap — empty shard discovery and page-size accounting", () => 
         expect(result.delivered).toBe(1);
     });
 
-    it("omits `defaultShardKey` when the caller supplies none (an empty fan-out stays empty)", async () => {
+    // Regression: `defaultShardKey` was optional here and forwarded as
+    // `undefined`, so a tap that simply never mentioned it drained zero shards
+    // and reported success. `null` is now the only way to ask for that, and it
+    // has to be written down.
+    it("forwards an explicit `null` unchanged (an empty fan-out stays empty)", async () => {
         expect.assertions(1);
 
         const { coordinator, requests } = fakeCoordinator(() => {
@@ -279,12 +297,13 @@ describe("export-tap — empty shard discovery and page-size accounting", () => 
         await runExportTap({
             coordinator,
             cursorStore: createMemoryCursorStore(),
+            defaultShardKey: null,
             shardDO: noopShardDO,
             sink: defineExportSink({ deliver: async () => undefined, name: "warehouse" }),
             tables: ["t"],
         });
 
-        expect(requests[0]?.defaultShardKey).toBeUndefined();
+        expect(requests[0]?.defaultShardKey).toBeNull();
     });
 
     it("reports `hasMore` on a full page even when the caller passed no `limit`", async () => {

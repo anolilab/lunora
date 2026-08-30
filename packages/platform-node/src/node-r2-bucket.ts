@@ -1,7 +1,7 @@
 /**
  * `createNodeR2Bucket` — a Node implementation of the `R2BucketLike` structural
  * contract (`@lunora/platform`) over the local filesystem, so `@lunora/storage`'s
- * `createStorage({ bucket })` runs on the Node host.
+ * `createStorage({ bucket, bucketName })` runs on the Node host.
  *
  * # The invariant
  *
@@ -622,7 +622,7 @@ const unlinkIfPresent = async (path: string): Promise<void> => {
 
 /**
  * Create an `R2BucketLike` over the local filesystem. Any object shape
- * `createStorage({ bucket })` accepts — `put`/`get`/`head`/`delete`/`list` —
+ * `createStorage({ bucket, bucketName })` accepts — `put`/`get`/`head`/`delete`/`list` —
  * maps directly onto a file operation.
  */
 const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {

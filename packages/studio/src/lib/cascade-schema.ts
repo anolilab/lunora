@@ -57,6 +57,10 @@ const advisorSchemaFromColumns = (columnsByTable: Readonly<Record<string, Readon
  */
 const buildCascadeMap = (schema: AdvisorSchema): Map<string, AdvisorRelation[]> => {
     const map = new Map<string, AdvisorRelation[]>();
+    // `childTable:field` pairs already recorded per parent. The same edge declared
+    // twice is still ONE edge; without this the preview renders a duplicate node
+    // for it, doubling the apparent blast radius of the delete.
+    const seen = new Set<string>();
 
     for (const advisorTable of schema.tables) {
         for (const relation of advisorTable.relations) {
@@ -75,6 +79,14 @@ const buildCascadeMap = (schema: AdvisorSchema): Map<string, AdvisorRelation[]> 
 
             // The relation's `references` is the referenced (parent) table.
             const parent = relation.references;
+            const edgeKey = `${parent}\u0000${advisorTable.name}\u0000${relation.field}`;
+
+            if (seen.has(edgeKey)) {
+                continue;
+            }
+
+            seen.add(edgeKey);
+
             const existing = map.get(parent) ?? [];
 
             // Include the relation with the child's table name so the walker knows

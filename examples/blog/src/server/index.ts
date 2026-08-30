@@ -45,7 +45,12 @@ export const ShardDO = createShardDO({
         const shardEnv = env as unknown as ShardEnv;
 
         return shardEnv.FILES
-            ? createStorage({ bucket: shardEnv.FILES, publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL, signingSecret: shardEnv.STORAGE_SECRET })
+            ? createStorage({
+                  bucket: shardEnv.FILES,
+                  bucketName: "default",
+                  publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL,
+                  signingSecret: shardEnv.STORAGE_SECRET,
+              })
             : undefined;
     },
     // Maps the schema's logical index name (`posts_search`) to the Vectorize

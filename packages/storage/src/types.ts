@@ -36,11 +36,14 @@ export interface LunoraStorageOptions {
      * union use. Bound into every signed URL's HMAC and mirrored on it as
      * `&bucket=`, so a URL minted for one bucket can't be replayed against
      * another sharing the signing secret, and the serving route can resolve
-     * which bucket to read. Defaults to `"default"` (the tag a single-bucket
-     * app's bare `ctx.storage` carries); pass the registered name for any
-     * bucket reached through `createBucketStorage`.
+     * which bucket to read.
+     *
+     * Required, and deliberately without a default: a defaulted name is how
+     * every bucket ended up signing as `"default"` and cross-verifying against
+     * each other. Pass `"default"` for a single-bucket app's `ctx.storage`, and
+     * the registered name for any bucket reached through `createBucketStorage`.
      */
-    bucketName?: string;
+    bucketName: string;
     /** Public base URL used by `getSignedUrl()`. Required for signed URLs. */
     publicBaseUrl?: string;
 

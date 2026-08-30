@@ -18,7 +18,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { Middleware } from "../src/index";
+import composeMiddleware from "../src/builder/compose-middleware";
+import type { Middleware, MiddlewareNext } from "../src/index";
 import {
     buildMaskRegistry,
     buildRlsReadRegistry,
@@ -31,6 +32,8 @@ import {
     protectPublic,
     rls,
 } from "../src/index";
+import { readMaskTag } from "../src/mask/policy-tag";
+import { readRlsTags } from "../src/rls/policy-tag";
 
 const builders = initLunora.dataModel<unknown>().create();
 
@@ -137,5 +140,58 @@ describe("composePluginMiddleware carries the policy tags of its inner chain", (
 
         expect(fn).not.toHaveProperty("rls");
         expect(fn).not.toHaveProperty("maskedTables");
+    });
+});
+
+// Both composers fold their chain through ONE helper that tags as it composes,
+// so a third composer cannot be written that forgets to re-stamp: there is no
+// untagged arrow to return.
+describe("composeMiddleware tags as it composes", () => {
+    it("returns an already-tagged middleware — tagging is not a separate step a caller can skip", () => {
+        expect.assertions(2);
+
+        const composed = composeMiddleware([asMiddleware(rls(definePolicies([readOwnDocs]))), asMiddleware(mask({ users: { ssn: "redact" } }))]);
+
+        expect(readRlsTags(composed)).toHaveLength(1);
+        expect([...(readMaskTag(composed)?.columns.get("users") ?? [])]).toStrictEqual(["ssn"]);
+    });
+
+    it("runs the folded chain in order and hands the accumulated context to the outer next", async () => {
+        expect.assertions(2);
+
+        const order: string[] = [];
+        const step =
+            (name: string): Middleware<unknown, unknown> =>
+            async ({ ctx, next }) => {
+                order.push(name);
+
+                return await next({ ctx: { ...(ctx as Record<string, unknown>), [name]: true } });
+            };
+
+        const composed = composeMiddleware<unknown, unknown>([step("first"), step("second")]);
+        // The terminal stands in for the surrounding builder's own `next`: hand
+        // back whatever context the folded chain accumulated.
+        const terminal = (async (options?: { ctx: Record<string, unknown> }) => options?.ctx) as MiddlewareNext<unknown>;
+        const seen = await composed({ ctx: { base: true }, next: terminal });
+
+        expect(order).toStrictEqual(["first", "second"]);
+        expect(seen).toStrictEqual({ base: true, first: true, second: true });
+    });
+});
+
+// The mask union is one function shared with the builder's own hoisting, so a
+// composer's columns flatten per table exactly as a plain `.use()` chain's do.
+describe("protectPublic unions the masked columns of every step", () => {
+    it("flattens two mask() steps into one set per table", () => {
+        expect.assertions(1);
+
+        const fn = registerWith(
+            protectPublic({
+                use: [asMiddleware(mask({ users: { ssn: "redact" } })), asMiddleware(mask({ users: { phone: "hash" } }))],
+            }),
+        );
+        const registry = buildMaskRegistry([fn]);
+
+        expect([...(registry.get("users") ?? [])].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["phone", "ssn"]);
     });
 });
