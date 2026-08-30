@@ -7,14 +7,11 @@ import { ALL_LINTS, fanOutBreadth, hotShard, indexUtilization, runAdvisor, RUNTI
  * A minimal context with an empty schema.
  *
  * NOT because runtime lints ignore `schema` — `constraint_validator` reads it,
- * along with `tableSamples`. This base deliberately supplies neither, which is
- * why the tests below cover only the four observed-signal lints; a
- * `constraint_validator` case has to build its own context. The comment that
- * used to sit here claimed runtime lints read observed signal only, and that
- * assumption is exactly what let the studio ship `schema: { tables: [] }` and
- * leave the lint silent in production.
- */
-const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
+ * along with `tableSamples`. This base supplies neither, so the three
+ * observed-signal lints below (`fan_out_breadth`, `hot_shard`,
+ * `index_utilization`) are the ones it can drive; `constraint_validator` is
+ * covered by `constraint-validator.test.ts`, which builds its own context.
+ */ const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
     return { schema: { tables: [] }, ...overrides };
 };
 

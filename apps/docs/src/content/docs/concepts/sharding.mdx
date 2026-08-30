@@ -60,10 +60,12 @@ a dump taken before the edit lands on the right DOs after it.
 </Callout>
 
 1. **Stop writes to the table.** Do this _before_ the dump, not after. Export
-   walks the table with keyset pagination — successive live reads, not one
-   snapshot — so a row inserted behind the cursor is never dumped, and step 6
-   then deletes it from the root DO. That is the one way this procedure loses
-   data.
+   walks the table with successive live reads rather than one snapshot, and step 6
+   deletes the root DO's copies — so anything written during the procedure and
+   missed by the dump is gone. The widest window is between the dump finishing and
+   the deploy taking effect: those writes still land in `__root__` and are deleted
+   later. (A multi-table export widens it further — tables are walked one after
+   another, so a write to an already-finished table is missed too.)
 
 2. **Dump the table while it still lives in the root DO.** `_id` and
    `_creationTime` survive the round trip, so relations and
@@ -128,40 +130,64 @@ users: defineTable({ email: v.string(), name: v.string() }).global().index("by_e
 
 ### Migrating a populated table to D1
 
-Adding `.global()` to a table that already has rows has the same shape as
-[adopting `.shardBy()`](#migrating-a-populated-table) — the edit changes where
-_future_ rows go, and the ones already in `__root__` stay put, unreadable and
-still on the DO's ledger. The export/import round trip moves them, because
-`lunora import` routes each row by the deployed schema: a table the schema now
-declares `.global()` goes to D1 instead of a shard.
+Adding `.global()` to a table that already has rows moves it to D1, and — like
+adopting `.shardBy()` — the edit only changes where _future_ rows go. The
+export/import round trip moves the existing ones, because `lunora import` routes
+each row by the deployed schema: a table the schema now declares `.global()` goes
+to D1 instead of a shard.
 
-One extra step, and it is quiet rather than loud. The D1 **table** itself is
-provisioned lazily — `ensureMigrated` runs `CREATE TABLE IF NOT EXISTS` before
-the first read or write, so an import into a never-written `.global()` table
-succeeds. Its declared **indexes** are not: `lunora migrate generate` emits those,
-and the deploy applies them. Import before that and a `unique` index does not
-exist yet, so duplicates the constraint would have rejected are accepted without
-a word.
+**The order differs from the `.shardBy()` procedure, and the difference matters.**
+There, the root DO's leftover copies are cleared last, from the Studio. Here they
+cannot be cleared at all once the edit lands: the shard's writer refuses to touch
+a table the schema calls global (`GLOBAL_TABLE_NOT_EDITABLE`), and the Studio
+redirects a global table to a read-only D1 view. So the root copies have to go
+**before** the schema edit, while the table is still shard-local and the writer
+still owns it.
 
-```bash
-# stop writes first — export is keyset pagination over live reads, not a snapshot
-lunora export --tables users --out users.ndjson --prod --url <url>
-lunora migrate generate add_users_global   # emits the D1 DDL, indexes included
-lunora codegen && lunora deploy --allow-schema-drift   # applies the SQL, then publishes
-lunora import users.ndjson --prod --url <url> --yes --verify
-# resume writes, then clear the table at shard __root__ in the Studio
-```
+<Callout type="warn">
+    Writes are unavailable from step 1 to step 6. Export is keyset pagination over live reads, not a snapshot, and step 3 deletes the source rows — so a write
+    that lands mid-procedure is lost. Snapshot first: [Backups](/docs/concepts/backups) covers point-in-time recovery.
+</Callout>
+
+1. **Stop writes to the table.**
+
+2. **Dump it while it still lives in the root DO.**
+
+    ```bash
+    lunora export --tables users --out users.ndjson --prod --url <url>
+    ```
+
+3. **Delete the root DO's rows now**, before the schema edit — this is the only
+   window in which anything can. In the Studio's **Data** page set the shard key
+   to `__root__`, open the table, and use **Clear table**.
+
+4. **Add `.global()` to `lunora/schema.ts`**, then generate and deploy. The
+   schema-drift gate blocks a shard-mode change on purpose, so pass
+   `--allow-schema-drift` once you are running these steps deliberately.
+
+    ```bash
+    lunora migrate generate add_users_global   # keeps the committed D1 migration history in step
+    lunora codegen && lunora deploy --allow-schema-drift
+    ```
+
+5. **Load the dump back.** Rows now route to D1.
+
+    ```bash
+    lunora import users.ndjson --prod --url <url> --yes --verify
+    ```
+
+6. **Resume writes.**
+
+<Callout type="info">
+    `migrate generate` is bookkeeping here, not a prerequisite: `ensureMigrated` provisions a `.global()` table **and its declared indexes** — including the
+    UNIQUE ones — before the first read or write, so the import would succeed without it. Run it anyway to keep `lunora/migrations/` and its snapshot in step
+    with the schema, which is what the next `generate` diffs against.
+</Callout>
 
 <Callout type="warn">
     Going global is a one-way trip for atomicity, not just a storage move: a mutation that writes both a sharded table and a `.global()` one is **not** writing
     both atomically. Make that call before the migration, not after — reversing it is the same round trip again.
 </Callout>
-
-Everything else carries over from the shard-adoption procedure: the schema-drift
-gate blocks the deploy on purpose (a shard-mode change is breaking), `_id` and
-`_creationTime` survive the round trip, and the root DO's leftover copies are
-cleared last, from the Studio's **Data** page with the shard key set to
-`__root__`.
 
 ## Cross-shard reads
 

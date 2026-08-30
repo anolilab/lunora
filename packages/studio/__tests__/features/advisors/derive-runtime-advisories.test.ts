@@ -238,3 +238,32 @@ describe("declaredIndexesFor", () => {
         ]);
     });
 });
+
+describe("runtime lints this call site can actually drive", () => {
+    /**
+     * `constraint_validator` is registered in `RUNTIME_LINTS` but cannot fire from
+     * here: it reads `context.tableSamples` and `context.schema`, and this call
+     * site supplies neither. That is documented in `deriveRuntimeAdvisories`, but a
+     * paragraph does not fail when someone adds sampling and forgets the schema —
+     * this does.
+     *
+     * When it starts failing, the lint has become live: delete this test and the
+     * comment, rather than weakening the assertion.
+     */
+    it("produces no constraint_validator finding, because it is given neither schema nor samples", () => {
+        expect.assertions(2);
+
+        const rows = deriveRuntimeAdvisories({
+            declaredIndexes: [{ index: "byAuthor", table: "posts" }],
+            functions: [],
+            indexHits: [],
+            shardTraffic: [],
+        });
+
+        // Positive control: this input DOES fire index_utilization, and its key
+        // carries the lint name — so the negative below is discriminating, not
+        // just matching against an empty list.
+        expect(rows.some((row) => row.key.startsWith("index_utilization"))).toBe(true);
+        expect(rows.some((row) => row.key.startsWith("constraint_validator"))).toBe(false);
+    });
+});
