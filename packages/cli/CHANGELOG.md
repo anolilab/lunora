@@ -1,3 +1,17 @@
+## @lunora/cli [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.207...@lunora/cli@1.0.0-alpha.208) (2026-08-30)
+
+### Code Refactoring
+
+* **cli:** one pre-deploy pipeline, shared by prepare and deploy ([#529](https://github.com/anolilab/lunora/issues/529)) ([9242050](https://github.com/anolilab/lunora/commit/9242050be98fd9f7317af35e622cf16cb5ecfa09))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.142
+* **@lunora/config:** upgraded to 1.0.0-alpha.175
+* **@lunora/seed:** upgraded to 1.0.0-alpha.94
+* **@lunora/testing:** upgraded to 1.0.0-alpha.134
+
 ## @lunora/cli [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.206...@lunora/cli@1.0.0-alpha.207) (2026-08-29)
 
 
