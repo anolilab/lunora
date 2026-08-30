@@ -144,9 +144,21 @@ This runs:
 3. a Docker preflight when Dockerfile-backed containers are declared
 4. `wrangler deploy` against the resolved Worker (building/pushing container images)
 
-CI should run `lunora verify` (or `lunora prepare`) first so codegen drift and a
-stale `_generated/` are a build failure, not a deploy that silently uses old
-types.
+CI should run one of these before the deploy job, so codegen drift and a stale
+`_generated/` are a build failure rather than a deploy that silently ships old
+types:
+
+- **`lunora prepare`** shares the deploy's gate pipeline — codegen, the
+  `postcodegen` hook, the schema-drift gate, binding provisioning, the D1
+  placeholder and container/Docker preflights, and `wrangler.jsonc` validation —
+  so what it accepts is what `deploy` accepts. It writes (`_generated/`,
+  `wrangler.jsonc`), so reach for it when you want the reconciled config too.
+
+    It does **not** run migrations (step 2) or build and push images (step 4).
+    Migrations are a deploy-time action against a live database, not a check.
+
+- **`lunora verify`** writes nothing and adds `tsc --noEmit`, so it is the
+  lighter gate for a pull-request check.
 
 ## Worker size
 

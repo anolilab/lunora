@@ -1,24 +1,18 @@
 /**
  * `lunora prepare` — CI-friendly pre-deploy preparation without booting Vite.
- * Runs codegen, reconciles `wrangler.jsonc` bindings, then validates the config.
- * Returns `code: 0` only when both codegen and validation pass.
- * Idempotent and safe to run in CI before `lunora deploy`.
+ *
+ * A thin caller of the pre-deploy pipeline `lunora deploy` runs, stopped before
+ * the container build and the wrangler invocation. It is deliberately not a
+ * second implementation: it was one, and the copies had drifted so that prepare
+ * checked LESS than the deploy it precedes.
  */
-import type { CodegenResult } from "@lunora/codegen";
-import { runCodegen } from "@lunora/codegen";
-import { resolveDeployDriver, resolveTargetOrThrow } from "@lunora/config";
-
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
-import { renderCodegenFailure } from "../../util/codegen-error";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
-import reportPlatformDiagnostics from "../../util/platform-diagnostics";
-import { runPostCodegenHook } from "../../util/post-codegen-hook";
-import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { Spawner } from "../../util/spawn";
-import { validateWrangler } from "../../util/wrangler-validator";
+import { runPreDeployPipeline } from "../deploy/handler";
 import type { PrepareOptions } from "./index";
 
 interface PrepareCommandOptions {
@@ -55,152 +49,51 @@ interface PrepareCommandResult {
 }
 
 /**
- * Auto-provision the resources implied by the project's code into the deploy
- * target's configuration, through the `DeployDriver` seam.
- *
- * Best-effort: a driver folds a failed step into a warning rather than throwing,
- * because the subsequent `validateWrangler` call is the real gate on a
- * genuinely-missing requirement.
- *
- * Cloudflare is the only registered driver today, so this is behavior-identical
- * to the inline `inferLunoraBindings` + `reconcileWrangler*` sequence it
- * replaces — the driver delegates to exactly those functions.
- */
-const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> = [], target?: string): Promise<void> => {
-    const context = { crons: cronTriggers, projectRoot: cwd };
-    const driver = resolveDeployDriver(target);
-
-    // The portable summary of what the app needs — target-independent, so it
-    // reads the same whichever driver is selected. Best-effort: a failed
-    // inference must not stop provisioning, which reports its own warnings.
-    try {
-        const graph = await driver.infer(context);
-        const requirements = [
-            graph.shardNamespaces.length > 0 ? `${String(graph.shardNamespaces.length)} shard namespace(s)` : undefined,
-            graph.queues.length > 0 ? `${String(graph.queues.length)} queue(s)` : undefined,
-            graph.workflows.length > 0 ? `${String(graph.workflows.length)} workflow(s)` : undefined,
-            graph.containers.length > 0 ? `${String(graph.containers.length)} container(s)` : undefined,
-            graph.globalDatabase ? "global database" : undefined,
-            graph.objectStorage ? "object storage" : undefined,
-            graph.keyValueStore ? "key-value store" : undefined,
-        ].filter((entry): entry is string => entry !== undefined);
-
-        if (requirements.length > 0) {
-            logger.info(`${driver.name} target requires: ${requirements.join(", ")}`);
-        }
-    } catch {
-        // Inference is reporting-only here; `provision` surfaces the real problem.
-    }
-
-    const provisioned = await driver.provision(context);
-
-    if (provisioned.changed) {
-        logger.success(`provisioned: ${provisioned.added.join(", ")} → ${provisioned.configPath ?? "wrangler.jsonc"}`);
-    }
-
-    for (const warning of provisioned.warnings) {
-        logger.warn(warning);
-    }
-};
-
-/**
  * `lunora prepare` — get the project ready for deployment without booting Vite.
  *
- * Suitable for CI pipelines: runs codegen, reconciles `wrangler.jsonc` bindings,
- * and validates the config, stopping at the first failure with a non-zero code.
+ * The whole command is now the shared pre-deploy pipeline, stopped before
+ * anything ships. It used to be a second implementation of the same five steps,
+ * and the two had drifted: only `deploy` gated on ERROR-level advisories, so a CI
+ * job could run `lunora prepare`, go green, and still be rejected by the deploy
+ * it exists to pre-check. They also provisioned by different routes.
+ *
+ * What `prepare` still does NOT do, which is the line between the two commands:
+ * no container image build or push, and no wrangler invocation. It answers
+ * "would this deploy?" without producing a bundle.
  */
 const runPrepareCommand = async (options: PrepareCommandOptions): Promise<PrepareCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    // Resolved ONCE and reused for both codegen and binding provisioning, so
-    // the emitted surface and the provisioned bindings cannot disagree.
-    const target = resolveTargetOrThrow(cwd, options.target);
+    const pipeline = await runPreDeployPipeline(
+        {
+            allowSchemaDrift: options.allowSchemaDrift,
+            apiSpec: options.apiSpec,
+            cwd,
+            logger: options.logger,
+            spawner: options.spawner,
+            target: options.target,
+            updateSchemaBaseline: options.updateSchemaBaseline,
+        },
+        "prepare",
+    );
 
-    options.logger.info("running codegen");
-
-    let codegen: CodegenResult;
-
-    try {
-        codegen = runCodegen({ apiSpec: options.apiSpec, projectRoot: cwd, target });
-        options.logger.success("codegen complete");
-
-        // `prepare` is the CI entry point, so a gated surface has to be visible
-        // here rather than only in the deployed app.
-        reportPlatformDiagnostics(codegen.platformDiagnostics, options.logger);
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        // Render the failure plus any matched Lunora fix (same hint the Vite
-        // overlay and `lunora dev` show); the returned `error` stays the plain
-        // machine-readable string for `--format json` and callers.
-        options.logger.error(renderCodegenFailure(error));
-
+    if (pipeline.error !== undefined) {
         return {
             code: 1,
-            error: `codegen failed: ${message}`,
-            validation: { problems: [], wranglerPath: undefined },
-        };
-    }
-
-    // Codegen ran in-process, not through the project's own `codegen` script, so
-    // anything the project chained onto it would otherwise be skipped here.
-    const postCodegen = await runPostCodegenHook({ cwd, logger: options.logger, spawner: options.spawner });
-
-    // Already logged by the hook — this only decides that it BLOCKS, which is the
-    // one thing that differs between its callers.
-    if (postCodegen.error !== undefined) {
-        return {
-            code: 1,
-            error: postCodegen.error,
-            validation: { problems: [], wranglerPath: undefined },
-        };
-    }
-
-    // Schema-drift gate — block when breaking schema changes ship without a new
-    // data migration. CI-friendly: `lunora prepare` is the canonical pre-deploy
-    // step, so the gate lives here as well as in `lunora deploy`.
-    const gate = runSchemaDriftGate({
-        allowDrift: options.allowSchemaDrift === true,
-        codegen,
-        command: "prepare",
-        logger: options.logger,
-        updateBaseline: options.updateSchemaBaseline === true,
-    });
-
-    if (gate.blocked) {
-        return {
-            code: 1,
-            error: "schema drift gate blocked prepare",
-            schemaDrift: { blocked: true, reason: gate.reason },
-            validation: { problems: [], wranglerPath: undefined },
-        };
-    }
-
-    await provisionBindings(cwd, options.logger, codegen.cronTriggers, target);
-
-    const validation = validateWrangler({ projectRoot: cwd });
-
-    if (validation.problems.length > 0) {
-        options.logger.error("wrangler.jsonc validation failed:");
-
-        for (const problem of validation.problems) {
-            options.logger.error(`  - ${problem}`);
-        }
-
-        // Validation failed — do NOT advance the committed schema baseline, so a
-        // later deploy still re-checks this drift against the pre-prepare shape.
-        return {
-            code: 1,
-            error: "wrangler validation failed",
-            validation,
+            error: pipeline.error,
+            ...(pipeline.schemaDrift === undefined ? {} : { schemaDrift: pipeline.schemaDrift }),
+            validation: pipeline.validation,
         };
     }
 
     // Prepare fully succeeded — safe to advance the committed schema baseline.
-    gate.rebless?.();
+    // Deferred to here for the same reason deploy defers it past wrangler: a run
+    // that failed earlier must not move the goalposts the next one measures
+    // against.
+    pipeline.reblessSchemaBaseline?.();
 
     options.logger.success("project is ready to deploy");
 
-    return { code: 0, validation };
+    return { code: 0, validation: pipeline.validation };
 };
 
 /** `lunora prepare` handler (lazy-loaded via the command's `loader`). */

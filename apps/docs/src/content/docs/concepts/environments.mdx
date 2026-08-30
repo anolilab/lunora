@@ -88,7 +88,7 @@ That scaffolds a production deploy on the default branch plus a
 Two lighter gates run the same pipeline and stop short of publishing:
 
 ```bash
-lunora prepare      # codegen + wrangler validation — no network, for CI
+lunora prepare      # every pre-deploy gate, without deploying — no network, for CI
 lunora deploy --dry-run   # the full pipeline including the bundle, publishes nothing
 lunora verify       # codegen dry-run + tsc --noEmit
 ```
