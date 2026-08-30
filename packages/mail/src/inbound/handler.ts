@@ -54,7 +54,15 @@ interface ForwardableEmailMessageLike {
     readonly raw: ReadableStream<Uint8Array>;
     /** Reply to the sender with a new message. */
     reply: (message: { from: string; raw: string; to: string }) => Promise<unknown>;
-    /** Reject the message with a PERMANENT SMTP error — Cloudflare bounces it to the sender, it is never redelivered. */
+
+    /**
+     * Reject the message with a PERMANENT SMTP error — Cloudflare returns it to
+     * the connecting client with this reason, and it is never redelivered.
+     * Documented at https://developers.cloudflare.com/email-routing/email-workers/runtime-api/
+     * ("Reject this email message by returning a permanent SMTP error back to
+     * the connecting client, including the given reason") and mirrored in
+     * workerd's own `types/defines/email.d.ts`.
+     */
     setReject: (reason: string) => void;
     /** Envelope `To`. */
     readonly to: string;
@@ -89,16 +97,23 @@ interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
     dispatch: InboundDispatch<TEnv>;
 
     /**
-     * Called when `parse` or `verify` throws — a message that is malformed or
-     * fails sender authentication, which every redelivery would fail identically.
-     * The default rejects it via `message.setReject` (a PERMANENT SMTP failure,
-     * so the sender gets a bounce instead of a silent drop). A `dispatch`/
-     * transport failure does NOT come here: it is rethrown so the platform
-     * retries — see {@link createInboundEmailHandler}. SECURITY: the reject reason
-     * is delivered to the (attacker-controlled) sender as a bounce, so the default
-     * reason is a fixed, generic string and the real error is logged server-side.
-     * Override to log, forward, or swallow — but never pass internal error text to
-     * `setReject`.
+     * Called when `parse`, `verify`, or `dispatch` fails — but with two DIFFERENT
+     * contracts, because only the first two decide the message's fate here:
+     *
+     * - `parse` / `verify` — this hook DECIDES the outcome. The default
+     * ({@link rejectOnError}) rejects via `message.setReject`; supplying your own
+     * replaces that, so the message is accepted unless you reject it yourself.
+     * - `dispatch` — this hook is OBSERVABILITY ONLY. It is called for the side
+     * effect (log, alert, forward) and the error is then rethrown regardless of
+     * what it does; the built-in default is deliberately NOT applied there. A
+     * `setReject` from inside it still takes effect, which combined with the
+     * rethrow is almost certainly not what you want — see
+     * {@link createInboundEmailHandler}. A throw from the hook itself is logged
+     * and swallowed so it cannot mask the original dispatch error.
+     *
+     * SECURITY: a reject reason is delivered to the (attacker-controlled) sender
+     * as a bounce, so the default reason is a fixed, generic string and the real
+     * error is logged server-side. Never pass internal error text to `setReject`.
      */
     onError?: (error: unknown, context: InboundDispatchContext<TEnv>) => Promise<void> | void;
     /** Parses raw bytes into an {@link InboundEmail} (e.g. `parseInboundEmail`). */
@@ -140,16 +155,46 @@ const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: 
  * (b) parses it via `parse`, (c) runs the optional `verify` gate, then
  * (d) calls `dispatch(parsed, { message, env, ctx })`.
  *
- * The two failure classes are handled differently, because `setReject` is a
- * PERMANENT SMTP failure and this path has no dead-letter queue:
+ * The two failure classes are routed differently:
  *
  * - `parse` / `verify` (including a falsy `verify`) → `onError` (default: a
  * generic `message.setReject`). A malformed or unauthenticated message fails
  * the same way on every redelivery, so bouncing it is the honest answer.
- * - `dispatch` (or its transport) → RETHROWN. A two-second shard 502 or a
- * briefly-absent `LUNORA_ADMIN_TOKEN` is transient; rejecting it hands the
- * sender an unrecoverable NDR for a message that would have delivered a
- * moment later. Throwing lets the platform redeliver.
+ * - `dispatch` (or its transport) → a custom `onError` is called for
+ * observability, then the error is RETHROWN (see below).
+ *
+ * UNRESOLVED — the rethrow does NOT buy a redelivery. This split was written on
+ * the premise that "throwing lets the platform redeliver". That premise is not
+ * supported:
+ *
+ * - Cloudflare does not document what an uncaught throw from `email()` does. The
+ * full Email Routing and Email Service docs corpora
+ * (`developers.cloudflare.com/email-routing/llms-full.txt`,
+ * `.../email-service/llms-full.txt`) say nothing about an unhandled exception,
+ * and describe NO redelivery mechanism for inbound Email Workers at all. The
+ * documented lifecycle
+ * (https://developers.cloudflare.com/email-service/concepts/email-lifecycle/)
+ * lists exactly three worker outcomes — `forward()`, `reply()`, `setReject()` —
+ * with no branch for "the worker threw". (Its 4xx-retry prose is about OUTBOUND
+ * delivery to the destination MTA, not about invoking the worker.)
+ * - The behaviour reported in practice is a PERMANENT in-session rejection:
+ * `521 5.3.0 Upstream error`, i.e. the same permanence as `setReject` but with
+ * an opaque reason instead of ours. See
+ * https://community.cloudflare.com/t/is-it-possible-to-return-a-transient-failure-from-an-email-worker/599938
+ * ("If the email function raises an exception, a permanent failure is returned
+ * to the client after the DATA command") — a question Cloudflare never answered
+ * — and https://community.cloudflare.com/t/email-worker-upstream-error/457228.
+ * Email Routing also states it forwards upstream SMTP errors back to the sender
+ * in-session rather than generating a bounce later
+ * (https://developers.cloudflare.com/email-service/reference/postmaster/#smtp-errors).
+ *
+ * So the rethrow most likely trades a controlled generic bounce for an opaque
+ * one, and buys nothing. It is left in place rather than changed blind, because
+ * the behaviour is emergent rather than contractual and the right fix is a
+ * design change, not a branch flip: with no transient-reject API and no platform
+ * redelivery, a transient dispatch failure has to be ABSORBED inside the worker
+ * — accept the message and hand it to a queue/DO/alarm that owns the retry —
+ * rather than signalled through the SMTP response at all.
  */
 const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: InboundEmailHandlerOptions<TEnv>): InboundEmailHandler<TEnv> => {
     const onError = options.onError ?? rejectOnError;
@@ -176,10 +221,42 @@ const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: Inbo
             return;
         }
 
-        // Deliberately NOT wrapped: a dispatch/transport failure is transient, and
-        // `setReject` would turn it into an unrecoverable bounce with nothing to
-        // replay from. Let it propagate so the platform retries.
-        await options.dispatch(parsed, context);
+        try {
+            await options.dispatch(parsed, context);
+        } catch (error) {
+            // A custom `onError` is the app's only observability hook on this
+            // path — narrowing it to parse/verify meant an app that wired error
+            // reporting into it saw no dispatch failure at all. It is called for
+            // the side effect only; the rethrow below is unconditional. The
+            // BUILT-IN default (`rejectOnError`) is deliberately skipped here:
+            // it calls `setReject`, which would both bounce and rethrow.
+            if (options.onError) {
+                try {
+                    await options.onError(error, context);
+                } catch (hookError) {
+                    // Never let the observability hook mask the real failure.
+                    // eslint-disable-next-line no-console -- intentional server-side log; the message is rejected below regardless
+                    console.error("@lunora/mail/inbound: onError threw while reporting a dispatch failure —", hookError);
+                }
+            }
+
+            // Reject rather than rethrow. Cloudflare offers NO transient-reject
+            // path and no inbound redelivery (see the note above), so an uncaught
+            // throw is also permanent — it just reaches the sender as an opaque
+            // `521 Upstream error` instead of a reason we chose. Given both
+            // outcomes are permanent, the controlled one is strictly better.
+            //
+            // This means a transient dispatch failure — a two-second shard 502 —
+            // still bounces. Fixing that for real requires absorbing the failure
+            // INSIDE the worker (accept the message, hand it to a queue, DO or
+            // alarm and retry there) rather than signalling it through the SMTP
+            // response, because the SMTP response has no way to say "try later".
+            // That is a design change, deliberately not made here.
+            //
+            // ponytail: bounce-on-transient-dispatch-failure; absorb into a queue
+            // if inbound mail becomes load-bearing.
+            rejectOnError(error, context);
+        }
     };
 };
 
@@ -252,8 +329,10 @@ const toJsonSafeEmail = (email: InboundEmail): InboundEmail => {
  * Build a {@link InboundDispatch} that posts an {@link RpcEnvelope} to the root
  * shard stub — the same admin-RPC-over-shard path the dev capture sink uses
  * (`from-env.ts`) — routing the parsed message into a named Lunora
- * mutation/action. Throws on a non-2xx RPC or a missing admin token so the
- * handler's `onError` (default `setReject`) bounces the message.
+ * mutation/action. Throws on a non-2xx RPC or a missing admin token; the
+ * handler reports that through a custom `onError` and rethrows it — see the
+ * UNRESOLVED note on {@link createInboundEmailHandler} for what the platform
+ * actually does with a throw.
  *
  * SECURITY: the RPC carries the admin bearer, so the target function runs with
  * RLS bypassed over fully attacker-controlled, spoofable input — see the module
@@ -280,8 +359,8 @@ const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<
         };
 
         // The shared helper owns the URL, headers, `response.ok` check, and error
-        // envelope check; a throw here routes through the handler's `onError`
-        // (default `setReject`) so the message is rejected upstream.
+        // envelope check; a throw here reaches the handler's dispatch-failure
+        // path (custom `onError` for observability, then rethrow).
         await postShardRpc(options.shard, {
             adminToken,
             envelope,

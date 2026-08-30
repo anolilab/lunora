@@ -92,7 +92,7 @@ await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body
 
 // consumer (lunora/queues.ts)
 for (const message of batch.messages) {
-    const { failedIds, nextCursor } = await runPushBroadcastJob(ctx.push, message.body);
+    const { failedIds, nextCursor } = await runPushBroadcastPage(ctx.push, message.body);
 
     // One message = ONE bounded page. Discarding `nextCursor` delivers only the
     // first page (default 250 devices) and reports success for the whole audience.

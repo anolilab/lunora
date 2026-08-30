@@ -65,7 +65,7 @@ Only channels that survive workerd are wired here: Web Push and FCM run on Web
 Crypto and `fetch`. APNs needs `node:http2`, and the SMS and Node-only queue
 adapters likewise have no edge implementation, so the edge facade does not expose
 them. Route heavy fan-out through `@lunora/queue` instead: `enqueuePushBroadcast`
-hands the audience to a queue and `runPushBroadcastJob` drains it, so one request
+hands the audience to a queue and `runPushBroadcastPage` drains it, so one request
 never blocks on thousands of sends.
 
 ## Browser side

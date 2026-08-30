@@ -6,10 +6,24 @@ import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
 import type { Customer, PaymentSession, Subscription } from "../src/types";
 
-// In-memory PaymentDatabase that mirrors the equality-filter semantics ctx.db provides.
-const makeDb = (): PaymentDatabase => {
+/** A `PaymentDatabase` double that also reports how many rows it handed out. */
+type ProbedDatabase = PaymentDatabase & { readonly rowsRead: () => number };
+
+const compareValues = (a: unknown, b: unknown): number => {
+    if (typeof a === "number" && typeof b === "number") {
+        return a - b;
+    }
+
+    return String(a).localeCompare(String(b));
+};
+
+// In-memory PaymentDatabase that mirrors the equality-filter semantics ctx.db
+// provides, plus its order/limit/keyset-cursor push-down. `rowsRead` counts every
+// row the store actually pulled into memory, which is what bounds a sweep.
+const makeDb = (): ProbedDatabase => {
     const tables = new Map<string, Map<string, PaymentRow>>();
     let sequence = 0;
+    let rowsRead = 0;
 
     const tableOf = (table: string): Map<string, PaymentRow> => {
         const existing = tables.get(table);
@@ -36,7 +50,26 @@ const makeDb = (): PaymentDatabase => {
             }
         },
         findFirst: async (table, where) => [...tableOf(table).values()].find((row) => matches(row, where)) ?? null,
-        findMany: async (table, where) => [...tableOf(table).values()].filter((row) => matches(row, where)),
+        findMany: async (table, where, page) => {
+            const matched = [...tableOf(table).values()].filter((row) => matches(row, where));
+
+            for (const entry of (page?.orderBy ?? []).toReversed()) {
+                for (const [field, direction] of Object.entries(entry)) {
+                    matched.sort((a, b) => (direction === "asc" ? compareValues(a[field], b[field]) : compareValues(b[field], a[field])));
+                }
+            }
+
+            // Keyset resume: the cursor is the last row's id, and the total order
+            // above is stable, so "everything after that id" is the next page.
+            const start = page?.cursor === undefined ? 0 : matched.findIndex((row) => row._id === page.cursor) + 1;
+            const window = page?.limit === undefined ? matched.slice(start) : matched.slice(start, start + page.limit);
+            const last = window.at(-1);
+            const done = page?.limit === undefined || start + window.length >= matched.length;
+
+            rowsRead += window.length;
+
+            return { cursor: done || !last ? undefined : last._id, rows: window };
+        },
         insert: async (table, document) => {
             sequence += 1;
             const id = `id_${String(sequence)}`;
@@ -56,6 +89,7 @@ const makeDb = (): PaymentDatabase => {
                 }
             }
         },
+        rowsRead: () => rowsRead,
     };
 };
 
@@ -111,7 +145,7 @@ describe("createDatabasePaymentStore", () => {
         await memory.upsertCustomer(customer);
         await memory.upsertCustomer({ ...customer, id: "cus_2" });
 
-        await expect(db.findMany("customers", { provider: "stripe", referenceId: "user_1" })).resolves.toHaveLength(1);
+        await expect(db.findMany("customers", { provider: "stripe", referenceId: "user_1" }).then((page) => page.rows)).resolves.toHaveLength(1);
         await expect(store.getCustomerByReference("stripe", "user_1")).resolves.toMatchObject({ id: "cus_2" });
         // Parity: the memory store lands on the same surviving row.
         await expect(memory.getCustomerByReference("stripe", "user_1")).resolves.toMatchObject({ id: "cus_2" });
@@ -119,7 +153,7 @@ describe("createDatabasePaymentStore", () => {
         // A second provider's customer for the same reference stays a separate row.
         await store.upsertCustomer({ ...customer, id: "pcus_1", provider: "polar" });
 
-        await expect(db.findMany("customers", { referenceId: "user_1" })).resolves.toHaveLength(2);
+        await expect(db.findMany("customers", { referenceId: "user_1" }).then((page) => page.rows)).resolves.toHaveLength(2);
         await expect(store.getCustomerByReference("polar", "user_1")).resolves.toMatchObject({ id: "pcus_1" });
     });
 
@@ -227,6 +261,82 @@ describe("createDatabasePaymentStore", () => {
         // A feature with zero events is present in the map as 0, not absent.
         expect(batched.get("storage")).toBe(0);
         expect(batched.get("api_calls")).toBe(12);
+    });
+
+    it("listUnreportedUsage bounds the READ, not just the result", async () => {
+        expect.assertions(3);
+
+        // Regression: `limit` used to be applied AFTER materialising every
+        // unreported row. A provider down for a day meant each reconcile sweep
+        // pulled the whole backlog into a 128 MiB isolate to take 100 rows.
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+        const backlog = 500;
+
+        for (let index = 0; index < backlog; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- seeding a deterministic ledger; order matters
+            await store.recordUsage({
+                createdAt: index,
+                featureId: "tokens",
+                idempotencyKey: `evt_${String(index).padStart(4, "0")}`,
+                provider: "stripe",
+                quantity: 1,
+                referenceId: "user_1",
+                reportedToProvider: false,
+            });
+        }
+
+        const pending = await store.listUnreportedUsage("stripe", 10);
+
+        expect(pending.map((event) => event.idempotencyKey)).toStrictEqual([
+            "evt_0000",
+            "evt_0001",
+            "evt_0002",
+            "evt_0003",
+            "evt_0004",
+            "evt_0005",
+            "evt_0006",
+            "evt_0007",
+            "evt_0008",
+            "evt_0009",
+        ]);
+
+        // The whole point: rows FETCHED must scale with `limit`, not with the
+        // backlog. Before the fix this was `backlog`.
+        expect(db.rowsRead()).toBeLessThanOrEqual(20);
+        expect(db.rowsRead()).toBeLessThan(backlog);
+    });
+
+    it("listUnreportedUsage pages past non-candidate rows until it has `limit` of them", async () => {
+        expect.assertions(2);
+
+        // The additive/positive predicate is still applied in memory (the port's
+        // `where` is equality-only), so a chunk can come back entirely filtered
+        // out. The scan has to follow the cursor rather than stop short.
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+
+        for (let index = 0; index < 60; index += 1) {
+            // Only every 10th row is a retry candidate; the rest are `set`
+            // markers, which are never re-sent.
+            // eslint-disable-next-line no-await-in-loop -- seeding a deterministic ledger; order matters
+            await store.recordUsage({
+                createdAt: index,
+                featureId: "tokens",
+                idempotencyKey: `evt_${String(index).padStart(4, "0")}`,
+                ...(index % 10 === 0 ? {} : { mode: "set" as const }),
+                provider: "stripe",
+                quantity: 1,
+                referenceId: "user_1",
+                reportedToProvider: false,
+            });
+        }
+
+        const pending = await store.listUnreportedUsage("stripe", 3);
+
+        expect(pending.map((event) => event.idempotencyKey)).toStrictEqual(["evt_0000", "evt_0010", "evt_0020"]);
+        // Still bounded — chunks of 3, not the whole 60-row match set at once.
+        expect(db.rowsRead()).toBeLessThan(60);
     });
 
     it("releaseEvent rolls back a claim so the id can be re-processed", async () => {

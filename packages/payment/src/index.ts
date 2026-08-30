@@ -4,7 +4,7 @@ export type { LunoraDatabaseLike, PaymentContextLike, PaymentsFromContextOptions
 export { lunoraDatabaseToPaymentDatabase, paymentsFromContext } from "./context";
 export type { AuthorizeReference, CreatePaymentOptions, LunoraPayment } from "./create-payment";
 export { createPayment } from "./create-payment";
-export type { PaymentDatabase, PaymentRow } from "./database-store";
+export type { PaymentDatabase, PaymentPage, PaymentPageArgs, PaymentRow } from "./database-store";
 export { createDatabasePaymentStore } from "./database-store";
 export type { Entitlements, EntitlementsConfig, PlanDefinition } from "./entitlements";
 export { entitlementsForReference, featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";

@@ -22,12 +22,12 @@
  *   `owner` from a verified signal (a DKIM-checked address mapped to an account),
  *   never blindly from the spoofable sender, and treat every mapped field as
  *   attacker-controlled input.
- * - A parse failure routes through `@lunora/mail/inbound`'s default `onError`,
- *   which rejects the message with a fixed generic reason. A dispatch failure is
- *   rethrown there instead, so a transient transport error is redelivered rather
- *   than bounced — the two permanent dispatch failures below reject themselves.
- *   Either way the sender's bounce carries a fixed generic reason and never
- *   reflects internal error detail.
+ * - Every failure — parse, verify, or dispatch — rejects the message with a
+ *   fixed generic reason, so the sender's bounce never reflects internal error
+ *   detail. Cloudflare gives an inbound worker no way to signal "try later": an
+ *   uncaught throw is also permanent, just opaque, so there is nothing to gain
+ *   by rethrowing. The two permanent failures below reject themselves so their
+ *   real reason reaches the server log.
  */
 /* eslint-enable jsdoc/check-indentation, jsdoc/no-multi-asterisks */
 import type { ForwardableEmailMessageLike } from "@lunora/mail/inbound";

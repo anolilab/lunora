@@ -253,7 +253,7 @@ export interface LunoraPush {
      * materialized wholesale in the isolate — see `CreateNotifyOptions`'s
      * `broadcastPageSize`. This call still processes the WHOLE matched
      * audience in one request/queue message; use {@link LunoraPush.broadcastPage}
-     * directly (as `runPushBroadcastJob` does) to bound a single queue message
+     * directly (as `runPushBroadcastPage` does) to bound a single queue message
      * to one page.
      */
     broadcast: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastResult>;
@@ -265,7 +265,7 @@ export interface LunoraPush {
      * {@link LunoraPush.broadcast} (retry/circuit-breaker, gone-pruning) but
      * scoped to a single page; returns the page's own {@link BroadcastResult}
      * plus a `nextCursor` to fetch the next page (`undefined` when done).
-     * Backs `runPushBroadcastJob` so one queue message does bounded work
+     * Backs `runPushBroadcastPage` so one queue message does bounded work
      * regardless of audience size — most app code should call
      * {@link LunoraPush.broadcast} instead.
      */

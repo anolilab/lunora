@@ -1,10 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { PushBroadcastJob } from "../src/queue";
-import { enqueuePushBroadcast, runPushBroadcastJob } from "../src/queue";
+import { enqueuePushBroadcast, runPushBroadcastPage } from "../src/queue";
 import type { LunoraPush } from "../src/types";
 
 describe("queue-backed fan-out", () => {
+    it("does not re-export the old `runPushBroadcastJob` name under any alias", async () => {
+        expect.hasAssertions();
+
+        // The page runner stopped throwing on a partial failure and started
+        // returning `failedIds` instead. Because the result type only WIDENED,
+        // the previously documented consumer
+        //
+        //     const { nextCursor } = await runPushBroadcastJob(ctx.push, message.body);
+        //
+        // still compiled, still acked, and silently dropped every transiently
+        // failed push. The rename is what makes that stale call site a BUILD
+        // error rather than a runtime data loss — so re-adding the old name as a
+        // convenience alias would restore the silent break.
+        const barrel: Record<string, unknown> = await import("../src/index");
+
+        expect(barrel).not.toHaveProperty("runPushBroadcastJob");
+    });
+
     it("enqueues a typed broadcast job", async () => {
         expect.hasAssertions();
 
@@ -27,7 +45,7 @@ describe("queue-backed fan-out", () => {
         const push = { broadcastPage } as unknown as LunoraPush;
         const job: PushBroadcastJob = { payload: { body: "hi" }, type: "lunora.push.broadcast" };
 
-        await runPushBroadcastJob(push, job);
+        await runPushBroadcastPage(push, job);
 
         expect(broadcastPage).toHaveBeenCalledWith(job.payload, undefined);
     });
@@ -55,7 +73,7 @@ describe("queue-backed fan-out", () => {
         const push = { broadcastPage } as unknown as LunoraPush;
         const job: PushBroadcastJob = { payload: { body: "hi" }, type: "lunora.push.broadcast" };
 
-        const outcome = await runPushBroadcastJob(push, job);
+        const outcome = await runPushBroadcastPage(push, job);
 
         expect(outcome.nextCursor).toBe("wp2_page2");
         expect(outcome.failedIds).toStrictEqual(["b"]);
@@ -69,7 +87,7 @@ describe("queue-backed fan-out", () => {
         const push = { broadcastPage, send } as unknown as LunoraPush;
         const job: PushBroadcastJob = { payload: { body: "hi" }, retryIds: ["b"], type: "lunora.push.broadcast" };
 
-        const outcome = await runPushBroadcastJob(push, job);
+        const outcome = await runPushBroadcastPage(push, job);
 
         expect(broadcastPage).not.toHaveBeenCalled();
         expect(send).toHaveBeenCalledWith("b", job.payload);
@@ -83,7 +101,7 @@ describe("queue-backed fan-out", () => {
         const push = { broadcastPage: vi.fn(), send } as unknown as LunoraPush;
         const job: PushBroadcastJob = { payload: { body: "hi" }, retryIds: ["b"], type: "lunora.push.broadcast" };
 
-        await expect(runPushBroadcastJob(push, job)).rejects.toThrow(/retry failed/u);
+        await expect(runPushBroadcastPage(push, job)).rejects.toThrow(/retry failed/u);
         expect(send).toHaveBeenCalledTimes(1);
     });
 
@@ -97,7 +115,7 @@ describe("queue-backed fan-out", () => {
         const push = { broadcastPage } as unknown as LunoraPush;
         const job: PushBroadcastJob = { payload: { body: "hi" }, type: "lunora.push.broadcast" };
 
-        await expect(runPushBroadcastJob(push, job)).resolves.toMatchObject({ result: { pruned: 3, sent: 0 } });
+        await expect(runPushBroadcastPage(push, job)).resolves.toMatchObject({ result: { pruned: 3, sent: 0 } });
     });
 
     it("resolves for an empty page — nothing to retry", async () => {
@@ -107,7 +125,7 @@ describe("queue-backed fan-out", () => {
         const push = { broadcastPage } as unknown as LunoraPush;
         const job: PushBroadcastJob = { payload: { body: "hi" }, type: "lunora.push.broadcast" };
 
-        await expect(runPushBroadcastJob(push, job)).resolves.toMatchObject({ result: { total: 0 } });
+        await expect(runPushBroadcastPage(push, job)).resolves.toMatchObject({ result: { total: 0 } });
     });
 
     it("surfaces nextCursor so the caller can enqueue the continuation page", async () => {
@@ -119,7 +137,7 @@ describe("queue-backed fan-out", () => {
         const push = { broadcastPage } as unknown as LunoraPush;
         const job: PushBroadcastJob = { payload: { body: "hi" }, type: "lunora.push.broadcast" };
 
-        const outcome = await runPushBroadcastJob(push, job);
+        const outcome = await runPushBroadcastPage(push, job);
 
         expect(outcome.nextCursor).toBe("wp2_deadbeefdeadbeef");
     });
@@ -131,7 +149,7 @@ describe("queue-backed fan-out", () => {
         const push = { broadcastPage } as unknown as LunoraPush;
         const job: PushBroadcastJob = { filter: { after: "wp2_1111111111111111", userId: "u1" }, payload: { body: "hi" }, type: "lunora.push.broadcast" };
 
-        await runPushBroadcastJob(push, job);
+        await runPushBroadcastPage(push, job);
 
         expect(broadcastPage).toHaveBeenCalledWith(job.payload, { after: "wp2_1111111111111111", userId: "u1" });
     });

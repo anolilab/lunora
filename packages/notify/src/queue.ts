@@ -7,7 +7,7 @@ import type { BroadcastOutcome, BroadcastPageResult, LunoraPush, PushContent, Su
  * fan-out. Shaped to travel through a `@lunora/queue` producer/consumer without
  * `@lunora/notify` depending on `@lunora/queue` (the seam stays structural).
  * `filter.after`, when set, resumes a broadcast partway through (see
- * {@link runPushBroadcastJob}'s continuation semantics).
+ * {@link runPushBroadcastPage}'s continuation semantics).
  */
 interface PushBroadcastJob {
     /** Subscription filter (which devices/users to target; `filter.after` resumes a paged broadcast). */
@@ -17,17 +17,23 @@ interface PushBroadcastJob {
 
     /**
      * Redeliver to exactly these subscription ids instead of walking a page —
-     * an earlier page's {@link PushBroadcastJobResult.failedIds}. Set by the
+     * an earlier page's {@link PushBroadcastPageOutcome.failedIds}. Set by the
      * consumer when it re-enqueues a page's transient failures; `filter` is
-     * ignored on such a job. See {@link runPushBroadcastJob}.
+     * ignored on such a job. See {@link runPushBroadcastPage}.
      */
     retryIds?: string[];
     /** Discriminator so a shared queue can multiplex message kinds. */
     type: "lunora.push.broadcast";
 }
 
-/** One page's outcome plus the ids that need redelivering. */
-interface PushBroadcastJobResult extends BroadcastPageResult {
+/**
+ * One page's outcome plus the ids that need redelivering.
+ *
+ * The consumer MUST act on BOTH fields: `nextCursor` continues the broadcast and
+ * `failedIds` redelivers the recipients this page missed. Acking a message while
+ * ignoring either silently drops part of the audience.
+ */
+interface PushBroadcastPageOutcome extends BroadcastPageResult {
     /**
      * Subscriptions that failed transiently on this run (gone/pruned devices are
      * NOT here — they are deleted, not retried). Re-enqueue a job carrying these
@@ -36,6 +42,14 @@ interface PushBroadcastJobResult extends BroadcastPageResult {
     failedIds: string[];
 }
 
+/**
+ * The transiently-failed ids of a page — the set a `retryIds` job redelivers to.
+ * Gone/pruned subscriptions never carry `status: "failed"`, so they are excluded
+ * by construction.
+ */
+const failedIdsOf = (outcomes: ReadonlyArray<BroadcastOutcome>): string[] =>
+    outcomes.filter((outcome) => outcome.status === "failed").map((outcome) => outcome.id);
+
 /** The structural slice of a `@lunora/queue` producer (`ctx.queues.<name>`) used here. */
 interface QueueProducerLike {
     send: (body: PushBroadcastJob) => Promise<void>;
@@ -43,7 +57,7 @@ interface QueueProducerLike {
 
 /**
  * Enqueue a fan-out broadcast for background delivery through a `@lunora/queue`
- * queue instead of blocking the request. Pair with {@link runPushBroadcastJob} in
+ * queue instead of blocking the request. Pair with {@link runPushBroadcastPage} in
  * the queue consumer — see its doc comment for how a large audience continues
  * across MULTIPLE messages (one bounded page per message), not one.
  *
@@ -54,7 +68,7 @@ interface QueueProducerLike {
  * // in lunora/queues.ts consumer:
  * export const push = defineQueue({ async handler(batch, ctx) {
  *     for (const message of batch.messages) {
- *         const { failedIds, nextCursor } = await runPushBroadcastJob(ctx.push, message.body);
+ *         const { failedIds, nextCursor } = await runPushBroadcastPage(ctx.push, message.body);
  *
  *         if (nextCursor !== undefined) {
  *             // More pages remain — enqueue the continuation. Each message still
@@ -79,7 +93,7 @@ const enqueuePushBroadcast = (queue: QueueProducerLike, job: Omit<PushBroadcastJ
     queue.send({ ...job, type: "lunora.push.broadcast" });
 
 /** Redeliver to an explicit set of subscription ids (a previous page's failures). */
-const runRetryIds = async (push: LunoraPush, payload: PushContent, ids: ReadonlyArray<string>): Promise<PushBroadcastJobResult> => {
+const runRetryIds = async (push: LunoraPush, payload: PushContent, ids: ReadonlyArray<string>): Promise<PushBroadcastPageOutcome> => {
     const outcomes: BroadcastOutcome[] = [];
 
     for (const id of ids) {
@@ -96,7 +110,7 @@ const runRetryIds = async (push: LunoraPush, payload: PushContent, ids: Readonly
         }
     }
 
-    const failedIds = outcomes.filter((outcome) => outcome.status === "failed").map((outcome) => outcome.id);
+    const failedIds = failedIdsOf(outcomes);
     const sent = outcomes.length - failedIds.length;
     const result = { failed: failedIds.length, outcomes, pruned: 0, sent, total: outcomes.length };
 
@@ -147,7 +161,7 @@ const runRetryIds = async (push: LunoraPush, payload: PushContent, ids: Readonly
  * never appear in `failedIds` — an all-`pruned` page is a success, not a
  * failure, as is an empty page.
  */
-const runPushBroadcastJob = async (push: LunoraPush, job: PushBroadcastJob): Promise<PushBroadcastJobResult> => {
+const runPushBroadcastPage = async (push: LunoraPush, job: PushBroadcastJob): Promise<PushBroadcastPageOutcome> => {
     if (job.retryIds !== undefined && job.retryIds.length > 0) {
         return runRetryIds(push, job.payload, job.retryIds);
     }
@@ -155,11 +169,11 @@ const runPushBroadcastJob = async (push: LunoraPush, job: PushBroadcastJob): Pro
     const page = await push.broadcastPage(job.payload, job.filter);
 
     return {
-        failedIds: page.result.outcomes.filter((outcome) => outcome.status === "failed").map((outcome) => outcome.id),
+        failedIds: failedIdsOf(page.result.outcomes),
         nextCursor: page.nextCursor,
         result: page.result,
     };
 };
 
-export { enqueuePushBroadcast, runPushBroadcastJob };
-export type { PushBroadcastJob, PushBroadcastJobResult, QueueProducerLike };
+export { enqueuePushBroadcast, runPushBroadcastPage };
+export type { PushBroadcastJob, PushBroadcastPageOutcome, QueueProducerLike };

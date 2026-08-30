@@ -196,10 +196,10 @@ interface PushBroadcastJob {
 }
 ```
 
-### `PushBroadcastJobResult` (interface)
+### `PushBroadcastPageOutcome` (interface)
 
 ```ts
-interface PushBroadcastJobResult extends BroadcastPageResult {
+interface PushBroadcastPageOutcome extends BroadcastPageResult {
     failedIds: string[];
 }
 ```
@@ -432,10 +432,10 @@ const normalizeRegisterInput: (input: RegisterInput, now?: number, options?: Nor
 const routingPushProvider: (options: RoutingPushOptions) => Provider<unknown, PushPayload>;
 ```
 
-### `runPushBroadcastJob` (const)
+### `runPushBroadcastPage` (const)
 
 ```ts
-const runPushBroadcastJob: (push: LunoraPush, job: PushBroadcastJob) => Promise<PushBroadcastJobResult>;
+const runPushBroadcastPage: (push: LunoraPush, job: PushBroadcastJob) => Promise<PushBroadcastPageOutcome>;
 ```
 
 ### `targetOf` (const)

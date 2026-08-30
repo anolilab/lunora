@@ -23,13 +23,45 @@ interface PaymentRow extends Record<string, unknown> {
 }
 
 /**
+ * Bounded-read arguments for {@link PaymentDatabase.findMany}, mirroring what
+ * Lunora's `ctx.db.findMany` already accepts. `where` stays equality-only — these
+ * are the knobs that let a caller bound the number of rows FETCHED rather than
+ * fetching everything and slicing afterwards.
+ * @experimental
+ */
+interface PaymentPageArgs {
+    /** Keyset cursor from a previous page's {@link PaymentPage.cursor}. */
+    cursor?: string;
+    /** Maximum rows to FETCH. Omit to read every match. */
+    limit?: number;
+    /** Sort keys, pushed down to the store so the keyset cursor is well-defined. */
+    orderBy?: Record<string, "asc" | "desc">[];
+}
+
+/**
+ * One page of rows plus the cursor that continues it.
+ * @experimental
+ */
+interface PaymentPage {
+    /** Cursor for the next page, or `undefined` when this was the last one. */
+    readonly cursor: string | undefined;
+    readonly rows: PaymentRow[];
+}
+
+/**
  * Minimal write/read surface this store needs; `ctx.db` satisfies it structurally.
  * @experimental
  */
 interface PaymentDatabase {
     delete: (id: string) => Promise<void>;
     findFirst: (table: string, where: Record<string, unknown>) => Promise<PaymentRow | null>;
-    findMany: (table: string, where: Record<string, unknown>) => Promise<PaymentRow[]>;
+
+    /**
+     * Equality-only `where`, with optional order/limit/cursor pushed DOWN to the
+     * store (see {@link PaymentPageArgs}). Omitting `page` reads every match — do
+     * that only where the match set is inherently small (one reference's rows).
+     */
+    findMany: (table: string, where: Record<string, unknown>, page?: PaymentPageArgs) => Promise<PaymentPage>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
 }
@@ -203,22 +235,60 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         },
 
         listSubscriptionsByReference: async (referenceId) => {
-            const rows = await database.findMany("subscriptions", { referenceId });
+            // Unbounded by design: one reference holds a handful of subscriptions.
+            const { rows } = await database.findMany("subscriptions", { referenceId });
 
             return rows.map((row) => rowToSubscription(row));
         },
 
         listUnreportedUsage: async (provider, limit) => {
-            // The `where` port is equality-only, so the additive/positive predicate
-            // (see `PaymentStore.listUnreportedUsage`) is applied in memory over the
-            // provider's unreported rows — the same shape `sumUsage` uses.
-            const rows = await database.findMany("usageEvents", { provider, reportedToProvider: false });
+            const wanted = Math.max(0, Math.floor(limit));
 
-            return rows
-                .map((row) => rowToUsageEvent(row))
-                .filter((event) => event.mode !== "set" && event.quantity > 0)
-                .toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey))
-                .slice(0, Math.max(0, limit));
+            if (wanted === 0) {
+                return [];
+            }
+
+            // The port's `where` is equality-only, so the additive/positive
+            // predicate (see `PaymentStore.listUnreportedUsage`) still has to be
+            // applied in memory — but the READ is bounded. Order and limit are
+            // pushed DOWN via `PaymentPageArgs` and the keyset `cursor` walks the
+            // rest, so a provider that has been down for a day costs `wanted`-sized
+            // chunks instead of materialising its whole backlog in a 128 MiB
+            // isolate to take `limit` rows off the front.
+            //
+            // `orderBy` reproduces the previous in-memory sort exactly (createdAt
+            // asc, then idempotencyKey as the tiebreak) so "oldest first" and the
+            // memory store's ordering still agree.
+            const orderBy: Record<string, "asc" | "desc">[] = [{ createdAt: "asc" }, { idempotencyKey: "asc" }];
+            const events: UsageEvent[] = [];
+            let cursor: string | undefined;
+
+            do {
+                // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently serial: the next cursor is only known once this page returns
+                const page = await database.findMany("usageEvents", { provider, reportedToProvider: false }, { cursor, limit: wanted, orderBy });
+
+                for (const row of page.rows) {
+                    const event = rowToUsageEvent(row);
+
+                    if (event.mode !== "set" && event.quantity > 0) {
+                        events.push(event);
+
+                        if (events.length === wanted) {
+                            return events;
+                        }
+                    }
+                }
+
+                cursor = page.cursor;
+            } while (cursor !== undefined);
+
+            // ponytail: memory is bounded, total scan length is not. A `"set"` row
+            // (and a non-positive `"add"`) never becomes reported, so it is a
+            // permanent non-match this walk re-reads on every sweep. Upgrade path
+            // when that prefix gets long: record never-forwardable rows as already
+            // reported, or add a `(provider, reportedToProvider, createdAt)` index
+            // so the scan starts past them.
+            return events;
         },
 
         markEventProcessed: async (provider, eventId) => {
@@ -272,7 +342,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             // NOTE: this reads the full lifetime ledger for the pair and filters in memory — O(events)
             // per call. Fine for typical volumes; for hot metered features, add a per-period rollup row
             // (or a createdAt-range query) so old periods aren't re-scanned on every check/track.
-            const rows = await database.findMany("usageEvents", { featureId, referenceId });
+            const { rows } = await database.findMany("usageEvents", { featureId, referenceId });
             const window = rows
                 .filter((row) => readNumber(row, "createdAt") >= since)
                 .map((row) => {
@@ -294,7 +364,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             // memory — O(events) total instead of O(events) per feature. For hot metered features,
             // add a per-period rollup row (or a createdAt-range query) so old periods aren't
             // re-scanned on every read.
-            const rows = await database.findMany("usageEvents", { referenceId });
+            const { rows } = await database.findMany("usageEvents", { referenceId });
             const buckets = new Map<string, { createdAt: number; idempotencyKey: string; mode: "add" | "set"; quantity: number }[]>(
                 featureIds.map((featureId) => [featureId, []]),
             );
@@ -328,4 +398,4 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
     };
 };
 
-export type { PaymentDatabase, PaymentRow };
+export type { PaymentDatabase, PaymentPage, PaymentPageArgs, PaymentRow };

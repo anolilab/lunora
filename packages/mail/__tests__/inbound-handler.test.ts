@@ -52,13 +52,16 @@ describe("createInboundEmailHandler", () => {
         expect(context).toMatchObject({ ctx: { ctxToken: 1 }, env, message });
     });
 
-    it("rethrows a dispatch failure instead of bouncing it — the platform retries", async () => {
-        expect.assertions(2);
+    it("rejects a dispatch failure with a controlled reason rather than rethrowing", async () => {
+        expect.assertions(3);
 
-        // Regression: `setReject` is a PERMANENT SMTP failure, so a two-second
-        // shard 502 (or a briefly-absent LUNORA_ADMIN_TOKEN) used to hand the
-        // sender an unrecoverable NDR for a message that had nowhere to be
-        // replayed from.
+        // This was briefly a rethrow, on the premise that throwing lets the
+        // platform redeliver. It does not: Cloudflare documents no inbound
+        // redelivery, the email lifecycle has no branch for a worker that threw,
+        // and an uncaught throw reaches the sender as an opaque
+        // `521 Upstream error`. Both outcomes are permanent, so the controlled
+        // one wins — and the reason must never carry internal error text, since
+        // it is reflected to an untrusted sender.
         const message = fakeMessage();
         const handler = createInboundEmailHandler({
             dispatch: async () => {
@@ -67,8 +70,9 @@ describe("createInboundEmailHandler", () => {
             parse: async () => fixture,
         });
 
-        await expect(handler(message, {}, undefined)).rejects.toThrow(/shard 502/);
-        expect(message.setReject).not.toHaveBeenCalled();
+        await expect(handler(message, {}, undefined)).resolves.toBeUndefined();
+        expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+        expect(message.setReject).not.toHaveBeenCalledWith(expect.stringContaining("shard 502"));
     });
 
     it("rejects a parse failure with a generic reason (not internal error text)", async () => {
@@ -111,6 +115,54 @@ describe("createInboundEmailHandler", () => {
         expect(dispatch).not.toHaveBeenCalled();
         expect(message.setReject).toHaveBeenCalledTimes(1);
         expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+
+        consoleError.mockRestore();
+    });
+
+    it("calls a custom onError for a dispatch failure — for observability — then still rejects", async () => {
+        expect.assertions(4);
+
+        // Regression: narrowing `onError` to parse/verify meant an app that wired
+        // error reporting into it saw NO dispatch failure at all — silent at build
+        // time, blind at runtime. The hook is observability only; the message is
+        // rejected with the generic reason regardless of what it does.
+        const message = fakeMessage();
+        const onError = vi.fn<() => void>();
+        const failure = new Error("shard 502");
+        const handler = createInboundEmailHandler({
+            dispatch: async () => {
+                throw failure;
+            },
+            onError,
+            parse: async () => fixture,
+        });
+
+        await expect(handler(message, {}, undefined)).resolves.toBeUndefined();
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(onError).toHaveBeenCalledWith(failure, expect.objectContaining({ message }));
+        expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+    });
+
+    it("an onError that itself throws cannot mask the dispatch failure", async () => {
+        expect.assertions(2);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const message = fakeMessage();
+        const handler = createInboundEmailHandler({
+            dispatch: async () => {
+                throw new Error("shard 502");
+            },
+            onError: () => {
+                throw new Error("sentry is down");
+            },
+            parse: async () => fixture,
+        });
+
+        // A broken reporting hook must not change the outcome: the message is
+        // still rejected with the generic reason, and the hook's own failure is
+        // logged rather than replacing the dispatch failure.
+        await expect(handler(message, {}, undefined)).resolves.toBeUndefined();
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("onError threw"), expect.any(Error));
 
         consoleError.mockRestore();
     });
@@ -312,8 +364,8 @@ describe("dispatchToLunoraFunction", () => {
         await expect(dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() })).rejects.toThrow(/returned an error/);
     });
 
-    it("end-to-end: handler + dispatcher surfaces a shard error as a retryable throw, never a bounce", async () => {
-        expect.assertions(2);
+    it("end-to-end: a shard error bounces with a generic reason, never leaking the shard's text", async () => {
+        expect.assertions(3);
 
         const { shard } = stubShard({
             json: async () => {
@@ -328,9 +380,14 @@ describe("dispatchToLunoraFunction", () => {
             parse: async () => fixture,
         });
 
-        await expect(handler(message, { LUNORA_ADMIN_TOKEN: "secret" }, undefined)).rejects.toThrow(/returned an error/);
-        // A shard fault is transient — permanently rejecting it loses the mail.
-        expect(message.setReject).not.toHaveBeenCalled();
+        // A shard fault IS transient, and this still bounces — because Cloudflare
+        // gives an inbound worker no way to say "try later". Both a throw and a
+        // `setReject` are permanent to the sender, so the handler picks the one
+        // whose reason it controls. Absorbing the retry inside the worker is the
+        // real fix and is deliberately out of scope; see the handler's note.
+        await expect(handler(message, { LUNORA_ADMIN_TOKEN: "secret" }, undefined)).resolves.toBeUndefined();
+        expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+        expect(message.setReject).not.toHaveBeenCalledWith(expect.stringContaining("returned an error"));
     });
 
     it("routes through a jurisdiction-pinned subnamespace when configured", async () => {
