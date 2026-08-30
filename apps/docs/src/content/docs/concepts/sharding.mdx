@@ -54,9 +54,9 @@ row's shard key from the deployed schema and fans the batches out per shard, so
 a dump taken before the edit lands on the right DOs after it.
 
 <Callout type="warn">
-    This is not an online migration. The table is unavailable from step 1 through step 5, and the dump is inside that window rather than before it. Take the
-    window deliberately: a maintenance flag, or a quiet hour. Snapshot first: [Backups](/docs/concepts/backups) covers point-in-time recovery, and a sharding
-    migration is exactly the change you want it for.
+    This is not an online migration. The table is unavailable from step 1 until writes resume at step 5, and the dump is inside that window rather than before
+    it. Take the window deliberately: a maintenance flag, or a quiet hour. Snapshot first: [Backups](/docs/concepts/backups) covers point-in-time recovery, and
+    a sharding migration is exactly the change you want it for.
 </Callout>
 
 1. **Stop writes to the table.** Do this _before_ the dump, not after. Export
@@ -100,6 +100,11 @@ a dump taken before the edit lands on the right DOs after it.
    stay consistent. This step is off the critical path — do it after writes
    resume, not during the window.
 
+    Only for `.shardBy()`. A `.global()` migration has to clear the root DO
+    **before** the schema edit, because afterwards the writer refuses the table
+    outright — see
+    [Migrating a populated table to D1](#migrating-a-populated-table-to-d1).
+
 <Callout type="info">
     Admin reads and writes are addressed to a **shard**, not routed by the schema, which is why step 6 still reaches rows your application can no longer see.
     `lunora migrate` is the exception and cannot help here: a `defineMigration` transform runs inside one shard's Durable Object and can only `replace` the row
@@ -139,44 +144,58 @@ to D1 instead of a shard.
 **The order differs from the `.shardBy()` procedure, and the difference matters.**
 There, the root DO's leftover copies are cleared last, from the Studio. Here they
 cannot be cleared at all once the edit lands: the shard's writer refuses to touch
-a table the schema calls global (`GLOBAL_TABLE_NOT_EDITABLE`), and the Studio
-redirects a global table to a read-only D1 view. So the root copies have to go
+a table the schema calls global (`GLOBAL_TABLE_NOT_EDITABLE`). The orphaned rows
+are still listed under `__root__` — the table list reads SQLite directly — so the
+Studio will let you try, and the clear is what surfaces the refusal. So the root copies have to go
 **before** the schema edit, while the table is still shard-local and the writer
 still owns it.
 
 <Callout type="warn">
-    Writes are unavailable from step 1 to step 6. Export is keyset pagination over live reads, not a snapshot, and step 3 deletes the source rows — so a write
-    that lands mid-procedure is lost. Snapshot first: [Backups](/docs/concepts/backups) covers point-in-time recovery.
+    Writes are unavailable from step 1 until they resume at step 6. Export is keyset pagination over live reads, not a snapshot, and step 3 deletes the source
+    rows — so a write that lands mid-procedure is lost. Snapshot first: [Backups](/docs/concepts/backups) covers point-in-time recovery.
 </Callout>
 
-1. **Stop writes to the table.**
+1.  **Stop writes to the table.**
 
-2. **Dump it while it still lives in the root DO.**
+2.  **Dump it while it still lives in the root DO.**
 
     ```bash
     lunora export --tables users --out users.ndjson --prod --url <url>
     ```
 
-3. **Delete the root DO's rows now**, before the schema edit — this is the only
-   window in which anything can. In the Studio's **Data** page set the shard key
-   to `__root__`, open the table, and use **Clear table**.
+3.  **Delete the root DO's rows now**, before the schema edit — this is the only
+    window in which anything can. In the Studio's **Data** page set the shard key
+    to `__root__`, open the table, and use **Clear table**.
 
-4. **Add `.global()` to `lunora/schema.ts`**, then generate and deploy. The
-   schema-drift gate blocks a shard-mode change on purpose, so pass
-   `--allow-schema-drift` once you are running these steps deliberately.
+        <Callout type="warn">
+        **Check inbound relations first.** Clear table deletes through the
+        schema-aware writer, so `onDelete` fires. Any table declaring
+        `r.one("users", { onDelete: "cascade" })` loses its rows too — and those are
+        not in a `--tables users` dump, so they are gone for good. With
+        `onDelete: "restrict"` the clear aborts part-way instead, leaving the table
+        half-emptied. Either dump the dependent tables in the same export and
+        re-import them, or drop the `onDelete` on inbound relations for the
+        migration. Confirm the dump's row count before you clear: between this step
+        and step 5 the export file is the only copy.
+
+    </Callout>
+
+4.  **Add `.global()` to `lunora/schema.ts`**, then generate and deploy. The
+    schema-drift gate blocks a shard-mode change on purpose, so pass
+    `--allow-schema-drift` once you are running these steps deliberately.
 
     ```bash
     lunora migrate generate add_users_global   # keeps the committed D1 migration history in step
     lunora codegen && lunora deploy --allow-schema-drift
     ```
 
-5. **Load the dump back.** Rows now route to D1.
+5.  **Load the dump back.** Rows now route to D1.
 
     ```bash
     lunora import users.ndjson --prod --url <url> --yes --verify
     ```
 
-6. **Resume writes.**
+6.  **Resume writes.**
 
 <Callout type="info">
     `migrate generate` is bookkeeping here, not a prerequisite: `ensureMigrated` provisions a `.global()` table **and its declared indexes** — including the

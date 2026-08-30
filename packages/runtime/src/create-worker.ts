@@ -902,11 +902,8 @@ interface WorkerOptions {
      * Table allowlist for the scheduled backup. Omit to back up every table
      * (shard-local + `.global()`). Mirrors the export endpoint's `tables`.
      *
-     * "Every table" needs {@link WorkerOptions.listSchemaTables} to be real —
-     * shard discovery is driven by the table list, so on a worker without one an
-     * omitted allowlist reaches only the default shard and silently skips the
-     * other DOs of a `.shardBy(...)` deployment. Codegen supplies it; a
-     * hand-written worker should either wire it or name its tables here.
+     * "Every table" needs {@link WorkerOptions.listSchemaTables}; without it the
+     * backup reaches only the default shard. Export warns when that happens.
      */
     backupTables?: ReadonlyArray<string>;
 

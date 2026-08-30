@@ -1,6 +1,7 @@
+import { RUNTIME_LINTS } from "@lunora/advisor";
 import { describe, expect, it } from "vitest";
 
-import { declaredIndexesFor, deriveRuntimeAdvisories } from "../../../src/features/advisors/derive-runtime-advisories";
+import { declaredIndexesFor, deriveRuntimeAdvisories, DRIVABLE_RUNTIME_LINTS } from "../../../src/features/advisors/derive-runtime-advisories";
 import type { FunctionCallStat, MetricsIndexHit } from "../../../src/lib/admin";
 
 /** A used index — recorded reads > 0, so it must NOT be flagged dead. */
@@ -241,29 +242,23 @@ describe("declaredIndexesFor", () => {
 
 describe("runtime lints this call site can actually drive", () => {
     /**
-     * `constraint_validator` is registered in `RUNTIME_LINTS` but cannot fire from
-     * here: it reads `context.tableSamples` and `context.schema`, and this call
-     * site supplies neither. That is documented in `deriveRuntimeAdvisories`, but a
-     * paragraph does not fail when someone adds sampling and forgets the schema —
-     * this does.
+     * Asserts the derived list, not the absence of a finding.
      *
-     * When it starts failing, the lint has become live: delete this test and the
-     * comment, rather than weakening the assertion.
+     * The earlier version of this test checked that no `constraint_validator`
+     * finding came out of a studio-shaped context — which could never fail, because
+     * the inputs type has no samples field: someone adding one would write a
+     * new literal, this test would keep passing its old one, and the lint would stay
+     * silent. A deaf canary.
+     *
+     * This trips instead on the change that actually matters — putting the lint back
+     * into the driven set, which is what enabling it requires.
      */
-    it("produces no constraint_validator finding, because it is given neither schema nor samples", () => {
+    it("excludes only constraint_validator, and keeps every other runtime lint", () => {
         expect.assertions(2);
 
-        const rows = deriveRuntimeAdvisories({
-            declaredIndexes: [{ index: "byAuthor", table: "posts" }],
-            functions: [],
-            indexHits: [],
-            shardTraffic: [],
-        });
+        const driven = new Set(DRIVABLE_RUNTIME_LINTS.map((lint) => lint.name));
 
-        // Positive control: this input DOES fire index_utilization, and its key
-        // carries the lint name — so the negative below is discriminating, not
-        // just matching against an empty list.
-        expect(rows.some((row) => row.key.startsWith("index_utilization"))).toBe(true);
-        expect(rows.some((row) => row.key.startsWith("constraint_validator"))).toBe(false);
+        expect(driven.has("constraint_validator")).toBe(false);
+        expect([...RUNTIME_LINTS].every((lint) => lint.name === "constraint_validator" || driven.has(lint.name))).toBe(true);
     });
 });

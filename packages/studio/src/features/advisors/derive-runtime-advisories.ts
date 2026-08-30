@@ -1,5 +1,5 @@
 import type { AdvisorIndexHit, AdvisorShardTraffic, AdvisorTableScan, AnalyticsRuntimeMetrics } from "@lunora/advisor";
-import { runAdvisor, RUNTIME_LINTS } from "@lunora/advisor";
+import { constraintValidator, runAdvisor, RUNTIME_LINTS } from "@lunora/advisor";
 
 import type { FunctionCallStat, MetricsIndexHit, TableIndexInfo } from "../../lib/admin";
 import type { AdvisorRow } from "./advisor-view";
@@ -127,6 +127,17 @@ const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo
         return { index: index.name, table };
     });
 
+/**
+ * The runtime lints this call site can actually drive.
+ *
+ * `constraint_validator` reads `tableSamples` and `schema`, and the studio gathers
+ * neither — giving it samples alone would not wake it. Excluding it here rather
+ * than explaining the gap in prose means re-enabling it is a visible diff on this
+ * line, and the list assertion in the tests fails until the inputs exist. Written
+ * as a filter so a NEW runtime lint still flows in automatically.
+ */
+const DRIVABLE_RUNTIME_LINTS = RUNTIME_LINTS.filter((lint) => lint !== constraintValidator);
+
 /* eslint-disable jsdoc/check-indentation -- intentional nested bullet list documenting the inputs */
 
 /**
@@ -152,19 +163,8 @@ const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo
  * Pure and side-effect-free, so the panel can call it inside a `useMemo` and it
  * unit-tests without a client.
  *
- * **This is the only place in the product that runs `RUNTIME_LINTS`**, so the
- * context assembled here decides which of them can fire at all. Three do:
- * `hot_shard` and `fan_out_breadth` off `shardTraffic`, `index_utilization` off
- * `indexHits` + `tableScans`.
- *
- * `constraint_validator` cannot. It reads `context.tableSamples` (sampled rows,
- * to catch dangling FKs, nulls in non-optional columns, and duplicate values on a
- * unique index) and `context.schema`, and this call site has neither — `schema`
- * is passed as `{ tables: [] }` and no sample feed exists. It is NOT redundant
- * with anything else the panel shows, so it is a real check that never runs
- * rather than a duplicate; giving it inputs means a per-table row-sampling read
- * on every Advisors load, which is a cost worth deciding on deliberately rather
- * than adding by reflex. Add both together or the lint stays silent.
+ * Only the lints in {@link DRIVABLE_RUNTIME_LINTS} can fire from here; see there
+ * for the one that is excluded and why.
  */
 const deriveRuntimeAdvisories = (inputs: RuntimeAdvisoryInputs): AdvisorRow[] => {
     const inDoIndexHits = reconcileIndexHits(inputs.declaredIndexes ?? [], inputs.indexHits ?? []);
@@ -182,7 +182,7 @@ const deriveRuntimeAdvisories = (inputs: RuntimeAdvisoryInputs): AdvisorRow[] =>
     const tableScans = analytics && analytics.tableScans.length > 0 ? analytics.tableScans : inDoTableScans;
     const shardTraffic = analytics && analytics.shardTraffic.length > 0 ? analytics.shardTraffic : inDoShardTraffic;
 
-    const findings = runAdvisor({ indexHits, schema: { tables: [] }, shardTraffic, tableScans }, { lints: RUNTIME_LINTS, source: "runtime" });
+    const findings = runAdvisor({ indexHits, schema: { tables: [] }, shardTraffic, tableScans }, { lints: DRIVABLE_RUNTIME_LINTS, source: "runtime" });
 
     // Drop hot-scan findings for tables the panel's `missing-index` insight
     // already reports (same `scannedTables` signal), so a hot full-scanned table
@@ -200,5 +200,5 @@ const deriveRuntimeAdvisories = (inputs: RuntimeAdvisoryInputs): AdvisorRow[] =>
 };
 /* eslint-enable jsdoc/check-indentation */
 
-export { declaredIndexesFor, deriveRuntimeAdvisories };
+export { declaredIndexesFor, deriveRuntimeAdvisories, DRIVABLE_RUNTIME_LINTS };
 export type { DeclaredIndex, RuntimeAdvisoryInputs };

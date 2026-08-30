@@ -4,14 +4,11 @@ import type { AdvisorShardTraffic, LintContext } from "../src";
 import { ALL_LINTS, fanOutBreadth, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
 
 /**
- * A minimal context with an empty schema.
- *
- * NOT because runtime lints ignore `schema` — `constraint_validator` reads it,
- * along with `tableSamples`. This base supplies neither, so the three
- * observed-signal lints below (`fan_out_breadth`, `hot_shard`,
- * `index_utilization`) are the ones it can drive; `constraint_validator` is
- * covered by `constraint-validator.test.ts`, which builds its own context.
- */ const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
+ * A minimal context with an empty schema. `constraint_validator` also reads
+ * `schema` and `tableSamples`; this base supplies neither, so it is covered by
+ * `constraint-validator.test.ts` rather than here.
+ */
+const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
     return { schema: { tables: [] }, ...overrides };
 };
 
