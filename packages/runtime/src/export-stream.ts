@@ -106,12 +106,21 @@ const streamExportRows = async (
     writeRow: (row: ExportRow) => void,
     namespace: ShardNamespaceLike,
 ): Promise<void> => {
-    // "Every table" is a real table list when codegen could supply one. Resolving
-    // it here rather than leaving `shardLocalTables` empty is what lets a SHARDED
-    // deployment's `lunora export` (and its scheduled backup, which omits
-    // `backupTables` by default) reach shards other than the default one — shard
-    // discovery is driven by the table list, so an empty list discovers nothing.
+    // "Every table" is a real table list when codegen could supply one. Shard
+    // discovery is driven by that list, so without it only the default shard is
+    // contacted and a whole-deployment export silently comes back short.
     const seeded = tables ?? options.listSchemaTables?.();
+
+    // Said out loud, once, to the operator whose backup is short — the invariant is
+    // otherwise only documented, and a caller cannot tell a partial export from a
+    // deployment that genuinely has one shard.
+    if (tables === undefined && options.listSchemaTables === undefined) {
+        // eslint-disable-next-line no-console -- operational warning on a data-export path; there is no logger in scope here
+        console.warn(
+            "[lunora] export: no table list available (`listSchemaTables` is unset and no `tables` were named), so only the default shard is reachable. " +
+                "A `.shardBy()` deployment's other shards will be missing from this export. Name the tables explicitly, or regenerate the worker so codegen supplies the list.",
+        );
+    }
     const { globalTables, shardLocalTables } = partitionExportTables(options, seeded);
 
     await exportShardLocalRows(coordinator, forwardedHeaders, seeded, shardLocalTables, writeRow, namespace, options.defaultShardKey ?? "__root__");
