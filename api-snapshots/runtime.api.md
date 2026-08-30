@@ -1278,6 +1278,7 @@ type MetricKind = "counter" | "gauge" | "histogram";
 ```ts
 interface MigrationFanOutRequest {
     args?: Record<string, unknown>;
+    defaultShardKey?: string;
     functionPath: string;
     headers?: Record<string, string>;
     table: string;

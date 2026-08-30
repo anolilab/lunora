@@ -3076,10 +3076,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         assertAdmin: assertAdminAuthorized,
         exportCursorStore: options.exportCursorStore,
         exportSinks: options.exportSinks,
-        // The runtime carries no schema, so it cannot enumerate tables itself;
-        // callers pass explicit `tables` (the CLI always does) and this seam
-        // stays for a host that can.
-        knownTables: () => [],
+        defaultShardKey: defaultShard,
+        // Codegen supplies the schema's table list, so "every table" is a real list
+        // rather than an empty one. It used to be hardcoded empty with a note that
+        // the seam "stays for a host that can" enumerate — `listSchemaTables` is
+        // that host, and leaving this blind kept CDC sync and the export tap
+        // discovering no shards at all.
+        knownTables: () => [...(options.listSchemaTables?.() ?? [])],
         queryCoordinator: options.queryCoordinator,
         requireAdminOption,
         resolveForwardContext: resolveAdminForwardContext,
