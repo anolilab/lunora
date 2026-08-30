@@ -21,8 +21,20 @@ export type CountTarget = "incident" | "issue" | "uptime";
  */
 export type MetricTarget = "error_rate" | "latency_p95" | "llm_cost";
 
-/** What a rule watches — a count-crossing counter or a metric window. */
-export type AlertTarget = CountTarget | MetricTarget;
+/**
+ * Event targets — something that happened once, with no quantity to compare.
+ * `deploy` covers the release path's bad outcomes: a build failed, a deployment
+ * failed, or the rollout guard aborted a canary.
+ *
+ * Separate from {@link CountTarget} because a count target fires when a running
+ * total crosses a line and therefore needs a threshold; a failed release has no
+ * running total, and forcing one on it would mean either a threshold every rule
+ * sets to 1 or a latch that has to remember something that has already ended.
+ */
+export type EventAlertTarget = "deploy";
+
+/** What a rule watches — a count-crossing counter, a metric window, or a one-off event. */
+export type AlertTarget = CountTarget | EventAlertTarget | MetricTarget;
 
 /** How a metric value is compared to the rule threshold. Absent on a rule ⇒ `gt`. */
 export type Comparator = "gt" | "lt";
@@ -70,6 +82,39 @@ export const renderAlert = (rule: { name: string; target: CountTarget }, source:
             `${TARGET_LABEL[rule.target]} "${source.title}" (${source.culprit}) reached ` +
             `${String(source.count)} events on Lunora Cloud.\n\nSample: ${source.sampleMessage}`,
         subject: `[Lunora] ${rule.name}: ${source.title}`,
+    };
+};
+
+/** What tripped a `deploy` rule, for rendering. */
+export interface DeployAlertSource {
+    /** What went wrong, in the operator's words — a build error, a status, an abort reason. */
+    detail: string;
+    /** Which part of the release path produced it. */
+    kind: "build" | "deployment" | "rollout";
+    /** The project the release belongs to. */
+    project: string;
+    /** What identifies the failing thing — a branch, a commit, a script name. */
+    reference: string;
+}
+
+/** The human label for each part of the release path, used in the notification. */
+const DEPLOY_KIND_LABEL: Record<DeployAlertSource["kind"], string> = {
+    build: "Build failed",
+    deployment: "Deployment failed",
+    rollout: "Rollout aborted",
+};
+
+/**
+ * Render a fired `deploy` alert.
+ *
+ * The subject leads with the project and what happened, because this lands in a
+ * channel alongside other projects' notifications and the first line is often all
+ * that gets read on a phone.
+ */
+export const renderDeployAlert = (rule: { name: string }, source: DeployAlertSource): { body: string; subject: string } => {
+    return {
+        body: `${DEPLOY_KIND_LABEL[source.kind]} for "${source.project}" (${source.reference}) on Lunora Cloud.\n\n${source.detail}`,
+        subject: `[Lunora] ${rule.name}: ${source.project} — ${DEPLOY_KIND_LABEL[source.kind].toLowerCase()}`,
     };
 };
 

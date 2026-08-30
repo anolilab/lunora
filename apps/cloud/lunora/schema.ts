@@ -674,7 +674,10 @@ export default defineSchema({
         // group's event count), `uptime` (a deployment's consecutive failed
         // synthetic checks, see lunora/uptime.ts). Metric-window: `error_rate`
         // (% error spans), `latency_p95` (p95 durationMs), `llm_cost` (summed
-        // generation cost) over `windowMinutes`.
+        // generation cost) over `windowMinutes`. Event: `deploy` (a build or a
+        // deployment failed, or the rollout guard aborted a canary) — it carries
+        // no threshold, because a failed release is not a quantity that crosses a
+        // line, it is one thing that happened.
         target: v.union(
             v.literal("issue"),
             v.literal("incident"),
@@ -682,6 +685,7 @@ export default defineSchema({
             v.literal("error_rate"),
             v.literal("latency_p95"),
             v.literal("llm_cost"),
+            v.literal("deploy"),
         ),
         // Count-crossing: fire when the source's count first reaches this value.
         // Metric-window: the value the window metric is compared against.
@@ -730,7 +734,9 @@ export default defineSchema({
         createdAt: v.number(),
         deliveredAt: v.optional(v.number()),
         destination: v.string(),
-        // Fingerprint hash of the issue/incident that tripped the rule.
+        // Fingerprint of what tripped the rule: the issue/incident hash, or — for a
+        // `deploy` alert — the failing build/deployment id, which is what makes a
+        // re-fire for the same release identifiable.
         hash: v.string(),
         organizationId: v.id("organizations"),
         ruleId: v.id("alertRules"),
@@ -743,6 +749,7 @@ export default defineSchema({
             v.literal("error_rate"),
             v.literal("latency_p95"),
             v.literal("llm_cost"),
+            v.literal("deploy"),
         ),
         updatedAt: v.number(),
     })

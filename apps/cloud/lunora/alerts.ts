@@ -1,7 +1,9 @@
 import { LunoraError } from "@lunora/server";
 
-import { isSafeWebhookUrl } from "../src/telemetry/alerts";
+import type { DeployAlertSource } from "../src/telemetry/alerts";
+import { isSafeWebhookUrl, renderDeployAlert } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
+import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
@@ -16,11 +18,17 @@ import { boundedString, LIMITS } from "./validators";
  * hosted `AlertsSection`; reads are members-only.
  */
 
-/** Every rule target — count-crossing (`issue`/`incident`/`uptime`) + metric-window. */
-type RuleTarget = "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
+/** Every rule target — count-crossing (`issue`/`incident`/`uptime`) + metric-window + event. */
+type RuleTarget = "deploy" | "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
 
 /** Metric-window targets, which additionally require `windowMinutes` (+ optional comparator/scope). */
 const METRIC_TARGETS = new Set<RuleTarget>(["error_rate", "latency_p95", "llm_cost"]);
+
+/**
+ * Event targets, which carry no threshold at all — the rule is "tell me when this
+ * happens", and the only thing the operator configures is where to send it.
+ */
+const EVENT_TARGETS = new Set<RuleTarget>(["deploy"]);
 
 interface AlertRuleRow {
     _id: Id<"alertRules">;
@@ -72,9 +80,17 @@ export const rules = query
 const assertRuleShape = (
     args: { baselineWindows?: number; mode?: "deviation" | "threshold"; threshold: number; windowMinutes?: number },
     isMetric: boolean,
+    isEvent = false,
 ): void => {
     if (args.mode === "deviation" && !isMetric) {
         throw new LunoraError("BAD_REQUEST", "deviation mode applies to metric targets only");
+    }
+
+    // An event rule has nothing numeric to validate: the caller's `threshold` is
+    // ignored rather than rejected, so a dashboard form that always sends one
+    // does not have to know which targets read it.
+    if (isEvent) {
+        return;
     }
 
     if (args.mode !== "deviation" && (isMetric ? args.threshold < 0 : args.threshold < 1)) {
@@ -116,6 +132,7 @@ export const createRule = mutation
             v.literal("error_rate"),
             v.literal("latency_p95"),
             v.literal("llm_cost"),
+            v.literal("deploy"),
         ),
         threshold: v.number(),
         // Metric targets only: rolling window length in minutes (required for them).
@@ -126,7 +143,7 @@ export const createRule = mutation
 
         const isMetric = METRIC_TARGETS.has(args.target);
 
-        assertRuleShape(args, isMetric);
+        assertRuleShape(args, isMetric, EVENT_TARGETS.has(args.target));
 
         // SSRF guard: the edge `fetch`es a `webhook`/`slack` destination when the
         // alert fires, so both must be an https URL to a public host. `pagerduty`'s
@@ -225,3 +242,56 @@ export const markDelivered = mutation
 
         return { delivered: ids.length };
     });
+
+/**
+ * Fire the org's `deploy` rules for one release-path failure — insert an `alerts`
+ * row per enabled rule and return how many were raised.
+ *
+ * A plain exported helper rather than a mutation of its own, because every caller
+ * is already inside a mutation that has just written the failure it is reporting:
+ * `builds.fail`, `deployments.updateStatus`, and the rollout guard. Firing in the
+ * same transaction is what makes "the build is marked failed" and "somebody was
+ * told" one outcome instead of two that can disagree.
+ *
+ * It deliberately does NOT deliver. Delivery needs `fetch`, which a mutation does
+ * not have, so the row is left `firing` and the every-minute drain sweep
+ * (`src/telemetry/alert-drain.ts`) sends it. That indirection is also what makes
+ * an alert survive the edge dying mid-send, which the fire-and-deliver-inline
+ * paths do not.
+ *
+ * `hash` carries the failing thing's id, so a re-fire for the same release is
+ * identifiable in the alert list rather than looking like an unrelated second
+ * failure.
+ */
+export const fireDeployAlerts = async (
+    context: MutationContext,
+    organizationId: Id<"organizations">,
+    hash: string,
+    source: DeployAlertSource,
+): Promise<number> => {
+    const { page } = await context.db.alertRules.findMany({ where: { organizationId, target: "deploy" } });
+    const enabled = (page as unknown as AlertRuleRow[]).filter((rule) => rule.enabled);
+
+    const { now } = context;
+
+    for (const rule of enabled) {
+        const { body, subject } = renderDeployAlert(rule, source);
+
+        // eslint-disable-next-line no-await-in-loop -- an org configures a handful of rules; sequential keeps the writer simple
+        await context.db.insert("alerts", {
+            body,
+            channel: rule.channel,
+            createdAt: now,
+            destination: rule.destination,
+            hash,
+            organizationId,
+            ruleId: rule._id,
+            status: "firing",
+            subject,
+            target: "deploy",
+            updatedAt: now,
+        });
+    }
+
+    return enabled.length;
+};

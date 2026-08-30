@@ -340,7 +340,7 @@ export interface Doc_alertRules {
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
     threshold: number;
     updatedAt: number;
     windowMinutes?: number;
@@ -371,7 +371,7 @@ export interface Doc_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
     updatedAt: number;
 }
 
@@ -1027,7 +1027,7 @@ export interface Insert_alertRules {
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
     threshold: number;
     updatedAt: number;
     windowMinutes?: number;
@@ -1058,7 +1058,7 @@ export interface Insert_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
     updatedAt: number;
 }
 

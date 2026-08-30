@@ -2180,7 +2180,8 @@ const LUNORA_TABLE_COLUMNS: Record<
                 "uptime",
                 "error_rate",
                 "latency_p95",
-                "llm_cost"
+                "llm_cost",
+                "deploy"
             ]
         },
         {
@@ -2334,7 +2335,8 @@ const LUNORA_TABLE_COLUMNS: Record<
                 "uptime",
                 "error_rate",
                 "latency_p95",
-                "llm_cost"
+                "llm_cost",
+                "deploy"
             ]
         },
         {
@@ -4461,6 +4463,31 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "file": "builds",
         "hasEmailArg": false,
         "kind": "mutation",
+        "visibility": "internal"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": false,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "reportTarget",
+        "file": "builds",
+        "hasEmailArg": false,
+        "kind": "query",
         "visibility": "internal"
     },
     {

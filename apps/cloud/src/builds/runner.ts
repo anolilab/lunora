@@ -38,13 +38,36 @@ export interface BuildRunnerPorts {
      * fails the *deploy*, never the completed build. Omit for build-only runs.
      */
     release?: (build: ClaimedBuild, execution: BuildExecution) => Promise<{ deploymentId: string }>;
+
+    /**
+     * Report the build's state back to the commit that triggered it (GAPS.md A4)
+     * — the half of push-to-deploy that was missing, where the person who pushed
+     * finds out what happened without opening the dashboard.
+     *
+     * Optional, and every call is swallowed: this is a notification about work
+     * that has already happened, so a GitHub outage, a revoked installation or an
+     * absent App credential must never change a build's outcome.
+     */
+    reportStatus?: (build: ClaimedBuild, state: "failure" | "pending" | "success", description: string, targetUrl?: string) => Promise<void>;
 }
+
+/** Report a build's state, swallowing anything the report itself throws. */
+const report = async (
+    ports: BuildRunnerPorts,
+    build: ClaimedBuild,
+    state: "failure" | "pending" | "success",
+    description: string,
+    targetUrl?: string,
+): Promise<void> => {
+    await ports.reportStatus?.(build, state, description, targetUrl).catch(() => {});
+};
 
 export type BuildOutcome = { bundleHash: string; deploymentId?: string; status: "successful" } | { error: string; status: "failed" };
 
 /** Drive one claimed build through fetch → execute → complete/fail. Never throws. */
 export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Promise<BuildOutcome> => {
     try {
+        await report(ports, build, "pending", "Building on Lunora Cloud…");
         await ports.appendLog(build.buildId, "info", `fetching source at ${build.commitSha}`);
 
         const source = await ports.fetchSource(build);
@@ -62,14 +85,24 @@ export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Pr
                 const { deploymentId } = await ports.release(build, result);
 
                 await ports.appendLog(build.buildId, "info", `released as deployment ${deploymentId}`);
+                await report(ports, build, "success", "Deployed to a preview on Lunora Cloud.");
 
                 return { bundleHash: result.bundleHash, deploymentId, status: "successful" };
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
 
                 await ports.appendLog(build.buildId, "error", `release failed: ${message}`).catch(() => {});
+                // The BUILD succeeded and its artifact stays reusable, but nothing
+                // was deployed — so the commit must not read green. Reporting the
+                // build's own outcome here would tell the pusher their change is
+                // live when it is not, which is the one wrong answer available.
+                await report(ports, build, "failure", `Build succeeded but the release failed: ${message}`);
+
+                return { bundleHash: result.bundleHash, status: "successful" };
             }
         }
+
+        await report(ports, build, "success", "Built on Lunora Cloud.");
 
         return { bundleHash: result.bundleHash, status: "successful" };
     } catch (error) {
@@ -77,6 +110,7 @@ export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Pr
 
         await ports.appendLog(build.buildId, "error", message).catch(() => {});
         await ports.fail(build.buildId, message).catch(() => {});
+        await report(ports, build, "failure", message);
 
         return { error: message, status: "failed" };
     }

@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { isRequestSpan, percentile } from "../lunora/traffic";
 import type { TrafficFilter } from "../src/telemetry/traffic-read";
 import {
+    buildScriptHealthQuery,
     buildTrafficDimensionQuery,
     buildTrafficSeriesQuery,
     buildTrafficStatusQuery,
     createTrafficReader,
+    foldScriptHealth,
     foldTrafficBreakdown,
     foldTrafficSeries,
     foldTrafficStatus,
@@ -320,5 +322,59 @@ describe(percentile, () => {
     it("reads a single-sample window as that sample at every rank", () => {
         expect(percentile([42], 0.5)).toBe(42);
         expect(percentile([42], 0.99)).toBe(42);
+    });
+});
+
+const healthFilter: TrafficFilter = { dataset: "usage", scriptNames: ["app-v1", "app-v2"], sinceSec: 1000, toSec: 2000 };
+
+describe(buildScriptHealthQuery, () => {
+    it("groups by script AND class, so two releases come back from one read", () => {
+        const sql = buildScriptHealthQuery(healthFilter);
+
+        expect(sql).toContain("SELECT index1 AS script, blob3 AS class, SUM(_sample_interval) AS requests");
+        expect(sql).toContain("GROUP BY script, class");
+        expect(sql).toContain("index1 IN ('app-v1', 'app-v2')");
+    });
+
+    it("bounds the result set even though the shape already does", () => {
+        expect(buildScriptHealthQuery(healthFilter)).toContain("LIMIT 17");
+    });
+});
+
+describe(foldScriptHealth, () => {
+    it("sums every class into the request total and only 5xx into errors", () => {
+        const folded = foldScriptHealth([
+            { class: "2xx", requests: 80, script: "app-v2" },
+            { class: "4xx", requests: 10, script: "app-v2" },
+            { class: "5xx", requests: 10, script: "app-v2" },
+        ]);
+
+        expect(folded.get("app-v2")).toStrictEqual({ errorRate: 0.1, errors: 10, requests: 100, scriptName: "app-v2" });
+    });
+
+    /** 4xx is the caller's fault, not the release's — counting it would abort rollouts over bad bookmarks. */
+    it("does not count 4xx as an error", () => {
+        expect(foldScriptHealth([{ class: "4xx", requests: 50, script: "app-v2" }]).get("app-v2")?.errorRate).toBe(0);
+    });
+
+    it("keeps each script separate", () => {
+        const folded = foldScriptHealth([
+            { class: "5xx", requests: 5, script: "app-v1" },
+            { class: "2xx", requests: 95, script: "app-v1" },
+            { class: "5xx", requests: 50, script: "app-v2" },
+            { class: "2xx", requests: 50, script: "app-v2" },
+        ]);
+
+        expect(folded.get("app-v1")?.errorRate).toBe(0.05);
+        expect(folded.get("app-v2")?.errorRate).toBe(0.5);
+    });
+
+    it("skips blank and zero rows rather than minting a script that served nothing", () => {
+        expect(
+            foldScriptHealth([
+                { class: "2xx", requests: 0, script: "app-v2" },
+                { class: "2xx", requests: 5, script: "" },
+            ]).size,
+        ).toBe(0);
     });
 });

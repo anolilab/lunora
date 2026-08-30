@@ -5,6 +5,7 @@ import { previewExpiry } from "../src/deploy/preview";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import { fireDeployAlerts } from "./alerts";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -590,6 +591,22 @@ export const updateStatus = mutation
             status,
             updatedAt: now,
         });
+
+        // Notify the org's `deploy` rules, but only on the transition INTO failed.
+        // The orchestrator re-drives this mutation as it works through the
+        // provisioner's events, and a deployment that is already failed can be
+        // written again by a retry — firing on the state rather than the crossing
+        // would page somebody once per attempt for one broken release.
+        if (status === "failed" && existing.status !== "failed") {
+            const project = (await context.db.get(existing.projectId)) as null | { name: string };
+
+            await fireDeployAlerts(context, existing.organizationId, `deployment:${id}`, {
+                detail: `The deployment did not reach a live state. Its last recorded phase was "${existing.status}".`,
+                kind: "deployment",
+                project: project?.name ?? "project",
+                reference: existing.scriptName,
+            });
+        }
     });
 
 /**

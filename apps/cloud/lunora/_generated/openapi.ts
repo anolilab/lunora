@@ -158,6 +158,10 @@ export const openApiSpec: Record<string, unknown> = {
                                                     {
                                                         "const": "llm_cost",
                                                         "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "deploy",
+                                                        "type": "string"
                                                     }
                                                 ]
                                             },

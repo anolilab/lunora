@@ -380,7 +380,7 @@ export const alertRules = sqliteTable("alertRules", {
     mode: text("mode", { mode: "json" }).$type<"threshold" | "deviation">(),
     name: text("name").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy">().notNull(),
     threshold: real("threshold").notNull(),
     updatedAt: real("updatedAt").notNull(),
     windowMinutes: real("windowMinutes"),
@@ -416,7 +416,7 @@ export const alerts = sqliteTable("alerts", {
     ruleId: text("ruleId").references((): AnySQLiteColumn => alertRules._id).notNull(),
     status: text("status", { mode: "json" }).$type<"firing" | "delivered" | "failed">().notNull(),
     subject: text("subject").notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy">().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_status: index("by_status").on(t.status),

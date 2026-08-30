@@ -245,6 +245,67 @@ export const foldTrafficStatus = (rows: ReadonlyArray<Record<string, unknown>>):
     return [...byClass.values()].toSorted((a, b) => a.class.localeCompare(b.class));
 };
 
+/** Request and 5xx counts for one script over the read window. */
+export interface ScriptHealth {
+    /** Share of `requests` that were `5xx`, in `[0, 1]`; `0` when the script served nothing. */
+    errorRate: number;
+    /** Responses in the `5xx` class — the dispatcher's own failures plus the tenant's. */
+    errors: number;
+    requests: number;
+    scriptName: string;
+}
+
+/**
+ * Build the per-script health query — request and status-class counts grouped by
+ * script, for comparing two releases of the same app against each other.
+ *
+ * Deliberately one query rather than a `readSnapshot` per script. The rollout
+ * guard needs the candidate AND the active release, every minute, for every open
+ * rollout on the platform; a snapshot each would be five AE round trips per
+ * script per tick to answer a question that is two numbers wide.
+ */
+export const buildScriptHealthQuery = (filter: TrafficFilter): string =>
+    [
+        "SELECT index1 AS script, blob3 AS class, SUM(_sample_interval) AS requests",
+        `FROM ${filter.dataset}`,
+        whereClause(filter),
+        "GROUP BY script, class",
+        // Bounded by construction — one row per (script, status class), and status
+        // class has four possible values — but stated so a malformed dimension
+        // cannot return an unbounded result set.
+        `LIMIT ${String(Math.min(filter.scriptNames.length, MAX_TRAFFIC_SCRIPTS) * 8 + 1)}`,
+    ].join(" ");
+
+/** Fold `(script, class, requests)` rows into one {@link ScriptHealth} per script. */
+export const foldScriptHealth = (rows: ReadonlyArray<Record<string, unknown>>): Map<string, ScriptHealth> => {
+    const byScript = new Map<string, ScriptHealth>();
+
+    for (const row of rows) {
+        const scriptName = asString(row.script);
+        const requests = asNumber(row.requests);
+
+        if (scriptName === "" || requests <= 0) {
+            continue;
+        }
+
+        const health = byScript.get(scriptName) ?? { errorRate: 0, errors: 0, requests: 0, scriptName };
+
+        health.requests += requests;
+
+        if (asString(row.class) === "5xx") {
+            health.errors += requests;
+        }
+
+        byScript.set(scriptName, health);
+    }
+
+    for (const health of byScript.values()) {
+        health.errorRate = health.requests === 0 ? 0 : health.errors / health.requests;
+    }
+
+    return byScript;
+};
+
 /** One bucket of the volume series. */
 export interface TrafficSeriesPoint {
     avgDurationMs: number;
@@ -278,6 +339,8 @@ export interface TrafficSnapshot {
 
 /** Read a traffic snapshot for a set of scripts over a window. */
 export interface TrafficReader {
+    /** Request + 5xx counts per script, keyed by script name. Scripts that served nothing are absent. */
+    readScriptHealth: (input: { from: number; scriptNames: ReadonlyArray<string>; to: number }) => Promise<Map<string, ScriptHealth>>;
     readSnapshot: (input: { from: number; hostname?: string; scriptNames: ReadonlyArray<string>; to: number }) => Promise<TrafficSnapshot>;
 }
 
@@ -312,6 +375,17 @@ export const createTrafficReader = (options: TrafficReaderOptions): TrafficReade
     const bucketSec = Math.max(Math.floor((options.bucketMs ?? DEFAULT_TRAFFIC_BUCKET_MS) / 1000), 1);
 
     return {
+        readScriptHealth: async ({ from, scriptNames, to }) => {
+            if (scriptNames.length === 0) {
+                return new Map<string, ScriptHealth>();
+            }
+
+            const { rows } = await sql.query(
+                buildScriptHealthQuery({ dataset: options.dataset, scriptNames, sinceSec: Math.floor(from / 1000), toSec: Math.floor(to / 1000) }),
+            );
+
+            return foldScriptHealth(rows);
+        },
         readSnapshot: async ({ from, hostname, scriptNames, to }) => {
             // No scripts means the org has deployed nothing, and `index1 IN ()` is
             // not valid SQL — answer without a round trip rather than building it.

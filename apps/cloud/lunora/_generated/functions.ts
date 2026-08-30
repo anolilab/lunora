@@ -95,6 +95,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "builds:listByProject": lunora_builds_3.listByProject as unknown as RegisteredLunoraFunction,
     "builds:logs": lunora_builds_3.logs as unknown as RegisteredLunoraFunction,
     "builds:recordPush": lunora_builds_3.recordPush as unknown as RegisteredLunoraFunction,
+    "builds:reportTarget": lunora_builds_3.reportTarget as unknown as RegisteredLunoraFunction,
     "cells:list": lunora_cells_4.list as unknown as RegisteredLunoraFunction,
     "cells:register": lunora_cells_4.register as unknown as RegisteredLunoraFunction,
     "cloudflare_billing:disconnect": lunora_cloudflare_billing_5.disconnect as unknown as RegisteredLunoraFunction,
@@ -303,6 +304,12 @@ __has1 = true;
 if (typeof source["buildId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { ...(__has1 ? { "afterCreatedAt": __val1 } : {}), "buildId": source["buildId"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_builds_3.reportTarget.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["buildId"] !== "string") return DEFER;
+return { "buildId": source["buildId"] };
 });
 installCompiledValidatorMap(lunora_cells_4.register.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -734,11 +741,11 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     alerts: {
-        createRule: (args: { baselineWindows?: number; channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: unknown; functionPath?: unknown; mode?: "threshold" | "deviation"; name: unknown; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost"; threshold: number; windowMinutes?: number }) => Promise<Id<"alertRules">>;
+        createRule: (args: { baselineWindows?: number; channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: unknown; functionPath?: unknown; mode?: "threshold" | "deviation"; name: unknown; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy"; threshold: number; windowMinutes?: number }) => Promise<Id<"alertRules">>;
         deleteRule: (args: { id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alerts">; channel: "email" | "pagerduty" | "slack" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "failed" | "firing" | "delivered"; subject: string; target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime" }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alerts">; channel: "email" | "pagerduty" | "slack" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "failed" | "firing" | "delivered"; subject: string; target: "deploy" | "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime" }[]>;
         markDelivered: (args: { deployKey: unknown; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }) => Promise<{ delivered: number; }>;
-        rules: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alertRules">; channel: "email" | "pagerduty" | "slack" | "webhook"; comparator?: "gt" | "lt"; createdAt: number; destination: string; enabled: boolean; functionPath?: string; name: string; organizationId: Id<"organizations">; target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime"; threshold: number; windowMinutes?: number }[]>;
+        rules: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alertRules">; channel: "email" | "pagerduty" | "slack" | "webhook"; comparator?: "gt" | "lt"; createdAt: number; destination: string; enabled: boolean; functionPath?: string; name: string; organizationId: Id<"organizations">; target: "deploy" | "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime"; threshold: number; windowMinutes?: number }[]>;
         setRuleEnabled: (args: { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
     };
     audit_log: {
@@ -763,6 +770,7 @@ export interface Caller {
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; status: "building" | "failed" | "pending" | "successful" }[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
         recordPush: (args: { branch: unknown; commitSha: unknown; installationId: number; repository: unknown }) => Promise<{ buildId: Id<"builds">; reused: boolean; } | null>;
+        reportTarget: (args: { buildId: Id<"builds"> }) => Promise<{ commitSha: string; installationId: number; repository: string; } | null>;
     };
     cells: {
         list: (args?: {}) => Promise<{ _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
@@ -784,7 +792,7 @@ export interface Caller {
     deploy_keys: {
         ingestKeyCipher: (args: { deployKey: unknown; organizationId: Id<"organizations"> }) => Promise<null | { ciphertext: string; iv: string }>;
         issue: (args: { capability?: "deploy" | "ingest"; name: unknown; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }) => Promise<{ id: Id<"deployKeys">; key: string; }>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"deployKeys">; capability?: "ingest" | "deploy"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"deployKeys">; capability?: "deploy" | "ingest"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
         recordIngestKey: (args: { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations"> }) => Promise<{ ciphertext: string; iv: string }>;
         revoke: (args: { id: Id<"deployKeys">; organizationId: Id<"organizations"> }) => Promise<void>;
         roll: (args: { id: Id<"deployKeys">; organizationId: Id<"organizations"> }) => Promise<{ id: Id<"deployKeys">; key: string; }>;
@@ -859,7 +867,7 @@ export interface Caller {
         series: (args: { from?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
     };
     onboarding: {
-        checklist: (args: { organizationId: Id<"organizations"> }) => Promise<{ complete: boolean; steps: { done: boolean; id: "live" | "deploy" | "key" | "project" }[] }>;
+        checklist: (args: { organizationId: Id<"organizations"> }) => Promise<{ complete: boolean; steps: { done: boolean; id: "deploy" | "live" | "key" | "project" }[] }>;
     };
     organizations: {
         cancelDeletion: (args: { organizationId: Id<"organizations"> }) => Promise<void>;
@@ -963,6 +971,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         listByProject: (args) => callRegistered(context, "builds:listByProject", args),
         logs: (args) => callRegistered(context, "builds:logs", args),
         recordPush: (args) => callRegistered(context, "builds:recordPush", args),
+        reportTarget: (args) => callRegistered(context, "builds:reportTarget", args),
     },
     cells: {
         list: (args) => callRegistered(context, "cells:list", args),

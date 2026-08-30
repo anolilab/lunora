@@ -70,6 +70,22 @@ Shipped since (2026-08-28, same pass):
 | **Deployment protection on previews** | ✅ A per-project password gates every PREVIEW deployment at the dispatcher, before dispatch. The salted hash stays in the control plane (`POST /v1/tenants/preview-auth`); the dispatcher mints a signed, script-scoped cookie so later requests cost no round trip. Production is never gated. |
 | **Staged rollouts (A1 follow-on)**    | ✅ `setRollout` / `promoteRollout` / `abortRollout` serve a candidate to a share of traffic alongside the active release. The split is deterministic per client and monotonic in the percentage, so advancing never moves anyone back. Error rate per script is already readable on Traffic.    |
 
+### Status pass — 2026-08-30
+
+Three loops that were each half-built, closed at the end nobody had reached.
+
+| Item                             | Now                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Rollout guard (A1 follow-on)** | ✅ `src/deploy/rollout-guard.ts`, on the every-minute tick. A staged rollout whose candidate returns materially more 5xx than the release it is replacing is aborted, audited as `deployment.rollout.auto_abort`, and notified. Judged against the ACTIVE release rather than a constant, because the two scripts are two builds of one app splitting the same traffic.           |
+| **Release-path notifications**   | ✅ A new `deploy` alert target. `builds.fail`, `deployments.updateStatus` (on the transition into `failed` only) and the rollout guard raise it. Previously the alert rules could only watch telemetry the tenant's own app had to send — so the one failure class where the app never starts could raise nothing.                                                                |
+| **Undelivered-alert drain**      | ✅ `src/telemetry/alert-drain.ts`, every minute. Sends `alerts` rows left in `firing` past a grace window. Release-path alerts are raised inside mutations, which have no `fetch`; this is also the first thing that re-sends an alert whose delivering request died mid-send, which used to be silently lost forever.                                                            |
+| **A4 commit-status write-back**  | 🌐 Code complete, credential-blocked. `src/github/app.ts` mints an installation token and posts a `lunora/deploy` commit status; `runBuild` reports pending → success/failure through an optional port. It needs the SAME App id + private key the source fetch needs, so it stays inert until those are provisioned — `createGitHubApp` returns `null` and reporting is skipped. |
+
+The commit-status half deserves the honest note: until the App credentials land,
+push-to-deploy still tells GitHub nothing, because it cannot fetch the source
+either. What changed is that the loop is now complete on our side — provisioning
+one credential lights both ends rather than half of one.
+
 **Unchanged 🌐 set** still includes D1 backups/PITR, which remains the
 highest-risk item on this page and is still not built.
 
