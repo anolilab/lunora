@@ -68,9 +68,11 @@ With no options, `lunora()` runs codegen on save, validates `wrangler.jsonc`, in
 
 ```ts
 lunora({
-    schemaDir: "lunora", // dir with schema.ts + function files
-    generatedDir: "lunora/_generated", // where api.ts/server.ts/dataModel.ts land
+    schemaDir: "lunora", // dir with schema.ts + function files (generated output lands in <schemaDir>/_generated)
     apiSpec: "openapi", // "openapi" | "openrpc" | "both" | "none"
+    target: "cloudflare", // deploy target the emitted ctx.* surface is tailored to
+    allowUnauthenticatedShardAccess: false, // composed class-A worker: allow a client-named shard / fan-out with no authorizeShard
+    shard: { cdc: true, reactiveCache: true }, // class-A only: shard DO config for the composed entry (class B/C set this in their own worker entry)
     studio: false, // disable the /__lunora studio
     overlay: false, // disable the runtime error overlay
     validateWrangler: false, // skip the wrangler.jsonc binding check

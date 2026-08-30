@@ -1682,12 +1682,43 @@ const resolveCiProvider = (raw: string | undefined, logger: Logger): CiProvider 
     return undefined;
 };
 
+/**
+ * Resolve `--template` into either a bespoke template id or a create-vite
+ * overlay framework, or into an error message.
+ *
+ * The four overlay framework names (`react` / `vue` / `solid` / `svelte`) are
+ * documented `-t` values, so they route to the overlay path rather than being
+ * looked up as bespoke templates that do not exist. Anything else is an ERROR:
+ * silently dropping an unrecognised value (what this did) left
+ * `resolveScaffoldChoice` falling through to `DEFAULT_FRAMEWORK = "react"`, so
+ * `lunora init -t vue` and `lunora init -t nextjs` both scaffolded React without
+ * a word — while the sibling paths (`--ci` warns, `--vite` errors) do say so.
+ */
+const resolveTemplateFlag = (raw: string | undefined): { error: string } | { templateType?: Template; vite?: string } => {
+    if (raw === undefined) {
+        return {};
+    }
+
+    if (isTemplate(raw)) {
+        return { templateType: raw };
+    }
+
+    if (isOverlayFramework(raw)) {
+        return { vite: raw };
+    }
+
+    return { error: `init: unknown --template "${raw}" — expected a bespoke template (${TEMPLATE_VALUES}) or an overlay framework (${OVERLAY_VALUES}).` };
+};
+
 /** `lunora init [name]` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argument, cwd, logger, options }) => {
-    // Leave `templateType` undefined when no `-t` was passed (or an unknown one
-    // was), so the scaffolder shows the interactive picker (TTY) / errors
-    // (non-TTY) / takes the React-overlay default rather than a stale template.
-    const templateType: Template | undefined = options.template !== undefined && isTemplate(options.template) ? options.template : undefined;
+    const template = resolveTemplateFlag(options.template);
+
+    if ("error" in template) {
+        logger.error(template.error);
+
+        return { code: 1 };
+    }
 
     return runInitCommand({
         add: options.add,
@@ -1702,12 +1733,14 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
         name: argument[0],
         ref: options.ref,
         source: options.source,
-        templateType,
-        vite: options.vite,
+        templateType: template.templateType,
+        // An explicit `--vite` still wins; `-t react` only fills the overlay slot
+        // when the user did not name a framework the other way.
+        vite: options.vite ?? template.vite,
         yes: options.yes === true,
     });
 });
 
-export { execute, isTemplate, resolveTemplateSource };
+export { execute, isTemplate, resolveTemplateFlag, resolveTemplateSource };
 export type { InitCommandOptions, InitCommandResult, Template };
 export { runInitCommand };

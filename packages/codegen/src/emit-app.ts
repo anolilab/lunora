@@ -32,8 +32,20 @@ interface EmitAppOptions {
     hasHyperdriveGlobal: boolean;
     /** App uses `@lunora/bindings/images` / `ctx.images` → emit `.images()`. */
     hasImages: boolean;
-    /** App uses `@lunora/bindings/kv` / `ctx.kv` → emit `.kv()`. */
+    /** App uses `@lunora/bindings/kv` / `ctx.kv` → emit `.kv()`. Usage-only, because the method's parameter type reads `ShardConfig["kv"]`, and that config field is emitted on the same usage signal. */
     hasKv: boolean;
+
+    /**
+     * Wire the studio's zero-config KV introspector. Gated on `studioFeatures.kv`
+     * (usage OR a declared `@lunora/bindings` dependency), NOT on {@link EmitAppOptions.hasKv},
+     * so a visible KV tab always has a working backend — never the reverse.
+     *
+     * Kept separate from `hasKv` deliberately: the two were accidentally equal
+     * while the dependency arm in `discover/studio-features.ts` matched a subpath
+     * and could never fire. Fixing that arm made them diverge, and the shared flag
+     * emitted a `.kv()` builder whose `ShardConfig["kv"]` type did not exist.
+     */
+    hasKvIntrospector: boolean;
     /** App declares `lunora/notify.ts` (`@lunora/notify`) → wire `options.notifySubscriptionStore` so the studio Notifications page can read registered devices. */
     hasNotify: boolean;
     /** App uses `@lunora/payment` / `ctx.payments` → emit `.payment()`. */
@@ -132,7 +144,8 @@ const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
         : [];
 
 /** KV-browser import — the zero-config env-scanning introspector factory backing `createWorker({ kvIntrospector })`. */
-const buildKvImports = (hasKv: boolean): string[] => (hasKv ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : []);
+const buildKvImports = (hasKvIntrospector: boolean): string[] =>
+    hasKvIntrospector ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : [];
 
 /** `lunora/notify.ts` default-export import — the `defineNotify(...)` config the worker reads its subscription store off (`createWorker({ notifySubscriptionStore })`). */
 const buildNotifyImports = (hasNotify: boolean): string[] => (hasNotify ? [`import notifyConfig from "../notify.js";`] : []);
@@ -168,7 +181,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         hasFramework,
         hasGlobal,
         hasHyperdriveGlobal,
-        hasKv,
+        hasKvIntrospector,
         hasQueue,
         hasScheduler,
         hasStorage,
@@ -225,12 +238,15 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
                   `import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";`,
               ]
             : []),
-        ...buildKvImports(hasKv),
+        ...buildKvImports(hasKvIntrospector),
         ...(hasScheduler
             ? [`import type { DurableObjectNamespaceLike } from "@lunora/scheduler";`, `import { createScheduler } from "@lunora/scheduler";`]
             : []),
         ...(hasStorage
-            ? [`import type { R2BucketLike, Storage } from "@lunora/storage";`, `import { createBucketStorage, createStorage } from "@lunora/storage";`]
+            ? [
+                  `import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";`,
+                  `import { createBucketStorage, createStorage } from "@lunora/storage";`,
+              ]
             : []),
         ...(hasWorkflow ? [`import { createWorkflowsRestClient } from "@lunora/workflow";`] : []),
         ...buildInboundImports(options),
@@ -267,6 +283,8 @@ interface StorageDeclaration<Env> {
     buckets?: Record<string, Selector<Env, R2BucketLike>>;
     /** Public base URL signed/public object URLs resolve against. */
     publicBaseUrl?: Selector<Env, string>;
+    /** R2 S3-API credentials (\`{ accountId, accessKeyId, secretAccessKey, bucket, jurisdiction? }\`) enabling \`ctx.storage.getPresignedUrl\` — native S3 presigned URLs that hit R2 directly, bypassing the worker. Omit to use only the worker-signed \`getSignedUrl\` path. */
+    s3?: Selector<Env, R2S3Credentials>;
     /** HMAC secret for signed URLs. */
     signingSecret?: Selector<Env, string>;
 }`,
@@ -332,6 +350,7 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
     `    private cdcEnabled = false;`,
+    `    private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;`,
     `    private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];`,
     ...(options.hasGlobal ? [`    private globalDeclaration?: GlobalDeclaration<Env>;`] : []),
     ...(options.hasHyperdriveGlobal ? [`    private hyperdriveGlobalDeclaration?: HyperdriveGlobalDeclaration<Env>;`] : []),
@@ -381,6 +400,16 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
      */
     public cdc(enabled = true): this {
         this.cdcEnabled = enabled;
+
+        return this;
+    }`,
+    `    /**
+     * Enable the per-shard reactive query cache: query results are memoized by \`(functionPath, args, identity)\` and invalidated by the ctx-db write hooks BEFORE the subscription broadcast, so a subscriber re-running its query always observes the post-write state.
+     *
+     * Off by default (every dispatch re-runs its handler). Pass an options object to tune the caps: \`maxEntries\` (default 1000) and \`maxBytes\` (default 4 MiB); either accepts \`Number.POSITIVE_INFINITY\` to disable that cap.
+     */
+    public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {
+        this.reactiveCacheConfig = config;
 
         return this;
     }`,
@@ -511,6 +540,10 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
         // is never written, and the `.global()` shape poll's changed-tables fast
         // path is unreachable while looking, from the shard, like CDC-off.
         `            cdc: this.cdcEnabled,`,
+        // Same reason as `cdc` above: nothing else on the builder reaches
+        // `ShardDOConfig`, so without this line `.reactiveCache()` would set a
+        // field the generated shard never reads.
+        `            reactiveCache: this.reactiveCacheConfig,`,
         ...(options.hasGlobal
             ? [
                   `            ...(this.globalDeclaration
@@ -635,7 +668,6 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
             const database = this.globalDeclaration.d1(env);
 
             if (database) {
-                options.d1 = database;
                 options.globalIntrospector = buildGlobalIntrospector(database);
                 // \`resolveTableSharding\`/\`importGlobals\` wire the admin bulk-import
                 // endpoint: without the former, EVERY row (including a \`.global()\`
@@ -677,7 +709,7 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     // entry in wrangler.jsonc appears under its binding name (any name, any count)
     // with no manual `createKvIntrospector` call. A deployment with no KV binding
     // yields an empty namespace list rather than crashing.
-    ...(options.hasKv ? [`        options.kvIntrospector = createKvIntrospectorFromEnv(env);`] : []),
+    ...(options.hasKvIntrospector ? [`        options.kvIntrospector = createKvIntrospectorFromEnv(env);`] : []),
     // The studio's Notifications page reads the app's registered `@lunora/notify`
     // device subscriptions through the SAME store the handlers register into. The
     // store is built from `env` via `lunora/notify.ts`'s `defineNotify({ store })`;
@@ -872,20 +904,32 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
             return undefined;
         }
 
-        const make = (bucket: R2BucketLike): Storage =>
-            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
+        // \`bucketName\` is bound into every signed URL's HMAC canonical, so a
+        // bucket that signs as the default's name lets a URL minted for one
+        // bucket verify against another sharing the secret — and multi-bucket
+        // verification fails outright. Each bucket therefore signs under the
+        // name it is registered as: \`"default"\` for the bare \`ctx.storage\`
+        // bucket, the \`buckets\` key for every other.
+        const make = (bucket: R2BucketLike, bucketName: string): Storage =>
+            createStorage({
+                bucket,
+                bucketName,
+                publicBaseUrl: declaration.publicBaseUrl?.(env),
+                s3: declaration.s3?.(env),
+                signingSecret: declaration.signingSecret?.(env),
+            });
         const extraEntries = Object.entries(declaration.buckets ?? {})
             .map(([name, selector]) => [name, selector(env)] as const)
             .filter((entry): entry is [string, R2BucketLike] => Boolean(entry[1]));
 
         if (extraEntries.length === 0) {
-            return make(defaultBucket);
+            return make(defaultBucket, "default");
         }
 
-        const map: Record<string, Storage> = { default: make(defaultBucket) };
+        const map: Record<string, Storage> = { default: make(defaultBucket, "default") };
 
         for (const [name, bucket] of extraEntries) {
-            map[name] = make(bucket);
+            map[name] = make(bucket, name);
         }
 
         return createBucketStorage(map, { default: "default" });
@@ -905,20 +949,32 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
             return {};
         }
 
-        const make = (bucket: R2BucketLike): Storage =>
-            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
+        // \`bucketName\` is bound into every signed URL's HMAC canonical, so a
+        // bucket that signs as the default's name lets a URL minted for one
+        // bucket verify against another sharing the secret — and multi-bucket
+        // verification fails outright. Each bucket therefore signs under the
+        // name it is registered as: \`"default"\` for the bare \`ctx.storage\`
+        // bucket, the \`buckets\` key for every other.
+        const make = (bucket: R2BucketLike, bucketName: string): Storage =>
+            createStorage({
+                bucket,
+                bucketName,
+                publicBaseUrl: declaration.publicBaseUrl?.(env),
+                s3: declaration.s3?.(env),
+                signingSecret: declaration.signingSecret?.(env),
+            });
         // Held separately from the map so \`pick\`'s fallback is a plain binding:
         // under \`noUncheckedIndexedAccess\` a \`Record<string, Storage>\` lookup —
         // including \`buckets.default\` — widens to \`Storage | undefined\`, which
         // would not satisfy \`pick\`'s declared \`Storage\` return.
-        const fallbackStorage = make(defaultBucket);
+        const fallbackStorage = make(defaultBucket, "default");
         const buckets: Record<string, Storage> = { default: fallbackStorage };
 
         for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
             const bucket = selector(env);
 
             if (bucket) {
-                buckets[name] = make(bucket);
+                buckets[name] = make(bucket, name);
             }
         }
 

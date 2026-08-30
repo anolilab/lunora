@@ -174,19 +174,18 @@ describe("target registries", () => {
     // direction must never happen, so it stays asserted below.
     //
     // A target with a matrix but no driver is different: it says codegen can
-    // gate capabilities for a host the CLI cannot deploy to yet — exactly
-    // `node` today (`@lunora/platform-node`, plan 234), a spike host that
-    // exists to run the conformance TCK against a second implementation and
-    // has deliberately no `lunora dev`/deploy wiring. That is not a bug in
-    // either registry; it is what "codegen-gateable" and "deployable" being
-    // different questions looks like once a second target actually exists to
-    // ask them about. See `plans/234-node-host-findings.md`.
+    // gate capabilities for a host the CLI cannot deploy to yet. `node` was
+    // exactly that while its capability matrix landed ahead of its driver; both
+    // registries list it now, so they happen to agree again — but agreement is a
+    // coincidence of timing, not the invariant. "Codegen-gateable" and
+    // "deployable" are different questions, and the next host answers the first
+    // the moment its matrix lands.
     //
     // This used to assert strict equality on the theory that the two id
     // spaces were one concept and would always agree — true only because both
-    // held exactly `cloudflare` and nothing had tested the claim. `node` is
-    // that test, and it failed the strict form: a construction-discovered gap
-    // in the invariant itself, not in either registry.
+    // held exactly `cloudflare` and nothing had tested the claim. Restoring the
+    // strict form would just turn that normal intermediate state back into a
+    // test failure.
     it("never has a deploy driver for a target codegen cannot gate", () => {
         expect.assertions(1);
 

@@ -10,6 +10,7 @@ import { Project } from "ts-morph";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { toAdvisorContext } from "./advisor";
+import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { buildDeclarationSurface } from "./declaration-surface";
 import discoverAdminRoutes from "./discover/admin-routes";
 import discoverAiRawRuns from "./discover/ai-raw-runs";
@@ -35,6 +36,7 @@ import discoverGeoIndexUsages from "./discover/geo-index-usages";
 import discoverHttpActionGuards from "./discover/http-action-guards";
 import discoverHttpHeaderWrites from "./discover/http-header-writes";
 import discoverHttpRoutes from "./discover/http-routes";
+import discoverHyperdriveCalls from "./discover/hyperdrive-calls";
 import discoverIdentityClaimReads from "./discover/identity-claim-reads";
 import discoverImageDeliveryUrlAccesses from "./discover/image-delivery-url-accesses";
 import discoverInserts from "./discover/inserts";
@@ -421,6 +423,11 @@ const inferToFixpoint = (options: {
     let mutators = discoverMutators(project, lunoraDirectory);
     let httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
 
+    // Two files whose sanitized namespaces collide (`a-b.ts` + `a_b.ts`) would
+    // emit the same key twice into `_generated/api.ts` — a TS2300 inside
+    // generated code, with no pointer back to the two files that caused it.
+    assertNoNamespaceCollisions([...functions, ...mutators].map((definition) => definition.filePath));
+
     for (let pass = 1; ; pass += 1) {
         const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
         const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
@@ -689,6 +696,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   geoIndexUsages: discoverGeoIndexUsages(project, lunoraDirectory),
                   httpActionGuards: discoverHttpActionGuards(project, lunoraDirectory),
                   httpHeaderWrites: discoverHttpHeaderWrites(project, lunoraDirectory),
+                  hyperdriveCalls: discoverHyperdriveCalls(project, lunoraDirectory),
                   identityClaimReads: discoverIdentityClaimReads(project, lunoraDirectory),
                   imageDeliveryUrlAccesses: discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
                   inserts: discoverInserts(project, lunoraDirectory),
@@ -894,11 +902,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasHyperdrive: featureUsage.hyperdrive,
         hasHyperdriveGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive"),
         hasImages: featureUsage.images,
+        // The `.kv()` builder's parameter type reads `ShardConfig["kv"]`, and that
+        // config field is emitted on the usage signal — so this MUST stay
+        // usage-only or the emitted method references a type that is not there.
+        hasKv: featureUsage.kv,
         // Auto-wire the studio's KV introspector on the SAME condition the nav
         // gates its tab on (`studioFeatures.kv` = ctx.kv usage OR a declared
-        // `@lunora/bindings/kv` dep), so a visible KV tab always has a working
-        // backend — never the reverse. The `ctx.kv` type-seam stays usage-only.
-        hasKv: studioFeatures.kv,
+        // `@lunora/bindings` dep), so a visible KV tab always has a working
+        // backend — never the reverse.
+        hasKvIntrospector: studioFeatures.kv,
         hasNotify,
         hasPayments: featureUsage.payments,
         hasR2sql: featureUsage.r2sql,

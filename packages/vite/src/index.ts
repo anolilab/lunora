@@ -72,10 +72,17 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
         apiSpec: input.apiSpec ?? "openapi",
         cloudflare: cloudflareOption,
         studio: input.studio ?? true,
-        generatedDir: input.generatedDir ?? `${schemaDirectory}/_generated`,
+        // Derived, never taken from `input`: codegen always writes
+        // `<schemaDir>/_generated`, so this is the only value that can be true —
+        // eslint-disable-next-line no-secrets/no-secrets -- false positive: a function name referenced in a comment, not a credential.
+        // and `frameworkComposePlugin` uses it as the composed worker's import base.
+        generatedDir: `${schemaDirectory}/_generated`,
         overlay: resolveOverlayOption(input.overlay),
         projectRoot,
         schemaDir: schemaDirectory,
+        // The only route a class-A app has to `createShardDO(config)` — it has no
+        // worker entry of its own to pass one from. See `LunoraShardConfig`.
+        shard: input.shard ?? {},
         // Same resolution AND validation as the CLI — explicit option, then
         // `lunora.json`, then the default — so a project that sets `target`
         // once gets it in `vite build` and `lunora deploy` alike, and a typo
@@ -203,8 +210,15 @@ export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWo
 // composing the framework SSR handler under `composeWorker`'s `httpRouter` seam
 // is emitted by the plugin, not hand-wired. `buildWorkerEntrySource` /
 // `isAutoComposable` / `CLASS_A_WIRING` are exported for the CLI + tests.
-export type { ClassAWiring } from "./framework-compose-plugin";
-export { buildWorkerEntrySource, CLASS_A_WIRING, frameworkComposePlugin, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID } from "./framework-compose-plugin";
+export type { ClassAWiring, GeneratedClassModule } from "./framework-compose-plugin";
+export {
+    buildWorkerEntrySource,
+    CLASS_A_WIRING,
+    frameworkComposePlugin,
+    GENERATED_CLASS_MODULES,
+    isAutoComposable,
+    LUNORA_WORKER_VIRTUAL_ID,
+} from "./framework-compose-plugin";
 // The custom HMR event the codegen plugin sends on the client environment's hot
 // channel after a successful codegen run (in place of a blanket browser reload).
 export { default as LUNORA_API_UPDATED_EVENT } from "./hmr-events";
@@ -222,7 +236,14 @@ export { planViteRemoteBindings, remoteBindingsCleanupPlugin, remoteBindingsConf
 export type { Solution, SolutionFinder } from "./solution-finders";
 export { lunoraSolutionFinder, lunoraSolutionFinders } from "./solution-finders";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
-export type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
+export type {
+    CloudflarePluginOptions,
+    LunoraPluginOptions,
+    LunoraPlugins,
+    LunoraShardConfig,
+    OverlayPluginOptions,
+    ResolvedLunoraPluginOptions,
+} from "./types";
 export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";
 export { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
 export { lunora, resolveOverlayOption, VERSION };

@@ -209,6 +209,7 @@ interface EmitAppOptions {
     hasHyperdriveGlobal: boolean;
     hasImages: boolean;
     hasKv: boolean;
+    hasKvIntrospector: boolean;
     hasNotify: boolean;
     hasPayments: boolean;
     hasQueue: boolean;
@@ -302,6 +303,18 @@ interface HttpRouteIR {
 }
 ```
 
+### `HyperdriveCallIR` (interface)
+
+```ts
+interface HyperdriveCallIR {
+    callee: string;
+    exportName: string;
+    file: string;
+    kind: "mutation" | "query";
+    line: number;
+}
+```
+
 ### `IndexIR` (interface)
 
 ```ts
@@ -365,6 +378,7 @@ interface LintSchemaOptions {
     geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<HttpActionGuardIR>;
     httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>;
+    hyperdriveCalls?: ReadonlyArray<HyperdriveCallIR>;
     identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>;
     imageDeliveryUrlAccesses?: ReadonlyArray<ImageDeliveryUrlAccessIR>;
     inserts?: ReadonlyArray<InsertWriteIR>;
@@ -1033,6 +1047,12 @@ const discoverFunctions: (project: Project, lunoraDirectory: string) => Function
 
 ```ts
 const discoverHttpRoutes: (project: Project, lunoraDirectory: string) => HttpRouteIR[];
+```
+
+### `discoverHyperdriveCalls` (const)
+
+```ts
+const discoverHyperdriveCalls: (project: Project, lunoraDirectory: string) => HyperdriveCallIR[];
 ```
 
 ### `discoverInserts` (const)

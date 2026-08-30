@@ -369,11 +369,10 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // registration) must agree on one answer.
     const codegenDisabled = isCodegenDisabled(process.env[CODEGEN_ENV]);
 
-    // Seed from the resolved option, but treat codegen's returned output dir as
-    // authoritative once it has run — codegen always writes to
-    // `<schemaDir>/_generated` and ignores any custom `generatedDir`, so a
-    // mismatching option would otherwise make the change-guard and the
-    // invalidation loop below target the wrong (empty) directory.
+    // Seed from the resolved option (itself derived as `<schemaDir>/_generated`,
+    // the only path codegen writes), then treat codegen's returned output dir as
+    // authoritative once it has run — so the change-guard and the invalidation
+    // loop below can never target a directory nothing writes.
     let absoluteGeneratedDirectory = resolve(options.projectRoot, options.generatedDir);
 
     // When the project's `postcodegen` last finished, and whether one is running

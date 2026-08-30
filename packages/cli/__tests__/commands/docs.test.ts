@@ -40,9 +40,9 @@ describe("lunora docs", () => {
 
         const { openedUrls, opener } = recordingOpener();
 
-        await runDocsCommand({ logger: silentLogger(), opener, section: "addons/studio" });
+        await runDocsCommand({ logger: silentLogger(), opener, section: "packages/studio" });
 
-        expect(openedUrls).toEqual(["https://lunora.sh/docs/addons/studio"]);
+        expect(openedUrls).toEqual(["https://lunora.sh/docs/packages/studio"]);
     });
 
     it("normalises leading + trailing slashes", async () => {

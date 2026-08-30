@@ -292,6 +292,12 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "1000cc26
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
+    /** Ceiling on the join keys one relation-crossing `where` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
+    maxRelationKeys?: number;
+    /** Enable the per-shard reactive query cache: `true` for the defaults, or an options object to tune the caps. Query results are memoized by `(functionPath, args, identity)` and invalidated by the ctx-db write hooks before the subscription broadcast, so subscribers never observe a pre-write value. Omitted (or `false`) keeps every dispatch re-running its handler. */
+    reactiveCache?: boolean | { maxBytes?: number; maxEntries?: number };
+    /** Resolution policy for a relation-crossing `where` whose child is co-located in this shard: `"auto"` (cost-based, the engine default), `"always"` (inline correlated EXISTS) or `"never"` (universal semijoin). All three return identical rows. */
+    relationExistsPushDown?: "always" | "auto" | "never";
     /** Optional telemetry sink. When supplied, each `ctx.log.*` call is forwarded to `sink.onLog`. Pass the SAME sink you give `createWorker({ observability })` (which drives `onRpc`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
@@ -374,6 +380,18 @@ const dispatchRun = async (expected: FunctionKind, functionPath: string, args: R
  */
 export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
     class extends ShardDOBase {
+        public constructor(state: ShardDOState, env: unknown) {
+            super(state, env, {
+                ...(config.maxRelationKeys === undefined ? {} : { maxRelationKeys: config.maxRelationKeys }),
+                ...(config.reactiveCache ? { reactiveCache: config.reactiveCache === true ? {} : config.reactiveCache } : {}),
+                ...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),
+            });
+        }
+
+        protected override isQueryFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.kind === "query";
+        }
+
         private migrated = false;
 
         public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown> {
@@ -968,6 +986,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // handler making hundreds of queries stays readable. See
             // `instrumentDatabase` for the `"spans"` / `"off"` levels.
             const db: DatabaseWriterLike = this.instrumentDb(createShardCtxDb({
+                ...this.ctxDbTuning(),
                 auth: { identity: identity ?? null, userId: userId ?? null },
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);

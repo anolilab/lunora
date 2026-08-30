@@ -29,6 +29,7 @@ import type {
     FlagSecurityDefaultIR,
     HttpActionGuardIR,
     HttpHeaderWriteIR,
+    HyperdriveCallIR,
     IdentityClaimReadIR,
     ImageDeliveryUrlAccessIR,
     InsertWriteIR,
@@ -191,6 +192,7 @@ interface LintSchemaOptions {
     geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<HttpActionGuardIR>;
     httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>;
+    hyperdriveCalls?: ReadonlyArray<HyperdriveCallIR>;
     identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>;
     imageDeliveryUrlAccesses?: ReadonlyArray<ImageDeliveryUrlAccessIR>;
     inserts?: ReadonlyArray<InsertWriteIR>;

@@ -137,21 +137,30 @@ const wantRawJsonLogs = (): boolean => {
 };
 
 /**
+ * The restore for the patch currently installed on `process.stdout`/`stderr`, if
+ * any.
+ *
+ * MODULE-scoped, not factory-scoped, and that is the whole point: Vite 8's
+ * `restartServer` re-runs `resolveConfig`, which builds a NEW plugin instance
+ * from a NEW factory closure. A factory-scoped handle is therefore `undefined`
+ * in the new generation — it restores nothing, wraps the previous generation's
+ * wrapper, and every restart adds another layer that outlives the process's last
+ * server. One module-level handle lets a later generation undo the earlier
+ * patch, which is the only correct owner: the streams are process-global too.
+ */
+let activeRestore: (() => void) | undefined;
+
+/**
  * Vite plugin (serve-only) that formats Lunora worker logs in the terminal.
  * Patches `process.stdout`/`process.stderr` fresh for each dev-server generation
  * and restores them when that server closes.
  */
 const logStreamPlugin = (): Plugin => {
     // Teardown callbacks pending a middleware-mode dev-server close (no httpServer
-    // to hang a "close" listener on) — see `server-close.ts`. Factory-scoped so it
-    // survives across `configureServer` generations (a `server.restart()`).
+    // to hang a "close" listener on) — see `server-close.ts`. Factory-scoped is
+    // right HERE: the map is keyed by Environment instance, so each generation's
+    // `buildEnd` consumes its own entry from its own map.
     const pendingMiddlewareTeardowns: PendingCloseMap = new Map();
-
-    // The restore for the patch currently installed on the streams, if any. A new
-    // generation restores the previous one before installing its own, so a
-    // `server.restart()` (which configures the new server BEFORE closing the old)
-    // never double-wraps the streams over a stale wrapper.
-    let activeRestore: (() => void) | undefined;
 
     return {
         apply: "serve",

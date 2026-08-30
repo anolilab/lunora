@@ -41,6 +41,10 @@ const mcpCommand: Command = {
         },
         { description: "install/uninstall: this project's config instead of the machine-wide one", name: "project", type: Boolean },
         { description: "serve: also expose the mutation/action tools (default: read-only)", name: "allow-writes", type: Boolean },
+        // Both halves declared: a `no-*`-only declaration makes cerebro synthesize
+        // `--docs` by cloning this description, so `--help` showed the positive
+        // flag as "skip the documentation tools".
+        { description: "serve: expose the documentation tools (default)", name: "docs", type: Boolean },
         { description: "serve: skip the documentation tools", name: "no-docs", type: Boolean },
         { description: "Docs site origin backing the documentation tools (default https://lunora.sh)", name: "docs-url", type: String },
         { description: "serve: deployment URL to expose (default: the running dev server)", name: "url", type: String },
@@ -57,8 +61,8 @@ export { mcpCommand };
 
 export type McpOptions = CreateOptions<{
     "allow-writes": boolean | undefined;
-    // `--no-docs` is declared as a `no-*` option but cerebro exposes it at
-    // runtime under the negated positive key.
+    // `docs` is declared TWICE in `options` (`--docs` and `--no-docs`, each with
+    // its own description); cerebro exposes both under this one positive key.
     docs: boolean | undefined;
     "docs-only": boolean | undefined;
     "docs-url": string | undefined;

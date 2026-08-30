@@ -4768,7 +4768,15 @@ ${vectorNamespaceField}
     // server-trusted columns (owner/tenant ids) stamp from the verified caller,
     // never the client. `userId`/`identity` are resolved above in `buildCtx`.
     const authField = "\n                auth: { identity: identity ?? null, userId: userId ?? null },";
-    const databaseOptions = `{${authField}
+    // `ctxDbTuning()` FIRST, so every per-request option below still wins. It
+    // carries the reactive cache (row + index-range invalidation — without it a
+    // write only invalidates table-wide) and the two relation knobs
+    // (`maxRelationKeys` / `relationExistsPushDown`), which were unreachable in
+    // every deployment while the RLS docs described `maxRelationKeys` as a cap
+    // users could raise. Only keys the app set are present, so the spread never
+    // clobbers an engine default with `undefined`.
+    const databaseOptions = `{
+                ...this.ctxDbTuning(),${authField}
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -5116,14 +5124,37 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
             }
 `
         : "";
-    const sourceConstructorOverride =
-        hasSourcedTables || hasTtlTables
-            ? `
+    // The constructor is UNCONDITIONAL, and that is the fix: without it the
+    // emitted subclass never called `super(state, env, options)`, so
+    // `ShardDOOptions` was always `{}` and the per-shard reactive query cache
+    // (plus the two relation knobs) was unreachable no matter what the app
+    // configured. The alarm bootstraps ride the same constructor rather than
+    // minting a second one.
+    //
+    // `isQueryFunction` rides with it, and is equally load-bearing: the base
+    // class has no function registry, so its answer is a conservative `false`
+    // and `runCachedQuery` returns early on EVERY call — a wired cache that
+    // memoizes nothing. This override is the single point where that goes
+    // silently inert, which is why `emit-shard-reactive-cache.test.ts` pins it.
+    // The generated `handleRpc` deliberately does NOT wrap dispatch in
+    // `runCachedQuery` itself: the base `/rpc` path already routes through it,
+    // and a second wrap would let the inner call steal `currentTracker` and
+    // store an entry with zero deps — permanently stale.
+    /* eslint-disable no-secrets/no-secrets -- false positive: emitted generated-code text referencing the function registry, not a credential */
+    const constructorOverride = `
         public constructor(state: ShardDOState, env: unknown) {
-            super(state, env);
+            super(state, env, {
+                ...(config.maxRelationKeys === undefined ? {} : { maxRelationKeys: config.maxRelationKeys }),
+                ...(config.reactiveCache ? { reactiveCache: config.reactiveCache === true ? {} : config.reactiveCache } : {}),
+                ...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),
+            });
 ${sourceBootstrap}${ttlBootstrap}        }
-`
-            : "";
+
+        protected override isQueryFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.kind === "query";
+        }
+`;
+    /* eslint-enable no-secrets/no-secrets */
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
@@ -5234,6 +5265,12 @@ ${schemaSnapshotConst}${flagsOverrides.constant}${shapeReadRegistryConst}${workf
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
+    /** Ceiling on the join keys one relation-crossing \`where\` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
+    maxRelationKeys?: number;
+    /** Enable the per-shard reactive query cache: \`true\` for the defaults, or an options object to tune the caps. Query results are memoized by \`(functionPath, args, identity)\` and invalidated by the ctx-db write hooks before the subscription broadcast, so subscribers never observe a pre-write value. Omitted (or \`false\`) keeps every dispatch re-running its handler. */
+    reactiveCache?: boolean | { maxBytes?: number; maxEntries?: number };
+    /** Resolution policy for a relation-crossing \`where\` whose child is co-located in this shard: \`"auto"\` (cost-based, the engine default), \`"always"\` (inline correlated EXISTS) or \`"never"\` (universal semijoin). All three return identical rows. */
+    relationExistsPushDown?: "always" | "auto" | "never";
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
@@ -5276,7 +5313,7 @@ const dispatchRun = async (expected: FunctionKind, functionPath: string, args: R
  * from the worker entry so wrangler binds it by name.
  */
 export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
-    class extends ShardDOBase {${sourceConstructorOverride}
+    class extends ShardDOBase {${constructorOverride}
         private migrated = false;
 
         public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown> {

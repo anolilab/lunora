@@ -28,6 +28,7 @@ const baseOptions = {
     hasHyperdriveGlobal: false,
     hasImages: false,
     hasKv: false,
+    hasKvIntrospector: false,
     hasNotify: false,
     hasPayments: false,
     hasQueue: false,

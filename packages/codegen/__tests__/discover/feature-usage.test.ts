@@ -313,6 +313,20 @@ describe("discover/feature-usage", () => {
             expect(buildStudioFeatures({ ...ALL_OFF, storage: true, vectors: true }, NO_SIGNALS)).toMatchObject({ storage: true, vectors: true });
         });
 
+        it("fails open on the `@lunora/bindings` package name for analytics, kv and vectors", () => {
+            expect.assertions(1);
+
+            // Regression: these three arms tested subpaths (`@lunora/bindings/kv`)
+            // against a set of package NAMES, so the fail-open arm could never
+            // fire — an app depending on `@lunora/bindings` and wiring KV in its
+            // worker entry got the page hidden.
+            expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/bindings"]) })).toMatchObject({
+                analytics: true,
+                kv: true,
+                vectors: true,
+            });
+        });
+
         it("shows a page from its schema/project signal even with no code usage", () => {
             expect.assertions(4);
 

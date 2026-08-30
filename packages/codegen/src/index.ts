@@ -23,6 +23,7 @@ export { default as discoverCrons } from "./discover/crons";
 export { discoverFlags, FLAGS_FILENAME } from "./discover/flags";
 export { default as discoverFunctions } from "./discover/functions";
 export { default as discoverHttpRoutes } from "./discover/http-routes";
+export { default as discoverHyperdriveCalls } from "./discover/hyperdrive-calls";
 export { default as discoverInserts } from "./discover/inserts";
 export { default as discoverMaskProcedures } from "./discover/mask-procedures";
 export { default as discoverMigrations } from "./discover/migrations";
@@ -71,6 +72,7 @@ export type {
     FlagsIR,
     FunctionIR,
     HttpRouteIR,
+    HyperdriveCallIR,
     IndexIR,
     InsertWriteIR,
     MaskProcedureIR,
