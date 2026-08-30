@@ -1,6 +1,6 @@
 {
     "name": "@lunora/svelte",
-    "version": "1.0.0-alpha.99",
+    "version": "1.0.0-alpha.100",
     "description": "Svelte adapter for Lunora — live stores, optimistic mutations, and reactive loaders",
     "keywords": [
         "cloudflare",
@@ -68,7 +68,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.65",
+        "@lunora/client": "1.0.0-alpha.66",
         "@lunora/errors": "1.0.0-alpha.26",
         "@lunora/ratelimit": "1.0.0-alpha.30",
         "@visulima/storage-client": "catalog:storage"
