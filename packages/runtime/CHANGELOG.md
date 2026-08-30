@@ -1,3 +1,9 @@
+## @lunora/runtime [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.82...@lunora/runtime@1.0.0-alpha.83) (2026-08-30)
+
+### Bug Fixes
+
+* **runtime:** stop migration and CDC sync reporting success over zero shards ([#533](https://github.com/anolilab/lunora/issues/533)) ([d55aaec](https://github.com/anolilab/lunora/commit/d55aaecd00f5621e9173aaa9c3d7af1f0de2cdb3)), closes [#527](https://github.com/anolilab/lunora/issues/527) [#527](https://github.com/anolilab/lunora/issues/527)
+
 ## @lunora/runtime [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.81...@lunora/runtime@1.0.0-alpha.82) (2026-08-30)
 
 ### Documentation
