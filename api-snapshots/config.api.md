@@ -165,6 +165,12 @@ interface BadgeSpec {
 }
 ```
 
+### `CODEGEN_ENV` (const)
+
+```ts
+const CODEGEN_ENV = "LUNORA_CODEGEN";
+```
+
 ### `ClaimDevServerStateResult` (interface)
 
 ```ts
@@ -1161,6 +1167,12 @@ const inferLunoraBindings: (options: InferOptions) => Promise<InferredBindings>;
 const interpretRemote: (value: unknown) => RemotePreference;
 ```
 
+### `isCodegenDisabled` (const)
+
+```ts
+const isCodegenDisabled: (value: string | undefined) => boolean;
+```
+
 ### `isInteractive` (const)
 
 ```ts
@@ -1325,6 +1337,12 @@ const readProjectRemotePreference: (projectRoot: string) => RemotePreference;
 
 ```ts
 const readProjectTarget: (projectRoot: string) => string | undefined;
+```
+
+### `removeDevVariableLine` (const)
+
+```ts
+const removeDevVariableLine: (content: string, key: string) => string;
 ```
 
 ### `requiredSecrets` (const)

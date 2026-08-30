@@ -28,6 +28,7 @@ interface ComposedApp extends LunoraWorker {
  */
 class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
+    private cdcEnabled = false;
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
@@ -38,6 +39,19 @@ class AppBuilder<Env extends object> {
     /** Bearer token gating the `/_lunora/admin/*` endpoints the studio calls. */
     public admin(selector: Selector<Env, string>): this {
         this.adminToken = selector;
+
+        return this;
+    }
+
+    /**
+     * Opt into change-data-capture: every write records a post-image to `__cdc_log` — on this shard AND, when the app has `.global()` tables, on the global backend. Backs streaming export, replay-PITR, and the `.global()` half of `defineShape` replication (whose poll tick asks the global changelog which tables moved). Off by default: it costs a changelog row per write, which an app using none of the above should not pay.
+     *
+     * REQUIRED for a shard-local `defineShape`: those replicate out of `__cdc_log`, and a `shape_subscribe` is refused with `SHAPE_REQUIRES_CDC` without it.
+     *
+     * It also changes how fresh a `.global()` shape is against writes made OUTSIDE `ctx.db` — an admin import, a PITR replay, an external ETL job, or a predicate over wall clock. With CDC off the poll re-reads every shape every 2s. With it on the poll asks the global changelog which tables moved and skips the rest, so a change the changelog never saw waits for the 30s unconditional resync instead. Writes through `ctx.db` are unaffected: they append, so the poll sees them on the next tick either way.
+     */
+    public cdc(enabled = true): this {
+        this.cdcEnabled = enabled;
 
         return this;
     }
@@ -84,7 +98,9 @@ class AppBuilder<Env extends object> {
 
     /** Build the shard DO + compose the worker (standalone or framework-hosted), wrapping the lazy per-isolate singletons + auth init. */
     private assemble(): ComposedApp {
-        const ShardDO = createShardDO({});
+        const ShardDO = createShardDO({
+            cdc: this.cdcEnabled,
+        });
 
         // Per-isolate singletons: the worker (and auth instance) are expensive to
         // build, so the first request constructs them and every later request on

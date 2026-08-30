@@ -47,6 +47,7 @@ import externalSourceUnscoped from "./lints/static/external-source-unscoped";
 import filterOnPrimaryKey from "./lints/static/filter-on-primary-key";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
+import flagReadInSubscription from "./lints/static/flag-read-in-subscription";
 import geoIndexFieldNotGeopoint from "./lints/static/geo-index-field-not-geopoint";
 import geoIndexUnused from "./lints/static/geo-index-unused";
 import globalTableNearColumnLimit from "./lints/static/global-table-near-column-limit";
@@ -138,6 +139,7 @@ export type { AdvisorContainer } from "./containers";
 export { dedupeCacheKeys } from "./dedupe-cache-keys";
 export type { AdvisorExportSink } from "./export-sinks";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
+export type { AdvisorFlagRead } from "./flag-reads";
 export type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
 export type { AdvisorFunctionMetrics } from "./function-metrics";
 export type { AdvisorGeoIndexUsage } from "./geo-index-usages";
@@ -188,6 +190,7 @@ export { default as externalSourceUnscoped } from "./lints/static/external-sourc
 export { default as filterOnPrimaryKey } from "./lints/static/filter-on-primary-key";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/flag-gates-security-with-unsafe-default";
+export { default as flagReadInSubscription } from "./lints/static/flag-read-in-subscription";
 export { default as geoIndexFieldNotGeopoint } from "./lints/static/geo-index-field-not-geopoint";
 export { default as geoIndexUnused } from "./lints/static/geo-index-unused";
 export { default as globalTableNearColumnLimit } from "./lints/static/global-table-near-column-limit";
@@ -391,6 +394,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     httpActionResponseHeaderInjection,
     ratelimitMiddlewareFailOpen,
     flagGatesSecurityWithUnsafeDefault,
+    flagReadInSubscription,
     aiToolSideEffectPromptInjection,
     identityUndeclaredClaimTrusted,
     paymentWebhookWideTolerance,

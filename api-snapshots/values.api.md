@@ -368,6 +368,7 @@ const v: {
     number: typeof number;
     object: typeof objectValidator;
     optional: typeof optional;
+    partial: typeof partial;
     record: typeof record;
     storage: typeof storage;
     string: typeof string;

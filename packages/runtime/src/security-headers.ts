@@ -560,9 +560,10 @@ const enforceWebSocketOrigin = (request: Request, resolved: ResolvedSecurity): R
  *
  * `x-d1-bookmark` carries D1 read-your-writes; `x-lunora-shard-key` is the
  * canonical shard a dispatch resolved to, which the client keys its replica
- * bookmark by.
+ * bookmark by; `x-lunora-edge-cache` is the REST edge-cache hit indicator, which
+ * the docs tell callers to read and a browser could not otherwise see.
  */
-const DEFAULT_CORS_EXPOSED_HEADERS = ["X-D1-Bookmark", "X-Lunora-Shard-Key"];
+const DEFAULT_CORS_EXPOSED_HEADERS = ["X-D1-Bookmark", "X-Lunora-Edge-Cache", "X-Lunora-Shard-Key"];
 
 /** Build the `Access-Control-Allow-*` headers for an allowed cross-origin request. */
 const corsResponseHeaders = (origin: string, cors: ResolvedCors): Headers => {

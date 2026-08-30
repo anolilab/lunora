@@ -27,11 +27,15 @@
  */
 import type { TraceRefLike } from "@lunora/do";
 import { ShardDO } from "@lunora/do";
+import { flushDeferredDeletes } from "@lunora/server";
 
 class EmittedShardContract extends ShardDO {
-    // eslint-disable-next-line class-methods-use-this -- required abstract override; this file exercises the base surface, it never dispatches
-    public override handleRpc(): Promise<unknown> {
-        return Promise.resolve(undefined);
+    public override async handleRpc(): Promise<unknown> {
+        // Mirrors the shape of the emitted mutation branch, so the flush below is
+        // reached from a real dispatch signature rather than sitting unreferenced.
+        await this.flushDeferredStorageDeletes({});
+
+        return undefined;
     }
 
     /**
@@ -54,6 +58,15 @@ class EmittedShardContract extends ShardDO {
         await this.scheduleSourcePoll();
 
         return undefined;
+    }
+
+    /**
+     * Mirrors the post-commit flush the generated dispatches perform. It reaches
+     * one base member (`deferPastResponse`), which is `protected` for exactly this
+     * call — the host's `waitUntil` behind it is private.
+     */
+    private async flushDeferredStorageDeletes(context: unknown): Promise<void> {
+        await this.deferPastResponse(flushDeferredDeletes(context));
     }
 }
 export default EmittedShardContract;

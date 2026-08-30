@@ -2102,7 +2102,7 @@ export const run = query.input({ tool: v.from(toolSchema) }).query(async () => 1
             }
         });
 
-        it("expands a type IMPORTED into the handler's module instead of leaking a bare name", () => {
+        it("qualifies a type IMPORTED into the handler's module instead of leaking a bare name", () => {
             expect.assertions(4);
 
             // The other half of the same leak. When the handler DOES import the
@@ -2112,6 +2112,10 @@ export const run = query.input({ tool: v.from(toolSchema) }).query(async () => 1
             // reachability guard only covered types declared in the handler's OWN
             // file, so a shared `./lib/types` interface — the ordinary way to
             // write one — leaked straight through.
+            //
+            // The handler's own `import` names the module, so the alias survives
+            // as an `import("…")` qualifier rebased out of `_generated/`, rather
+            // than being flattened to its members.
             mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
             writeFileSync(
                 join(workdir, "lunora", "lib", "shapes.ts"),
@@ -2132,9 +2136,91 @@ export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "
             const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
 
             for (const rendered of [api, functions]) {
-                // Expanded structurally, so it resolves with no import at all.
+                // Qualified and rebased one level out of `_generated/`, so it
+                // resolves without an import statement of its own.
+                expect(rendered).toContain('import("../lib/shapes.js").Badge');
+                expect(rendered).not.toMatch(/(?<![.\w])Badge\b/u);
+            }
+        });
+
+        it("declines to name an imported type carrying a member the wire cannot encode", () => {
+            expect.assertions(4);
+
+            // Naming a type publishes every member of it. `Money` is a class, so
+            // `encodeWire` throws on the value at the send site
+            // (`shared/wire-codec.ts`) — but `import("../lib/money.js").Envelope`
+            // would type `result.at.format()` for every caller, a runtime
+            // TypeError with no compile error anywhere. Structural expansion
+            // already declined a bare class for exactly this reason; qualifying
+            // must not become the way around it.
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "lib", "money.ts"),
+                `export class Money {
+    format(): string {
+        return "x";
+    }
+}
+
+export interface Envelope {
+    at: Money;
+    label: string;
+}
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "wallet.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Envelope } from "./lib/money";
+
+export const get = query.input({}).query(async (): Promise<Envelope> => null as never);
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            expect(api).toContain('get: FunctionReference<"query", {}, unknown>');
+            expect(functions).toContain("Promise<unknown>");
+
+            for (const rendered of [api, functions]) {
+                expect(rendered).not.toMatch(/Envelope|Money/u);
+            }
+        });
+
+        it("declines a tsconfig `paths` alias — it resolves under the app's config and nowhere else", () => {
+            expect.assertions(4);
+
+            // The emitted qualifier is the specifier the USER wrote, and none of
+            // emit.ts's three rebasers touch an alias. Written out verbatim it
+            // resolves under the authoring project's own tsconfig and fails from a
+            // sibling package or under a dedicated strict config for generated
+            // output — which is the pattern this repo itself ships. Falling back
+            // to structural expansion is what the type got before qualifying
+            // existed, and it always resolves.
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `{
+    "compilerOptions": { "moduleResolution": "bundler", "module": "ESNext", "target": "ES2022", "strict": true, "baseUrl": ".", "paths": { "~/*": ["./lunora/lib/*"] } },
+    "include": ["lunora/**/*"]
+}
+`,
+            );
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "lib", "aliased.ts"), `export interface Badge {\n    label: string;\n}\n`);
+            writeFileSync(
+                join(workdir, "lunora", "aliased.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Badge } from "~/aliased";
+
+export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "x" }));
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [api, functions]) {
+                expect(rendered).not.toContain('import("~/aliased")');
                 expect(rendered).toContain("{ label: string }");
-                expect(rendered).not.toMatch(/,\s*Badge>/u);
             }
         });
 
@@ -2171,6 +2257,63 @@ export const raw = internalQuery
             // No `.output()` → the handler still supplies the type, so projects
             // that never declare one are unaffected.
             expect(result.generated.api).toContain('raw: FunctionReference<"query", { id: string }, string>');
+        });
+
+        it("keeps a stream on its handler's yield type — `.output()` is inert on that terminal", () => {
+            expect.assertions(3);
+
+            // `.output()` is not applied to a stream: `makeStreamHandler` is never
+            // given `state.output`, and the terminal is generic over its own yield
+            // type, so the builder does not type-check the declaration either.
+            // Preferring it would describe chunks the handler never yields — and
+            // preferring it in BOTH surfaces would only make the two agree on
+            // something untrue.
+            writeFileSync(
+                join(workdir, "lunora", "ticker.ts"),
+                `import { query, v } from "./_generated/server.js";
+
+export const tick = query
+    .input({ id: v.string() })
+    .output(v.object({ n: v.string() }))
+    .stream(async function* () {
+        yield { n: 1 };
+    });
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.functions).toContain("tick: (args: { id: string }) => Promise<AsyncIterable<{ n: number; }>>;");
+            expect(result.generated.api).toContain("{ n: number; }");
+            expect(result.generated.api).not.toContain("{ n: string }");
+        });
+
+        it("types the CALLER from .output() too, not just the api reference", () => {
+            expect.assertions(3);
+
+            // `_generated/server.ts`'s `Caller` read the handler's inferred type
+            // directly while `api.ts` one function away read `.output()`, so the
+            // two descriptions of the same procedure disagreed: a field declared
+            // `v.optional(...)` typed as required through `ctx.run*`, and a
+            // `v.string()` narrowed to a branded `Id<...>`.
+            writeFileSync(
+                join(workdir, "lunora", "audit.ts"),
+                `import { internalQuery, v } from "./_generated/server.js";
+
+export const page = internalQuery
+    .input({ limit: v.number() })
+    .output(v.object({ cursor: v.optional(v.string()), id: v.string() }))
+    .query(async () => ({ cursor: "c", id: "abc" }));
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.functions).toContain("page: (args: { limit: number }) => Promise<{ cursor?: string; id: string }>;");
+            // The declared `v.string()` stays opaque — it is not re-branded as an
+            // `Id<...>` by whatever the handler happened to return.
+            expect(result.generated.functions).not.toContain('Id<"audit">');
+            expect(result.generated.api).toContain("cursor?: string");
         });
 
         it("registers a default-exported procedure as <module>.default", () => {
@@ -3183,7 +3326,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // deployment's default bucket, so a non-default one never previewed.
             expect(output).toContain('"bucket": "media"');
             // `v.storage()` with no argument names none, which IS the default bucket.
-            expect(output.match(/"bucket"/gu)).toHaveLength(1);
+            // Anchored on the JSON key (`"bucket":`) rather than the bare word: the
+            // emitted module also carries `"bucket"` as a plain string in the
+            // eslint-disable-next-line no-secrets/no-secrets -- an emitted identifier, not a credential
+            // `markUnvouchableReads` method allowlist for `ctx.storage`, which is
+            // unrelated to column metadata and would otherwise inflate this count.
+            expect(output.match(/"bucket":/gu)).toHaveLength(1);
         });
 
         it("omits enumValues for a union with a non-literal member", () => {
@@ -3886,7 +4034,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // The request type declares the Sessions-API bookmark pair the DO actually
             // passes, so a direct `createShardDO({ d1 })` can read them under types.
             expect(output).toContain(
-                "d1?: (env: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;",
+                "d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;",
             );
             expect(output).toContain("const globalDbStub: DatabaseWriterLike");
             expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;");

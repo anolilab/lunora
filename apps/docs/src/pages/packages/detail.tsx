@@ -13,7 +13,7 @@ import AnimatedNumber from "@/components/ui/animated/animated-number";
 import type { AccentColor } from "@/data/packages";
 import { Shell } from "@/kit/layout";
 import { ArticleHeader } from "@/kit/page-header";
-import posthog from "@/lib/posthog";
+import { posthog } from "@/lib/posthog";
 import { cn, formatNumber } from "@/lib/utils";
 import type { DownloadStats, MonthlyDataPoint } from "@/server/stats";
 import { getStats } from "@/server/stats";

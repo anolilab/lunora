@@ -1,3 +1,26 @@
+## @lunora/angular [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.43...@lunora/angular@1.0.0-alpha.44) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.60
+
+## @lunora/angular [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.42...@lunora/angular@1.0.0-alpha.43) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.59
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.27
+
+## @lunora/angular [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.41...@lunora/angular@1.0.0-alpha.42) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.58
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.26
+
 ## @lunora/angular [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.40...@lunora/angular@1.0.0-alpha.41) (2026-08-23)
 
 

@@ -1,3 +1,52 @@
+## @lunora/workflow [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.34...@lunora/workflow@1.0.0-alpha.35) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.31
+* **@lunora/server:** upgraded to 1.0.0-alpha.87
+
+## @lunora/workflow [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.33...@lunora/workflow@1.0.0-alpha.34) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.30
+* **@lunora/server:** upgraded to 1.0.0-alpha.86
+
+## @lunora/workflow [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.32...@lunora/workflow@1.0.0-alpha.33) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.24
+* **@lunora/values:** upgraded to 1.0.0-alpha.29
+* **@lunora/server:** upgraded to 1.0.0-alpha.84
+
+## @lunora/workflow [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.31...@lunora/workflow@1.0.0-alpha.32) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.23
+* **@lunora/values:** upgraded to 1.0.0-alpha.28
+* **@lunora/server:** upgraded to 1.0.0-alpha.83
+
+## @lunora/workflow [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.30...@lunora/workflow@1.0.0-alpha.31) (2026-08-24)
+
+### Bug Fixes
+
+* **workflow:** reject reserved names on step.name ([#447](https://github.com/anolilab/lunora/issues/447)) ([f51690d](https://github.com/anolilab/lunora/commit/f51690da43c76e134de1b9dc68468da03c4e6834))
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.80
+
 ## @lunora/workflow [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.29...%40lunora%2Fworkflow%401.0.0-alpha.30) (2026-08-18)
 
 

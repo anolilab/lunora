@@ -11,6 +11,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
+import type { AlertTarget } from "../telemetry/alerts";
+import { EVENT_TARGETS, METRIC_TARGETS } from "../telemetry/alerts";
 import { AsyncList } from "./AsyncList";
 import { formatDateTime } from "./format";
 import { COLUMN_LABEL } from "./section-styles";
@@ -18,11 +20,8 @@ import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge, Ups
 import type { SectionProps } from "./tabs";
 import type { OrgId } from "./types";
 
-/** Every alert-rule target — count-crossing + app-semantic / budget metric windows. */
-type RuleTarget = "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
-
-/** Metric-window targets, which take a rolling window (+ comparator + optional scope). */
-const METRIC_TARGETS = new Set<RuleTarget>(["error_rate", "latency_p95", "llm_cost"]);
+/** Every alert-rule target, from the one place the taxonomy is declared (`src/telemetry/alerts.ts`). */
+type RuleTarget = AlertTarget;
 
 /** Delivery channels — `email` via the mailer, the rest typed webhook POSTs. */
 type Channel = "email" | "pagerduty" | "slack" | "webhook";
@@ -37,6 +36,7 @@ const DESTINATION_HINT: Record<Channel, string> = {
 
 /** Human labels for each target in the create form. */
 const TARGET_LABELS: Record<RuleTarget, string> = {
+    deploy: "Failed deploy",
     error_rate: "Error rate (%)",
     incident: "Incident count",
     issue: "Issue count",
@@ -98,8 +98,17 @@ const AlertRulesCard = ({ organizationId, rules }: { organizationId: OrgId; rule
                                     </span>
                                     {/* The one value shown at size: a rule is its condition. */}
                                     <span className="font-mono text-base whitespace-nowrap tabular-nums">
-                                        {rule.target} {comparatorGlyph(rule.target, rule.comparator)} {rule.threshold}
-                                        {rule.windowMinutes ? ` / ${String(rule.windowMinutes)}m` : ""}
+                                        {EVENT_TARGETS.has(rule.target) ? (
+                                            // No comparator, no threshold: an event rule has no
+                                            // quantity, and rendering "deploy ≥ 0" would invite
+                                            // somebody to go looking for the number it means.
+                                            <>on {rule.target}</>
+                                        ) : (
+                                            <>
+                                                {rule.target} {comparatorGlyph(rule.target, rule.comparator)} {rule.threshold}
+                                                {rule.windowMinutes ? ` / ${String(rule.windowMinutes)}m` : ""}
+                                            </>
+                                        )}
                                     </span>
                                     <StatusBadge tone={rule.enabled ? "success" : "neutral"}>{rule.enabled ? "on" : "off"}</StatusBadge>
                                     <RowActions>
@@ -151,6 +160,7 @@ const NewRuleForm = ({ organizationId }: { organizationId: OrgId }): ReactElemen
     const [error, setError] = useState<null | string>(null);
 
     const isMetric = METRIC_TARGETS.has(target);
+    const isEvent = EVENT_TARGETS.has(target);
 
     return (
         <Card>
@@ -243,18 +253,20 @@ const NewRuleForm = ({ organizationId }: { organizationId: OrgId }): ReactElemen
                             </Select>
                         </Field>
                     ) : null}
-                    <Field htmlFor="alert-threshold" label="Threshold">
-                        <Input
-                            className="font-mono tabular-nums"
-                            id="alert-threshold"
-                            min={isMetric ? 0 : 1}
-                            onChange={(event) => {
-                                setThreshold(event.target.value);
-                            }}
-                            type="number"
-                            value={threshold}
-                        />
-                    </Field>
+                    {isEvent ? null : (
+                        <Field htmlFor="alert-threshold" label="Threshold">
+                            <Input
+                                className="font-mono tabular-nums"
+                                id="alert-threshold"
+                                min={isMetric ? 0 : 1}
+                                onChange={(event) => {
+                                    setThreshold(event.target.value);
+                                }}
+                                type="number"
+                                value={threshold}
+                            />
+                        </Field>
+                    )}
                     {isMetric ? (
                         <Field htmlFor="alert-window" label="Window (minutes)">
                             <Input

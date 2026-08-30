@@ -736,6 +736,36 @@ describe("v.union() edge cases", () => {
 
         expect(v.union(v.string()).parse("ok")).toBe("ok");
     });
+
+    it("a nested union that misses every branch reports a real diagnostic, not the internal probe signal", () => {
+        expect.hasAssertions();
+
+        // `union` runs its branch trial with `context.probe` set, which makes
+        // `fail` throw the shared, stackless PROBE_MISS instead of building a
+        // per-branch ValidationError. The inner union here misses under the
+        // outer union's trial, so PROBE_MISS travels one level up — it must
+        // never reach the caller, and the outer union must still build the
+        // full "union of N member(s) (closest: …)" diagnostic.
+        const schema = v.object({ value: v.union(v.union(v.number(), v.boolean()), v.string()) });
+        const result = schema.safeParse({ value: { nope: true } });
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        expect(result.error.message).not.toMatch(/probe/iu);
+        expect(result.error.expected).toMatch(/^union of 2 member\(s\)/u);
+        expect(result.error.path).toStrictEqual(["value"]);
+    });
+
+    it("a nested union still matches on a branch reached only after a miss", () => {
+        expect.assertions(2);
+
+        // The trial pass must leave the shared path stack unwound so a later
+        // branch parses at the right depth, and the matched value passes through.
+        const schema = v.object({ value: v.union(v.union(v.number(), v.boolean()), v.array(v.string())) });
+
+        expect(schema.parse({ value: ["a", "b"] })).toStrictEqual({ value: ["a", "b"] });
+        expect(schema.parse({ value: true })).toStrictEqual({ value: true });
+    });
 });
 
 describe(".meta() without a description", () => {
@@ -820,5 +850,54 @@ describe("isOrWrapsFromValidator", () => {
         const metaless = { kind: "string" } as unknown as Parameters<typeof isOrWrapsFromValidator>[0];
 
         expect(isOrWrapsFromValidator(metaless)).toBe(false);
+    });
+});
+
+describe("v.partial", () => {
+    it("makes every member optional", () => {
+        expect.assertions(3);
+
+        const shape = v.partial({ done: v.boolean(), title: v.string() });
+        const object = v.object(shape);
+
+        expect(object.parse({})).toStrictEqual({});
+        expect(object.parse({ title: "a" })).toStrictEqual({ title: "a" });
+        expect(object.parse({ done: true, title: "a" })).toStrictEqual({ done: true, title: "a" });
+    });
+
+    it("still rejects a present member of the wrong type", () => {
+        expect.assertions(1);
+
+        const object = v.object(v.partial({ title: v.string() }));
+
+        expect(() => object.parse({ title: 1 })).toThrow(ValidationError);
+    });
+
+    it("passes an already-optional member through instead of double-wrapping", () => {
+        expect.assertions(2);
+
+        const inner = v.optional(v.string());
+        const shape = v.partial({ title: inner });
+
+        expect(shape.title).toBe(inner);
+        expect(v.object(shape).parse({})).toStrictEqual({});
+    });
+
+    it("infers every key as optional", () => {
+        expect.assertions(3);
+
+        const object = v.object(v.partial({ done: v.boolean(), title: v.string() }));
+
+        type Inferred = Infer<typeof object>;
+
+        // Compile-time: each member keeps its type, widened by `undefined`…
+        const doneCheck: Assert<Equal<Inferred["done"], boolean | undefined>> = true;
+        // …and every KEY is optional, or neither literal below would assign.
+        const empty: Inferred = {};
+        const some: Inferred = { title: "a" };
+
+        expect(doneCheck).toBe(true);
+        expect(empty).toStrictEqual({});
+        expect(some).toStrictEqual({ title: "a" });
     });
 });

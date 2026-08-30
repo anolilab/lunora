@@ -6,6 +6,7 @@
  * the connector wire shape. All functions here are pure — no worker options, no
  * I/O — so they live free of `create-worker` and are unit-testable in isolation.
  */
+import { fromBase64Url, toBase64Url } from "../../../shared/base64";
 import type { ConnectorChange } from "./connector-format";
 
 /** Reusable encoder for the cursor codec (base64url over the JSON state). */
@@ -31,17 +32,7 @@ interface ConnectorCursorState {
  * consumer stores it verbatim and re-posts it to resume — it never parses it,
  * so the internal shape stays free to change behind the version tag.
  */
-const encodeConnectorCursor = (state: ConnectorCursorState): string => {
-    const json = JSON.stringify(state);
-    const bytes = CURSOR_ENCODER.encode(json);
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
-
-    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-};
+const encodeConnectorCursor = (state: ConnectorCursorState): string => toBase64Url(CURSOR_ENCODER.encode(JSON.stringify(state)));
 
 /**
  * Decode an opaque connector cursor token back to its {@link ConnectorCursorState}.
@@ -57,14 +48,7 @@ const decodeConnectorCursor = (token: unknown): ConnectorCursorState => {
     }
 
     try {
-        const binary = atob(token.replaceAll("-", "+").replaceAll("_", "/"));
-        const bytes = new Uint8Array(binary.length);
-
-        for (let index = 0; index < binary.length; index += 1) {
-            bytes[index] = binary.codePointAt(index) ?? 0;
-        }
-
-        const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Partial<ConnectorCursorState>;
+        const parsed = JSON.parse(new TextDecoder().decode(fromBase64Url(token))) as Partial<ConnectorCursorState>;
         const shards = parsed.s && typeof parsed.s === "object" ? parsed.s : {};
         const sanitized: Record<string, number> = {};
 

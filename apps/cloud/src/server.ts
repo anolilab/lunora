@@ -25,6 +25,7 @@ import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
 import { createHttpCloudflareApi } from "./cloudflare/api";
 import { resolveAdminToken } from "./deploy/admin-token";
+import { runRolloutGuard } from "./deploy/rollout-guard";
 import { createDeployRouter } from "./deploy/router";
 import { teardownPorts, usageRollbackPorts } from "./deploy/sweeps";
 import { createResourceTeardown, runTeardownSweep } from "./deploy/teardown";
@@ -37,8 +38,10 @@ import { createHttpAnalyticsReader } from "./metering/analytics";
 import { runUsageRollback } from "./metering/rollback";
 import readJson from "./read-json";
 import type { ControlPlaneDatabase } from "./store";
+import { runAlertDrain } from "./telemetry/alert-drain";
 import type { AlertDelivery } from "./telemetry/alerts";
 import { runAlertSweep } from "./telemetry/sweep";
+import { createTrafficReader } from "./telemetry/traffic-read";
 import { runUptimeSweep } from "./uptime/sweep";
 
 /**
@@ -465,6 +468,50 @@ const sweepAlerts = async (env: Env): Promise<void> => {
 };
 
 /**
+ * Deliver `alerts` rows still sitting in `firing` past the drain grace.
+ *
+ * The release path raises its alerts from inside mutations, which have no
+ * `fetch`; this is the only thing that sends them. It also re-sends any alert
+ * whose original delivering request died mid-send — before this existed such a
+ * row stayed `firing` and nobody was ever told.
+ */
+const sweepAlertDrain = async (env: Env): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const { deliveries } = await runAlertDrain(database, { now });
+
+    await deliverFiredAlerts(env, database, deliveries, now);
+};
+
+/**
+ * Abort staged rollouts whose candidate is failing worse than the release it is
+ * replacing (GAPS.md A1 follow-on).
+ *
+ * Needs the AE account credentials, because the evidence is the dispatcher's own
+ * metering stream — the one signal that exists for every tenant without the
+ * tenant instrumenting anything. No credentials means no evidence, and the guard
+ * does nothing rather than guessing.
+ */
+const sweepRollouts = async (env: Env): Promise<void> => {
+    if (!env.DB || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+        return;
+    }
+
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+    const reader = createTrafficReader({
+        accountId: env.CLOUDFLARE_ACCOUNT_ID,
+        apiToken: env.CLOUDFLARE_API_TOKEN,
+        dataset: env.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage",
+    });
+
+    await runRolloutGuard(database, { now: Date.now(), reader });
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -484,6 +531,12 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     // minute so quiet windows the ingest never re-examines still fire/clear —
     // rides the existing every-minute trigger (no new cron, stays within the cap).
     { cron: EVERY_MINUTE, run: sweepAlerts },
+    // The release path's own alerts, which are raised inside mutations and so
+    // cannot be delivered where they are fired — plus anything an earlier
+    // delivery dropped. Rides the existing every-minute trigger.
+    { cron: EVERY_MINUTE, run: sweepAlertDrain },
+    // Auto-abort a canary that is failing worse than the release it replaces.
+    { cron: EVERY_MINUTE, run: sweepRollouts },
 ];
 
 /** Script id → per-deployment admin token (decrypted in-process), for the queue fan-out. */
@@ -712,11 +765,31 @@ export default {
         // The control plane's own code crons fire on their declared expression.
         await worker.scheduled(controller, env, context);
 
-        // Run the sweeps whose bucket this tick matches (see SCHEDULED_SWEEPS).
-        for (const sweep of SCHEDULED_SWEEPS) {
-            if (controller.cron === sweep.cron) {
-                // eslint-disable-next-line no-await-in-loop -- sweeps run sequentially; each is independent + no-ops when unconfigured
+        // Run the sweeps whose bucket this tick matches (see SCHEDULED_SWEEPS),
+        // isolated from each other rather than chained.
+        //
+        // These ran in a bare loop with no `catch`, so the FIRST sweep to throw took
+        // out every sweep after it — and the tenant cron fan-out below, which is what
+        // fires customers' scheduled functions. Two every-minute sweeps each add a
+        // live throw source in front of it: the rollout guard deliberately propagates
+        // a failed Analytics Engine read (it must not abort releases on no evidence),
+        // and the alert drain issues up to a hundred outbound deliveries. An AE
+        // outage or one hung customer webhook would have stopped every tenant's crons
+        // for its duration.
+        //
+        // `allSettled` is what makes the "each is independent" claim true rather than
+        // aspirational. A throwing sweep is logged and skipped; the next tick retries
+        // it, which is safe because every one of them is idempotent by design.
+        const swept = await Promise.allSettled(
+            SCHEDULED_SWEEPS.filter((sweep) => sweep.cron === controller.cron).map(async (sweep) => {
                 await sweep.run(env);
+            }),
+        );
+
+        for (const result of swept) {
+            if (result.status === "rejected") {
+                // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
+                console.error("[sweep] scheduled sweep failed", result.reason);
             }
         }
 

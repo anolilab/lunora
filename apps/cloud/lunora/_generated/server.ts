@@ -14,6 +14,7 @@ import type {
     InternalQueryBuilder,
     MutationBuilder,
     MutationCtx as MutationCtxBase,
+    MutationStorage,
     MutatorDefinition,
     QueryBuilder,
     QueryCtx as QueryCtxBase,
@@ -216,7 +217,7 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage" | "env"> {
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage" | "env"> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;
+    readonly storage: MutationStorage<StorageBucketName>;
     /** Validated, typed environment declared by `defineEnv` in `lunora/env.ts` — parsed & coercion-aware config values (`ctx.env.STRIPE_KEY`); a missing or invalid value throws at read time. */
     readonly env: LunoraEnv;
 }

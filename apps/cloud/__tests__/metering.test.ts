@@ -1,30 +1,67 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AnalyticsEngineDatasetLike } from "../src/metering/analytics";
-import { createHttpAnalyticsReader, normalizeRoutePath, recordRequestUsage, statusClass } from "../src/metering/analytics";
+import { createHttpAnalyticsReader, normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../src/metering/analytics";
 
 describe(recordRequestUsage, () => {
-    it("writes a per-request data point carrying outcome and route", () => {
+    it("writes a per-request data point carrying the full traffic dimension set", () => {
         const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const dataset: AnalyticsEngineDatasetLike = { writeDataPoint };
 
-        recordRequestUsage(dataset, { outcome: "5xx", plan: "pro", route: "/orders/:id", scriptName: "acme-app" });
+        recordRequestUsage(dataset, {
+            bytes: 2048,
+            country: "BR",
+            durationMs: 37,
+            hostname: "app.acme.com",
+            outcome: "5xx",
+            plan: "pro",
+            route: "/orders/:id",
+            scriptName: "acme-app",
+            status: 503,
+        });
 
-        expect(writeDataPoint).toHaveBeenCalledWith({ blobs: ["acme-app", "pro", "5xx", "/orders/:id"], doubles: [1], indexes: ["acme-app"] });
+        expect(writeDataPoint).toHaveBeenCalledWith({
+            blobs: ["acme-app", "pro", "5xx", "/orders/:id", "BR", "app.acme.com", "503"],
+            doubles: [1, 37, 2048],
+            indexes: ["acme-app"],
+        });
     });
 
-    it("keeps script and plan in blob1/blob2 — the usage rollup's SQL reads them positionally", () => {
+    /**
+     * The regression this pins is a BILLING one, and it is silent.
+     *
+     * The usage rollup's SQL reads `blob1 AS scriptName` and the ledger derives
+     * each org's charges from that column; `double1` is likewise the request
+     * count the meter sums. So a widening that inserts a dimension anywhere
+     * before them — rather than appending — keeps every type check and every
+     * other test green while quietly re-attributing one tenant's traffic to
+     * another's invoice. Nothing else in the repo would notice.
+     */
+    it("pins script, plan and count to the positions the billing rollup reads", () => {
+        const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
+        const dataset: AnalyticsEngineDatasetLike = { writeDataPoint };
+
+        recordRequestUsage(dataset, { country: "DE", plan: "pro", scriptName: "acme-app", status: 200 });
+
+        const point = writeDataPoint.mock.calls[0]?.[0];
+
+        expect(point?.blobs?.[0]).toBe("acme-app");
+        expect(point?.blobs?.[1]).toBe("pro");
+        expect(point?.doubles?.[0]).toBe(1);
+        expect(point?.indexes).toStrictEqual(["acme-app"]);
+    });
+
+    it("writes a well-formed point when a caller reports no optional dimension", () => {
         const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const dataset: AnalyticsEngineDatasetLike = { writeDataPoint };
 
         recordRequestUsage(dataset, { plan: "pro", scriptName: "acme-app" });
 
-        const blobs = writeDataPoint.mock.calls[0]?.[0]?.blobs ?? [];
-
-        expect(blobs[0]).toBe("acme-app");
-        expect(blobs[1]).toBe("pro");
-        // A caller that reports neither dimension still writes a well-formed point.
-        expect(blobs.slice(2)).toStrictEqual(["unknown", "unknown"]);
+        expect(writeDataPoint).toHaveBeenCalledWith({
+            blobs: ["acme-app", "pro", "unknown", "unknown", "unknown", "unknown", "unknown"],
+            doubles: [1, 0, 0],
+            indexes: ["acme-app"],
+        });
     });
 
     it("no-ops without a dataset binding", () => {
@@ -62,6 +99,23 @@ describe(statusClass, () => {
         expect(statusClass(200)).toBe("2xx");
         expect(statusClass(404)).toBe("4xx");
         expect(statusClass(503)).toBe("5xx");
+    });
+});
+
+describe(normalizeHostname, () => {
+    it("lower-cases and strips the port so casing and ports do not split a domain", () => {
+        expect(normalizeHostname("App.Acme.COM")).toBe("app.acme.com");
+        expect(normalizeHostname("app.acme.com:8787")).toBe("app.acme.com");
+    });
+
+    /**
+     * Unlike route and status class, hostname is not bounded by construction —
+     * anything that resolves to the dispatcher lands here, scanner traffic
+     * included. The cap is what stops a probe run minting unbounded dimension
+     * values in the dataset.
+     */
+    it("caps length so probe traffic cannot mint an unbounded dimension", () => {
+        expect(normalizeHostname(`${"a".repeat(500)}.com`)).toHaveLength(100);
     });
 });
 

@@ -411,6 +411,97 @@ private fun pokePartsDoNotApplyBeforePokeEnd() {
 }
 
 /**
+ * A `reset` part carries the shape's COMPLETE membership, so the view has to be
+ * dropped before the ops are applied.
+ *
+ * A manifest case, asserted by every port against the shared fixture's
+ * `resetPokeSequence`.
+ * It starts from the cold-seed state on purpose: a re-seed is inserts-only, so
+ * `m1` leaves the shape with no delete op behind it, and a client that merges
+ * renders it for the rest of its life.
+ */
+
+private fun resetPokeReplacesShapeMembership() {
+    covers("shape_reset_poke_replaces_membership")
+
+    val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+
+    val delivered = mutableListOf<List<WireValue>>()
+
+    client.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { delivered.add(it) })
+
+    for (frame in shape["pokeSequence"] as List<*>) {
+        client.handleFrame(Json.write(frame))
+    }
+
+    check(
+        canonical(Wire.encode(WireValue.Arr(delivered.last()))) == canonical(shape["expectedRows"]),
+        "the cold seed lands before the re-seed",
+    )
+
+    for (frame in shape["resetPokeSequence"] as List<*>) {
+        client.handleFrame(Json.write(frame))
+    }
+
+    check(
+        canonical(Wire.encode(WireValue.Arr(delivered.last()))) == canonical(shape["resetExpectedRows"]),
+        "a reset poke replaces the shape's membership rather than merging into it",
+    )
+}
+
+/**
+ * A buffer is only released at its `pokeEnd`. A socket that drops mid-poke never
+ * sends one, so its buffer would be retained for the life of the client — one
+ * leak per reconnect, and unbounded against a peer that opens pokes it never
+ * closes.
+ *
+ * Asserted black-box: an evicted poke behaves exactly like one that was never
+ * opened, which is the only form of this assertion all eight ports can share.
+ */
+private fun pendingPokeBuffersAreBounded() {
+    covers("pending_poke_buffers_are_bounded")
+
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+
+    val delivered = mutableListOf<List<WireValue>>()
+
+    client.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { delivered.add(it) })
+
+    // A poke opened, part-filled, then abandoned when the socket dropped.
+    client.handleFrame("{\"type\":\"pokeStart\",\"pokeId\":\"stale\"}")
+    client.handleFrame(
+        "{\"type\":\"pokePart\",\"pokeId\":\"stale\",\"shapeId\":\"shape_1\"," +
+            "\"rowsPatch\":[{\"op\":\"insert\",\"key\":\"ghost\",\"value\":\"ghost-row\"}]}",
+    )
+
+    for (index in 0 until MAX_PENDING_POKES) {
+        client.handleFrame("{\"type\":\"pokeStart\",\"pokeId\":\"filler-" + index + "\"}")
+    }
+
+    // The abandoned buffer is gone, so its late pokeEnd is a no-op.
+    client.handleFrame("{\"type\":\"pokeEnd\",\"pokeId\":\"stale\"}")
+
+    check(delivered.isEmpty(), "the ghost row of an evicted poke must never reach the view")
+
+    // ...and eviction is oldest-first, not a blanket drop: a live poke still applies.
+    val newest = "filler-" + (MAX_PENDING_POKES - 1)
+
+    client.handleFrame(
+        "{\"type\":\"pokePart\",\"pokeId\":\"" + newest + "\",\"shapeId\":\"shape_1\"," +
+            "\"rowsPatch\":[{\"op\":\"insert\",\"key\":\"m1\",\"value\":\"kept\"}]}",
+    )
+    client.handleFrame("{\"type\":\"pokeEnd\",\"pokeId\":\"" + newest + "\"}")
+
+    check(delivered.size == 1, "the newest buffer must survive and apply")
+    check(delivered[0] == listOf(WireValue.Text("kept")), "the surviving poke applies its rows")
+}
+
+/**
  * The topology every real consumer has: a socket read loop on one thread,
  * application code subscribing on another.
  *
@@ -468,6 +559,8 @@ fun main() {
     shapeSubscribeFrame()
     pokeSequenceMaterialisesRows()
     pokePartsDoNotApplyBeforePokeEnd()
+    resetPokeReplacesShapeMembership()
+    pendingPokeBuffersAreBounded()
     concurrentSubscribeAndHandleFrame()
 
     // The optimistic-layer and offline-queue cases, in their own file so this one

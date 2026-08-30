@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildKvPutOptions, isTtlValid, ttlToSeconds } from "../../../src/features/kv/kv-fields";
+import { buildKvPutOptions, formatExpiration, isJsonOrEmpty, isTtlValid, tryFormatJson, ttlToSeconds } from "../../../src/features/kv/kv-fields";
 
 describe("ttlToSeconds", () => {
     it("converts an amount in its unit to an integer-seconds string", () => {
@@ -71,5 +71,97 @@ describe("buildKvPutOptions", () => {
         expect.assertions(1);
 
         expect(buildKvPutOptions({ metadata: '{"a":1}', ttl: "", value: "v" }, "k", "NS").metadata).toStrictEqual({ a: 1 });
+    });
+});
+
+describe("formatExpiration", () => {
+    it("renders a KV expiration (Unix SECONDS, not ms) as an ISO string", () => {
+        expect.assertions(1);
+
+        // The ×1000 is the whole point: KV speaks seconds, `Date` speaks ms.
+        expect(formatExpiration(1_767_225_600)).toBe("2026-01-01T00:00:00.000Z");
+    });
+
+    it("renders an unset expiration as an em dash", () => {
+        expect.assertions(1);
+
+        expect(formatExpiration(undefined)).toBe("—");
+    });
+
+    it("treats 0 as an instant, not as unset", () => {
+        expect.assertions(1);
+
+        expect(formatExpiration(0)).toBe("1970-01-01T00:00:00.000Z");
+    });
+});
+
+describe("tryFormatJson", () => {
+    it("pretty-prints a parseable value with two-space indentation", () => {
+        expect.assertions(2);
+
+        expect(tryFormatJson('{"a":1}')).toBe('{\n  "a": 1\n}');
+        expect(tryFormatJson("[1,2]")).toBe("[\n  1,\n  2\n]");
+    });
+
+    it("formats a bare JSON scalar (the Format button stays live for one)", () => {
+        expect.assertions(2);
+
+        expect(tryFormatJson("42")).toBe("42");
+        expect(tryFormatJson('"text"')).toBe('"text"');
+    });
+
+    it("returns undefined for blank input so the Format button stays disabled", () => {
+        expect.assertions(2);
+
+        expect(tryFormatJson("")).toBeUndefined();
+        expect(tryFormatJson("   \n ")).toBeUndefined();
+    });
+
+    it("returns undefined rather than throwing on unparseable input", () => {
+        expect.assertions(2);
+
+        expect(tryFormatJson("{ broken")).toBeUndefined();
+        expect(tryFormatJson("plain text")).toBeUndefined();
+    });
+});
+
+describe("isJsonOrEmpty", () => {
+    // The metadata save guard: empty means "no metadata", which is legal.
+    it("accepts blank input", () => {
+        expect.assertions(2);
+
+        expect(isJsonOrEmpty("")).toBe(true);
+        expect(isJsonOrEmpty("  \t ")).toBe(true);
+    });
+
+    it("accepts any parseable JSON, object or scalar", () => {
+        expect.assertions(4);
+
+        expect(isJsonOrEmpty('{"a":1}')).toBe(true);
+        expect(isJsonOrEmpty("[]")).toBe(true);
+        expect(isJsonOrEmpty("null")).toBe(true);
+        expect(isJsonOrEmpty("0")).toBe(true);
+    });
+
+    // `buildKvPutOptions` calls `JSON.parse` unguarded, so a false positive here
+    // becomes a thrown error on the save path.
+    it("rejects unparseable input", () => {
+        expect.assertions(3);
+
+        expect(isJsonOrEmpty("{ broken")).toBe(false);
+        expect(isJsonOrEmpty("plain text")).toBe(false);
+        expect(isJsonOrEmpty("{'single':'quotes'}")).toBe(false);
+    });
+
+    // `buildKvPutOptions` documents "assumes metadata is valid JSON — guard with
+    // isJsonOrEmpty at the call site" and then calls `JSON.parse` unguarded, so a
+    // value this accepts but the builder throws on is a save-path crash.
+    it("accepts nothing that makes buildKvPutOptions throw", () => {
+        expect.assertions(12);
+
+        for (const metadata of ["", "  ", '{"a":1}', "[]", "null", "0"]) {
+            expect(isJsonOrEmpty(metadata)).toBe(true);
+            expect(() => buildKvPutOptions({ metadata, ttl: "", value: "v" }, "k", "NS")).not.toThrow();
+        }
     });
 });

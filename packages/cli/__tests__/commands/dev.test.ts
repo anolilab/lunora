@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readDevServerState, writeDevServerState } from "@lunora/config";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevCommandOptions } from "../../src/commands/dev/handler";
 import { detectDevFlavor, planDevCommand, resolveWorkerPort, runDevCommand } from "../../src/commands/dev/handler";
@@ -26,6 +26,9 @@ describe("lunora dev", () => {
     });
 
     afterEach(() => {
+        // Unconditional: a failed assertion would skip a trailing unstub in a test
+        // body, leaking LUNORA_CODEGEN into every test that follows.
+        vi.unstubAllEnvs();
         rmSync(workdir, { force: true, recursive: true });
     });
 
@@ -52,7 +55,7 @@ describe("lunora dev", () => {
             const plan = planDevCommand({ cwd: workdir, logger: silentLogger(), worker: false });
 
             expect(plan.workerEnabled).toBe(false);
-            expect(plan.codegenEnabled).toBe(true);
+            expect(plan.runsCodegenWatch).toBe(true);
             expect(plan.studioEnabled).toBe(true);
             // The plan still records where the externally-owned worker will be,
             // so studio and the printed hints point at the right origin.
@@ -179,7 +182,7 @@ describe("lunora dev", () => {
             const plan = planDevCommand({ codegen: false, cwd: workdir, studio: false, logger: silentLogger() });
 
             expect(plan.studioEnabled).toBe(false);
-            expect(plan.codegenEnabled).toBe(false);
+            expect(plan.runsCodegenWatch).toBe(false);
         });
 
         it("leaves remote mode off and adds no --config when --remote is absent", () => {
@@ -251,7 +254,7 @@ describe("lunora dev", () => {
             expect(plan.wrangler.args.join(" ")).toContain("vite dev");
             // The Vite plugin already runs studio + codegen inside the dev server.
             expect(plan.studioEnabled).toBe(false);
-            expect(plan.codegenEnabled).toBe(false);
+            expect(plan.runsCodegenWatch).toBe(false);
         });
 
         it("runs the project's dev script for the vite flavor (meta-framework CLIs)", () => {
@@ -306,6 +309,38 @@ describe("lunora dev", () => {
             expect(plan.remote.enabled).toBe(true);
         });
 
+        it("honours LUNORA_CODEGEN=0 on the wrangler flavor too, where the CLI owns the watcher", () => {
+            expect.assertions(2);
+
+            // The env var is documented as the flag's other spelling. The CLI's own
+            // watcher read only `options.codegen`, so on the flavor where the CLI —
+            // not the plugin — owns codegen, setting it did nothing at all.
+            vi.stubEnv("LUNORA_CODEGEN", "0");
+
+            expect(planDevCommand({ cwd: workdir, flavor: "wrangler", logger: silentLogger() }).runsCodegenWatch).toBe(false);
+
+            vi.unstubAllEnvs();
+
+            expect(planDevCommand({ cwd: workdir, flavor: "wrangler", logger: silentLogger() }).runsCodegenWatch).toBe(true);
+        });
+
+        it("forwards --no-codegen to the vite child as LUNORA_CODEGEN=0", () => {
+            expect.assertions(3);
+
+            // On this flavor `@lunora/vite` owns the codegen watch, inside a child
+            // process that re-parses its own argv — so `codegenEnabled: false`
+            // alone left the flag inert and `_generated/**` kept being rewritten
+            // on every save.
+            const plan = planDevCommand({ codegen: false, cwd: workdir, flavor: "vite", logger: silentLogger() });
+
+            expect(plan.wrangler.env).toStrictEqual({ LUNORA_CODEGEN: "0" });
+            expect(plan.runsCodegenWatch).toBe(false);
+
+            const enabled = planDevCommand({ cwd: workdir, flavor: "vite", logger: silentLogger() });
+
+            expect(enabled.wrangler.env).toBeUndefined();
+        });
+
         it.each([
             ["sveltekit", { "@sveltejs/kit": "^2.0.0" }],
             ["nuxt", { nuxt: "^4.0.0" }],
@@ -338,7 +373,7 @@ describe("lunora dev", () => {
             expect(plan.sidecar?.tag).toBe("worker");
             expect(plan.sidecar?.args.join(" ")).toContain("dev --config wrangler.dev.jsonc");
             // Codegen/studio are owned by the framework's own @lunora/vite plugin.
-            expect(plan.codegenEnabled).toBe(false);
+            expect(plan.runsCodegenWatch).toBe(false);
             expect(plan.studioEnabled).toBe(false);
         });
 

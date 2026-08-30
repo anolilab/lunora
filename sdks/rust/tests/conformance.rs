@@ -9,7 +9,7 @@ use std::thread;
 
 use lunora::client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
-    StreamEvent,
+    StreamEvent, MAX_PENDING_POKES,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
 use lunora::wire::{decode_wire, encode_wire, from_model_json, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
@@ -102,6 +102,8 @@ fn conformance_manifest_is_covered() {
             "shape_subscribe_frame" => shape_subscribe_frame(),
             "poke_sequence_materialises_rows" => poke_sequence_materialises_rows(),
             "poke_parts_do_not_apply_before_poke_end" => poke_parts_do_not_apply_before_poke_end(),
+            "shape_reset_poke_replaces_membership" => reset_poke_replaces_the_view(),
+            "pending_poke_buffers_are_bounded" => pending_poke_buffers_are_bounded(),
             "optimistic_layer_rebases_onto_server_frame" => optimistic_layer_rebases_onto_server_frame(),
             "optimistic_layer_drops_on_commit_cursor" => optimistic_layer_drops_on_commit_cursor(),
             "optimistic_layer_drops_on_settled_frame" => optimistic_layer_drops_on_settled_frame(),
@@ -479,6 +481,130 @@ fn poke_parts_do_not_apply_before_poke_end() {
     }
 
     assert_eq!(*fired.lock().expect("fired"), 0, "the view would be torn if parts applied before pokeEnd");
+}
+
+/// Drives `shape.resetPokeSequence` on top of the cold-subscribe view: a part
+/// flagged `reset: true` carries the shape's whole membership, so `m1` — present
+/// in `expectedRows`, absent from the re-seed, and never deleted by an op — must
+/// be gone. Merging the seed instead keeps it forever, which is what every
+/// disconnect of a `.global()` shape (they full-reseed on every reconnect) used
+/// to leave behind.
+///
+/// Dispatched from the shared manifest now that all eight ports assert it, so
+/// a future port cannot go green without it.
+fn reset_poke_replaces_the_view() {
+    let document = fixture("ws-frames.json");
+    let sequence = document["shape"]["pokeSequence"].as_array().expect("pokeSequence");
+    let reset_sequence = document["shape"]["resetPokeSequence"].as_array().expect("resetPokeSequence");
+
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
+    let handle = Arc::clone(&delivered);
+
+    client.subscribe_shape(
+        "roomMessages",
+        Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
+        Some(Box::new(move |rows| handle.lock().expect("delivered").push(rows.to_vec()))),
+        None,
+    );
+
+    for frame in sequence.iter().chain(reset_sequence) {
+        client.handle_frame(&frame.to_string()).expect("handle");
+    }
+
+    let delivered = delivered.lock().expect("delivered");
+
+    assert_eq!(delivered.len(), 2, "one delivery per poke");
+
+    // The re-seed applies to the view the first poke left behind, so this only
+    // passes if it CLEARED that view rather than merging onto it.
+    let seeded = WireValue::Array(delivered[0].clone());
+    let after_reset = WireValue::Array(delivered[1].clone());
+
+    assert_eq!(canonical(&encode_wire(&seeded).expect("encode")), canonical(&document["shape"]["expectedRows"]));
+    assert_eq!(
+        canonical(&encode_wire(&after_reset).expect("encode")),
+        canonical(&document["shape"]["resetExpectedRows"])
+    );
+}
+
+/// A buffer is only released at its `pokeEnd`. A socket that drops mid-poke never
+/// sends one, so its buffer would be retained for the life of the client — one
+/// leak per reconnect, and unbounded against a peer that opens pokes it never
+/// closes. Asserted black-box: an evicted poke behaves exactly like one that was
+/// never opened, which is the only form of this the eight ports can share.
+fn pending_poke_buffers_are_bounded() {
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
+    let handle = Arc::clone(&delivered);
+
+    client.subscribe_shape(
+        "roomMessages",
+        Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
+        Some(Box::new(move |rows| handle.lock().expect("delivered").push(rows.to_vec()))),
+        None,
+    );
+
+    // A poke opened, part-filled, then abandoned when the socket dropped.
+    client
+        .handle_frame(&json!({ "type": "pokeStart", "pokeId": "stale" }).to_string())
+        .expect("pokeStart");
+    client
+        .handle_frame(
+            &json!({
+                "type": "pokePart",
+                "pokeId": "stale",
+                "shapeId": "shape_1",
+                "rowsPatch": [{ "op": "insert", "key": "ghost", "value": "ghost-row" }],
+            })
+            .to_string(),
+        )
+        .expect("pokePart");
+
+    for index in 0..MAX_PENDING_POKES {
+        client
+            .handle_frame(&json!({ "type": "pokeStart", "pokeId": format!("filler-{index}") }).to_string())
+            .expect("pokeStart");
+    }
+
+    // The abandoned buffer is gone, so its late pokeEnd is a no-op.
+    client
+        .handle_frame(&json!({ "type": "pokeEnd", "pokeId": "stale" }).to_string())
+        .expect("pokeEnd");
+
+    assert!(
+        delivered.lock().expect("delivered").is_empty(),
+        "the ghost row of an evicted poke must never reach the view"
+    );
+
+    // ...and eviction is oldest-first, not a blanket drop: a live poke still applies.
+    let newest = format!("filler-{}", MAX_PENDING_POKES - 1);
+
+    client
+        .handle_frame(
+            &json!({
+                "type": "pokePart",
+                "pokeId": newest,
+                "shapeId": "shape_1",
+                "rowsPatch": [{ "op": "insert", "key": "m1", "value": "kept" }],
+            })
+            .to_string(),
+        )
+        .expect("pokePart");
+    client
+        .handle_frame(&json!({ "type": "pokeEnd", "pokeId": newest }).to_string())
+        .expect("pokeEnd");
+
+    let delivered = delivered.lock().expect("delivered");
+
+    assert_eq!(delivered.len(), 1, "the newest buffer must survive and apply");
+    assert_eq!(delivered[0], vec![WireValue::String("kept".into())]);
 }
 
 /// The topology every real consumer has: a socket read loop on one thread and

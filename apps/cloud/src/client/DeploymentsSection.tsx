@@ -21,17 +21,25 @@ import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
 import { formatDateTime, formatTime } from "./format";
+import { PreviewProtectionCard } from "./PreviewProtectionCard";
 import { ProjectGraph } from "./ProjectGraph";
+import { RolloutCard } from "./RolloutCard";
 import { StatusBadge } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
 
 interface DeploymentsSectionProps {
+    /** The deployment currently serving the stable URL — never a rollout candidate. */
+    activeDeploymentId?: string;
     githubRepo?: string;
     gitProvider?: string;
     onBack: () => void;
     organizationId: OrgId;
+    /** Whether preview deployments for this project currently require a password. */
+    previewProtected?: boolean;
     projectId: ProjectId; // secret-scanner:allow -- domain field name
     projectName: string;
+    /** The staged rollout in progress, if any. */
+    rollout?: { percent: number; scriptName: string };
 }
 
 type Deployment = ReturnOf<typeof api.deployments.listByProject>[number];
@@ -433,7 +441,17 @@ const DeploymentsTable = ({
  * created out-of-band (the CLI or the GitHub push webhook), so this is read-only
  * apart from rollback.
  */
-export const DeploymentsSection = ({ gitProvider, githubRepo, onBack, organizationId, projectId, projectName }: DeploymentsSectionProps): ReactElement => {
+export const DeploymentsSection = ({
+    activeDeploymentId,
+    gitProvider,
+    githubRepo,
+    onBack,
+    organizationId,
+    previewProtected = false,
+    projectId,
+    projectName,
+    rollout,
+}: DeploymentsSectionProps): ReactElement => {
     const deployments = useQuery(api.deployments.listByProject, { organizationId, projectId });
     const builds = useQuery(api.builds.listByProject, { organizationId, projectId });
     const domains = useQuery(api.domains.list, { organizationId, projectId });
@@ -494,6 +512,17 @@ export const DeploymentsSection = ({ gitProvider, githubRepo, onBack, organizati
                 </Card>
             ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
+            {/* Only a NON-active deployment can be a rollout candidate — `setRollout`
+                rejects the active release, and `active` here defaults to the newest
+                deployment, which right after a deploy IS the active one. Passing it
+                would offer percentage buttons that always error. */}
+            <RolloutCard
+                candidateId={active && active._id !== activeDeploymentId ? active._id : undefined}
+                organizationId={organizationId}
+                projectId={projectId}
+                rollout={rollout}
+            />
+            <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
             <DeploymentsTable
                 activeId={active?._id}
                 deployments={deployments ?? EMPTY}

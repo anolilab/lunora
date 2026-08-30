@@ -42,7 +42,7 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain("options.resolveTableSharding = buildTableShardingResolver();");
-        expect(output).toContain("options.importGlobals = buildGlobalImporter(database);");
+        expect(output).toContain("options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);");
         expect(output).toContain("const buildTableShardingResolver = (): AdminTableResolver =>");
         expect(output).toContain("const buildGlobalImporter =");
     });
@@ -62,7 +62,7 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain(
-            'import { createD1CtxDb, emitD1QueryCost, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage, retryingExec } from "@lunora/d1";',
+            'import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";',
         );
         expect(output).toContain("return importGlobalRows(writer, schema as unknown as");
     });
@@ -90,13 +90,16 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
     });
 
     it("omits the admin-import wiring entirely for an app with no .global() table", () => {
-        expect.assertions(3);
+        expect.assertions(6);
 
         const output = emitApp(baseOptions);
 
         expect(output).not.toContain("resolveTableSharding");
         expect(output).not.toContain("importGlobals");
         expect(output).not.toContain("buildGlobalImporter");
+        expect(output).not.toContain("exportGlobals");
+        expect(output).not.toContain("syncGlobals");
+        expect(output).not.toContain("applyGlobals");
     });
 
     it("omits the admin-import wiring for a Hyperdrive-backed global app (D1-only wiring)", () => {
@@ -105,5 +108,71 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         const output = emitApp({ ...baseOptions, hasHyperdriveGlobal: true });
 
         expect(output).not.toContain("resolveTableSharding");
+    });
+});
+
+// The import half above is only a quarter of the global admin plane. `@lunora/runtime`
+// also reads `exportGlobals` (export + `lunora backup create` + the scheduled R2
+// backup), `syncGlobals` (CDC sync + the warehouse-connector feed) and `applyGlobals`
+// (point-in-time-recovery apply) off the worker options, and every one of them is
+// guarded by a bare `if (option)` — so an unset option is not an error, it is a 200
+// with the global storage plane missing from the answer. Export was the severe one:
+// `importGlobals` IS wired, so an export→import round trip restored cleanly having
+// silently dropped every `.global()` row from the backup.
+describe("emitApp — admin export/sync/apply wiring (.global())", () => {
+    it("wires options.exportGlobals so backups and exports cover the global plane", () => {
+        expect.assertions(3);
+
+        const output = emitApp({ ...baseOptions, hasGlobal: true });
+
+        expect(output).toContain("options.exportGlobals = buildGlobalExporter(database);");
+        expect(output).toContain("const buildGlobalExporter =");
+        expect(output).toContain('exportGlobalRows(buildExec(database), schema as unknown as D1CtxDbOptions["schema"], { tables: request.tables })');
+    });
+
+    it("wires options.syncGlobals + options.applyGlobals for CDC sync and PITR apply", () => {
+        expect.assertions(4);
+
+        const output = emitApp({ ...baseOptions, hasGlobal: true });
+
+        expect(output).toContain("options.syncGlobals = buildGlobalCdcSync(database);");
+        expect(output).toContain("options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);");
+        expect(output).toContain("const buildGlobalCdcSync =");
+        expect(output).toContain("const buildGlobalCdcApplier =");
+    });
+
+    // The global `__cdc_log` is created lazily, and only when the writer runs with
+    // CDC enabled — so on most apps it does not exist at all. `readD1CdcChanges`
+    // throws `no such table: __cdc_log` against a database without it, which would
+    // turn "nothing has changed yet" into a 500 on the sync endpoint. The shard-local
+    // twin (`runShardCdcSync`) probes `sqlite_master` and returns an empty page; the
+    // emitted global twin must do the same.
+    it("syncGlobals probes for __cdc_log and returns an empty page when the log does not exist", () => {
+        expect.assertions(3);
+
+        const output = emitApp({ ...baseOptions, hasGlobal: true });
+
+        expect(output).toContain("const present = await exec.all(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, [\"__cdc_log\"]);");
+        expect(output).toContain("return { changes: [], cursor: request.sinceSeq };");
+        expect(output).toContain("const page = await readD1CdcChanges(exec, { limit: request.limit, sinceSeq: request.sinceSeq });");
+    });
+
+    it("applyGlobals replays through the same D1 writer and reports the count", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, hasGlobal: true });
+
+        expect(output).toContain("await applyCdcChanges(writer, request.changes as unknown as Parameters<typeof applyCdcChanges>[1]);");
+        expect(output).toContain("return request.changes.length;");
+    });
+
+    it("omits the export/sync/apply wiring for a Hyperdrive-backed global app (D1-only wiring)", () => {
+        expect.assertions(3);
+
+        const output = emitApp({ ...baseOptions, hasHyperdriveGlobal: true });
+
+        expect(output).not.toContain("exportGlobals");
+        expect(output).not.toContain("syncGlobals");
+        expect(output).not.toContain("applyGlobals");
     });
 });

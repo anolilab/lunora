@@ -3,17 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ControlPlaneDatabase } from "../src/store";
 import type { MetricObservation } from "../src/telemetry/alerts";
 import { runAlertSweep } from "../src/telemetry/sweep";
-
-/** A fake ControlPlaneDatabase answering findMany per-table, mirroring uptime.test.ts. */
-const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDatabase> = {}): ControlPlaneDatabase => {
-    return {
-        delete: () => Promise.resolve(undefined),
-        findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
-        insert: () => Promise.resolve("row_id"),
-        patch: () => Promise.resolve(undefined),
-        ...spies,
-    };
-};
+import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 
 const now = 10 * 60_000; // 10 minutes in
 
@@ -45,7 +35,7 @@ const errorRateRule = {
 describe(runAlertSweep, () => {
     it("re-fires a quiet error_rate window that the ingest path missed (no latch yet)", async () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
-        const database = fakeDb(
+        const database = fakeControlPlaneDb(
             {
                 alertRuleState: [], // never latched → wasFiring is false
                 alertRules: [errorRateRule],
@@ -67,7 +57,7 @@ describe(runAlertSweep, () => {
     it("clears a firing rule when its window falls back under threshold — no alert, latch reset", async () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const database = fakeDb(
+        const database = fakeControlPlaneDb(
             {
                 alertRuleState: [{ _id: "state1", firing: true, ruleId: "rule1" }],
                 alertRules: [errorRateRule],
@@ -88,7 +78,7 @@ describe(runAlertSweep, () => {
     it("does not re-fire while the rule stays firing (latched, still breaching)", async () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const database = fakeDb(
+        const database = fakeControlPlaneDb(
             {
                 alertRuleState: [{ _id: "state1", firing: true, ruleId: "rule1" }],
                 alertRules: [errorRateRule],
@@ -117,7 +107,7 @@ describe(runAlertSweep, () => {
                         : [],
             }),
         );
-        const database = fakeDb({}, { findMany });
+        const database = fakeControlPlaneDb({}, { findMany });
 
         const result = await runAlertSweep(database, { now });
 

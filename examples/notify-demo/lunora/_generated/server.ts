@@ -14,6 +14,7 @@ import type {
     InternalQueryBuilder,
     MutationBuilder,
     MutationCtx as MutationCtxBase,
+    MutationStorage,
     MutatorDefinition,
     QueryBuilder,
     QueryCtx as QueryCtxBase,
@@ -210,7 +211,7 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;
+    readonly storage: MutationStorage<StorageBucketName>;
     /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */
     readonly notify: import("@lunora/notify").LunoraNotify;
     /** Device push sub-facade — the same object as ctx.notify.push (register / send / broadcast). Sends belong in action handlers. */

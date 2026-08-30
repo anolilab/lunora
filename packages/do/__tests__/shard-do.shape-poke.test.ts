@@ -1,6 +1,6 @@
-import type { CdcChange, DatabaseWriterLike, SocketAttachment, SqlExec } from "@lunora/shard-engine";
+import type { CdcChangeKey, DatabaseWriterLike, SocketAttachment, SqlExec } from "@lunora/shard-engine";
 import { createShardCtxDb as createShardContextDatabase, readCdcCursor, readShapePokeCursor, runShardMigrations } from "@lunora/shard-engine";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState } from "../src/shard-do";
@@ -107,21 +107,21 @@ class ShapePokeShard extends ShardDO {
 }
 
 /**
- * {@link ShapePokeShard} that counts every `__cdc_log` page read backing a shape
- * diff, so a test can prove the flush-local op-range cache collapses N
- * same-range shape diffs to ONE changelog drain.
+ * {@link ShapePokeShard} that counts every `__cdc_log` read backing a shape
+ * diff, so a test can prove the flush-local diff cache collapses N same-range
+ * shape diffs to ONE changed-key scan.
  */
 class CountingShapePokeShard extends ShapePokeShard {
     public cdcPageReads = 0;
 
-    /** Every `sinceSeq` a shape diff was drained from, in call order — lets a test pin exactly which baseline a poke resumed from. */
+    /** Every `sinceSeq` a shape diff was scanned from, in call order — lets a test pin exactly which baseline a poke resumed from. */
     public sinceSeqSeen: number[] = [];
 
-    protected override readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): { changes: CdcChange[]; cursor: number } {
+    protected override readShapeCdcKeys(sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[] {
         this.cdcPageReads += 1;
         this.sinceSeqSeen.push(sinceSeq);
 
-        return super.readShapeCdcPage(sql, sinceSeq, tables);
+        return super.readShapeCdcKeys(sql, table, sinceSeq, upTo);
     }
 }
 
@@ -164,6 +164,20 @@ const pokeOps = (ws: FakeWebSocket): { key: string; op: string; value?: Record<s
 
 const frameTypes = (ws: FakeWebSocket): string[] => ws.sent.map((raw) => (JSON.parse(raw) as { type: string }).type);
 
+/** The `baseCheckpoint` on every `pokePart` the socket received, in order. */
+const partBases = (ws: FakeWebSocket): (number | undefined)[] =>
+    ws.sent
+        .map((raw) => JSON.parse(raw) as { baseCheckpoint?: number; type: string })
+        .filter((frame) => frame.type === "pokePart")
+        .map((frame) => frame.baseCheckpoint);
+
+/** The `checkpoint` on every `pokeEnd` the socket received, in order. */
+const endCheckpoints = (ws: FakeWebSocket): (number | undefined)[] =>
+    ws.sent
+        .map((raw) => JSON.parse(raw) as { checkpoint?: number; type: string })
+        .filter((frame) => frame.type === "pokeEnd")
+        .map((frame) => frame.checkpoint);
+
 describe("shardDO shape poke protocol (dispatch path)", () => {
     beforeEach(() => {
         harness = createSqliteExec();
@@ -193,6 +207,44 @@ describe("shardDO shape poke protocol (dispatch path)", () => {
 
         expect(ops).toHaveLength(1);
         expect(ops[0]).toMatchObject({ key: "m1", op: "insert" });
+    });
+
+    /**
+     * Defect #6 — the live poke path shipped `baseCheckpoint: undefined`, so the
+     * client's gap detector was dead code on the ONE path where a gap actually
+     * happens. It has to be the cursor the client is really at, which is the last
+     * poke that CARRIED ROWS for this shape — not the shape's memo cursor, which
+     * also advances on an empty diff and would read as a gap the client never had.
+     */
+    it("stamps each live poke part with the checkpoint of the last poke that carried rows", async () => {
+        expect.assertions(3);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+
+        // First live poke: its base is the seed's checkpoint.
+        await shard.fetch(write("messages:send", { _id: "m1", channelId: "c1", text: "one" }));
+
+        const seedCheckpoint = endCheckpoints(ws)[0];
+
+        expect(partBases(ws)[1]).toBe(seedCheckpoint);
+
+        const afterFirst = endCheckpoints(ws)[1];
+
+        // An out-of-channel write: the shape is diffed, the diff is empty, so no
+        // part is delivered and the client's cursor does NOT move — but the memo
+        // does. Stamping the memo would fire a spurious gap on the next real poke.
+        await shard.fetch(write("messages:send", { _id: "other", channelId: "c2", text: "two" }));
+
+        expect(frameTypes(ws).filter((type) => type === "pokePart")).toHaveLength(2);
+
+        await shard.fetch(write("messages:send", { _id: "m2", channelId: "c1", text: "three" }));
+
+        expect(partBases(ws)[2]).toBe(afterFirst);
     });
 
     it("pokes an insert when a new row joins the shape", async () => {
@@ -589,5 +641,95 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         expect(readShapePokeCursor(harness.sql, "conn-6", "s2")).toBeUndefined();
         // Untouched: a different socket's connection.
         expect(readShapePokeCursor(harness.sql, "conn-7", "s1")).toBeDefined();
+    });
+
+    it("still purges durable cursors and clears the attachment when lifecycle dispatch throws", async () => {
+        expect.assertions(3);
+
+        // The dispatch *machinery* throwing (not a hook — hooks are swallowed
+        // per-hook inside `dispatchLifecycle`) must not skip the deterministic
+        // teardown: durable cursor purge + attachment clear live in a `finally`.
+        class ThrowingDispatchShard extends ShapePokeShard {
+            // eslint-disable-next-line class-methods-use-this -- test override: fail the dispatch machinery unconditionally
+            protected override async dispatchLifecycle(): Promise<void> {
+                throw new Error("dispatch machinery failed");
+            }
+        }
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ThrowingDispatchShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-8", subs: {} };
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+
+        // The dispatch failure still surfaces to the runtime…
+        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).rejects.toThrow("dispatch machinery failed");
+
+        // …but the durable row is gone and the attachment is cleared anyway.
+        expect(readShapePokeCursor(harness.sql, "conn-8", "s1")).toBeUndefined();
+        expect(ws.attachment).toBeUndefined();
+    });
+
+    it("keeps the dispatch failure as the thrown error when the relay drain also fails", async () => {
+        expect.assertions(2);
+
+        // `announceDrain` is a network post, so it can reject. Running it in the
+        // teardown `finally` must not let it displace the dispatch error the
+        // caller still has to see.
+        class ThrowingDispatchShard extends ShapePokeShard {
+            // eslint-disable-next-line class-methods-use-this -- test override: fail the dispatch machinery unconditionally
+            protected override async dispatchLifecycle(): Promise<void> {
+                throw new Error("dispatch machinery failed");
+            }
+        }
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ThrowingDispatchShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-9", subs: {} };
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+        // Install a relay whose drain rejects. The unit harness has no relay
+        // (`announceDrain` is skipped), and close touches no other relay method
+        // — but a subscribe does, so this lands after the subscribe above.
+        (shard as unknown as { relay: { announceDrain: () => Promise<void> } }).relay = {
+            announceDrain: () => Promise.reject(new Error("relay detach failed")),
+        };
+
+        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).rejects.toThrow("dispatch machinery failed");
+        // The relay failure is reported, not swallowed silently.
+        expect(consoleError).toHaveBeenCalledWith("[@lunora/do] relay drain failed during socket close:", expect.any(Error));
+
+        consoleError.mockRestore();
+    });
+
+    it("surfaces a relay drain failure when the lifecycle dispatch succeeded", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-10", subs: {} };
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+        // Install a relay whose drain rejects. The unit harness has no relay
+        // (`announceDrain` is skipped), and close touches no other relay method
+        // — but a subscribe does, so this lands after the subscribe above.
+        (shard as unknown as { relay: { announceDrain: () => Promise<void> } }).relay = {
+            announceDrain: () => Promise.reject(new Error("relay detach failed")),
+        };
+
+        // Nothing else in flight → the relay error is the one the runtime sees…
+        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).rejects.toThrow("relay detach failed");
+        // …and the teardown ahead of it still ran.
+        expect(readShapePokeCursor(harness.sql, "conn-10", "s1")).toBeUndefined();
     });
 });

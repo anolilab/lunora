@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import { CURSOR_PREFIX } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -134,6 +135,95 @@ const schema: SchemaLike = {
         },
     },
 } as never;
+
+/**
+ * A field added to a `.global()` table after its first deployment.
+ *
+ * This is the regression that motivated the reconciliation: `CREATE TABLE IF NOT
+ * EXISTS` is a no-op against an existing table, so the new column was created on
+ * fresh databases and silently absent on every deployed one. Reads degraded
+ * quietly (the field just read as absent) but WRITES failed outright, because the
+ * writer builds its column list from the schema shape — and nothing anywhere
+ * failed on a fresh database, so CI and every local dev loop stayed green.
+ */
+describe("createSqlCtxDb — adding a field to an already-provisioned global table", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    /** `schema` plus one new optional column, as a later release would declare it. */
+    const widened: SchemaLike = {
+        tables: {
+            notes: {
+                indexes: [],
+                shape: { ...schema.tables["notes"]?.shape, pinnedAt: optionalCol("number") },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
+
+    it("adds the column to the existing table, so a write that names it succeeds", async () => {
+        expect.assertions(2);
+
+        const before = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema });
+
+        await before.insert("notes", { archived: false, body: "first", priority: 1, slug: "a" });
+
+        // A later release declares one more field against the SAME database.
+        const after = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema: widened });
+        const id = await after.insert("notes", { archived: false, body: "second", pinnedAt: 1234, priority: 2, slug: "b" });
+
+        await expect(after.get(id)).resolves.toMatchObject({ pinnedAt: 1234, slug: "b" });
+
+        // The row written before the column existed still reads — and reads the new
+        // field back as `null`, not `undefined`, because ALTER backfills NULL and
+        // that is what the decoder sees. Worth pinning: a consumer testing
+        // `=== undefined` on a column added this way silently takes the wrong branch.
+        const rows = await after.findMany("notes", { where: { slug: "a" } });
+
+        expect((rows.page[0] as Record<string, unknown>)["pinnedAt"]).toBeNull();
+    });
+
+    it("patches an existing row through the new column", async () => {
+        expect.assertions(1);
+
+        const before = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema });
+        const id = await before.insert("notes", { archived: false, body: "first", priority: 1, slug: "a" });
+
+        const after = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema: widened });
+
+        await after.patch(id, { pinnedAt: 99 });
+
+        await expect(after.get(id)).resolves.toMatchObject({ pinnedAt: 99 });
+    });
+
+    it("refuses a new REQUIRED field rather than letting the write fail with `no such column`", async () => {
+        expect.assertions(1);
+
+        const before = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema });
+
+        await before.insert("notes", { archived: false, body: "first", priority: 1, slug: "a" });
+
+        // SQLite cannot ADD COLUMN … NOT NULL without a default, and inventing one
+        // would write a value of the store's choosing into every existing row.
+        const required: SchemaLike = {
+            tables: {
+                notes: { indexes: [], shape: { ...schema.tables["notes"]?.shape, owner: col("string") }, shardMode: { kind: "global" } },
+            },
+        } as never;
+        const after = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema: required });
+
+        await expect(after.insert("notes", { archived: false, body: "x", owner: "u1", priority: 1, slug: "c" })).rejects.toThrow(
+            'declares a new required field "owner"',
+        );
+    });
+});
 
 describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
     let harness: ReturnType<typeof createSqliteHarness>;
@@ -755,7 +845,9 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
             const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema: rankSchema });
 
             // A 4-element cursor matches [partition, sort_0, sort_1, __id__].
-            const cursor = btoa(JSON.stringify(["0", 30, "a", "x"]));
+            // Minted the way the engine mints them: `decodeCursor` refuses a
+            // cursor without the format marker.
+            const cursor = CURSOR_PREFIX + btoa(JSON.stringify(["0", 30, "a", "x"]));
 
             await writer.rankPage("notes", "byPriority", { cursor, take: 2 });
 
@@ -840,5 +932,132 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         // The SET clause binds `_creationTime = ?` first, so the minted clock() is the leading param — never the forged 5.
         expect(update?.params[0]).toBe(CLOCK);
         expect(update?.params).not.toContain(5);
+    });
+});
+
+describe("createSqlCtxDb — the `.global()` changelog", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    /** A CDC-enabled writer over the real SQLite harness. */
+    const makeCdcWriter = () => createSqlCtxDb({ cdc: true, clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema });
+
+    it("reports the tables written after a cursor, and the log head", async () => {
+        expect.assertions(3);
+
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+
+        const first = await writer.cdcChangedTables?.(0);
+
+        expect(first).toMatchObject({ tables: ["notes"] });
+        expect(first?.cursor).toBeGreaterThan(0);
+
+        // Nothing has been written since that head, so the poll it drives has
+        // nothing to re-read — which is the steady state the fast path exists for.
+        const quiet = await writer.cdcChangedTables?.(first?.cursor ?? 0);
+
+        expect(quiet).toMatchObject({ tables: [] });
+    });
+
+    it("bounds the table scan by the head it returns, so a concurrent write is not lost", async () => {
+        expect.assertions(2);
+
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+
+        const opened = await writer.cdcChangedTables?.(0);
+        const head = opened?.cursor ?? 0;
+
+        // A write landing after the head was read must sit ABOVE the cursor the
+        // caller adopts — never inside the range it believes it has covered, which
+        // is what reading the head last would have produced.
+        await writer.insert("notes", { archived: false, body: "b", priority: 1, slug: "b" });
+
+        const next = await writer.cdcChangedTables?.(head);
+
+        expect(next?.tables).toStrictEqual(["notes"]);
+        expect(next?.cursor).toBeGreaterThan(head);
+    });
+
+    it("reports no visibility when CDC is disabled, rather than throwing", async () => {
+        expect.assertions(1);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema });
+
+        // `undefined` is the contract's "fall back to re-reading" signal — the
+        // behaviour every caller had before this method existed.
+        const blind = await writer.cdcChangedTables?.(0);
+
+        expect(blind).toBeUndefined();
+    });
+
+    it("applies a key prefix to the changelog index only where the engine demands one", async () => {
+        expect.assertions(4);
+
+        /** Captures the DDL a writer renders, so the index can be asserted without a MySQL engine to run it on. */
+        const capturingExec = (): { exec: SqlCtxExec; statements: string[] } => {
+            const statements: string[] = [];
+
+            return {
+                exec: {
+                    all: (query) => {
+                        statements.push(query);
+
+                        return Promise.resolve([]);
+                    },
+                    run: (query) => {
+                        statements.push(query);
+
+                        return Promise.resolve();
+                    },
+                },
+                statements,
+            };
+        };
+
+        const createIndexFor = async (indexKeyPrefix?: SqlDialect["indexKeyPrefix"]): Promise<string> => {
+            const { exec, statements } = capturingExec();
+
+            await createSqlCtxDb({ cdc: true, clock: () => 1, dialect: { ...makeSqliteDialect(), indexKeyPrefix }, exec, schema }).insert("notes", {
+                archived: false,
+                body: "a",
+                priority: 1,
+                slug: "a",
+            });
+
+            return statements.find((statement) => /create index .*__cdc_log_table_seq/iu.test(statement)) ?? "";
+        };
+
+        // MySQL's `key` type is VARCHAR(768) BECAUSE 768 utf8mb4 characters is
+        // InnoDB's single-column index limit — so a composite `("table", seq)`
+        // built without a prefix is over that limit and the migration fails with
+        // ER_TOO_LONG_KEY. The prefix bounds `table`'s contribution; `seq` is an
+        // integer and must never carry one.
+        // Asserted on the column list rather than the whole statement: the index
+        // NAME contains "table_seq", so a looser pattern matches itself.
+        // The column list is what follows the first `(` after `ON <table>` — not
+        // the last `(`, which on the prefixed form is the prefix's own.
+        const columnsOf = (statement: string): string => statement.slice(statement.indexOf("(", statement.indexOf(" ON ")) + 1, statement.lastIndexOf(")"));
+
+        const prefixed = await createIndexFor(() => 191);
+        const plain = await createIndexFor();
+
+        expect(columnsOf(prefixed)).toBe(`"table"(191), "seq"`);
+        expect(prefixed).toMatch(/__cdc_log_table_seq/u);
+
+        // An engine that indexes text directly gets the whole column, and `seq` —
+        // an integer — is never prefixed on either.
+        expect(columnsOf(plain)).toBe(`"table", "seq"`);
+        expect(plain).not.toMatch(/\(191\)/u);
     });
 });

@@ -19,7 +19,7 @@ import { sql as dsql } from "drizzle-orm";
 
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { sqlComparableProjection } from "./sql-projection";
@@ -119,8 +119,13 @@ const encodeDocJson = (document: Record<string, unknown>): string => {
         projected[DOC_ORIGINALS_KEY] = originals;
     }
 
+    const source = projected ?? document;
+
     try {
-        return JSON.stringify(encodeWire(projected ?? document));
+        // `encodeWire` is identity for pure JSON, so for a document with no
+        // wire-typed leaf — the overwhelmingly common case — it rebuilds the whole
+        // tree only for `JSON.stringify` to discard it. Ask first and skip it.
+        return needsWireEncoding(source) ? JSON.stringify(encodeWire(source)) : JSON.stringify(source);
     } catch (error: unknown) {
         // `encodeWire` throws a bare `TypeError` for a non-plain object and a
         // `RangeError` past its depth cap. Unwrapped, both reach the caller as
@@ -144,15 +149,26 @@ const encodeDocJson = (document: Record<string, unknown>): string => {
 // eslint-disable-next-line unicorn/prevent-abbreviations -- see encodeDocJson above.
 const decodeDocJson = (raw: string): Record<string, unknown> => {
     const decoded = decodeWire(JSON.parse(raw)) as Record<string, unknown>;
-    const { [DOC_ORIGINALS_KEY]: originals, ...fields } = decoded;
+    const originals = decoded[DOC_ORIGINALS_KEY];
 
     // Claim the key only when it looks like ours. `encodeDocJson` always writes
     // a plain object here, so a scalar or array under this name predates the
     // write guard and belongs to the user — spreading a string would explode it
     // into `{"0":"h","1":"e",…}`, which is worse than leaving it alone.
+    //
+    // Read the key before destructuring, not as part of it: almost no document
+    // carries projected originals, and a rest-destructure copies every OTHER
+    // field into a fresh object to isolate one that is usually absent — a full
+    // per-document allocation, on every row of every read, discarded unused by
+    // the early return below.
     if (originals === null || typeof originals !== "object" || Array.isArray(originals)) {
         return decoded;
     }
+
+    const fields = { ...decoded };
+
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- DOC_ORIGINALS_KEY is a module constant, not caller input; the rule guards against attacker-chosen keys. The spread above is what creates own properties correctly, which a per-key assignment loop would not for a field literally named `__proto__`.
+    delete fields[DOC_ORIGINALS_KEY];
 
     return { ...fields, ...(originals as Record<string, unknown>) };
 };
@@ -229,17 +245,53 @@ const AGG_COUNT: Name = dsql.identifier("__count__");
 const aggUpsertSql = (aggTable: string, key: unknown, value: unknown, count: unknown, set: SQL): SQL =>
     dsql`INSERT INTO ${dsql.identifier(aggTable)} (${AGG_KEY}, ${AGG_VALUE}, ${AGG_COUNT}) VALUES (${key}, ${value}, ${count}) ON CONFLICT(${AGG_KEY}) DO UPDATE SET ${set}`;
 
-/** The schema-declared columns of a table, as `[field, columnMeta]` pairs (skips fields without a `.column()` validator meta). */
-const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
-    const columns: [string, ColumnMetaLike][] = [];
+/**
+ * Memo for {@link tableColumns}, keyed by the definition object itself.
+ *
+ * A table definition is built once from the schema and never mutated after
+ * construction — a migration produces a NEW definition rather than editing the
+ * live one — so the derived column list is a per-definition constant. Keyed
+ * weakly so a definition dropped by a schema swap takes its entry with it.
+ */
+const TABLE_COLUMNS_CACHE = new WeakMap<TableDefinitionLike, ReadonlyArray<readonly [string, ColumnMetaLike]>>();
+
+/**
+ * The schema-declared columns of a table, as `[field, columnMeta]` pairs (skips
+ * fields without a `.column()` validator meta).
+ *
+ * Memoized because it is on the write path, not merely because it repeats:
+ * `applyInsertDefaults` calls it on every insert and `applyOnUpdate` on every
+ * patch/replace, and each call walked `Object.entries(shape)` and built a fresh
+ * array of fresh pairs — allocation proportional to the table's width, per row
+ * written, to rebuild a value that cannot have changed.
+ *
+ * The returned array is shared and frozen, and so is every pair in it. This
+ * function is exported from the package root, so "shared" cannot be left to a
+ * doc comment: a caller that pushed to the array — or reassigned a pair's column
+ * meta — would poison the memo for every later write on that table, and the
+ * symptom, `.default()` values silently no longer applying, is data loss that no
+ * test would attribute back here. Freezing costs one call per column per table,
+ * once, and turns the mutation into an immediate throw instead.
+ */
+const tableColumns = (definition: TableDefinitionLike): ReadonlyArray<readonly [string, ColumnMetaLike]> => {
+    const cached = TABLE_COLUMNS_CACHE.get(definition);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const columns: (readonly [string, ColumnMetaLike])[] = [];
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         const column = validator._meta?.column;
 
         if (column) {
-            columns.push([field, column]);
+            columns.push(Object.freeze<readonly [string, ColumnMetaLike]>([field, column]));
         }
     }
+
+    Object.freeze(columns);
+    TABLE_COLUMNS_CACHE.set(definition, columns);
 
     return columns;
 };

@@ -1013,15 +1013,11 @@ const withEmailGate: (options: BetterAuthOptions, config?: EmailGateHookConfig) 
 
 ### `lunoraAuthAdapter` (const)
 
-```ts
-const lunoraAuthAdapter: (store: AuthStore, runInTransaction?: TransactionRunner) => ReturnType<typeof createAdapterFactory>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `lunoraD1Adapter` (const)
 
-```ts
-const lunoraD1Adapter: (d1: Parameters<typeof d1Executor>[0]) => ReturnType<typeof lunoraAuthAdapter>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `lunoraDoAdapter` (const)
 
@@ -1031,213 +1027,107 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ### `AUTH_AUDIT_TABLE` (const)
 
-```ts
-const AUTH_AUDIT_TABLE = "__lunora_auth_audit__";
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `AppendAuthAuditEntry` (interface)
 
-```ts
-interface AppendAuthAuditEntry {
-    actorEmail?: string;
-    actorId?: string;
-    detail?: Record<string, unknown>;
-    event: string;
-    ip?: string;
-    outcome: AuthAuditOutcome;
-    targetEmail?: string;
-    ts: number;
-    userAgent?: string;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `AppendAuthAuditOptions` (interface)
 
-```ts
-interface AppendAuthAuditOptions {
-    redactDetail?: boolean;
-    retention?: number;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `AuthAuditEntry` (interface)
 
-```ts
-interface AuthAuditEntry {
-    actorEmail?: string;
-    actorId?: string;
-    detail?: Record<string, unknown>;
-    event: string;
-    ip?: string;
-    outcome: AuthAuditOutcome;
-    seq: number;
-    targetEmail?: string;
-    ts: number;
-    userAgent?: string;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `AuthAuditEvent` (type)
 
-```ts
-type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `AuthAuditOutcome` (type)
 
-```ts
-type AuthAuditOutcome = "failure" | "success";
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `AuthAuditReader` (interface)
 
-```ts
-interface AuthAuditReader {
-    read: (options: ReadAuthAuditOptions) => Promise<AuthAuditEntry[]>;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `ReadAuthAuditOptions` (interface)
 
-```ts
-interface ReadAuthAuditOptions {
-    actorId?: string;
-    event?: string;
-    limit?: number;
-    sinceSeq?: number;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `appendAuthAuditEntry` (const)
 
-```ts
-const appendAuthAuditEntry: (executor: SqlExecutor, entry: AppendAuthAuditEntry, options?: AppendAuthAuditOptions) => Promise<AppendAuthAuditEntry>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `createAuthAuditReader` (const)
 
-```ts
-const createAuthAuditReader: (executor: SqlExecutor) => AuthAuditReader;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `ensureAuthAuditTable` (const)
 
-```ts
-const ensureAuthAuditTable: (executor: SqlExecutor) => Promise<void>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `readAuthAuditLog` (const)
 
-```ts
-const readAuthAuditLog: (executor: SqlExecutor, options?: ReadAuthAuditOptions) => Promise<AuthAuditEntry[]>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/email-guard`
 
 ### `EmailClass` (type)
 
-```ts
-type EmailClass = "business" | "disposable" | "free";
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `EmailClassification` (interface)
 
-```ts
-interface EmailClassification {
-    domain: string | undefined;
-    emailClass: EmailClass;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `EmailGateConfig` (interface)
 
-```ts
-interface EmailGateConfig {
-    allowDomains?: ReadonlyArray<string>;
-    blockDisposable?: boolean;
-    denyDomains?: ReadonlyArray<string>;
-    flagFreeEmail?: boolean;
-    mx?: boolean;
-    requireValidSyntax?: boolean;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `EmailGateMiddlewareOptions` (interface)
 
-```ts
-interface EmailGateMiddlewareOptions<Context> extends EmailGateConfig {
-    email: (context: Context) => string | undefined;
-    onClassify?: (classification: EmailClassification, context: Context) => void;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `assertEmailAllowed` (const)
 
-```ts
-const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<EmailClassification>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `classifyEmail` (const)
 
-```ts
-const classifyEmail: (email: string, config?: EmailGateConfig) => EmailClassification;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `emailGateMiddleware` (const)
 
-```ts
-const emailGateMiddleware: <Context>(options: EmailGateMiddlewareOptions<Context>) => Middleware<Context, Context>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `loadEmailDomainLists` (const)
 
-```ts
-const loadEmailDomainLists: () => Promise<void>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/middleware`
 
 ### `LunoraAuthApiContext` (interface)
 
-```ts
-interface LunoraAuthApiContext<Auth extends LunoraAuth> {
-    readonly authApi: {
-        withoutHeaders: () => Auth["api"];
-    } & Auth["api"];
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `LunoraAuthHeadersError` (class)
 
-```ts
-class LunoraAuthHeadersError extends LunoraError {
-    readonly method: string;
-    constructor(method: string);
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `WithAuthPluginsMiddleware` (type)
 
-```ts
-type WithAuthPluginsMiddleware<Auth extends LunoraAuth> = <ContextIn>(options: {
-    ctx: ContextIn;
-    next: MiddlewareNext<ContextIn>;
-}) => Promise<ContextIn & LunoraAuthApiContext<Auth>>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `WithAuthPluginsOptions` (interface)
 
-```ts
-interface WithAuthPluginsOptions {
-    enforceHeaders?: boolean;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `withAuthPlugins` (const)
 
-```ts
-const withAuthPlugins: <Auth extends LunoraAuth>(auth: Auth, options?: WithAuthPluginsOptions) => WithAuthPluginsMiddleware<Auth>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/plugins`
 
@@ -1571,157 +1461,76 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ### `default` (const)
 
-```ts
-const authTables: (options: LunoraAuthOptions) => Record<string, TableDefinition>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/sql-store`
 
 ### `SqlExecutor` (interface)
 
-```ts
-interface SqlExecutor {
-    all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
-    run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<void>;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `createSqlAuthStore` (const)
 
-```ts
-const createSqlAuthStore: (executor: SqlExecutor) => AuthStore;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `d1Executor` (const)
 
-```ts
-const d1Executor: (database: D1Like) => SqlExecutor;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/store`
 
 ### `AuthQuery` (interface)
 
-```ts
-interface AuthQuery {
-    limit?: number;
-    offset?: number;
-    sortBy?: {
-        direction: "asc" | "desc";
-        field: string;
-    };
-    where: ReadonlyArray<AuthWhereClause>;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `AuthRow` (type)
 
-```ts
-type AuthRow = Record<string, unknown>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `AuthStore` (interface)
 
-```ts
-interface AuthStore {
-    consumeOne: (model: string, where: ReadonlyArray<AuthWhereClause>) => Promise<AuthRow | undefined>;
-    count: (model: string, where: ReadonlyArray<AuthWhereClause>) => Promise<number>;
-    create: (model: string, data: AuthRow) => Promise<AuthRow>;
-    incrementOne: (model: string, where: ReadonlyArray<AuthWhereClause>, increment: Record<string, number>, set?: AuthRow) => Promise<AuthRow | undefined>;
-    read: (model: string, query: AuthQuery) => Promise<AuthRow[]>;
-    remove: (model: string, where: ReadonlyArray<AuthWhereClause>) => Promise<number>;
-    update: (model: string, where: ReadonlyArray<AuthWhereClause>, values: AuthRow) => Promise<AuthRow[]>;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `AuthWhereClause` (type)
 
-```ts
-type AuthWhereClause = NonNullable<Parameters<CustomAdapter["findOne"]>[0]["where"]>[number];
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `createMemoryAuthStore` (const)
 
-```ts
-const createMemoryAuthStore: () => AuthStore;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `matchesWhere` (const)
 
-```ts
-const matchesWhere: (row: AuthRow, where: ReadonlyArray<AuthWhereClause>) => boolean;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/turnstile`
 
 ### `FetchLike` (type)
 
-```ts
-type FetchLike = (input: string, init?: {
-    body?: BodyInit;
-    headers?: Record<string, string>;
-    method?: string;
-}) => Promise<Response>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `TURNSTILE_VERIFY_ENDPOINT` (const)
 
-```ts
-const TURNSTILE_VERIFY_ENDPOINT = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `TurnstileVerifyResult` (interface)
 
-```ts
-interface TurnstileVerifyResult {
-    action?: string;
-    cdata?: string;
-    challengeTs?: string;
-    errorCodes: string[];
-    hostname?: string;
-    success: boolean;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `VerifyTurnstileOptions` (interface)
 
-```ts
-interface VerifyTurnstileOptions {
-    expectedAction?: string;
-    expectedHostname?: string;
-    fetch?: FetchLike;
-    remoteip?: string;
-    secret: string;
-    token: string;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `verifyTurnstile` (const)
 
-```ts
-const verifyTurnstile: ({ expectedAction, expectedHostname, fetch, remoteip, secret, token }: VerifyTurnstileOptions) => Promise<TurnstileVerifyResult>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/turnstile-middleware`
 
 ### `VerifyTurnstileMiddlewareOptions` (interface)
 
-```ts
-interface VerifyTurnstileMiddlewareOptions<Context> {
-    expectedAction?: string;
-    expectedHostname?: string;
-    failOpen?: boolean;
-    fetch?: FetchLike;
-    message?: string;
-    remoteip?: (context: Context) => string | undefined;
-    secret: string;
-    token: (context: Context) => string | undefined;
-    validate?: (result: TurnstileVerifyResult) => boolean;
-}
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `verifyTurnstileMiddleware` (const)
 
-```ts
-const verifyTurnstileMiddleware: <Context>(options: VerifyTurnstileMiddlewareOptions<Context>) => Middleware<Context, Context>;
-```
+Re-exported from `@lunora/auth` — signature tracked in that section.

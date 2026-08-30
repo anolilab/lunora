@@ -25,7 +25,8 @@
  * `outDir`/`rootDir` from their `tsconfig.json` (a set `rootDir` raises TS6059
  * for this out-of-package file under `tsc --noEmit`).
  */
-import { evictOldestEntry } from "./evict-oldest";
+import { fromBase64Url, toBase64Url } from "./base64";
+import { memoizePromise } from "./promise-memo";
 
 const textEncoder = new TextEncoder();
 
@@ -43,28 +44,6 @@ const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+\-.]*:\/\//i;
 const CONTROL_CHAR_CODES: number[] = Array.from({ length: 32 }, (_, index) => index);
 const CONTROL_CHAR_RE = new RegExp(`[${CONTROL_CHAR_CODES.map((code) => String.fromCodePoint(code)).join("")}]`, "u");
 
-const toBase64Url = (bytes: Uint8Array): string => {
-    // A SHA-256 HMAC is a fixed 32 bytes, well under the argument-spread limit,
-    // so building the binary string in one `fromCodePoint` call is safe and
-    // cheaper than a per-byte loop. Each byte is < 256, so code point and char
-    // code are identical here.
-    const binary = String.fromCodePoint(...bytes);
-
-    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-};
-
-const fromBase64Url = (input: string): Uint8Array => {
-    const padded = input.replaceAll("-", "+").replaceAll("_", "/") + "===".slice((input.length + 3) % 4);
-    const binary = atob(padded);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.codePointAt(index) ?? 0;
-    }
-
-    return bytes;
-};
-
 // The signing secret is effectively constant per process, so the imported
 // (non-extractable) CryptoKey is memoized by secret value: this removes one
 // `crypto.subtle.importKey` from the verify hot path on every request. Caching
@@ -75,21 +54,17 @@ const fromBase64Url = (input: string): Uint8Array => {
 const KEY_CACHE_MAX = 64;
 const keyCache = new Map<string, Promise<CryptoKey>>();
 
-const importHmacKey = async (secret: string): Promise<CryptoKey> => {
-    const cached = keyCache.get(secret);
-
-    if (cached) {
-        return cached;
-    }
-
-    evictOldestEntry(keyCache, KEY_CACHE_MAX);
-
-    const keyPromise = crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
-
-    keyCache.set(secret, keyPromise);
-
-    return keyPromise;
-};
+// `memoizePromise` rather than a bare `set`: a rejected import used to stay in
+// the map, so one failed `importKey` poisoned that secret for the isolate's
+// whole life and every later verify against it failed with the original error.
+// It carries the FIFO bound too, evicting on the insert path.
+const importHmacKey = async (secret: string): Promise<CryptoKey> =>
+    memoizePromise(
+        keyCache,
+        secret,
+        async () => crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]),
+        KEY_CACHE_MAX,
+    );
 
 /**
  * Extract `host[:port]` from a full URL or a bare host/base form. Tolerates a
@@ -134,6 +109,41 @@ const assertCanonicalSafe = (value: string): void => {
  */
 const hasControlChar = (value: string): boolean => CONTROL_CHAR_RE.test(value);
 
+// A base-URL pathname consisting only of slashes (`"/"`, `"//"`, …) is not a
+// "path" for the signed-URL subpath-base guard — the URL builders collapse any
+// run of trailing slashes to the bare origin when the URL is minted, so e.g.
+// `https://cdn.test//` must be accepted like the bare origin.
+const ONLY_SLASHES_RE = /^\/+$/u;
+
+/**
+ * True when `path` is a run of one or more slashes (`"/"`, `"//"`, …) — the
+ * trailing-slash carve-out both signed-URL builders apply to their
+ * no-subpath-base guard. Single definition so the two guards cannot diverge on
+ * what counts as "no path".
+ */
+const isOnlySlashesPath = (path: string): boolean => ONLY_SLASHES_RE.test(path);
+
+/**
+ * Validate a signed-URL TTL against the shared posture: a positive finite
+ * number, at most `maxSeconds`. Returns a human-readable problem (without a
+ * package prefix) or `undefined` when valid. Zero-dep by design — each caller
+ * throws its own error type (`LunoraError` in storage, `TypeError` in images)
+ * around the returned message.
+ */
+const validateTtlSeconds = (value: number, maxSeconds: number): string | undefined => {
+    if (!Number.isFinite(value) || value <= 0) {
+        return "expiresInSeconds must be a positive finite number";
+    }
+
+    if (value > maxSeconds) {
+        const wholeDays = maxSeconds % 86_400 === 0 ? ` (${String(maxSeconds / 86_400)} days)` : "";
+
+        return `expiresInSeconds must not exceed ${String(maxSeconds)} seconds${wholeDays}`;
+    }
+
+    return undefined;
+};
+
 /** Sign `canonical` with the secret's HMAC key, returning the base64url signature. */
 const signCanonical = async (secret: string, canonical: string): Promise<string> => {
     const cryptoKey = await importHmacKey(secret);
@@ -154,4 +164,14 @@ const verifyCanonical = async (secret: string, canonical: string, sigBytes: Uint
     return crypto.subtle.verify("HMAC", cryptoKey, sigBytes as unknown as BufferSource, textEncoder.encode(canonical));
 };
 
-export { assertCanonicalSafe, extractHost, fromBase64Url, hasControlChar, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical };
+export {
+    assertCanonicalSafe,
+    extractHost,
+    fromBase64Url,
+    hasControlChar,
+    isOnlySlashesPath,
+    MAX_SIGNED_URL_TTL_SECONDS,
+    signCanonical,
+    validateTtlSeconds,
+    verifyCanonical,
+};

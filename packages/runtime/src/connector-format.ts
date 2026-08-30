@@ -15,7 +15,13 @@
  * the line-delimited stream an Airbyte incremental source emits.
  *
  * Both consume the SAME page, so a single endpoint feeds either ecosystem.
+ *
+ * Shard admin RPCs hand docs over in wire form (`encodeWire` tags for bigint /
+ * bytes), so both formatters decode each doc and map it to warehouse-portable
+ * JSON before it reaches third-party output — see {@link toPortableDocument}.
  */
+
+import { toPortableDocument } from "./portable-json";
 
 /**
  * One change record in a {@link ConnectorSyncPage}. Mirrors a row of the CDC log
@@ -119,16 +125,18 @@ const toFivetranResponse = (page: ConnectorSyncPage, primaryKey: Record<string, 
     for (const change of page.changes) {
         schema[change.table] ??= { primary_key: [pkFor(change.table)] };
 
+        const portable = toPortableDocument(change.doc);
+
         if (change.op === "delete") {
-            bucketFor(remove, change.table).push(change.doc);
+            bucketFor(remove, change.table).push(portable);
         } else if (change.op === "update") {
-            bucketFor(update, change.table).push(change.doc);
+            bucketFor(update, change.table).push(portable);
         } else {
             // `insert`, `upsert`, and any op outside the Fivetran verbs (a
             // connector that has drifted from the schema) all land in `insert` —
             // Fivetran upserts on primary key, so the row still lands and a sync
             // never hard-fails on one unknown op.
-            bucketFor(insert, change.table).push(change.doc);
+            bucketFor(insert, change.table).push(portable);
         }
     }
 
@@ -152,7 +160,8 @@ const toAirbyteMessages = (page: ConnectorSyncPage, emittedAt: number = Date.now
     const messages: AirbyteMessage[] = [];
 
     for (const change of page.changes) {
-        const data = change.op === "delete" ? { ...change.doc, _lunora_deleted: true } : change.doc;
+        const portable = toPortableDocument(change.doc);
+        const data = change.op === "delete" ? { ...portable, _lunora_deleted: true } : portable;
 
         messages.push({ record: { data, emitted_at: emittedAt, stream: change.table }, type: "RECORD" });
     }

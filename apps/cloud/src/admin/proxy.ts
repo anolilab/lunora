@@ -34,7 +34,15 @@ export interface AdminProxyDeps {
 
 const json = (status: number, data: unknown): Response => Response.json(data, { headers: { "content-type": "application/json" }, status });
 
-const stripTrailingSlashes = (value: string): string => {
+/**
+ * Trim trailing slashes before joining a path onto a base URL.
+ *
+ * A loop rather than a `/\/+$/` replace: a greedy trailing-quantifier regex on
+ * attacker-influenced input is the classic backtracking shape, and this runs on
+ * every proxied admin request. Exported so the eject route joins its tenant URL
+ * exactly the same way.
+ */
+export const stripTrailingSlashes = (value: string): string => {
     let result = value;
 
     while (result.endsWith("/")) {

@@ -2,10 +2,19 @@ import type { ReactElement } from "react";
 
 import { ModalShell } from "../../components/ui/modal-shell";
 import { formatCell, formatTimestamp } from "../../lib/internal";
+import type { MaskView } from "../../lib/mask-preview";
 
 interface RowDetailDrawerProps {
     /** Column order to display fields in (mirrors the table's columns). */
     readonly columns: string[];
+
+    /**
+     * Active mask preview. `row` already carries the masked values (the caller runs
+     * `maskRow`); this is what tells the drawer which fields those are, so a covered
+     * field renders the masked value alone — no foreign-key link (see
+     * {@link FieldValue}).
+     */
+    readonly mask: MaskView;
     /** Close the drawer. */
     readonly onClose: () => void;
     /** Follow a foreign-key field to its target table (same as a table ref cell). */
@@ -24,11 +33,14 @@ const looksLikeTimestamp = (column: string, value: unknown): value is number => 
 /** Render one field's value: null marker, ref link, readable timestamp, JSON, or text. */
 const FieldValue = ({
     column,
+    masked,
     onNavigate,
     target,
     value,
 }: {
     readonly column: string;
+    /** True when the mask preview covers this column — see the early return below. */
+    readonly masked: boolean;
     readonly onNavigate: (target: string, id: string) => void;
     readonly target: string | undefined;
     readonly value: unknown;
@@ -41,6 +53,19 @@ const FieldValue = ({
 
     if (value === null || value === undefined) {
         return <span className="italic text-muted-foreground">null</span>;
+    }
+
+    // A mask-covered field renders its masked value and nothing else — no
+    // foreign-key link. The same early return the grid takes for a masked cell
+    // (`data-browser-grid.tsx`'s `EditableCell`), for the same reason: under
+    // `"hash"` the value is a digest, so an `↗` beside it would navigate to a row
+    // id that does not exist.
+    if (masked) {
+        return (
+            <span className="italic text-muted-foreground" data-testid={`rd-masked-${column}`} title="Masked (preview)">
+                {formatCell(value)}
+            </span>
+        );
     }
 
     if (target !== undefined && (typeof value === "string" || typeof value === "number") && String(value) !== "") {
@@ -76,7 +101,7 @@ const FieldValue = ({
  * panel via the `target === currentTarget` check), on Escape, or via the Close
  * button — so it's keyboard-accessible without a click handler on the panel.
  */
-const RowDetailDrawer = ({ columns, onClose, onNavigate, refs, row }: RowDetailDrawerProps): ReactElement => {
+const RowDetailDrawer = ({ columns, mask, onClose, onNavigate, refs, row }: RowDetailDrawerProps): ReactElement => {
     // A ref field followed from the drawer should also dismiss it, so the table
     // view's navigation lands on a clean screen.
     const navigateAndClose = (target: string, id: string): void => {
@@ -98,7 +123,13 @@ const RowDetailDrawer = ({ columns, onClose, onNavigate, refs, row }: RowDetailD
                     <div className="border-t border-border py-2 first:border-t-0" data-testid={`rd-field-${column}`} key={column}>
                         <dt className="mb-0.5 text-xs font-semibold text-muted-foreground">{column}</dt>
                         <dd className="m-0">
-                            <FieldValue column={column} onNavigate={navigateAndClose} target={refs?.[column]} value={row[column]} />
+                            <FieldValue
+                                column={column}
+                                masked={mask.enabled && mask.columns.has(column)}
+                                onNavigate={navigateAndClose}
+                                target={refs?.[column]}
+                                value={row[column]}
+                            />
                         </dd>
                     </div>
                 ))}

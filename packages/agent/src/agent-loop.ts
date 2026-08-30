@@ -1,6 +1,6 @@
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
-import { definedColumns } from "./component-shared";
+import { APPROVAL_TIMEOUT_MAX_MS, definedColumns } from "./component-shared";
 import { resolveAgentModel } from "./generate";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
 import { buildModelMessages } from "./model-messages";
@@ -100,6 +100,9 @@ interface TurnContext {
     agent: AgentDefinition;
     /** History-compaction seam, when the runtime provided one (else `undefined`). */
     compact: AgentCompact | undefined;
+    /** Patch this run's thread by key (status/error/usage/…). */
+    /** Retire a persisted message by key (dispatches `agents:agentDeleteMessage`). */
+    deleteMessage: (messageKey: string) => Promise<void>;
     env: Record<string, unknown>;
     generate: AgentGenerate;
     /** Read the thread's synced state (dispatches `agents:agentState`) — the tool ctx's `getState`. */
@@ -111,7 +114,6 @@ interface TurnContext {
     memoryContext: string | undefined;
     /** Live-only token-delta sink, when the runtime provided one (else `undefined`). */
     onTokenDelta: AgentTokenSink | undefined;
-    /** Patch this run's thread by key (status/error/usage/…). */
     patchThread: (patch: Record<string, unknown>) => Promise<void>;
     persist: (message: Record<string, unknown>) => Promise<void>;
     run: AgentRunFunction;
@@ -196,13 +198,87 @@ const resolveNeedsApproval = async (
 };
 
 /**
+ * Cloudflare Workflows raises an elapsed `waitForEvent` as an `Error` named
+ * `WorkflowTimeoutError` (message `"Execution timed out after <n>ms"`). Matched
+ * by NAME rather than `instanceof`: the constructor lives in the host's own
+ * `workflows-shared` module, which we neither import nor can identity-compare
+ * across the RPC boundary. Same shape as `channels.ts`'s duplicate-instance
+ * check, and deliberately narrow — every OTHER rejection (a binding failure, a
+ * payload that will not deserialize, a host bug) must NOT be silently recorded
+ * as a human decision.
+ */
+const WORKFLOW_TIMEOUT_ERROR_NAME = "WorkflowTimeoutError";
+
+/** True only for the host's elapsed-`waitForEvent` rejection — see {@link WORKFLOW_TIMEOUT_ERROR_NAME}. */
+const isWaitTimeoutError = (error: unknown): boolean => error instanceof Error && error.name === WORKFLOW_TIMEOUT_ERROR_NAME;
+
+/**
+ * How long a HITL approval wait hibernates before it gives up (overridable per
+ * agent via `approvalTimeout`). A slow approver is the NORMAL case — overnight
+ * or over a weekend — so the default is generous; but with no bound at all a
+ * never-answered approval hibernates the instance forever, and once the
+ * thread's staleness horizon passes, its pending approval can never be
+ * resolved again. The reclaim horizon is derived from
+ * `APPROVAL_TIMEOUT_MAX_MS`, so the wait always fires first by construction.
+ */
+const DEFAULT_APPROVAL_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000;
+
+/** Milliseconds per unit of the host's duration grammar (`"3 days"`); month/year are nominal. */
+const DURATION_UNIT_MS: Record<string, number> = {
+    day: 86_400_000,
+    hour: 3_600_000,
+    minute: 60_000,
+    month: 30 * 86_400_000,
+    second: 1000,
+    week: 7 * 86_400_000,
+    year: 365 * 86_400_000,
+};
+
+/** The host's `"<n> <unit>[s]"` duration grammar (hoisted, avoids recompilation). */
+const DURATION_PATTERN = /^(\d+(?:\.\d+)?) (day|hour|minute|month|second|week|year)s?$/u;
+
+/**
+ * Resolve the agent's configured approval timeout to a bounded number of
+ * milliseconds.
+ *
+ * Returns ms (which `waitForEvent` accepts natively) rather than passing the
+ * configured value through, because the bound is the point: a value above
+ * {@link APPROVAL_TIMEOUT_MAX_MS} would let the thread be reclaimed out from
+ * under a still-pending approval. An unparseable string cannot reach here from
+ * TypeScript (the property's type is the host's closed grammar) but can from
+ * plain JS — it falls back to the default rather than handing the host a
+ * duration it will reject mid-run.
+ */
+const approvalTimeoutMs = (configured: number | string | undefined): number => {
+    if (configured === undefined) {
+        return DEFAULT_APPROVAL_TIMEOUT_MS;
+    }
+
+    if (typeof configured === "number") {
+        return Math.min(configured, APPROVAL_TIMEOUT_MAX_MS);
+    }
+
+    const match = DURATION_PATTERN.exec(configured);
+
+    if (match === null) {
+        return DEFAULT_APPROVAL_TIMEOUT_MS;
+    }
+
+    return Math.min(Number(match[1]) * (DURATION_UNIT_MS[match[2] as string] as number), APPROVAL_TIMEOUT_MAX_MS);
+};
+
+/**
  * Pause the run on a human-in-the-loop tool approval: persist an
  * `"awaiting_approval"` marker (filtered out of the model prompt, but observable
  * by a client), move the thread to `"awaiting_input"`, then hibernate on the
  * deterministically named durable event `approval:<toolCallId>`. A workflow
  * replay memoizes the resolved wait, so the run resumes with the recorded
  * decision without pausing (or re-persisting) again. Named ONLY from the
- * replay-stable `call.id`.
+ * replay-stable `call.id`. The wait carries a timeout (default
+ * {@link DEFAULT_APPROVAL_TIMEOUT_MS}, configurable via the agent's
+ * `approvalTimeout` and bounded by {@link approvalTimeoutMs}) so a
+ * never-answered approval ends as a rejection instead of hibernating the run
+ * forever.
  *
  * The wait's match `type` is scoped to THIS call (`agent-approval:<call.id>`,
  * the same format `component.ts`'s `agentResolveApproval` sends) — native CF
@@ -211,7 +287,7 @@ const resolveNeedsApproval = async (
  * pending tool call on the same instance could resolve this one instead.
  */
 const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Promise<ApprovalDecision> => {
-    const { instanceId, patchThread, persist, step } = turnContext;
+    const { agent, deleteMessage, instanceId, patchThread, persist, step } = turnContext;
 
     await persist({
         content: `Awaiting approval to run tool "${call.name}".`,
@@ -223,12 +299,46 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
     });
     await patchThread({ status: "awaiting_input" });
 
-    const event = await step.waitForEvent<ApprovalDecision>(`approval:${call.id}`, { type: `agent-approval:${call.id}` });
+    const decision = await step
+        .waitForEvent<ApprovalDecision>(`approval:${call.id}`, {
+            timeout: approvalTimeoutMs(agent.approvalTimeout),
+            type: `agent-approval:${call.id}`,
+        })
+        .then((event): ApprovalDecision => {
+            return { decision: event.payload.decision, ...(event.payload.note === undefined ? {} : { note: event.payload.note }) };
+        })
+        .catch((error: unknown): ApprovalDecision => {
+            // ONLY an elapsed timeout becomes a decision. Without it the run
+            // hibernates forever and, once the thread's staleness horizon
+            // passes, the pending approval is permanently unresolvable — so a
+            // timeout is recorded as a rejection and the loop continues down
+            // the existing rejection path. Any OTHER rejection (binding
+            // failure, undeserializable payload, host bug) is rethrown: writing
+            // a rejection into the durable record when nobody was asked would
+            // be a worse lie than a failed run, and the sibling `awaitDequeue`
+            // propagates host errors for the same reason.
+            if (!isWaitTimeoutError(error)) {
+                throw error;
+            }
+
+            return { decision: "reject", note: "approval timed out" };
+        });
+
+    // Retire the marker the moment a decision is reached — by a human OR by the
+    // timeout. Every client reads this row alone to decide whether to OFFER an
+    // Approve/Reject, so leaving it behind keeps advertising an action that can
+    // no longer be delivered (the instance that would receive it is finished).
+    // It is deleted rather than restatused because any non-"awaiting_approval"
+    // status turns it into a second, bogus tool RESULT — see the mutation's
+    // docstring. The real outcome lands on the tool-result row next.
+    // All three outcomes strand the same marker, so this is not on the timeout
+    // branch alone.
+    await deleteMessage(`${instanceId}:approval:${call.id}`);
 
     // Resume: back to running before we act on the decision.
     await patchThread({ status: "running" });
 
-    return { decision: event.payload.decision, ...(event.payload.note === undefined ? {} : { note: event.payload.note }) };
+    return decision;
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
@@ -1022,6 +1132,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     const completeRun = toFunctionReference(paths.completeRun);
     const ensureThread = toFunctionReference(paths.ensureThread);
     const listMessages = toFunctionReference(paths.listMessages);
+    const deleteMessageRef = toFunctionReference(paths.deleteMessage);
     const patchThread = toFunctionReference(paths.patchThread);
     const setStateRef = toFunctionReference(paths.setState);
     const stateRef = toFunctionReference(paths.state);
@@ -1032,6 +1143,10 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     const patchThreadByKey = async (patch: Record<string, unknown>): Promise<void> => {
         await run(patchThread, { key: params.threadKey, ...patch });
+    };
+
+    const deleteMessageByKey = async (messageKey: string): Promise<void> => {
+        await run(deleteMessageRef, { messageKey, threadKey: params.threadKey });
     };
 
     /** The user turn that opens the run. Runs after any queue wait, so a parked run appends only once it owns the thread. */
@@ -1109,6 +1224,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         listMessages,
         memoryContext,
         onTokenDelta,
+        deleteMessage: deleteMessageByKey,
         patchThread: patchThreadByKey,
         persist,
         run,

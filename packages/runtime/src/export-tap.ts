@@ -20,6 +20,7 @@
  * un-advanced so the next pass re-delivers, while other shards (and the shard's
  * own writes) proceed unaffected.
  */
+import { toPortableDocument } from "./portable-json";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
@@ -124,13 +125,18 @@ const defaultSleep = (ms: number): Promise<void> =>
  * Project a raw op-log CDC record (`{ id, op, seq, table, ts, doc? }`) into a
  * clean {@link ExportChange}. Mirrors `./connector-cdc`'s `flattenCdcChange` but
  * PRESERVES `seq` / `id` / `ts` so a downstream warehouse can order and dedupe.
+ *
+ * The raw record arrives in wire form (the shard admin RPC encodes its result),
+ * so `doc` is mapped through {@link toPortableDocument} — every sink NDJSON-encodes
+ * it straight to a third party, where a `["$lunora.wire$","bigint",…]` tag would
+ * land as an array instead of a value.
  */
 const sanitizeChange = (raw: Record<string, unknown>): ExportChange => {
     const table = typeof raw["table"] === "string" ? raw["table"] : "";
     const rawOp = typeof raw["op"] === "string" ? raw["op"] : "";
     const op: ExportChange["op"] = rawOp === "delete" || rawOp === "insert" || rawOp === "update" ? rawOp : "upsert";
     const id = typeof raw["id"] === "string" ? raw["id"] : undefined;
-    const documentRow = raw["doc"] && typeof raw["doc"] === "object" ? (raw["doc"] as Record<string, unknown>) : undefined;
+    const documentRow = raw["doc"] && typeof raw["doc"] === "object" ? toPortableDocument(raw["doc"] as Record<string, unknown>) : undefined;
     const seq = typeof raw["seq"] === "number" && Number.isFinite(raw["seq"]) ? raw["seq"] : undefined;
     const ts = typeof raw["ts"] === "number" && Number.isFinite(raw["ts"]) ? raw["ts"] : undefined;
 

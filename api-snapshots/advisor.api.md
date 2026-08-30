@@ -191,6 +191,17 @@ interface AdvisorFailOpenGuard {
 }
 ```
 
+### `AdvisorFlagRead` (interface)
+
+```ts
+interface AdvisorFlagRead {
+    callee: string;
+    exportName: string;
+    file: string;
+    line: number;
+}
+```
+
 ### `AdvisorFlagSecurityDefault` (interface)
 
 ```ts
@@ -953,6 +964,7 @@ interface LintContext {
     containers?: ReadonlyArray<AdvisorContainer>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
+    flagReads?: ReadonlyArray<AdvisorFlagRead>;
     flagSecurityDefaults?: ReadonlyArray<AdvisorFlagSecurityDefault>;
     functionMetrics?: ReadonlyArray<AdvisorFunctionMetrics>;
     geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
@@ -1353,6 +1365,12 @@ const filterWithoutIndex: Lint;
 
 ```ts
 const flagGatesSecurityWithUnsafeDefault: Lint;
+```
+
+### `flagReadInSubscription` (const)
+
+```ts
+const flagReadInSubscription: Lint;
 ```
 
 ### `fromServerSchema` (const)

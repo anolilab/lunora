@@ -251,6 +251,18 @@ catalogs:
     prettier-plugin-svelte: 4.1.1
     react-doctor: 0.9.11
   node:
+    # Exact-pinned (no caret): this is the parser `wrangler dev` runs over
+    # `.dev.vars`, and `@lunora/config` reads that file with the same library so
+    # the CLI/studio can't disagree with the worker about what a line means.
+    # wrangler bundles its own copy rather than resolving ours (4.120.1 ships
+    # 16.3.1), so the two versions are independent — they agree today because
+    # `parse()` is byte-identical from 16.3.1 through 17.x, which is exactly
+    # the thing that could silently stop being true. A dotenv release that
+    # changes the grammar is a behaviour change for us, so it gets vetted (the
+    # parity fixtures in
+    # `packages/config/__tests__/dev-variables-format.test.ts` are the tripwire)
+    # rather than floated in on a range.
+    dotenv: 16.6.1
     fast-glob: ^3.3.3
     rimraf: 6.1.3
     semver: ^7.8.5
@@ -291,8 +303,8 @@ catalogs:
     # `launch` by injection). The live-worker leg needs a real Browser Rendering binding
     # on a deployed worker; run it before relying on this in production.
     "@cloudflare/playwright": 1.3.5
-    "@cloudflare/vitest-plugin": ^1.0.0
-    # PATCHED (patches/@cloudflare__workers-types@5.20260811.1.patch), and the patch
+    "@cloudflare/vitest-plugin": ^1.1.0
+    # PATCHED (patches/@cloudflare__workers-types@5.20260827.1.patch), and the patch
     # is version-pinned in `patchedDependencies` — regenerate it when bumping this.
     # Upstream declares `declare const Buffer: any` / `declare const process: any`,
     # which win over @types/node's `BufferConstructor` / `NodeJS.Process` in every
@@ -300,9 +312,9 @@ catalogs:
     # alone). That makes every `process.*` and `Buffer.*` read an untyped `any`,
     # silently disabling `no-unsafe-*` on exactly the two globals most likely to be
     # absent at runtime. The patch drops both declarations so @types/node wins.
-    "@cloudflare/workers-types": ^5.20260811.1
+    "@cloudflare/workers-types": ^5.20260827.1
     miniflare: ^4.20260730.0
-    wrangler: ^4.120.1
+    wrangler: ^4.126.0
   e2e:
     "@playwright/test": ^1.62.1
     playwright: ^1.62.1
@@ -370,7 +382,7 @@ catalogs:
     # To bump: smoke `pnpm --filter "@lunora/vite" dev` against a template, confirm the
     # dev runner boots and serves, and confirm the transitive wrangler/miniflare/workerd
     # are past the release-age window. 1.51.2 was vetted that way.
-    "@cloudflare/vite-plugin": 1.51.2
+    "@cloudflare/vite-plugin": 1.54.0
     "@tailwindcss/cli": ^4.3.3
     "@tailwindcss/vite": ^4.3.3
     "@visulima/vite-overlay": 2.0.12
@@ -929,6 +941,6 @@ packageExtensions:
 
 patchedDependencies:
   '@cloudflare/containers@0.3.7': patches/@cloudflare__containers@0.3.7.patch
-  '@cloudflare/workers-types@5.20260811.1': patches/@cloudflare__workers-types@5.20260811.1.patch
+  '@cloudflare/workers-types@5.20260827.1': patches/@cloudflare__workers-types@5.20260827.1.patch
   gray-matter@4.0.3: patches/gray-matter@4.0.3.patch
   recast@0.23.11: patches/recast@0.23.11.patch

@@ -2,8 +2,11 @@ import { LunoraError } from "@lunora/server";
 
 import { runBuildDispatch } from "../src/builds/dispatch";
 import type { BuildRunnerPorts } from "../src/builds/runner";
+import { isUnconfiguredInfrastructure } from "../src/builds/runner";
+import { createGitHubApp } from "../src/github/app";
 import type { Id } from "./_generated/dataModel.js";
-import { internalAction, internalMutation, query, v } from "./_generated/server.js";
+import { internalAction, internalMutation, internalQuery, query, v } from "./_generated/server.js";
+import { fireDeployAlerts } from "./alerts";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -182,11 +185,22 @@ export const complete = internalMutation
         });
     });
 
-/** Mark a claimed build failed with its error. SYSTEM only. */
+/**
+ * Mark a claimed build failed with its error, and notify the org's `deploy` rules.
+ *
+ * The notification is raised in the same mutation as the status write. A build
+ * that fails is the one moment in the release path where nobody is watching by
+ * construction — it happens minutes after a push, on a cron, with the person who
+ * pushed already doing something else — so recording the failure and telling
+ * somebody about it have to be one outcome. Delivery itself is the drain sweep's
+ * job (a mutation has no `fetch`).
+ *
+ * SYSTEM only.
+ */
 export const fail = internalMutation
     .input({ buildId: v.id("builds"), error: v.string(), runnerId: v.string() })
     .mutation(async ({ ctx: context, args: { buildId, error, runnerId } }): Promise<void> => {
-        assertLease(await context.db.get(buildId), runnerId);
+        const build = assertLease(await context.db.get(buildId), runnerId);
 
         const { now } = context;
 
@@ -198,6 +212,61 @@ export const fail = internalMutation
             status: "failed",
             updatedAt: now,
         });
+
+        // Not raised for the platform's own missing infrastructure — see
+        // `isUnconfiguredInfrastructure`. The build is recorded failed either way;
+        // this only decides whether a human is woken for it.
+        if (isUnconfiguredInfrastructure(error)) {
+            return;
+        }
+
+        const project = (await context.db.get(build.projectId)) as null | { name: string };
+
+        await fireDeployAlerts(context, build.organizationId, `build:${buildId}`, {
+            detail: error,
+            kind: "build",
+            project: project?.name ?? "project",
+            reference: `${build.branch}@${build.commitSha.slice(0, 7)}`,
+        });
+    });
+
+/**
+ * Everything needed to write a commit status for one build: the repository, the
+ * commit, and the installation that grants write access to it.
+ *
+ * Resolved here rather than stored on the build row, because both halves already
+ * have an owner and neither belongs to a build: the repository is the project's
+ * connection (`githubRepo`), and the installation is the org's claim. Copying
+ * them onto every build would give a rename or a re-install two places to be
+ * right, and the second one is the one nobody updates.
+ *
+ * Returns `null` when either is missing — a project with no connected repo, or an
+ * org that has not claimed an installation — which is the ordinary state for a
+ * build that arrived any way other than a push. SYSTEM only.
+ */
+export const reportTarget = internalQuery
+    .input({ buildId: v.id("builds") })
+    .query(async ({ ctx: context, args: { buildId } }): Promise<null | { commitSha: string; installationId: number; repository: string }> => {
+        const build = (await context.db.get(buildId)) as BuildRow | null;
+
+        if (!build) {
+            return null;
+        }
+
+        const project = (await context.db.get(build.projectId)) as null | ProjectRow;
+
+        if (!project?.githubRepo) {
+            return null;
+        }
+
+        const { page } = await context.db.githubInstallations.findMany({ where: { organizationId: build.organizationId } });
+        const installation = (page as unknown as { claimedAt?: number; installationId: number }[]).find((row) => row.claimedAt !== undefined);
+
+        if (!installation) {
+            return null;
+        }
+
+        return { commitSha: build.commitSha, installationId: installation.installationId, repository: project.githubRepo };
     });
 
 /** A project's builds, newest first (members). */
@@ -309,6 +378,11 @@ const unconfigured = (what: string) => (): never => {
 export const dispatch = internalAction.action(async ({ ctx: context }): Promise<{ ran: number }> => {
     const runnerId = `cron-${String(context.now)}`;
 
+    // Absent App credentials this is `null` and the runner skips reporting — the
+    // same 🌐 gate the source fetch sits behind, since it is the same credential.
+    const environment = (context.env ?? {}) as { GITHUB_APP_ID?: string; GITHUB_APP_PRIVATE_KEY?: string };
+    const app = createGitHubApp({ appId: environment.GITHUB_APP_ID, fetch: context.fetch, privateKeyPem: environment.GITHUB_APP_PRIVATE_KEY });
+
     const runnerPorts: BuildRunnerPorts = {
         appendLog: async (buildId, level, line) => {
             await context.runMutation(appendLog, { buildId: buildId as BuildId, level, line, runnerId });
@@ -321,6 +395,26 @@ export const dispatch = internalAction.action(async ({ ctx: context }): Promise<
             await context.runMutation(fail, { buildId: buildId as BuildId, error, runnerId });
         },
         fetchSource: unconfigured("source fetch"),
+        ...(app === null
+            ? {}
+            : {
+                  reportStatus: async (build, state, description, targetUrl) => {
+                      const target = await context.runQuery(reportTarget, { buildId: build.buildId as BuildId });
+
+                      if (!target) {
+                          return;
+                      }
+
+                      await app.postCommitStatus({
+                          description,
+                          installationId: target.installationId,
+                          repository: target.repository,
+                          sha: target.commitSha,
+                          state,
+                          ...(targetUrl === undefined ? {} : { targetUrl }),
+                      });
+                  },
+              }),
     };
 
     const { outcomes } = await runBuildDispatch({

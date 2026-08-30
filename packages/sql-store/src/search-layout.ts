@@ -196,7 +196,7 @@ const runScoredJoin = async (
  * final prefix term can legitimately be satisfied by the same row as an earlier
  * exact term — `"javascript java"` against a document holding only `javascript`
  * matches both terms, and a single `CASE` would score it into one slot and drop
- * the document, diverging from FTS5 and from `scoreDocument`.
+ * the document, diverging from FTS5 and from `scoreTokens`.
  *
  * `SUM(occurrences)` is that scorer's term-frequency score computed in SQL, so
  * relevance order agrees with the FTS5 path, down to the `_creationTime DESC`
@@ -225,7 +225,7 @@ const runInvertedSearch = async (
     // One `SUM(CASE …)` per term, for the match test *and* for the score.
     //
     // Summing the occurrence column once per row would count a companion row
-    // once no matter how many terms it satisfies — but `scoreDocument` walks the
+    // once no matter how many terms it satisfies — but `scoreTokens` walks the
     // terms and counts the document's tokens afresh for each, so a token that
     // satisfies two terms contributes twice. `"javascript java"` against a
     // document holding `javascript` twice scores 4 there and would score 2 here.

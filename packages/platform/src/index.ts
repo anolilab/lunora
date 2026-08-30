@@ -41,6 +41,8 @@ export type {
     D1DatabaseLike,
     D1PreparedStatementLike,
     D1SessionLike,
+    HttpCacheLike,
+    HttpCacheQueryOptions,
     KvGetOptions,
     KvListKey,
     KVNamespaceLike,

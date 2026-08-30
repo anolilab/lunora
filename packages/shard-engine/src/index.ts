@@ -37,7 +37,19 @@ export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexF
 export type { AuditEntry } from "./audit-log";
 export type { AppendAuditEntry } from "./audit-log";
 export { appendAuditEntry, AUDIT_LOG_TABLE, ensureAuditTable, readAuditLog } from "./audit-log";
-export type { CdcChange, Clock, CountArgs, CtxDbOptions, IdGenerator, SqlCursor, SqlExec, WriteEvent, WriteHook } from "./ctx-db";
+export type {
+    CdcChange,
+    CdcChangeKey,
+    Clock,
+    CountArgs,
+    CtxDbOptions,
+    IdGenerator,
+    SearchBackfillProgress,
+    SqlCursor,
+    SqlExec,
+    WriteEvent,
+    WriteHook,
+} from "./ctx-db";
 export {
     applyCdcChanges,
     assertValidClientId,
@@ -45,15 +57,35 @@ export {
     backfillRankIndexes,
     backfillSearchIndexes,
     CDC_LOG_TABLE,
+    cdcCanVouchFor,
+    cdcSeqLeavingRows,
+    cdcTouchesTables,
+    cdcTrimmedError,
+    compactCdcDocs,
     createShardCtxDb,
+    cursorBelowRetainedFloor,
+    minCdcReplayableSeq,
     normalizeIdStructurally,
     NotUniqueError,
+    readCdcChangeKeys,
     readCdcChanges,
     runShardMigrations,
     trimCdcChanges,
 } from "./ctx-db";
 export { backfillSearchIndexesForTable } from "./ctx-db-backfill";
-export { appendCdcChange, bumpCdcEpoch, CDC_META_TABLE, migrateCdcLog, migrateCdcMeta, minCdcSeq, readCdcCursor, readCdcEpoch } from "./ctx-db-cdc";
+export {
+    appendCdcChange,
+    bumpCdcEpoch,
+    CDC_LOG_TABLE_SEQ_INDEX,
+    CDC_META_TABLE,
+    migrateCdcLog,
+    migrateCdcMeta,
+    minCdcSeq,
+    readCdcCursor,
+    readCdcEpoch,
+} from "./ctx-db-cdc";
+export type { CdcArchiveScope } from "./ctx-db-cdc-archive";
+export { archiveCdcSegment, readArchivedCdcChanges, readCdcArchivedThrough, writeCdcArchivedThrough } from "./ctx-db-cdc-archive";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
 export { allocateCommitSeq, COMMIT_SEQ_FIELD, COMMIT_SEQ_TABLE, migrateCommitSeq, readCommitSeq } from "./ctx-db-commit-seq";
 export type { CompanionSync, CompanionSyncDeps } from "./ctx-db-companions";
@@ -72,16 +104,19 @@ export { clearMemoryTables, isMemoryTable, memoryTableNames } from "./ctx-db-mem
 export type { RankPageComputation, RankPageDeps } from "./ctx-db-rank-page";
 export { computeRankPage, hydrateDocsById } from "./ctx-db-rank-page";
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState } from "./ctx-db-search-state";
+export type { ShapePokeCursorRow } from "./ctx-db-shape-poke-cursor";
 export {
     deleteShapePokeCursor,
     deleteShapePokeCursorsForConnection,
     migrateShapePokeCursor,
+    minShapePokeCursor,
     readShapePokeCursor,
     SHAPE_POKE_CURSOR_TABLE,
     writeShapePokeCursor,
+    writeShapePokeCursors,
 } from "./ctx-db-shape-poke-cursor";
 export type { ShapeRow } from "./ctx-db-shapes";
-export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
+export { selectShapeMembers, selectShapeRows } from "./ctx-db-shapes";
 export type {
     DataMigrationDocument,
     DataMigrationLike,
@@ -129,6 +164,7 @@ export {
 } from "./durable-stream";
 export type { DurableAttachDecision, DurableStreamAttach, DurableStreamSink } from "./durable-stream-runner";
 export { decideDurableAttach, DurableStreamRunner, MAX_DURABLE_STREAM_BYTES, MAX_DURABLE_STREAM_CHUNKS } from "./durable-stream-runner";
+export { envOptionalPositiveInt, envPositiveInt } from "./env-int";
 export type { ExternalSourceDiffResult } from "./external-source-diff";
 export { diffExternalSource } from "./external-source-diff";
 export { liftSourceId, normalizeSourceDocument, normalizeSourceValue } from "./external-source-lift";
@@ -138,6 +174,7 @@ export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefr
 export { isSoftDeleted, isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "./external-source-pull";
 export type { GeoBoundingBox, GeoPoint } from "./geo";
 export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
+export { default as GlobalPollTick } from "./global-poll-tick";
 export type {
     AdvisoriesResult,
     AdvisorProcedure,
@@ -188,7 +225,9 @@ export type {
     FilterClause,
     FilterOperator,
     FunctionScanAttribution,
+    GlobalPollCounters,
     OrderByClause,
+    ShapeProbeCounters,
     StorageReference,
     StorageReferenceResult,
     SubscriptionConnection,
@@ -209,10 +248,14 @@ export {
 } from "./introspect";
 export {
     createFanoutCounters,
+    createGlobalPollCounters,
+    createShapeProbeCounters,
     DEFAULT_FANOUT_TOPIC_LIMIT,
     findStorageReferences,
     MAX_PAGE_SIZE,
     recordFanoutPass,
+    recordGlobalPollPass,
+    recordShapeProbePass,
     summarizeFanoutTopics,
     summarizeSubscriptions,
 } from "./introspect";
@@ -221,7 +264,17 @@ export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCap
 export { NotFoundError } from "./not-found-error";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
-export { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
+export {
+    applySelect,
+    buildSeekBeforeWhere,
+    buildSeekWhere,
+    CURSOR_PREFIX,
+    decodeCursor,
+    encodeCursor,
+    normalizeOrderKeys,
+    softDeleteScope,
+    tiebreakDirectionFor,
+} from "./query-args";
 // Consumed by `@lunora/do` internals rather than by end users: these were
 // module-private inside `@lunora/do` before the relocation, and are published
 // here only because the import now crosses a package boundary. They are not
@@ -234,7 +287,7 @@ export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from 
 export type { ReactorDispatchResult, ReactorState, ReactorStats } from "./reactor-state";
 export { listReactorStates, migrateReactorState, REACTOR_STATE_TABLE, reactorNeedsRun, readReactorState, writeReactorState } from "./reactor-state";
 export type { ReadFootprint } from "./read-footprint";
-export { createReadFootprint } from "./read-footprint";
+export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "./read-footprint";
 export type { IndexKeyEntry, KeyRange } from "./read-write-set";
 export { buildIndexRange, indexKeysForRow, keysTouchRanges } from "./read-write-set";
 export type { RelationExistsMarker, ResolveRelationPredicatesOptions } from "./relation-predicates";
@@ -336,6 +389,8 @@ export type {
 } from "./schema-types";
 export { serializeSqlValue } from "./serialize-sql";
 export { buildSettings, isDevEnvironment, readDeployInfo } from "./settings";
+export { buildShapeDiff } from "./shape-diff";
+export { createShapeDiffCache, globalShapeReadKey, ShapeDiffCache } from "./shape-diff-cache";
 export type { PokeFrameMeta, ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 export { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns } from "./shape-global-diff";
 export type { ShardRunnerOptions } from "./shard-runner";

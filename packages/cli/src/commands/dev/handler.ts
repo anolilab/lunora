@@ -54,7 +54,15 @@ import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
 import type { DevOptions } from "./index";
 import type { DevFlavor } from "./lifecycle";
-import { detectDevFlavor, reportExistingServer, runLifecycleSubcommand, startBackground, viteDevCommand } from "./lifecycle";
+import {
+    codegenRequested,
+    detectDevFlavor,
+    reportExistingServer,
+    runLifecycleSubcommand,
+    startBackground,
+    viteDevCommand,
+    withViteChildEnv,
+} from "./lifecycle";
 
 /**
  * The dev-only wrangler config the `framework-worker` sidecar runs (`wrangler dev
@@ -144,7 +152,6 @@ interface DevRemotePlan {
 }
 
 interface DevCommandPlan {
-    codegenEnabled: boolean;
     /** Which stack the child runs — see {@link DevFlavor}. */
     flavor: DevFlavor;
 
@@ -165,8 +172,10 @@ interface DevCommandPlan {
      * Always `false` for the vite flavor (the plugin owns its own bind).
      */
     ipv4LoopbackForced: boolean;
+
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
     remote: DevRemotePlan;
+    runsCodegenWatch: boolean;
 
     /**
      * The `wrangler dev` sidecar for the `framework-worker` flavor (SvelteKit /
@@ -353,7 +362,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         }
 
         return {
-            codegenEnabled: false,
+            runsCodegenWatch: false,
             flavor,
             ipv4LoopbackForced: false,
             remote: { bindings: [], cleanup: () => {}, enabled: options.remote === true },
@@ -372,7 +381,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
                 args: exec.args,
                 command: exec.command,
                 cwd,
-                ...(options.remote === true ? { env: { LUNORA_REMOTE: "1" } } : {}),
+                ...withViteChildEnv(options),
                 tag: "vite",
             },
         };
@@ -403,7 +412,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort), ...loopbackArgs, "--var", "WORKER_ENV:development", ...remote.args]);
 
     return {
-        codegenEnabled: options.codegen !== false,
+        runsCodegenWatch: codegenRequested(options),
         flavor,
         frameworkHint,
         ipv4LoopbackForced: loopbackArgs.length > 0,
@@ -528,7 +537,7 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
         logger.info(`  ➜  Studio:  ${studioUrl}`);
     }
 
-    if (plan.codegenEnabled) {
+    if (plan.runsCodegenWatch) {
         logger.info("  ➜  Codegen:    watching lunora/");
     }
 
@@ -921,7 +930,7 @@ const startStudioBestEffort = async (
  * while nothing ran at all.
  */
 const attachedModeNotice = (plan: DevCommandPlan): string => {
-    const attached = [plan.codegenEnabled ? "codegen watch" : undefined, plan.studioEnabled ? "studio" : undefined].filter(
+    const attached = [plan.runsCodegenWatch ? "codegen watch" : undefined, plan.studioEnabled ? "studio" : undefined].filter(
         (name): name is string => name !== undefined,
     );
 
@@ -938,7 +947,7 @@ const attachedModeNotice = (plan: DevCommandPlan): string => {
  * every single-process flavor. A failure is surfaced but non-fatal.
  */
 const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions, cwd: string, logger: Logger, target: string): void => {
-    if (plan.sidecar === undefined) {
+    if (plan.sidecar === undefined || !codegenRequested(options)) {
         return;
     }
 
@@ -960,7 +969,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     const { logger } = options;
     const cwd = plan.wrangler.cwd ?? process.cwd();
     // Resolved for every flavor, not just the ones that run the codegen watcher:
-    // the `vite` and `framework-worker` flavors have `codegenEnabled === false`,
+    // the `vite` and `framework-worker` flavors have `runsCodegenWatch === false`,
     // so gating on it accepted `--target` and then used it nowhere — while
     // `lunora codegen --target <same typo>` exited 1. Resolving here also puts
     // the failure before the dev-vars prompt and the start-record claim, rather
@@ -1024,7 +1033,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             );
         }
 
-        if (plan.codegenEnabled) {
+        if (plan.runsCodegenWatch) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({
                 apiSpec: options.apiSpec,
                 logger,

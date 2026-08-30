@@ -26,6 +26,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
+import { memoizePromise } from "../../../shared/promise-memo";
 import type { McpFetchHandler } from "./http";
 import { serveStateless } from "./http";
 import type { ToolInputSchema, ToolResult } from "./tools";
@@ -253,31 +254,20 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
         return server;
     };
 
-    // The initialised charge middleware for a paid tool, memoised (built once, reused).
-    const gateFor = (name: string, price: X402Price): Promise<ChargeMiddleware> => {
-        let pending = middlewareByTool.get(name);
-
-        if (pending === undefined) {
+    // The initialised charge middleware for a paid tool, memoised (built once,
+    // reused). `memoizePromise` owns the coalescing and the don't-cache-a-failure
+    // eviction, so a transient facilitator outage retries on the next call.
+    const gateFor = (name: string, price: X402Price): Promise<ChargeMiddleware> =>
+        memoizePromise(middlewareByTool, name, async () => {
             // `@lunora/x402` is an OPTIONAL peer, imported only when a paid tool
             // is actually charged. A static import would put its dependency tree
             // (viem, the Solana kit, the x402 packages — tens of megabytes) into
             // every install of every consumer of this package, including the CLI,
             // which never charges anything.
-            const built: Promise<ChargeMiddleware> = loadChargeMiddleware()
-                .then(async (create) => create({ ...config.charge, price }, { resource: name }))
-                .catch((error: unknown): never => {
-                    // Don't cache a failed init — let the next request retry.
-                    middlewareByTool.delete(name);
+            const create = await loadChargeMiddleware();
 
-                    throw error;
-                });
-
-            pending = built;
-            middlewareByTool.set(name, built);
-        }
-
-        return pending;
-    };
+            return create({ ...config.charge, price }, { resource: name });
+        });
 
     const fetchHandler: McpFetchHandler = async (request: Request): Promise<Response> => {
         // Peek the JSON-RPC body from a clone so `request` stays pristine for both

@@ -5,7 +5,7 @@ import { motion, useReducedMotion } from "motion/react";
 import type { FC } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import posthog from "@/lib/posthog";
+import { posthog } from "@/lib/posthog";
 import { cn } from "@/lib/utils";
 
 /**

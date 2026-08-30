@@ -27,7 +27,7 @@ const app = defineApp<Env>()
     // one is its own hand-written entry — without this line the `.shardBy(...)`
     // demo in `lunora/schema.ts` default-denies and every sharded socket 403s.
     // A PRODUCTION sharded app must gate this instead — e.g.
-    // `.extend(() => ({ authorizeShard: (identity, shardKey) => identity?.userId === ownerOf(shardKey) }))`.
+    // `.extend(() => ({ authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === ownerOf(shardKey) }))`.
     .extend(() => ({ allowUnauthenticatedShardAccess: true }))
     .build();
 

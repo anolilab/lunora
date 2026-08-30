@@ -6,7 +6,7 @@ import type { ExecutionContextLike } from "@lunora/runtime";
 
 import { api, internal } from "../../lunora/_generated/api.js";
 import type { AlertDelivery } from "../../lunora/telemetry";
-import { proxyAdminRequest } from "../admin/proxy";
+import { proxyAdminRequest, stripTrailingSlashes } from "../admin/proxy";
 import type { UsageMeter as UsageKind } from "../billing/spend";
 import { createHttpCloudflareApi } from "../cloudflare/api";
 import { createDohResolver, verifyDomain } from "../domains/verify";
@@ -436,6 +436,29 @@ const handleCloudflareBillingRoute = async (request: Request, environment: Route
 };
 
 /**
+ * Bearer-gate a platform-internal `/v1/tenants/*` route with `LUNORA_ADMIN_TOKEN`,
+ * returning the 401 response when it fails and `undefined` when it passes.
+ *
+ * Extracted because the check was copied per route and one copy was missing:
+ * `handlePreviewAuthRoute` documented the gate and never performed it. A shared
+ * helper does not make forgetting impossible, but it removes the reason to
+ * re-type it, which is what let the omission look like the others.
+ *
+ * Fails closed when the token is unset — an unconfigured control plane refuses
+ * these routes rather than opening them.
+ */
+const requireAdminToken = (request: Request, environment: RouterEnv): Response | undefined => {
+    const authorization = request.headers.get("authorization") ?? "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+
+    if (!environment.LUNORA_ADMIN_TOKEN || !constantTimeEqual(token, environment.LUNORA_ADMIN_TOKEN)) {
+        return jsonError(401, "unauthorized");
+    }
+
+    return undefined;
+};
+
+/**
  * `GET /v1/tenants/plan?script=&lt;id>` — resolve a tenant script's plan tier for
  * the dispatcher's per-plan runtime limits (§4). Bearer-gated with
  * `LUNORA_ADMIN_TOKEN` (the dispatcher is a trusted account-level Worker).
@@ -447,11 +470,10 @@ const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): 
         return jsonError(500, "lunora context unavailable");
     }
 
-    const authorization = request.headers.get("authorization") ?? "";
-    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+    const unauthorized = requireAdminToken(request, environment);
 
-    if (!environment.LUNORA_ADMIN_TOKEN || token !== environment.LUNORA_ADMIN_TOKEN) {
-        return jsonError(401, "unauthorized");
+    if (unauthorized) {
+        return unauthorized;
     }
 
     const scriptName = new URL(request.url).searchParams.get("script");
@@ -460,7 +482,57 @@ const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): 
         return jsonError(400, "script is required");
     }
 
-    const result = await context.runQuery<{ plan: string }>(api.deployments.planForScript, { scriptName });
+    const result = await context.runQuery<{ plan: string; protected?: boolean }>(api.deployments.planForScript, { scriptName });
+
+    return Response.json(result);
+};
+
+/** The `POST /v1/tenants/preview-auth` body — which preview, and the password being tried. */
+interface PreviewAuthBody {
+    password?: string;
+    scriptName?: string;
+}
+
+/**
+ * `POST /v1/tenants/preview-auth` — verify a submitted preview password.
+ *
+ * The dispatcher owns the cookie; the control plane owns the secret. This route
+ * is the seam between them: it answers yes or no and nothing else, so the salted
+ * hash never reaches the data plane and a compromised dispatcher isolate has
+ * nothing it could attack offline.
+ *
+ * Admin-token gated like the rest of `/v1/tenants/*` — the caller is the
+ * platform's own dispatcher, never an end user. An end user's password reaches
+ * this only as the body of a request the dispatcher makes on their behalf.
+ */
+const handlePreviewAuthRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    // The check this route's own docblock claimed and did not perform. Without it
+    // this was an unauthenticated password oracle: anyone who could reach the
+    // control plane could POST a script name and a guess and read back yes or no,
+    // for any protected preview on the platform. Same form as every other
+    // `/v1/tenants/*` route, and now shared with them so a fourth cannot forget.
+    const unauthorized = requireAdminToken(request, environment);
+
+    if (unauthorized) {
+        return unauthorized;
+    }
+
+    const body = (await request.json().catch(() => null)) as null | PreviewAuthBody;
+
+    if (!body?.scriptName || !body.password) {
+        return jsonError(400, "scriptName and password are required");
+    }
+
+    const result = await context.runQuery<{ ok: boolean }>(internal.projects.verifyPreviewPassword, {
+        password: body.password,
+        scriptName: body.scriptName,
+    });
 
     return Response.json(result);
 };
@@ -477,11 +549,10 @@ const handleTenantRouteRoute = async (request: Request, environment: RouterEnv):
         return jsonError(500, "lunora context unavailable");
     }
 
-    const authorization = request.headers.get("authorization") ?? "";
-    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+    const unauthorized = requireAdminToken(request, environment);
 
-    if (!environment.LUNORA_ADMIN_TOKEN || token !== environment.LUNORA_ADMIN_TOKEN) {
-        return jsonError(401, "unauthorized");
+    if (unauthorized) {
+        return unauthorized;
     }
 
     const alias = new URL(request.url).searchParams.get("alias");
@@ -490,7 +561,9 @@ const handleTenantRouteRoute = async (request: Request, environment: RouterEnv):
         return jsonError(400, "alias is required");
     }
 
-    const result = await context.runQuery<null | { scriptName: string }>(api.deployments.routeForAlias, { alias });
+    const result = await context.runQuery<null | { candidateScriptName?: string; percent?: number; scriptName: string }>(api.deployments.routeForAlias, {
+        alias,
+    });
 
     return Response.json(result ?? { scriptName: null });
 };
@@ -704,6 +777,91 @@ const bearerToken = (request: Request): string | undefined => {
     }
 
     return header.startsWith("Bearer ") ? header.slice(7) : header;
+};
+
+/** The `POST /v1/eject` body — which deployment to package. */
+interface EjectBody {
+    deploymentId?: string;
+}
+
+/**
+ * `POST /v1/eject` — the no-lock-in exit hatch, over a deploy key (GAPS.md D2).
+ *
+ * Returns the deployment's data snapshot together with the identity the BYO
+ * `wrangler.jsonc` is named after, so `lunora cloud eject` can write a complete,
+ * runnable package from one round trip. The CLI does the scaffolding: the files
+ * land on the user's disk, so the templates belong on the user's side.
+ *
+ * Deploy-key authorized, unlike the studio's session-gated `/v1/admin` proxy —
+ * ejecting is something you do from a terminal, and requiring a browser session
+ * for the exit hatch would undercut the promise it exists to keep. The org comes
+ * from the verified key, never from the body, so a caller cannot name another
+ * org's deployment.
+ *
+ * The snapshot is buffered into the JSON response. That bounds this to exports
+ * that fit in a Worker's memory; a streaming form (or a signed R2 hand-off) is
+ * the upgrade if real snapshots outgrow it.
+ */
+const handleEjectRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const key = bearerToken(request);
+
+    if (key === undefined) {
+        return jsonError(401, "missing Authorization: Bearer <deploy key>");
+    }
+
+    const body = (await request.json().catch(() => null)) as EjectBody | null;
+
+    if (!body?.deploymentId) {
+        return jsonError(400, "deploymentId is required");
+    }
+
+    // The key is authorized INSIDE `ejectTarget`, against the deployment's own org
+    // and project — it rejects a revoked key, a telemetry-only ingest key, and a
+    // key scoped to another project. Resolving the org here first would repeat the
+    // mistake this route shipped with: `orgForDeployKey` exists for the OTLP
+    // endpoints and deliberately accepts ANY live key, which made a full tenant
+    // export reachable from an ingest token.
+    let target: (StoredAdminToken & { organizationId: string; projectSlug: string; scriptName: string; url: string }) | null;
+
+    try {
+        target = await context.runQuery(internal.deployments.ejectTarget, { deployKey: key, deploymentId: body.deploymentId });
+    } catch (error) {
+        return rejected(error, "eject denied");
+    }
+
+    if (!target) {
+        return jsonError(404, "deployment not found");
+    }
+
+    // Decrypt the sealed admin token at the edge, exactly as the studio proxy does.
+    const adminToken = await resolveAdminToken(target, environment.SECRET_ENCRYPTION_KEY);
+
+    if (!adminToken) {
+        return jsonError(409, "deployment has no usable admin token");
+    }
+
+    const exported = await fetch(`${stripTrailingSlashes(target.url)}/_lunora/admin/export`, {
+        headers: { authorization: `Bearer ${adminToken}` },
+    });
+
+    if (!exported.ok) {
+        return jsonError(502, `tenant export failed (${String(exported.status)})`);
+    }
+
+    const snapshot = await exported.text();
+
+    await context.runMutation(internal.audit_log.record, { action: "deployment.eject", organizationId: target.organizationId });
+
+    return Response.json(
+        { projectSlug: target.projectSlug, scriptName: target.scriptName, snapshot, url: target.url },
+        { headers: { "content-type": "application/json" }, status: 200 },
+    );
 };
 
 /**
@@ -1069,11 +1227,10 @@ const handleTenantCustomDomainRoute = async (request: Request, environment: Rout
         return jsonError(500, "lunora context unavailable");
     }
 
-    const authorization = request.headers.get("authorization") ?? "";
-    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+    const unauthorized = requireAdminToken(request, environment);
 
-    if (!environment.LUNORA_ADMIN_TOKEN || token !== environment.LUNORA_ADMIN_TOKEN) {
-        return jsonError(401, "unauthorized");
+    if (unauthorized) {
+        return unauthorized;
     }
 
     const host = new URL(request.url).searchParams.get("host");
@@ -1156,6 +1313,11 @@ export const createDeployRouter = (): HttpRouterLike => {
     const limiter = new RateLimiter({
         config: {
             api: { capacity: 120, kind: "token bucket", period: 60_000, rate: 120 },
+            // Preview-password attempts, keyed on the END USER's IP forwarded by the
+            // dispatcher — not the caller's, which is the dispatcher itself and would
+            // put every user of every protected preview in one bucket. Tight on
+            // purpose: this guards an 8-character password behind a URL people share.
+            previewAuth: { capacity: 10, kind: "token bucket", period: 60_000, rate: 10 },
             // Telemetry ingest is high-volume by nature — give it a generous bucket
             // keyed on the ingest token (per org), so a busy exporter isn't throttled
             // by the shared per-IP `api` limit and one noisy tenant can't starve others.
@@ -1326,6 +1488,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleUsageRoute, method: "POST", path: "/v1/usage", spec: { auth: "deployKey" } },
         // session — dashboard callers; the delegated mutation `assertMember`s.
         { handler: handleAdminRoute, method: "POST", path: "/v1/admin", spec: { auth: "session" } },
+        { handler: handleEjectRoute, method: "POST", path: "/v1/eject", spec: { auth: "deployKey" } },
         { handler: handleDomainAddRoute, method: "POST", path: "/v1/domains", spec: { auth: "session" } },
         { handler: handleDomainVerifyRoute, method: "POST", path: "/v1/domains/verify", spec: { auth: "session" } },
         { handler: handleInviteRoute, method: "POST", path: "/v1/invitations/send", spec: { auth: "session" } },
@@ -1338,6 +1501,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleLogsTailRoute, method: "POST", path: "/v1/logs/tail", spec: { auth: "tailSecret" } },
         // adminToken — the dispatcher/platform trust boundary (LUNORA_ADMIN_TOKEN).
         { handler: handleTenantPlanRoute, method: "GET", path: "/v1/tenants/plan", spec: { auth: "adminToken" } },
+        { handler: handlePreviewAuthRoute, method: "POST", path: "/v1/tenants/preview-auth", spec: { auth: "adminToken" } },
         { handler: handleTenantRouteRoute, method: "GET", path: "/v1/tenants/route", spec: { auth: "adminToken" } },
         { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
         { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },
@@ -1384,7 +1548,22 @@ export const createDeployRouter = (): HttpRouterLike => {
         // starving others. Non-telemetry paths use the shared per-IP `api` limit.
         let verdict;
 
-        if (telemetryPaths.has(pathname)) {
+        if (pathname === "/v1/tenants/preview-auth") {
+            // Keyed on the END USER's address, forwarded by the dispatcher. `ip` here
+            // is the dispatcher itself, so keying on it alone would put every user of
+            // every protected preview into one bucket — no isolation of a grinder, and
+            // one grinder throttles everybody. This is the only thing standing between
+            // an 8-character password and unlimited guesses by anyone holding the URL.
+            //
+            // COMPOSED with the caller's own address rather than trusting the header
+            // alone. Throttling runs before authorization, so the forwarded value is
+            // caller-controlled on every request that reaches the router: alone, it is
+            // both a bypass (rotate the header, get a fresh bucket per guess) and a
+            // DoS (send a victim's address ten times, lock them out of their own
+            // preview). Composed, a spoofer can only ever divide their OWN budget, and
+            // a victim's bucket is unreachable from another connection.
+            verdict = await limiter.limit("previewAuth", { key: `${ip}|${request.headers.get("x-lunora-client-ip") ?? ""}` });
+        } else if (telemetryPaths.has(pathname)) {
             const ipVerdict = await limiter.limit("telemetryIp", { key: ip });
 
             verdict = ipVerdict.ok ? await limiter.limit("telemetry", { key: bearerToken(request) ?? ip }) : ipVerdict;

@@ -1,7 +1,9 @@
 import { LunoraError } from "@lunora/server";
 
-import { isSafeWebhookUrl } from "../src/telemetry/alerts";
+import type { AlertFamily, AlertTarget, DeployAlertSource } from "../src/telemetry/alerts";
+import { alertFamily, fireDeployRules, isSafeWebhookUrl } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
+import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
@@ -16,11 +18,8 @@ import { boundedString, LIMITS } from "./validators";
  * hosted `AlertsSection`; reads are members-only.
  */
 
-/** Every rule target — count-crossing (`issue`/`incident`/`uptime`) + metric-window. */
-type RuleTarget = "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
-
-/** Metric-window targets, which additionally require `windowMinutes` (+ optional comparator/scope). */
-const METRIC_TARGETS = new Set<RuleTarget>(["error_rate", "latency_p95", "llm_cost"]);
+/** Every rule target, from the one place the taxonomy is declared (`src/telemetry/alerts.ts`). */
+type RuleTarget = AlertTarget;
 
 interface AlertRuleRow {
     _id: Id<"alertRules">;
@@ -71,10 +70,21 @@ export const rules = query
  */
 const assertRuleShape = (
     args: { baselineWindows?: number; mode?: "deviation" | "threshold"; threshold: number; windowMinutes?: number },
-    isMetric: boolean,
+    family: AlertFamily,
 ): void => {
+    const isMetric = family === "metric";
+
     if (args.mode === "deviation" && !isMetric) {
         throw new LunoraError("BAD_REQUEST", "deviation mode applies to metric targets only");
+    }
+
+    // An event rule has nothing numeric to validate — it has no quantity at all —
+    // so the caller's `threshold` is ignored rather than rejected, and `createRule`
+    // stores 0 rather than whatever arrived. A dashboard form that always sends the
+    // field does not have to know which targets read it, and no reader inherits a
+    // number nothing checked.
+    if (family === "event") {
+        return;
     }
 
     if (args.mode !== "deviation" && (isMetric ? args.threshold < 0 : args.threshold < 1)) {
@@ -116,6 +126,7 @@ export const createRule = mutation
             v.literal("error_rate"),
             v.literal("latency_p95"),
             v.literal("llm_cost"),
+            v.literal("deploy"),
         ),
         threshold: v.number(),
         // Metric targets only: rolling window length in minutes (required for them).
@@ -124,9 +135,10 @@ export const createRule = mutation
     .mutation(async ({ ctx: context, args }): Promise<Id<"alertRules">> => {
         await assertMember(context, args.organizationId, ["owner", "admin"]);
 
-        const isMetric = METRIC_TARGETS.has(args.target);
+        const family = alertFamily(args.target);
+        const isMetric = family === "metric";
 
-        assertRuleShape(args, isMetric);
+        assertRuleShape(args, family);
 
         // SSRF guard: the edge `fetch`es a `webhook`/`slack` destination when the
         // alert fires, so both must be an https URL to a public host. `pagerduty`'s
@@ -150,7 +162,10 @@ export const createRule = mutation
             name: args.name,
             organizationId: args.organizationId,
             target: args.target,
-            threshold: args.threshold,
+            // An event rule's threshold is never read, and storing an unvalidated
+            // one (a `NaN`, a negative) leaves a number in the row that a future
+            // reader could mistake for meaningful.
+            threshold: family === "event" ? 0 : args.threshold,
             updatedAt: now,
             // Only persist the metric-only fields for metric rules, so a count
             // rule stays exactly as before (no stray comparator/window columns).
@@ -225,3 +240,42 @@ export const markDelivered = mutation
 
         return { delivered: ids.length };
     });
+
+/**
+ * Fire the org's `deploy` rules for one release-path failure — insert an `alerts`
+ * row per enabled rule and return how many were raised.
+ *
+ * A plain exported helper rather than a mutation of its own, because every caller
+ * is already inside a mutation that has just written the failure it is reporting:
+ * `builds.fail`, `deployments.updateStatus`, and the rollout guard. Firing in the
+ * same transaction is what makes "the build is marked failed" and "somebody was
+ * told" one outcome instead of two that can disagree.
+ *
+ * It deliberately does NOT deliver. Delivery needs `fetch`, which a mutation does
+ * not have, so the row is left `firing` and the every-minute drain sweep
+ * (`src/telemetry/alert-drain.ts`) sends it. That indirection is also what makes
+ * an alert survive the edge dying mid-send, which the fire-and-deliver-inline
+ * paths do not.
+ *
+ * `hash` carries the failing thing's id, so a re-fire for the same release is
+ * identifiable in the alert list rather than looking like an unrelated second
+ * failure.
+ */
+export const fireDeployAlerts = async (
+    context: MutationContext,
+    organizationId: Id<"organizations">,
+    hash: string,
+    source: DeployAlertSource,
+): Promise<number> => {
+    const { page } = await context.db.alertRules.findMany({ where: { organizationId, target: "deploy" } });
+    const enabled = (page as unknown as AlertRuleRow[]).filter((rule) => rule.enabled);
+
+    return fireDeployRules(
+        enabled.map((rule) => {
+            return { channel: rule.channel, destination: rule.destination, name: rule.name, ruleId: rule._id };
+        }),
+        source,
+        { hash, now: context.now, organizationId },
+        async (row) => await context.db.insert("alerts", row),
+    );
+};

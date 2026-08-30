@@ -6,8 +6,9 @@
  * What it does, at runtime:
  *
  * 1. Resolves the request identity/roles once (like `rls`), then wraps
- * `ctx.storage`. Each guarded method (`download` / `getMetadata` / `getUrl` →
- * `read`; `store` / `generateUploadUrl` → `write`; `delete` → `delete`) checks
+ * `ctx.storage`. Each guarded method (`download` / `getMetadata` / `head` /
+ * `getUrl` → `read`; `store` / `generateUploadUrl` → `write`; `delete` →
+ * `delete`) checks
  * the key it targets against the rules for that operation before delegating to
  * the underlying storage. `getSignedUrl` is gated by the requested HTTP method:
  * `{ method: "PUT" }` mints an upload URL and is checked as `write`, otherwise
@@ -49,7 +50,17 @@ interface WrappableStorage {
     generateUploadUrl?: (key: string, options?: unknown) => Promise<string>;
     getMetadata?: (key: string) => Promise<unknown>;
     getSignedUrl?: (key: string, options?: unknown) => Promise<string>;
+
+    /**
+     * The one SYNCHRONOUS member of the guarded surface (every sibling returns
+     * a Promise). The wrapping loop must keep returning its value directly —
+     * making the wrapper `async` (or `await`ing the original) would silently
+     * turn `ctx.storage.getUrl` into a Promise for guarded procedures only.
+     * A test pins the sync return; if `getUrl` ever goes async upstream,
+     * delete that pin and this note in the same change.
+     */
     getUrl?: (key: string) => string;
+    head?: (key: string) => Promise<unknown>;
     store?: (key: string, body: unknown, options?: unknown) => Promise<unknown>;
 }
 
@@ -101,6 +112,11 @@ const GUARDED_METHODS: ReadonlyArray<[keyof WrappableStorage, OperationResolver]
     ["getMetadata", "read"],
     ["getSignedUrl", resolveSignedUrlOperation],
     ["getUrl", "read"],
+    // The body-free sibling of `getMetadata` (it is what `getMetadata` projects),
+    // so it reads the same bytes' metadata and must be gated identically —
+    // otherwise it is an ungated route to everything `getMetadata`'s `read` rules
+    // were written to fence off.
+    ["head", "read"],
     ["store", "write"],
 ];
 

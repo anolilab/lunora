@@ -33,12 +33,14 @@
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts"
     },
     "dependencies": {
         "@lunora/errors": "workspace:*"
     },
     "devDependencies": {
+        "@codspeed/vitest-plugin": "catalog:test",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

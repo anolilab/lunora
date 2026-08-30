@@ -32,9 +32,13 @@ const deps = (over: Partial<CloudCommandDeps> = {}): Partial<CloudCommandDeps> =
         readWrangler: () => {
             return { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] }, name: "app", triggers: { crons: ["0 0 * * *"] } };
         },
+        ejectFn: async () => {
+            return { projectSlug: "acme", scriptName: "acme-v3", snapshot: '{"table":"users"}\n', url: "https://acme.lunora.app" };
+        },
         rollbackFn: async () => {
             return { scriptName: "app-v2", version: 2 };
         },
+        writeEjectFile: () => Promise.resolve(),
         ...over,
     };
 };
@@ -185,5 +189,93 @@ describe("lunora cloud", () => {
         await expect(runCloudCommand({ argument: ["rollback"], cwd: "/x", deps: deps(), logger, org: "o", yes: true })).resolves.toMatchObject({ code: 1 });
         await expect(runCloudCommand({ argument: ["rollback", "dep_1"], cwd: "/x", deps: deps(), logger, yes: true })).resolves.toMatchObject({ code: 1 });
         await expect(runCloudCommand({ argument: ["rollback", "dep_1"], cwd: "/x", deps: deps(), logger, org: "o" })).resolves.toMatchObject({ code: 1 });
+    });
+
+    it("eject writes the three files into ./eject", async () => {
+        expect.assertions(4);
+
+        const written: { content: string; directory: string; name: string }[] = [];
+        const { logger } = capturingLogger();
+
+        const result = await runCloudCommand({
+            argument: ["eject", "dep_1"],
+            cwd: "/x",
+            deps: deps({
+                writeEjectFile: (directory, name, content) => {
+                    written.push({ content, directory, name });
+
+                    return Promise.resolve();
+                },
+            }),
+            logger,
+        });
+
+        expect(result.code).toBe(0);
+        expect(written.map((file) => file.name)).toStrictEqual(["export.ndjson", "wrangler.jsonc", "README.md"]);
+        expect(written[0]?.directory).toBe("/x/eject");
+        // The BYO config is named after the deployment's own script, not the cwd.
+        expect(written[1]?.content).toContain('"name": "acme-v3"');
+    });
+
+    it("eject honours --out", async () => {
+        expect.assertions(1);
+
+        const written: string[] = [];
+        const { logger } = capturingLogger();
+
+        await runCloudCommand({
+            argument: ["eject", "dep_1"],
+            cwd: "/x",
+            deps: deps({
+                writeEjectFile: (directory) => {
+                    written.push(directory);
+
+                    return Promise.resolve();
+                },
+            }),
+            ejectOut: "backup",
+            logger,
+        });
+
+        expect(written[0]).toBe("/x/backup");
+    });
+
+    it("eject requires a deployment id", async () => {
+        expect.assertions(2);
+
+        const { errors, logger } = capturingLogger();
+        const result = await runCloudCommand({ argument: ["eject"], cwd: "/x", deps: deps(), logger });
+
+        expect(result.code).toBe(1);
+        expect(errors[0]).toMatch(/requires a deployment id/);
+    });
+
+    /**
+     * A half-written eject directory reads as a backup and is not one, so a failed
+     * export must leave nothing behind rather than the files it managed first.
+     */
+    it("eject writes nothing when the control plane refuses", async () => {
+        expect.assertions(3);
+
+        const written: string[] = [];
+        const { errors, logger } = capturingLogger();
+
+        const result = await runCloudCommand({
+            argument: ["eject", "dep_1"],
+            cwd: "/x",
+            deps: deps({
+                ejectFn: () => Promise.reject(new Error("eject failed (404)")),
+                writeEjectFile: (_directory, name) => {
+                    written.push(name);
+
+                    return Promise.resolve();
+                },
+            }),
+            logger,
+        });
+
+        expect(result.code).toBe(1);
+        expect(written).toStrictEqual([]);
+        expect(errors[0]).toMatch(/eject failed \(404\)/);
     });
 });

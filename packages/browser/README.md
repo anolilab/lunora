@@ -109,7 +109,7 @@ const browser = createBrowser({ binding: env.BROWSER, launch, allowPrivateTarget
 
 Only set `allowPrivateTargets` when every URL is trusted — it re-opens the SSRF surface. The guard does not resolve DNS, so a public hostname that resolves to a private address (DNS rebinding) is out of scope; keep caller-supplied URLs trusted regardless.
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/browser)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/browser)**.
 
 ## Related
 

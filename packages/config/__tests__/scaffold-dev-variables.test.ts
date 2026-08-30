@@ -219,6 +219,37 @@ describe("planDevVariablesAugment", () => {
         expect(plan.additions).toStrictEqual([]);
     });
 
+    it("re-escapes a newline the example spelled as an escape, keeping the entry one line", () => {
+        expect.assertions(1);
+
+        // dotenv EXPANDS `\n` inside a double-quoted value, so copying the parsed
+        // value through would have written a physical line break into `.dev.vars`
+        // — and every rewrite here is line-oriented, so the tail would be orphaned.
+        const plan = planDevVariablesAugment({
+            exampleContent: `${String.raw`BANNER="one\ntwo"`}\n`,
+            existingContent: "",
+            randomHex: fixedHex,
+        });
+
+        expect(plan.additions).toStrictEqual([String.raw`BANNER="one\ntwo"`]);
+    });
+
+    it("empties a value carrying a quote, which a double-quoted entry cannot spell", () => {
+        expect.assertions(2);
+
+        // dotenv does not unescape `\"`, so there is no form that round-trips a
+        // literal quote; emitting it would close the entry early and silently
+        // truncate. An empty placeholder is the honest answer.
+        const plan = planDevVariablesAugment({
+            exampleContent: 'GREETING="say \\"hi\\""\n',
+            existingContent: "",
+            randomHex: fixedHex,
+        });
+
+        expect(plan.missingKeys).toStrictEqual(["GREETING"]);
+        expect(plan.additions).toStrictEqual(['GREETING=""']);
+    });
+
     it("renders additions for missing keys: secrets generated, plain values copied", () => {
         expect.assertions(3);
 

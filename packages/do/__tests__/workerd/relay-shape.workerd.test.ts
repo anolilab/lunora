@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -51,8 +51,30 @@ const openRelaySocket = async (stub: DurableObjectStub, room: string): Promise<O
     return { received, ws };
 };
 
-const sendRpc = (stub: DurableObjectStub, functionPath: string, args: Record<string, unknown>): Promise<Response> =>
-    stub.fetch("https://owner.internal/rpc", { body: JSON.stringify({ args, functionPath }), headers: { "content-type": "application/json" }, method: "POST" });
+const sendRpc = (stub: DurableObjectStub, functionPath: string, args: Record<string, unknown>, binding?: string): Promise<Response> =>
+    stub.fetch("https://owner.internal/rpc", {
+        body: JSON.stringify({ args, functionPath }),
+        // The runtime stamps `x-lunora-shard-binding` on EVERY forwarded request,
+        // and the owner only keeps it in memory — so a cold-woken owner relearns it
+        // from the request that woke it. The eviction tests below therefore send it;
+        // the warm tests inherit it from the relay's seed hop and don't need to.
+        headers: binding === undefined ? { "content-type": "application/json" } : { "content-type": "application/json", "x-lunora-shard-binding": binding },
+        method: "POST",
+    });
+
+/**
+ * Fire an RPC and drain its body before returning.
+ *
+ * `evictDurableObject` waits for in-flight requests to drain, and an unread
+ * `Response` body counts as in-flight forever — so anything sent to a DO that is
+ * about to be evicted has to be drained first. Same footgun as
+ * `eviction.workerd.test.ts`; see its harness note.
+ */
+const sendDrained = async (stub: DurableObjectStub, functionPath: string, args: Record<string, unknown>, binding?: string): Promise<void> => {
+    const response = await sendRpc(stub, functionPath, args, binding);
+
+    await response.text();
+};
 
 const frameTypes = (socket: OpenSocket): string[] => socket.received.map((raw) => (JSON.parse(raw) as { type: string }).type);
 
@@ -236,5 +258,79 @@ describe("relay shape seed (workerd e2e)", () => {
 
         expect(keys).toContain("p2"); // the in-scope write reached the proxied socket
         expect(keys).not.toContain("p1"); // the out-of-scope (other author) write did not
+    });
+});
+
+/**
+ * The owner's relayed-shape registry across an owner EVICTION.
+ *
+ * This is the transition the registry table was built for, and the one a
+ * `RelayHost` double cannot produce: an owner in relay mode holds no sockets of
+ * its own, so nothing keeps it warm between writes and it is freely evictable.
+ * While the registry lived in in-memory `Map`s, that eviction silently emptied
+ * it — the multicast then returned at its empty-registry guard and NO relayed
+ * subscriber heard anything again, for any write, until it happened to
+ * reconnect. Nothing logged and nothing retried, so nothing noticed.
+ *
+ * Both tests drain every owner response before evicting; see `sendDrained`.
+ */
+describe("relay shape registry across owner eviction (workerd e2e)", () => {
+    it("still multicasts to a relayed cohort after the owner is evicted from memory", async () => {
+        expect.assertions(2);
+
+        const owner = env.SYNC.get(env.SYNC.idFromName("relay-evict-room"));
+        const relay = env.SYNC.get(env.SYNC.idFromName("relay-evict-room::relay::0"));
+
+        await sendDrained(owner, "messages:send", { _id: "m1", channelId: "c1", text: "ev1" }, "SYNC");
+
+        // Registers the cohort entry on the OWNER: the relay forwards the
+        // subscribe, the owner computes the seed and records the shape.
+        const socket = await openRelaySocket(relay, "relay-evict-room-relay-0");
+
+        await subscribeToC1(socket);
+
+        expect(keysOf(socket)).toStrictEqual(["m1"]);
+
+        // Tear the owner down. The relay and its socket are untouched — the
+        // subscriber is still connected and still expecting deltas.
+        await evictDurableObject(owner);
+
+        // This write cold-wakes the owner. Its registry now exists only in
+        // `__lunora_relay_shapes`, so the multicast happens at all only if the
+        // wake rehydrated it from there.
+        await sendDrained(owner, "messages:send", { _id: "m2", channelId: "c1", text: "ev2" }, "SYNC");
+        await waitFor(() => keysOf(socket).includes("m2"));
+
+        // Delivered exactly once, from the rehydrated frontier — a registry that
+        // came back at cursor 0 would have re-sent m1 alongside it.
+        expect(keysOf(socket)).toStrictEqual(["m1", "m2"]);
+    });
+
+    it("keeps a real op-log retention floor after the owner is evicted", async () => {
+        expect.assertions(2);
+
+        const owner = env.SYNC.get(env.SYNC.idFromName("relay-floor-room"));
+        const relay = env.SYNC.get(env.SYNC.idFromName("relay-floor-room::relay::0"));
+
+        await sendDrained(owner, "messages:send", { _id: "m1", channelId: "c1", text: "fl1" }, "SYNC");
+
+        const socket = await openRelaySocket(relay, "relay-floor-room-relay-0");
+
+        await subscribeToC1(socket);
+
+        const warmFloor = await owner.relayShapeFloor();
+
+        expect(warmFloor).toBeGreaterThan(0);
+
+        await evictDurableObject(owner);
+
+        // `ShardDO.retentionFloor` folds this into the changelog sweep's cutoff.
+        // `undefined` here means the sweep sees a fully relayed shard as having no
+        // subscribers at all, and is free to delete the exact range the next
+        // relayed diff has to read — and a just-evicted owner is precisely when
+        // that used to happen.
+        await expect(owner.relayShapeFloor()).resolves.toBe(warmFloor);
+
+        socket.ws.close(1000, "done");
     });
 });

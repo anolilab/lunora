@@ -243,7 +243,8 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * `filterFields` (at most 16) lists the columns `.eq()` may narrow by inside
      * the search. `language` selects the text analysis (accent folding always,
      * plus that language's stopwords). `staged: true` skips the migration-time
-     * backfill on a large existing table. `strategy: "native"` uses the engine's
+     * backfill on a large existing table — pre-existing rows stay unsearchable
+     * until `__lunora_admin__:backfillSearch` is run against the deployment. `strategy: "native"` uses the engine's
      * own full-text index where it has one (Postgres) — faster on large corpora,
      * at the cost of the engine ranking rather than the shared scorer.
      */

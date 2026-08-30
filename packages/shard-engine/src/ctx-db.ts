@@ -32,7 +32,7 @@
 import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import {
-    analyzedSearchText,
+    analyzedSearchTokens,
     assertSearchWithinCap,
     createSearchAnalyzer,
     createSearchBuilder,
@@ -42,7 +42,7 @@ import {
     MAX_SEARCH_SCAN,
     planSearchPage,
     resolveSearchScan,
-    scoreDocument,
+    scoreTokens,
     searchPageScan,
     searchTermRange,
     tokenizeSearch,
@@ -64,7 +64,7 @@ import { isMemoryTable } from "./ctx-db-memory";
 import type { RankPageDeps } from "./ctx-db-rank-page";
 import { computeRankPage } from "./ctx-db-rank-page";
 import { SCAN_DEP } from "./dependency-tracker";
-import { runDrizzle } from "./do-exec";
+import { runDrizzle, runSql } from "./do-exec";
 import {
     AGG_COUNT,
     AGG_KEY,
@@ -73,7 +73,9 @@ import {
     encodeDocJson,
     geoTableName,
     isFtsAvailable,
+    jsonPath,
     jsonPathSql,
+    qualifiedJsonPath,
     qualifiedJsonPathSql,
     quoteIdentifier,
     rowToDocument,
@@ -81,10 +83,19 @@ import {
     tableColumns,
     tryRowToDocument,
 } from "./do-sql";
-import { sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
+import { renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
-import { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
+import {
+    applySelect,
+    buildSeekBeforeWhere,
+    buildSeekWhere,
+    decodeCursor,
+    encodeCursor,
+    normalizeOrderKeys,
+    softDeleteScope,
+    tiebreakDirectionFor,
+} from "./query-args";
 import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
@@ -93,6 +104,7 @@ import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import { applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
+import { CHANGES_PROBE_SQL, deleteRowSql, insertRowSql, patchRowSql, replaceRowSql, rowProbeParams, rowProbeSql } from "./row-statements";
 import type {
     BroadcastDelta,
     DatabaseWriterLike,
@@ -122,6 +134,8 @@ import { ConflictError } from "./transaction";
 import type { TransactionHeadroomTracker } from "./transaction-headroom";
 import type { SchedulerLike, TriggerContextLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
 import { runTriggers } from "./triggers";
+import type { TextFragment } from "./where-fragments";
+import { identifierText, joinText, rawText, textFragments } from "./where-fragments";
 import type { WhereSqlStrategy } from "./where-sql";
 import { compileWhereSql } from "./where-sql";
 import type { WhereInput } from "./where-types";
@@ -649,12 +663,12 @@ const searchViaScan = (
             continue;
         }
 
-        // The *analyzed* text, not the raw field: every other layout stores and
+        // The *analyzed* tokens, not the raw field: every other layout stores and
         // scores a token stream capped at `MAX_INDEXED_TOKENS`, so scoring the
         // raw value here would make this path find matches past the cap that
         // the others cannot — a divergence in the one direction no parity gate
         // covers, since this path only runs where FTS5 is absent.
-        const score = scoreDocument(analyzedSearchText(record, search.definition), tokens, analyzer);
+        const score = scoreTokens(analyzedSearchTokens(record, search.definition), tokens);
 
         if (score > 0) {
             scored.push({
@@ -915,6 +929,33 @@ const runGeoTerminalScored = (
     return filtered ? takeMatching(entries, stage.inMemoryFilters, limit, (entry) => entry.document) : entries;
 };
 
+/**
+ * The row-page SELECT, assembled as text plus its bound values.
+ *
+ * Two things are happening here, both measured. The clause-at-a-time form this
+ * replaced — `query = sql\`${query} WHERE …\`` and again for ORDER BY and LIMIT —
+ * nested the statement one level deeper per clause, and drizzle's renderer walks
+ * that tree recursively with a type check at every node; flattening it rendered
+ * 62% faster. Emitting text rather than a drizzle `SQL` at all takes the rest:
+ * building and rendering this statement through drizzle measured 5.35us against
+ * 0.10us to assemble it directly, on a read that costs ~10.8us in total.
+ *
+ * The four branches are deliberate. Splicing optional clauses as fragments into
+ * one template recovers a quarter of the flattening; assembling them with
+ * `sql.join` is 19% SLOWER than the nesting it replaces. Both were measured
+ * before this shape was chosen.
+ *
+ * `__tests__/select-page-sql.test.ts` pins every branch against the drizzle
+ * composition it replaced, text and parameters alike.
+ * @returns the statement text and its bound values, in placeholder order
+ */
+const selectPageSql = (tableName: string, where: TextFragment | undefined, order: string, limit: number | undefined): TextFragment => {
+    const head = `SELECT id, _creationTime, ${quoteIdentifier(DOC_COLUMN)} FROM ${quoteIdentifier(tableName)}`;
+    const tail = `ORDER BY ${order}${limit === undefined ? "" : ` LIMIT ${String(limit)}`}`;
+
+    return where === undefined ? rawText(`${head} ${tail}`) : joinText(`${head} WHERE `, where, ` ${tail}`);
+};
+
 /** Bare-doc twin of {@link runGeoTerminalScored} — same candidate set, filter handling, and limit, with the scores mapped away. */
 const runGeoTerminal = (
     sql: SqlExec,
@@ -1098,12 +1139,75 @@ const makeRelationExistsSqlStrategy = (onRead: ReadHook): WhereSqlStrategy => {
     return strategy;
 };
 
-/** Drizzle ORDER BY for the DO: each key as `<jsonPath> ASC|DESC`, with an `id ASC` tiebreak unless an id field is already ordered (keeps paging deterministic). The drizzle twin of `compileOrderBy`. */
+/**
+ * The flat `where` strategy in TEXT form — the twin of {@link doWhereSqlStrategy}.
+ *
+ * Reads compile through this instead of the drizzle one: same traversal, same
+ * SQL, assembled directly. See `where-fragments.ts` for why.
+ */
+const doWhereTextStrategy: WhereSqlStrategy<TextFragment> = {
+    fieldRef: (field) => rawText(jsonPath(field)),
+    serialize: serializeSqlValue,
+};
+
+/**
+ * The relation-EXISTS strategy in TEXT form — the twin of
+ * {@link makeRelationExistsSqlStrategy}, including its per-query alias counter
+ * and scope stack, which are what make nested markers correlate to the right
+ * parent.
+ */
+const makeRelationExistsTextStrategy = (onRead: ReadHook): WhereSqlStrategy<TextFragment> => {
+    let aliasCounter = 0;
+    const scopeStack: string[] = [];
+
+    const strategy: WhereSqlStrategy<TextFragment> = {
+        fieldRef: (field) => rawText(jsonPath(field)),
+        relationExists: (request) => {
+            const { childWhere, negated, parentTable, relation } = request as RelationExistsMarker;
+            const alias = `__rel_${String(aliasCounter)}`;
+            const parentRef = scopeStack.at(-1) ?? parentTable;
+
+            aliasCounter += 1;
+            onRead(relation.table, SCAN_DEP);
+
+            const parentColumn = relation.kind === "one" ? relation.field : relation.references;
+            const childColumn = relation.kind === "one" ? relation.references : relation.field;
+            const correlation = rawText(`${qualifiedJsonPath(alias, childColumn)} = ${qualifiedJsonPath(parentRef, parentColumn)}`);
+
+            scopeStack.push(alias);
+
+            const childSql = compileWhereSql(childWhere, strategy, textFragments);
+
+            scopeStack.pop();
+
+            const condition = childSql === undefined ? correlation : joinText(correlation, " AND ", childSql);
+            const body = joinText("EXISTS (SELECT 1 FROM ", identifierText(relation.table), " AS ", identifierText(alias), " WHERE ", condition, ")");
+
+            return negated ? joinText("NOT ", body) : body;
+        },
+        serialize: serializeSqlValue,
+    };
+
+    return strategy;
+};
+
+/** The text twin of {@link compileOrderBySql}: an ordering binds no values, so it is a bare string. */
+const compileOrderByText = (keys: OrderKey[]): string => {
+    const parts = keys.map((key) => `${jsonPath(key.field)} ${key.direction === "desc" ? "DESC" : "ASC"}`);
+
+    if (!keys.some((key) => key.field === "_id" || key.field === "id")) {
+        parts.push(`${jsonPath("id")} ${tiebreakDirectionFor(keys) === "desc" ? "DESC" : "ASC"}`);
+    }
+
+    return parts.join(", ");
+};
+
+/** Drizzle ORDER BY for the DO: each key as `<jsonPath> ASC|DESC`, with an `id` tiebreak in the last key's direction (see `tiebreakDirectionFor`) unless an id field is already ordered. The drizzle twin of `compileOrderBy`. */
 const compileOrderBySql = (keys: OrderKey[]): SQL => {
     const parts = keys.map((key) => dsql`${jsonPathSql(key.field)} ${dsql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
 
     if (!keys.some((key) => key.field === "_id" || key.field === "id")) {
-        parts.push(dsql`${jsonPathSql("id")} ASC`);
+        parts.push(dsql`${jsonPathSql("id")} ${dsql.raw(tiebreakDirectionFor(keys) === "desc" ? "DESC" : "ASC")}`);
     }
 
     return dsql.join(parts, dsql`, `);
@@ -1193,7 +1297,7 @@ const paginateStage = (
     tableName: string,
     stage: QueryStage,
     options: PaginationOptions,
-    scopeCondition?: SQL,
+    scopeCondition?: TextFragment,
     /** Reports the PRE-filter row count — an unbounded filtered page scans past what it returns. */
     onScanned: (count: number) => void = () => undefined,
 ): QueryPage => {
@@ -1202,28 +1306,19 @@ const paginateStage = (
     // A cursor is always a non-empty base64 string, so truthiness distinguishes
     // a bounded page (endCursor set) from the legacy open-ended one (null/omitted).
     const bounded = typeof options.endCursor === "string";
-    const pageWhere = compileWhereSql(paginateWhere(stage, orderKeys, options.cursor, options.endCursor), doWhereSqlStrategy);
+    const pageWhere = compileWhereSql(paginateWhere(stage, orderKeys, options.cursor, options.endCursor), doWhereTextStrategy, textFragments);
     // Soft delete: AND the scope onto the keyset predicate so a paginated fluent
     // read hides soft-deleted rows too.
-    const whereCondition = scopeCondition && pageWhere ? dsql`${pageWhere} AND ${scopeCondition}` : (scopeCondition ?? pageWhere);
-
-    let query = dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`;
-
-    if (whereCondition) {
-        query = dsql`${query} WHERE ${whereCondition}`;
-    }
-
-    query = dsql`${query} ORDER BY ${compileOrderBySql(orderKeys)}`;
+    const whereCondition = scopeCondition && pageWhere ? joinText(pageWhere, " AND ", scopeCondition) : (scopeCondition ?? pageWhere);
 
     const filtered = stage.inMemoryFilters.length > 0;
 
     // A bounded page returns its entire range, so never cap the SQL scan. An
     // unbounded, unfiltered page over-fetches one row to learn `isDone`.
-    if (!filtered && !bounded) {
-        query = dsql`${query} LIMIT ${dsql.raw(String(numberItems + 1))}`;
-    }
-
-    const rows = runDrizzle(sql, query).toArray();
+    // Same SELECT shape as `findMany`, so it shares the builder — see
+    // `selectPageSql` for why this is assembled rather than rendered.
+    const statement = selectPageSql(tableName, whereCondition, compileOrderByText(orderKeys), filtered || bounded ? undefined : numberItems + 1);
+    const rows = runSql(sql, statement.text, ...statement.params).toArray();
 
     onScanned(rows.length);
 
@@ -1325,6 +1420,10 @@ const buildReader = (
     // the opt-in to see them. Compiled once and ANDed into every fetch/search/page.
     const scopeWhere = softDeleteScope(tableDefinition.softDeleteMode, undefined);
     const scopeCondition = scopeWhere ? compileWhereSql(scopeWhere, doWhereSqlStrategy) : undefined;
+    // The paginated read assembles text; the search and fetch terminals still
+    // build drizzle. Compiled once per query builder either way, so keeping both
+    // forms costs a compile per `.query()` rather than per read.
+    const scopeConditionText = scopeWhere ? compileWhereSql(scopeWhere, doWhereTextStrategy, textFragments) : undefined;
 
     const stage: QueryStage = {
         indexFields: [],
@@ -1400,11 +1499,29 @@ const buildReader = (
     const buildOrderClause = (): SQL => {
         const orderFields = stage.indexFields.length > 0 ? stage.indexFields : ["_creationTime"];
         const orderDirection = stage.order === "desc" ? "DESC" : "ASC";
+        const parts = orderFields.map((field) => dsql`${jsonPathSql(field)} ${dsql.raw(orderDirection)}`);
 
-        return dsql.join(
-            orderFields.map((field) => dsql`${jsonPathSql(field)} ${dsql.raw(orderDirection)}`),
-            dsql`, `,
-        );
+        // Fall through to creation order, then id, for rows sharing every indexed
+        // value — the same total order `compileOrderBySql` gives the object-form
+        // read, and the same order the declared index is physically built in
+        // (`<fields>, _creationTime, id`), so it stays an index walk.
+        //
+        // Without it the order of tied rows is whatever the engine returns, which
+        // is not stable: two messages written in the same millisecond and read
+        // back with `.withIndex("by_channel").order("asc")` came out in the order
+        // of their RANDOM server-minted ids. It looked deterministic only while
+        // the index could not satisfy the ORDER BY and SQLite sorted into a temp
+        // B-tree whose input order it happened to preserve.
+        if (!orderFields.includes("_creationTime")) {
+            parts.push(dsql`${jsonPathSql("_creationTime")} ${dsql.raw(orderDirection)}`);
+        }
+
+        if (!orderFields.some((field) => field === "_id" || field === "id")) {
+            // Same direction as everything above it — see `tiebreakDirectionFor`.
+            parts.push(dsql`${jsonPathSql("id")} ${dsql.raw(orderDirection)}`);
+        }
+
+        return dsql.join(parts, dsql`, `);
     };
 
     /**
@@ -1600,7 +1717,7 @@ const buildReader = (
                 throw new LunoraError("INTERNAL", "pagination is not supported on geo queries; use .take(n) or .collect()");
             }
 
-            const page = paginateStage(sql, tableName, stage, options, scopeCondition, (count) => {
+            const page = paginateStage(sql, tableName, stage, options, scopeConditionText, (count) => {
                 scanned = count;
             });
 
@@ -1795,9 +1912,19 @@ const UNIQUE_VIOLATION_RE = /unique constraint failed/i;
 const isUniqueViolation = (error: unknown): boolean => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message);
 
 /** Run a write, remapping a UNIQUE-index breach to a {@link ConflictError} (code `CONFLICT`, 409). */
-const runWrite = (sql: SqlExec, table: string, query: SQL): void => {
+
+/**
+ * Run a single-row write, mapping a UNIQUE violation onto {@link ConflictError}.
+ *
+ * Takes rendered text plus its bound values rather than a drizzle `SQL`, because
+ * every statement that reaches it has text that is a constant for its table —
+ * see `row-statements.ts` for the shapes and for why they are no longer built
+ * per write. The one caller with a genuinely variable statement (the batch
+ * INSERT's `VALUES` list) renders it itself and passes the result through.
+ */
+const runWrite = (sql: SqlExec, table: string, text: string, params: ReadonlyArray<unknown>): void => {
     try {
-        runDrizzle(sql, query);
+        runSql(sql, text, ...params);
     } catch (error) {
         if (isUniqueViolation(error)) {
             throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
@@ -1815,10 +1942,10 @@ const runWrite = (sql: SqlExec, table: string, query: SQL): void => {
  * the snapshot. `changes()` reports the row count of the most recent
  * INSERT/UPDATE/DELETE, available in both workerd SQLite and `node:sqlite`.
  */
-const runGuardedWrite = (sql: SqlExec, table: string, query: SQL): void => {
-    runWrite(sql, table, query);
+const runGuardedWrite = (sql: SqlExec, table: string, text: string, params: ReadonlyArray<unknown>): void => {
+    runWrite(sql, table, text, params);
 
-    const changedRow = runDrizzle<{ changed: number }>(sql, dsql`SELECT changes() AS changed`).one();
+    const changedRow = runSql<{ changed: number }>(sql, CHANGES_PROBE_SQL).one();
 
     if (changedRow.changed === 0) {
         throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`, "occ");
@@ -2558,13 +2685,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const nonGlobalTables = nonGlobalTableNames(expectedTable);
 
         for (let start = 0; start < nonGlobalTables.length; start += MAX_PROBE_BRANCHES) {
-            const branches = nonGlobalTables.slice(start, start + MAX_PROBE_BRANCHES).map(
-                (tableName) =>
-                    // The table-name discriminator stays an inline literal (escaped) rather than a bound param so it reads as `'<table>' AS __t__`.
-                    dsql`SELECT ${dsql.raw(`'${tableName.replaceAll("'", "''")}'`)} AS __t__, id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id = ${id}`,
-            );
-
-            const [firstRow] = runDrizzle(sql, dsql`${unionAll(branches)} LIMIT 1`).toArray();
+            const chunk = nonGlobalTables.slice(start, start + MAX_PROBE_BRANCHES);
+            // Text depends only on the chunk's table list, so it is rendered once
+            // per distinct list rather than per read — this probe runs on every
+            // get/patch/replace/delete. See `row-statements.ts`.
+            const [firstRow] = runSql(sql, rowProbeSql(chunk), ...rowProbeParams(id, chunk)).toArray();
 
             if (!firstRow) {
                 continue;
@@ -2959,11 +3084,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // tombstone and would keep serving a row its source considers gone.
                 const merged: Record<string, unknown> = { ...existing, ...commitSeqFields(tableName), [softField]: clock(), _id: id };
 
-                runGuardedWrite(
-                    sql,
-                    tableName,
-                    dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${encodeDocJson(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
-                );
+                runGuardedWrite(sql, tableName, patchRowSql(tableName), [encodeDocJson(merged), id, existingJson]);
 
                 // Search stays maintained (the marker filter hides it on read), but
                 // the rank companion and external stores (Vectorize) have NO read-time
@@ -3006,11 +3127,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // rows and raises ConflictError rather than clobbering that write —
             // and keeps `existing` (used for the aggregate/rank -prev steps) in
             // sync with what was actually on disk.
-            runGuardedWrite(
-                sql,
-                tableName,
-                dsql`DELETE FROM ${dsql.identifier(tableName)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
-            );
+            runGuardedWrite(sql, tableName, deleteRowSql(tableName), [id, existingJson]);
 
             syncSearch(tableName, id, undefined);
             syncGeo(tableName, id, undefined);
@@ -3129,7 +3246,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async findFirst(tableName, args = {}) {
-            const result = await writer.findMany(tableName, { ...args, limit: 1 });
+            // `page[0]` is the whole answer, so the envelope's cursor is built and
+            // thrown away — see `omitContinueCursor`.
+            const result = await writer.findMany(tableName, { ...args, limit: 1, omitContinueCursor: true });
 
             // eslint-disable-next-line unicorn/no-null -- findFirst is `Promise<Record | null>`: null is the documented "no match" result
             return result.page[0] ?? null;
@@ -3214,26 +3333,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // fast path (or with no relation predicates) the flat strategy is
             // equivalent and cheaper, so only build the per-query strategy when
             // the push-down is enabled.
-            const whereStrategy = relationExistsPushDownEnabled ? makeRelationExistsSqlStrategy(onRead) : doWhereSqlStrategy;
-            const whereCondition = compileWhereSql(predicate, whereStrategy);
-
-            let query = dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`;
-
-            if (whereCondition) {
-                query = dsql`${query} WHERE ${whereCondition}`;
-            }
-
-            query = dsql`${query} ORDER BY ${compileOrderBySql(orderKeys)}`;
+            const whereStrategy = relationExistsPushDownEnabled ? makeRelationExistsTextStrategy(onRead) : doWhereTextStrategy;
+            const whereCondition = compileWhereSql(predicate, whereStrategy, textFragments);
 
             const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
-
-            if (limit !== undefined) {
-                // Over-fetch by one row to learn whether another page exists
-                // without issuing a second query.
-                query = dsql`${query} LIMIT ${dsql.raw(String(limit + 1))}`;
-            }
-
-            const rows = runDrizzle(sql, query).toArray();
+            // Over-fetch by one row to learn whether another page exists without
+            // issuing a second query.
+            const statement = selectPageSql(tableName, whereCondition, compileOrderByText(orderKeys), limit === undefined ? undefined : limit + 1);
+            const rows = runSql(sql, statement.text, ...statement.params).toArray();
 
             // A full scan stamps ONE `*scan` dep instead of a dep per row, so the
             // read meter — which counts concrete-id stamps — would never see the
@@ -3299,7 +3406,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // The cursor is encoded from `last` (the full, unprojected row) above,
                 // so `applySelect` only trims the returned payload — paging is intact.
                 // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
-                continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
+                continueCursor: hasMore && last && args.omitContinueCursor !== true ? encodeCursor(last, orderKeys) : null,
                 isDone: !hasMore,
                 page: applySelect(page, args.select, args.with),
             };
@@ -3586,11 +3693,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);
 
-            runWrite(
-                sql,
-                tableName,
-                dsql`INSERT INTO ${dsql.identifier(tableName)} (id, _creationTime, ${dsql.identifier(DOC_COLUMN)}) VALUES (${id}, ${creationTime}, ${encodeDocJson(documentWithMeta)})`,
-            );
+            runWrite(sql, tableName, insertRowSql(tableName), [id, creationTime, encodeDocJson(documentWithMeta)]);
 
             syncCompanionsForInsert(tableName, id, documentWithMeta);
 
@@ -3713,11 +3816,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     dsql`, `,
                 );
 
-                runWrite(
-                    sql,
-                    tableName,
+                // The only write whose text genuinely varies: the `VALUES` list grows
+                // with the chunk, so it is built and rendered per batch rather than
+                // cached per table like the single-row statements.
+                const batch = renderSql(
+                    "sqlite",
                     dsql`INSERT INTO ${dsql.identifier(tableName)} (id, _creationTime, ${dsql.identifier(DOC_COLUMN)}) VALUES ${valuesSql}`,
                 );
+
+                runWrite(sql, tableName, batch.sql, batch.params);
             }
 
             // Companions + notifications ARE still maintained per row (shared with
@@ -3863,11 +3970,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // and raise ConflictError instead of silently clobbering it (and
             // keeps `existing` — used for the aggregate/rank -prev steps — in
             // sync with what is actually on disk).
-            runGuardedWrite(
-                sql,
-                tableName,
-                dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${encodeDocJson(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
-            );
+            runGuardedWrite(sql, tableName, patchRowSql(tableName), [encodeDocJson(merged), id, existingJson]);
 
             syncSearch(tableName, id, merged, existing);
             syncGeo(tableName, id, merged);
@@ -4283,11 +4386,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // trigger `await` raises ConflictError instead of being silently
             // clobbered (and keeps `previous` — used for the aggregate/rank
             // -prev steps — in sync with disk).
-            runGuardedWrite(
-                sql,
-                tableName,
-                dsql`UPDATE ${dsql.identifier(tableName)} SET _creationTime = ${creationTime}, ${dsql.identifier(DOC_COLUMN)} = ${encodeDocJson(replaced)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
-            );
+            runGuardedWrite(sql, tableName, replaceRowSql(tableName), [creationTime, encodeDocJson(replaced), id, existingJson]);
 
             syncSearch(tableName, id, replaced, previous);
             syncGeo(tableName, id, replaced);
@@ -4380,9 +4479,27 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 };
 
 export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
+export type { SearchBackfillProgress } from "./ctx-db-backfill";
 export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes } from "./ctx-db-backfill";
-export type { CdcChange } from "./ctx-db-cdc";
-export { applyCdcChanges, bumpCdcEpoch, CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readCdcEpoch, trimCdcChanges } from "./ctx-db-cdc";
+export type { CdcChange, CdcChangeKey } from "./ctx-db-cdc";
+export {
+    applyCdcChanges,
+    bumpCdcEpoch,
+    CDC_LOG_TABLE,
+    cdcCanVouchFor,
+    cdcSeqLeavingRows,
+    cdcTouchesTables,
+    cdcTrimmedError,
+    compactCdcDocs,
+    cursorBelowRetainedFloor,
+    minCdcReplayableSeq,
+    minCdcSeq,
+    readCdcChangeKeys,
+    readCdcChanges,
+    readCdcCursor,
+    readCdcEpoch,
+    trimCdcChanges,
+} from "./ctx-db-cdc";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
 export {
     deleteGlobalShapeSnapshot,
@@ -4396,7 +4513,7 @@ export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } fr
 export { runShardMigrations } from "./ctx-db-migrations";
 export { SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { ShapeRow } from "./ctx-db-shapes";
-export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
+export { selectShapeMembers, selectShapeRows } from "./ctx-db-shapes";
 export {
     type BroadcastDelta,
     type ColumnMetaLike,

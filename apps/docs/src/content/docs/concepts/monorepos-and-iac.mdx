@@ -20,6 +20,11 @@ manages while Lunora keeps the parts only it can do.
 | `--no-studio`  | the embedded Studio server                             |
 | `--no-codegen` | the codegen watcher                                    |
 
+On the Vite flavors the codegen watcher lives in `@lunora/vite`, inside the
+framework dev server — a separate process. `--no-codegen` reaches it as
+`LUNORA_CODEGEN=0`, which you can set yourself when you run that dev script
+directly instead of through `lunora dev`.
+
 The common monorepo shape is **attached mode**, where your runner starts the
 worker and Lunora keeps regenerating types and serving Studio:
 

@@ -65,13 +65,14 @@ export {
     parseSearchCursor,
     planSearchPage,
     resolveSearchScan,
-    scoreDocument,
+    scoreTokens,
     searchPageScan,
     searchTermRange,
     tokenizeSearch,
 } from "./query";
 export {
     analyzedSearchText,
+    analyzedSearchTokens,
     countSearchTokens,
     FTS_COUNT_COLUMN,
     FTS_ID_COLUMN,

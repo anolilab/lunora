@@ -9,6 +9,18 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/server`
 
+### `ACTION_CACHE_DEFAULT_TTL_MS` (const)
+
+```ts
+const DEFAULT_ACTION_CACHE_TTL_MS: number;
+```
+
+### `ACTION_CACHE_TABLE` (const)
+
+```ts
+const ACTION_CACHE_TABLE: "actionCache_entries";
+```
+
 ### `ActionBuilder` (interface)
 
 ```ts
@@ -31,6 +43,53 @@ interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined>
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => ActionBuilder<Context, Args, Output>;
+}
+```
+
+### `ActionCacheComponent` (type)
+
+```ts
+type ActionCacheComponent = {
+    functions: ActionCacheFunctions;
+    invalidate: (context: ActionCacheContext, name: string, args: unknown) => Promise<void>;
+    invalidateAll: (context: ActionCacheContext, name: string) => Promise<{
+        complete: boolean;
+        deleted: number;
+    }>;
+    wrap: <T>(context: ActionCacheContext, name: string, args: unknown, compute: () => Promise<T>) => Promise<T>;
+} & Component<{
+    [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
+```
+
+### `ActionCacheContext` (interface)
+
+```ts
+interface ActionCacheContext {
+    db: ActionCacheDatabase;
+}
+```
+
+### `ActionCacheDatabase` (interface)
+
+```ts
+interface ActionCacheDatabase {
+    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
+    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    query: (table: string) => ActionCacheQuery;
+}
+```
+
+### `ActionCacheFunctions` (interface)
+
+```ts
+interface ActionCacheFunctions {
+    purgeExpired: RegisteredMutation<{
+        limit: ReturnType<typeof v.optional>;
+    }, {
+        deleted: number;
+    }>;
 }
 ```
 
@@ -172,6 +231,18 @@ const DEFAULT_LIMIT = 25;
 const DEFAULT_MAX_LIMIT = 100;
 ```
 
+### `DOCUMENT_HISTORY_REDACTED_FIELDS` (const)
+
+```ts
+const DEFAULT_REDACTED_FIELDS: ReadonlyArray<string>;
+```
+
+### `DOCUMENT_HISTORY_TABLE` (const)
+
+```ts
+const DOCUMENT_HISTORY_TABLE: "documentHistory_versions";
+```
+
 ### `DailySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -251,11 +322,42 @@ interface DatabaseWriter extends DatabaseReader {
 }
 ```
 
+### `DeferredDeleteFlushResult` (interface)
+
+```ts
+interface DeferredDeleteFlushResult {
+    attempted: number;
+    failures: {
+        error: unknown;
+        key: string;
+    }[];
+}
+```
+
+### `DefineActionCacheOptions` (interface)
+
+```ts
+interface DefineActionCacheOptions {
+    maxValueBytes?: number;
+    ttlMs?: number;
+}
+```
+
 ### `DefineComponentOptions` (interface)
 
 ```ts
 interface DefineComponentOptions<TExtension extends Record<string, TableDefinition>, TContextIn, TContextOut, F extends ComponentFunctions> extends DefinePluginOptions<TExtension, TContextIn, TContextOut> {
     functions?: F;
+}
+```
+
+### `DefineDocumentHistoryOptions` (interface)
+
+```ts
+interface DefineDocumentHistoryOptions {
+    maxSnapshotBytes?: number;
+    redact?: ReadonlyArray<string>;
+    retentionMs?: number;
 }
 ```
 
@@ -304,6 +406,7 @@ interface DefinePolicyInput<Context = unknown> {
 ```ts
 interface DefinePresenceOptions {
     disconnectGraceMs?: number;
+    maxSessions?: number;
     ttlMs?: number;
 }
 ```
@@ -316,6 +419,48 @@ interface DefineStorageRuleInput<Context = unknown> {
     on: StorageOperation;
     prefix?: string;
     when: (context: StorageRuleContext<Context>) => StorageRuleDecision;
+}
+```
+
+### `DocumentHistoryComponent` (type)
+
+```ts
+type DocumentHistoryComponent = {
+    functions: DocumentHistoryFunctions;
+    record: (t: TriggerBuilder) => Record<string, TriggerDefinition>;
+} & Component<{
+    [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
+```
+
+### `DocumentHistoryEntry` (interface)
+
+```ts
+interface DocumentHistoryEntry {
+    doc?: Record<string, unknown>;
+    documentId: string;
+    op: "delete" | "insert" | "update";
+    previous?: Record<string, unknown>;
+    recordedAt: number;
+    tableName: string;
+    truncated?: boolean;
+}
+```
+
+### `DocumentHistoryFunctions` (interface)
+
+```ts
+interface DocumentHistoryFunctions {
+    listForDocument: RegisteredQuery<{
+        before: ReturnType<typeof v.optional>;
+        documentId: ReturnType<typeof v.string>;
+        limit: ReturnType<typeof v.optional>;
+    }, DocumentHistoryEntry[]>;
+    vacuum: RegisteredMutation<{
+        limit: ReturnType<typeof v.optional>;
+    }, {
+        deleted: number;
+    }>;
 }
 ```
 
@@ -1197,10 +1342,19 @@ interface MutationCtx {
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly span: LunoraWideEvent;
-    readonly storage: ReadOnlyStorage;
+    readonly storage: MutationStorage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
     readonly workflows: Workflows;
+}
+```
+
+### `MutationStorage` (interface)
+
+```ts
+interface MutationStorage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
+    bucket: (name: Buckets) => MutationStorage<Buckets>;
+    deleteAfterCommit: (key: string) => void;
 }
 ```
 
@@ -1524,6 +1678,7 @@ interface ReadOnlyStorage<Buckets extends string = string> {
         expiresInSeconds?: number;
     }) => Promise<string>;
     getUrl: (key: string) => string;
+    head: (key: string) => Promise<StorageObjectHead | null>;
 }
 ```
 
@@ -1910,6 +2065,24 @@ interface StorageMetadata {
     sha256?: string;
     size: number;
     uploaded?: number;
+}
+```
+
+### `StorageObjectHead` (interface)
+
+```ts
+interface StorageObjectHead {
+    customMetadata?: Record<string, string>;
+    etag?: string;
+    httpEtag?: string;
+    httpMetadata?: {
+        contentType?: string;
+    };
+    key: string;
+    sha256?: string;
+    sha256Base64?: string;
+    size: number;
+    uploaded?: Date;
 }
 ```
 
@@ -2561,6 +2734,14 @@ interface Workflows {
 }
 ```
 
+### `actionCacheExtension` (const)
+
+```ts
+const actionCacheExtension: SchemaExtension<{
+    [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
+```
+
 ### `allowAll` (const)
 
 ```ts
@@ -2603,6 +2784,12 @@ const buildMaskRegistry: (functions: Iterable<unknown>) => MaskRegistry;
 const buildRlsReadRegistry: (functions: Iterable<unknown>) => RlsReadRegistry;
 ```
 
+### `cacheKeyFor` (const)
+
+```ts
+const cacheKeyFor: (name: string, argumentsKey: string) => Promise<string>;
+```
+
 ### `clampLimit` (const)
 
 ```ts
@@ -2637,6 +2824,12 @@ const createSecrets: (env: Record<string, unknown>) => Secrets;
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
+### `defineActionCache` (const)
+
+```ts
+const defineActionCache: (options?: DefineActionCacheOptions) => ActionCacheComponent;
+```
+
 ### `defineAggregateIndex` (const)
 
 ```ts
@@ -2647,6 +2840,12 @@ const defineAggregateIndex: (name: string, options: AggregateIndexOptions) => Ag
 
 ```ts
 const defineComponent: <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn, F extends ComponentFunctions = ComponentFunctions>(key: string, options: DefineComponentOptions<TExtension, TContextIn, TContextOut, F>) => Component<TExtension, TContextIn, TContextOut, F>;
+```
+
+### `defineDocumentHistory` (const)
+
+```ts
+const defineDocumentHistory: (options?: DefineDocumentHistoryOptions) => DocumentHistoryComponent;
 ```
 
 ### `defineEnv` (const)
@@ -2774,6 +2973,20 @@ const defineVectorIndex: (options: VectorIndexOptions) => VectorIndexDefinition;
 
 ```ts
 const deny: () => WhereInput;
+```
+
+### `documentHistoryExtension` (const)
+
+```ts
+const documentHistoryExtension: SchemaExtension<{
+    [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable>;
+}>;
+```
+
+### `flushDeferredDeletes` (const)
+
+```ts
+const flushDeferredDeletes: (context: unknown) => Promise<DeferredDeleteFlushResult>;
 ```
 
 ### `httpAction` (const)
@@ -2911,6 +3124,12 @@ const toWhereInput: (decision: WhereInput | boolean | undefined) => WhereInput;
 ### `v` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `withDeferredDeletes` (const)
+
+```ts
+const withDeferredDeletes: (storage: unknown) => unknown;
+```
 
 ## `@lunora/server/data-model`
 
@@ -4249,170 +4468,51 @@ const expectPolicy: <Context = unknown>(policies: ReadonlyArray<Policy<Context>>
 
 ### `ActionCtx` (interface)
 
-```ts
-interface ActionCtx {
-    readonly auth: AuthState;
-    readonly cache?: CachePurge;
-    readonly db: DatabaseWriter;
-    readonly env?: Record<string, unknown>;
-    readonly fetch: typeof globalThis.fetch;
-    readonly ip?: string;
-    readonly log: LunoraLogger;
-    readonly meta?: Readonly<Record<string, unknown>>;
-    readonly metrics: LunoraMetrics;
-    readonly now: number;
-    readonly runAction: RunAction;
-    readonly runMutation: RunMutation;
-    readonly runQuery: RunQuery;
-    readonly scheduler: Scheduler;
-    readonly secrets: Secrets;
-    readonly span: LunoraWideEvent;
-    readonly storage: Storage;
-    readonly trace: LunoraTracer;
-    readonly vectors: VectorSearch;
-    readonly workflows: Workflows;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `AggregateIndexDefinition` (interface)
 
-```ts
-interface AggregateIndexDefinition {
-    by?: ReadonlyArray<string>;
-    field?: string;
-    name: string;
-    on: string;
-    op: AggregateOp;
-    where?: Record<string, unknown>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `AggregateOp` (type)
 
-```ts
-type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `AnyApi` (type)
 
-```ts
-type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValidator, unknown, FunctionKind>>>;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `ArgsValidator` (type)
 
-```ts
-type ArgsValidator = ValidatorMap;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `AuthState` (interface)
 
-```ts
-interface AuthState {
-    getIdentity: () => Promise<Record<string, unknown> | null>;
-    readonly userId: string | null;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `CachePurge` (interface)
 
-```ts
-interface CachePurge {
-    purge: (options: {
-        purgeEverything?: boolean;
-        tags?: string[];
-    }) => Promise<unknown>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `DatabaseReader` (interface)
 
-```ts
-interface DatabaseReader {
-    asId: <T extends string>(tableName: T, id: string) => Id<T>;
-    get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
-    normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
-    query: (tableName: string) => TableReader;
-    readonly system: SystemDatabaseReader;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `DatabaseWriter` (interface)
 
-```ts
-interface DatabaseWriter extends DatabaseReader {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
-    deleteAll: (tableName: string, options?: {
-        chunkSize?: number;
-        hard?: boolean;
-    }) => Promise<{
-        deleted: number;
-    }>;
-    deleteMany: <T extends string>(ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{
-        deleted: number;
-    }>;
-    deleteWhere: (tableName: string, where: Record<string, unknown>, options?: BatchWriteOptions) => Promise<{
-        deleted: number;
-    }>;
-    insert: <T extends string>(tableName: T, document: Record<string, unknown>, options?: {
-        clientId?: string;
-    }) => Promise<Id<T>>;
-    insertMany: {
-        <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options: BatchWriteOptions & {
-            skipDuplicates: true;
-        }): Promise<(Id<T> | null)[]>;
-        <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options?: InsertManyOptions): Promise<Id<T>[]>;
-    };
-    insertManyUnsafe: <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options?: BatchWriteOptions & {
-        allowExplicitId?: boolean;
-    }) => Promise<Id<T>[]>;
-    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
-    patchMany: <T extends string>(patches: ReadonlyArray<{
-        id: Id<T>;
-        patch: Record<string, unknown>;
-    }>, options?: BatchWriteOptions) => Promise<{
-        patched: number;
-    }>;
-    patchWhere: (tableName: string, args: {
-        patch: Record<string, unknown>;
-        where: Record<string, unknown>;
-    }, options?: BatchWriteOptions) => Promise<{
-        patched: number;
-    }>;
-    replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
-    wipeShard: (options?: {
-        chunkSize?: number;
-        exclude?: ReadonlyArray<string>;
-        tables?: ReadonlyArray<string>;
-    }) => Promise<{
-        deleted: number;
-        tables: Record<string, number>;
-    }>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `DurableObjectJurisdiction` (type)
 
-```ts
-type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `DurableStreamOptions` (interface)
 
-```ts
-interface DurableStreamOptions {
-    readonly ttlMs?: number;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `ExposeConfig` (interface)
 
-```ts
-interface ExposeConfig {
-    readonly cache?: RestCacheConfig;
-    readonly rest?: boolean;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `ExternalSourceCursor` (interface)
 
@@ -4457,52 +4557,27 @@ type ExternalSourceRefresh = "manual" | {
 
 ### `FunctionKind` (type)
 
-```ts
-type FunctionKind = "action" | "mutation" | "query" | "stream";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `FunctionVisibility` (type)
 
-```ts
-type FunctionVisibility = "internal" | "public";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `GeoBoundingBox` (interface)
 
-```ts
-interface GeoBoundingBox {
-    ne: GeoPointInput;
-    sw: GeoPointInput;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `GeoFilterBuilder` (interface)
 
-```ts
-interface GeoFilterBuilder {
-    near: (point: GeoPointInput, radiusMeters: number) => GeoFilterBuilder;
-    within: (box: GeoBoundingBox) => GeoFilterBuilder;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `GeoIndexDefinition` (interface)
 
-```ts
-interface GeoIndexDefinition {
-    field: string;
-    name: string;
-    precision?: number;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `GeoPointInput` (interface)
 
-```ts
-interface GeoPointInput {
-    lat: number;
-    lng: number;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `GlobalBackend` (type)
 
@@ -4512,363 +4587,143 @@ type GlobalBackend = "d1" | "hyperdrive";
 
 ### `IndexDefinition` (interface)
 
-```ts
-interface IndexDefinition {
-    fields: ReadonlyArray<string>;
-    name: string;
-    unique?: boolean;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `IndexRangeBuilder` (interface)
 
-```ts
-interface IndexRangeBuilder {
-    eq: (field: string, value: unknown) => IndexRangeBuilder;
-    gt: (field: string, value: unknown) => IndexRangeBuilder;
-    gte: (field: string, value: unknown) => IndexRangeBuilder;
-    lt: (field: string, value: unknown) => IndexRangeBuilder;
-    lte: (field: string, value: unknown) => IndexRangeBuilder;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `InferArgs` (type)
 
-```ts
-type InferArgs<A extends ArgsValidator> = InferValidatorMap<A>;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `LifecycleEvent` (interface)
 
-```ts
-interface LifecycleEvent {
-    readonly connectionId: string;
-    readonly context?: Record<string, unknown>;
-    readonly shardKey: string;
-    readonly userId: string | null;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `LifecycleEventKind` (type)
 
-```ts
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `LogFields` (type)
 
-```ts
-type LogFields = Record<string, unknown>;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `LunoraLogMethod` (interface)
 
-```ts
-interface LunoraLogMethod {
-    (message: string, fields?: LogFields): void;
-    (...args: unknown[]): void;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `LunoraLogger` (interface)
 
-```ts
-interface LunoraLogger {
-    readonly debug: LunoraLogMethod;
-    readonly error: LunoraLogMethod;
-    readonly event: (name: string, fields?: LogFields) => void;
-    readonly fatal: LunoraLogMethod;
-    readonly info: LunoraLogMethod;
-    readonly log: LunoraLogMethod;
-    readonly trace: LunoraLogMethod;
-    readonly warn: LunoraLogMethod;
-    readonly with: (fields: LogFields) => LunoraLogger;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `LunoraMetrics` (interface)
 
-```ts
-interface LunoraMetrics {
-    readonly count: (name: string, value?: number, attributes?: LogFields) => void;
-    readonly gauge: (name: string, value: number, attributes?: LogFields) => void;
-    readonly record: (name: string, value: number, attributes?: LogFields) => void;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `LunoraTracer` (type)
 
-```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `LunoraWideEvent` (type)
 
-```ts
-type LunoraWideEvent = SpanHandle;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `MutationCtx` (interface)
 
-```ts
-interface MutationCtx {
-    readonly auth: AuthState;
-    readonly db: DatabaseWriter;
-    readonly env?: Record<string, unknown>;
-    readonly ip?: string;
-    readonly log: LunoraLogger;
-    readonly meta?: Readonly<Record<string, unknown>>;
-    readonly metrics: LunoraMetrics;
-    readonly now: number;
-    readonly runMutation: RunMutation;
-    readonly runQuery: RunQuery;
-    readonly scheduler: Scheduler;
-    readonly secrets: Secrets;
-    readonly span: LunoraWideEvent;
-    readonly storage: ReadOnlyStorage;
-    readonly trace: LunoraTracer;
-    readonly vectors: VectorSearch;
-    readonly workflows: Workflows;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `MutationStorage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `OnDeleteAction` (type)
 
-```ts
-type OnDeleteAction = "cascade" | "restrict" | "set null";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `PaginationOptions` (interface)
 
-```ts
-interface PaginationOptions {
-    cursor?: null | string;
-    endCursor?: null | string;
-    numItems: number;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `PaginationResult` (interface)
 
-```ts
-interface PaginationResult<T = Record<string, unknown>> {
-    continueCursor: null | string;
-    isDone: boolean;
-    page: T[];
-    splitCursor?: null | string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `QueryCtx` (interface)
 
-```ts
-interface QueryCtx {
-    readonly auth: AuthState;
-    readonly db: DatabaseReader;
-    readonly env?: Record<string, unknown>;
-    readonly ip?: string;
-    readonly log: LunoraLogger;
-    readonly meta?: Readonly<Record<string, unknown>>;
-    readonly metrics: LunoraMetrics;
-    readonly now: number;
-    readonly runQuery: RunQuery;
-    readonly secrets: Secrets;
-    readonly span: LunoraWideEvent;
-    readonly storage: ReadOnlyStorage;
-    readonly trace: LunoraTracer;
-    readonly vectors: VectorSearchReader;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RankIndexDefinition` (interface)
 
-```ts
-interface RankIndexDefinition {
-    name: string;
-    on: string;
-    partitionBy?: ReadonlyArray<string>;
-    sortBy: ReadonlyArray<RankSortKey>;
-    where?: Record<string, unknown>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RankSortKey` (interface)
 
-```ts
-interface RankSortKey {
-    direction: "asc" | "desc";
-    field: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `ReadOnlyStorage` (interface)
 
-```ts
-interface ReadOnlyStorage<Buckets extends string = string> {
-    bucket: (name: Buckets) => ReadOnlyStorage<Buckets>;
-    readonly bucketName: string;
-    download: (key: string) => Promise<ReadableStream | null>;
-    getMetadata: (key: string) => Promise<StorageMetadata | null>;
-    getSignedUrl: (key: string, options?: {
-        expiresInSeconds?: number;
-    }) => Promise<string>;
-    getUrl: (key: string) => string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RegisteredAction` (type)
 
-```ts
-type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RegisteredFunction` (interface)
 
-```ts
-interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
-    readonly args: A;
-    readonly expose?: ExposeConfig;
-    readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
-    readonly kind: Kind;
-    readonly lifecycle?: LifecycleEventKind;
-    readonly meta?: Readonly<Record<string, unknown>>;
-    readonly visibility?: FunctionVisibility;
-    readonly x402?: X402ProcedureConfig;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RegisteredLifecycleHook` (type)
 
-```ts
-type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & {
-    readonly lifecycle: LifecycleEventKind;
-};
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RegisteredMutation` (type)
 
-```ts
-type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RegisteredQuery` (type)
 
-```ts
-type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RegisteredStream` (interface)
 
-```ts
-interface RegisteredStream<A extends ArgsValidator, R> {
-    readonly args: A;
-    readonly durable?: DurableStreamOptions;
-    readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
-    readonly kind: "stream";
-    readonly meta?: Readonly<Record<string, unknown>>;
-    readonly visibility?: FunctionVisibility;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RelationDefinition` (interface)
 
-```ts
-interface RelationDefinition {
-    field: string;
-    kind: "many" | "one";
-    onDelete?: OnDeleteAction;
-    references: string;
-    table: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RestCacheConfig` (type)
 
-```ts
-type RestCacheConfig = RestCachePolicy;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RunQueryOptions` (interface)
 
-```ts
-interface RunQueryOptions {
-    untracked?: boolean;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `ScheduledFunctionDoc` (interface)
 
-```ts
-interface ScheduledFunctionDoc {
-    args: Record<string, unknown>;
-    attempts?: number;
-    enqueuedAt: number;
-    functionPath: string;
-    id: string;
-    scheduledFor: number;
-    shardKey?: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `ScheduledJob` (interface)
 
-```ts
-interface ScheduledJob {
-    args: Record<string, unknown>;
-    attempts?: number;
-    enqueuedAt: number;
-    functionPath: string;
-    id: string;
-    scheduledFor: number;
-    shardKey?: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `Scheduler` (interface)
 
-```ts
-interface Scheduler {
-    cancel: (id: string) => Promise<{
-        cancelled: boolean;
-    }>;
-    get: (id: string) => Promise<ScheduledJob | null>;
-    list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `Schema` (interface)
 
-```ts
-interface Schema<T extends Record<string, TableDefinition> = Record<string, TableDefinition>> {
-    readonly rlsMode?: "required";
-    readonly tables: T;
-    readonly vectorIndexes: Record<string, VectorIndexDefinition>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SearchFilterBuilder` (interface)
 
-```ts
-interface SearchFilterBuilder {
-    eq: (field: string, value: unknown) => SearchFilterBuilder;
-    search: (field: string, query: string) => SearchFilterBuilder;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SearchIndexDefinition` (interface)
 
-```ts
-interface SearchIndexDefinition {
-    field: string;
-    filterFields?: ReadonlyArray<string>;
-    language?: SearchLanguage;
-    name: string;
-    staged?: boolean;
-    strategy?: SearchStrategy;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SearchLanguage` (type)
 
@@ -4900,597 +4755,223 @@ interface SecretsStoreSecretLike {
 
 ### `ShardInitEvent` (interface)
 
-```ts
-interface ShardInitEvent {
-    readonly shardKey: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `ShardMode` (type)
 
-```ts
-type ShardMode = {
-    backend?: GlobalBackend;
-    kind: "global";
-} | {
-    field: string;
-    kind: "shardBy";
-} | {
-    kind: "root";
-};
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SpanEvaluation` (interface)
 
-```ts
-interface SpanEvaluation {
-    label?: string;
-    name: string;
-    score: number;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SpanHandle` (interface)
 
-```ts
-interface SpanHandle {
-    addEvent: (name: string, attributes?: LogFields) => void;
-    addLink: (link: SpanLink) => void;
-    recordEvaluation: (evaluation: SpanEvaluation) => void;
-    recordException: (error: unknown) => void;
-    setAttribute: (key: string, value: LogFields[string]) => void;
-    setAttributes: (fields: LogFields) => void;
-    spanContext: () => {
-        spanId: string;
-        traceId: string;
-    };
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SpanKind` (type)
 
-```ts
-type SpanKind = "client" | "consumer" | "internal" | "producer" | "server";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SpanLink` (interface)
 
-```ts
-interface SpanLink {
-    attributes?: LogFields;
-    spanId: string;
-    traceId: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SpanOptions` (interface)
 
-```ts
-interface SpanOptions {
-    attributes?: LogFields;
-    kind?: SpanKind;
-    links?: SpanLink[];
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `Storage` (interface)
 
-```ts
-interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
-    bucket: (name: Buckets) => Storage<Buckets>;
-    delete: (key: string) => Promise<void>;
-    generateUploadUrl: (key: string, options?: {
-        contentType?: string;
-        expiresInSeconds?: number;
-    }) => Promise<string>;
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: {
-        allowedContentTypes?: ReadonlyArray<string>;
-        contentType?: string;
-        customMetadata?: Record<string, string>;
-        maxSize?: number;
-    }) => Promise<{
-        etag: string;
-        key: string;
-    }>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `StorageMetadata` (interface)
 
-```ts
-interface StorageMetadata {
-    contentType?: string;
-    customMetadata?: Record<string, string>;
-    key: string;
-    sha256?: string;
-    size: number;
-    uploaded?: number;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageObjectHead` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SystemDatabaseReader` (interface)
 
-```ts
-interface SystemDatabaseReader {
-    get: <T extends SystemTableName>(table: T, id: string) => Promise<SystemDoc<T> | null>;
-    query: <T extends SystemTableName>(table: T) => SystemQuery<T>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SystemDoc` (type)
 
-```ts
-type SystemDoc<T extends SystemTableName> = SystemDocMap[T];
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SystemQuery` (interface)
 
-```ts
-interface SystemQuery<T extends SystemTableName> {
-    collect: () => Promise<SystemDoc<T>[]>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SystemTableName` (type)
 
-```ts
-type SystemTableName = "_scheduled_functions" | "_storage";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TableDefinition` (interface)
 
-```ts
-interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
-    aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
-    commitOrderedMode?: boolean;
-    externalSource?: ExternalSourceDefinition;
-    geoIndexes: ReadonlyArray<GeoIndexDefinition>;
-    indexes: ReadonlyArray<IndexDefinition>;
-    isExternallyManaged?: boolean;
-    isPublic?: boolean;
-    memoryMode?: boolean;
-    ownerField?: string;
-    rankIndexes: ReadonlyArray<RankIndexDefinition>;
-    relationMap: Record<string, RelationDefinition>;
-    searchIndexes: ReadonlyArray<SearchIndexDefinition>;
-    shape: Shape;
-    shardMode: ShardMode;
-    softDeleteMode?: {
-        field: string;
-    };
-    triggerMap: Record<string, TriggerDefinition>;
-    ttlPolicy?: TtlDefinition;
-    vectorIndexes: ReadonlyArray<TableVectorIndex>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TableReader` (interface)
 
-```ts
-interface TableReader<Row = Record<string, unknown>, Indexes extends string = string, SearchIndexes extends string = string, GeoIndexes extends string = string> {
-    [Symbol.asyncIterator]: () => AsyncIterator<Row>;
-    collect: () => Promise<Row[]>;
-    filter: (predicate: (document: Row) => boolean) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
-    first: () => Promise<Row | null>;
-    order: (direction: "asc" | "desc") => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
-    paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
-    take: (limit: number) => Promise<Row[]>;
-    unique: () => Promise<Row | null>;
-    withGeoIndex(indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
-    withIndex(indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
-    withSearchIndex(indexName: SearchIndexes, search: (q: SearchFilterBuilder) => SearchFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TableVectorIndex` (interface)
 
-```ts
-interface TableVectorIndex {
-    dimensions: number;
-    embed: VectorEmbedder;
-    field: string;
-    metadata?: ReadonlyArray<string>;
-    metric: VectorMetric;
-    name: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerAggregateOptions` (interface)
 
-```ts
-interface TriggerAggregateOptions {
-    baseWhere?: Record<string, unknown>;
-    field?: string;
-    op: AggregateOp;
-    restrictsCounts?: boolean;
-    where?: Record<string, unknown>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerBuilder` (interface)
 
-```ts
-interface TriggerBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> {
-    afterDelete: (handler: TriggerHandler<TriggerDeleteEvent<Shape>>) => TriggerDefinition;
-    afterInsert: (handler: TriggerHandler<TriggerInsertEvent<Shape>>) => TriggerDefinition;
-    afterUpdate: (handler: TriggerHandler<TriggerUpdateEvent<Shape>>) => TriggerDefinition;
-    beforeDelete: (handler: TriggerHandler<TriggerDeleteEvent<Shape>>) => TriggerDefinition;
-    beforeInsert: (handler: TriggerHandler<TriggerInsertEvent<Shape>>) => TriggerDefinition;
-    beforeUpdate: (handler: TriggerHandler<TriggerUpdateEvent<Shape>>) => TriggerDefinition;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerCtx` (interface)
 
-```ts
-interface TriggerCtx {
-    readonly db: TriggerDatabase;
-    readonly scheduler: Scheduler;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerDatabase` (interface)
 
-```ts
-interface TriggerDatabase {
-    aggregate: (tableName: string, options: TriggerAggregateOptions) => Promise<null | number>;
-    count: (tableName: string, where?: Record<string, unknown>) => Promise<number>;
-    delete: (id: string) => Promise<void>;
-    findFirst: (tableName: string, args?: TriggerQueryArgs) => Promise<Record<string, unknown> | null>;
-    findMany: (tableName: string, args?: TriggerQueryArgs) => Promise<TriggerQueryPage>;
-    get: (id: string) => Promise<Record<string, unknown> | null>;
-    groupBy: (tableName: string, options: TriggerGroupByOptions) => Promise<ReadonlyArray<TriggerGroupByEntry>>;
-    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
-    rank: (tableName: string, indexName: string, options: TriggerRankOptions) => Promise<null | TriggerRankResult>;
-    rankPage: (tableName: string, indexName: string, options?: TriggerRankPageOptions) => Promise<TriggerQueryPage>;
-    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerDefinition` (interface)
 
-```ts
-interface TriggerDefinition {
-    readonly handler: TriggerHandler<TriggerEvent>;
-    readonly op: TriggerOp;
-    readonly timing: TriggerTiming;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerDeleteEvent` (interface)
 
-```ts
-interface TriggerDeleteEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
-    readonly id: string;
-    readonly op: "delete";
-    readonly previous: TriggerRow<Shape>;
-    readonly table: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerEvent` (type)
 
-```ts
-type TriggerEvent = TriggerDeleteEvent | TriggerInsertEvent | TriggerUpdateEvent;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerGroupByEntry` (interface)
 
-```ts
-interface TriggerGroupByEntry {
-    key: Record<string, unknown>;
-    value: null | number;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerGroupByOptions` (interface)
 
-```ts
-interface TriggerGroupByOptions {
-    agg?: {
-        field?: string;
-        op: AggregateOp;
-    };
-    baseWhere?: Record<string, unknown>;
-    by: ReadonlyArray<string>;
-    restrictsCounts?: boolean;
-    where?: Record<string, unknown>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerHandler` (type)
 
-```ts
-type TriggerHandler<Event> = (context: TriggerCtx, event: Event) => Promise<void> | void;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerInsertEvent` (interface)
 
-```ts
-interface TriggerInsertEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
-    readonly doc: TriggerRow<Shape>;
-    readonly id: string;
-    readonly op: "insert";
-    readonly table: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerOp` (type)
 
-```ts
-type TriggerOp = "delete" | "insert" | "update";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerQueryArgs` (interface)
 
-```ts
-interface TriggerQueryArgs {
-    cursor?: null | string;
-    limit?: number;
-    orderBy?: ReadonlyArray<unknown>;
-    where?: Record<string, unknown>;
-    with?: Record<string, unknown>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerQueryPage` (interface)
 
-```ts
-interface TriggerQueryPage {
-    continueCursor: null | string;
-    isDone: boolean;
-    page: Record<string, unknown>[];
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerRankOptions` (interface)
 
-```ts
-interface TriggerRankOptions {
-    baseWhere?: Record<string, unknown>;
-    restrictsCounts?: boolean;
-    row: Record<string, unknown> | string;
-    where?: Record<string, unknown>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerRankPageOptions` (interface)
 
-```ts
-interface TriggerRankPageOptions {
-    baseWhere?: Record<string, unknown>;
-    cursor?: null | string;
-    take?: number;
-    where?: Record<string, unknown>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerRankResult` (interface)
 
-```ts
-interface TriggerRankResult {
-    position: number;
-    total: number;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerRow` (type)
 
-```ts
-type TriggerRow<Shape extends Record<string, Validator>> = {
-    [K in keyof Shape as undefined extends Infer<Shape[K]> ? K : never]?: Infer<Shape[K]>;
-} & {
-    [K in keyof Shape as undefined extends Infer<Shape[K]> ? never : K]: Infer<Shape[K]>;
-} & {
-    readonly _creationTime: number;
-    readonly _id: string;
-};
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerTiming` (type)
 
-```ts
-type TriggerTiming = "after" | "before";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TriggerUpdateEvent` (interface)
 
-```ts
-interface TriggerUpdateEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
-    readonly doc: TriggerRow<Shape>;
-    readonly id: string;
-    readonly op: "update";
-    readonly previous: TriggerRow<Shape>;
-    readonly table: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `TtlDefinition` (interface)
 
-```ts
-interface TtlDefinition {
-    after?: number;
-    field: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorEmbedder` (type)
 
-```ts
-type VectorEmbedder = (input: string) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorIndexDefinition` (interface)
 
-```ts
-interface VectorIndexDefinition {
-    readonly dimensions: number;
-    readonly embed: VectorEmbedder;
-    readonly kind: "vectorIndex";
-    readonly metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
-    readonly metric: VectorMetric;
-    readonly select: (row: Record<string, unknown>) => string;
-    readonly table: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorMatch` (interface)
 
-```ts
-interface VectorMatch {
-    id: string;
-    metadata?: Record<string, unknown>;
-    score: number;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorMatches` (interface)
 
-```ts
-interface VectorMatches {
-    count: number;
-    matches: ReadonlyArray<VectorMatch>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorMetric` (type)
 
-```ts
-type VectorMetric = "cosine" | "dot-product" | "euclidean";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorQueryInput` (interface)
 
-```ts
-interface VectorQueryInput {
-    embed?: VectorEmbedder;
-    filter?: Record<string, unknown>;
-    input?: string;
-    namespace?: string;
-    topK?: number;
-    vector?: ReadonlyArray<number>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorRecord` (interface)
 
-```ts
-interface VectorRecord {
-    id: string;
-    metadata?: Record<string, unknown>;
-    values: ReadonlyArray<number>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorSearch` (interface)
 
-```ts
-interface VectorSearch<IndexName extends string = string> extends VectorSearchReader<IndexName> {
-    deleteByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<void>;
-    upsert: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
-    upsertNow: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorSearchReader` (interface)
 
-```ts
-interface VectorSearchReader<IndexName extends string = string> {
-    getByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
-    query: (indexName: IndexName, input: VectorQueryInput) => Promise<VectorMatches>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorUpsertInput` (interface)
 
-```ts
-interface VectorUpsertInput {
-    embed: VectorEmbedder;
-    id: string;
-    input: string;
-    metadata?: Record<string, unknown>;
-    namespace?: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `WorkflowCreateOptions` (interface)
 
-```ts
-interface WorkflowCreateOptions<Params = Record<string, unknown>> {
-    id?: string;
-    params?: Params;
-    retention?: {
-        errorRetention?: string;
-        successRetention?: string;
-    };
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `WorkflowEventDefinition` (interface)
 
-```ts
-interface WorkflowEventDefinition<Payload = unknown> {
-    readonly isLunoraWorkflowEvent: true;
-    readonly payload: Validator<Payload>;
-    readonly type: string;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `WorkflowHandle` (interface)
 
-```ts
-interface WorkflowHandle<Params = Record<string, unknown>> {
-    create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstance>;
-    createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
-    get: (id: string) => Promise<WorkflowInstance>;
-    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `WorkflowInstance` (interface)
 
-```ts
-interface WorkflowInstance {
-    readonly id: string;
-    pause: () => Promise<void>;
-    restart: () => Promise<void>;
-    resume: () => Promise<void>;
-    sendEvent: (event: {
-        payload: unknown;
-        type: string;
-    }) => Promise<void>;
-    status: () => Promise<WorkflowStatusResult>;
-    terminate: () => Promise<void>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `WorkflowInstanceStatus` (type)
 
-```ts
-type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `WorkflowStatusResult` (interface)
 
-```ts
-interface WorkflowStatusResult {
-    error?: {
-        message: string;
-        name: string;
-    };
-    output?: unknown;
-    status: WorkflowInstanceStatus;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `Workflows` (interface)
 
-```ts
-interface Workflows {
-    get: <Params = Record<string, unknown>>(name: string) => WorkflowHandle<Params>;
-}
-```
+Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `X402ProcedureConfig` (interface)
 
@@ -5502,6 +4983,4 @@ interface X402ProcedureConfig {
 
 ### `anyApi` (const)
 
-```ts
-const anyApi: AnyApi;
-```
+Re-exported from `@lunora/server` — signature tracked in that section.

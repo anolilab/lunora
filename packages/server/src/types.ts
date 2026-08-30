@@ -158,7 +158,13 @@ interface SearchIndexDefinition {
      * added to a populated table works immediately. On a very large table that
      * scan is expensive to run inside a deploy: `staged: true` maintains the
      * index on write only and leaves the initial population to an out-of-band
-     * `backfillSearchIndexes`.
+     * run.
+     *
+     * That run is mandatory, not optional — until it happens, every row written
+     * BEFORE the deploy is unsearchable. Drive it against a deployment with
+     * `lunora run '__lunora_admin__:backfillSearch' --args '{"maxPages":20}'`,
+     * repeating until the response reports `done: true`; progress is durable, so
+     * each call resumes where the last stopped.
      */
     staged?: boolean;
 
@@ -1679,6 +1685,38 @@ interface StorageMetadata {
 }
 
 /**
+ * The body-free object shape returned by {@link ReadOnlyStorage.head} — a clean
+ * public mirror of `@lunora/storage`'s head projection, re-declared here for the
+ * same reason as {@link StorageMetadata}: the ctx surface carries no dependency
+ * on the storage package's types.
+ *
+ * Richer than {@link StorageMetadata} on purpose. `getMetadata` is the tidy
+ * Convex-shaped summary; `head` is what an HTTP layer needs, so it keeps the
+ * validator (`etag`) and the base64 digest RFC 9530 `Repr-Digest` requires, and
+ * leaves `uploaded` as the `Date` the binding reports rather than epoch ms.
+ */
+interface StorageObjectHead {
+    /** Custom metadata set at upload time, if any. */
+    customMetadata?: Record<string, string>;
+    /** R2's unquoted etag (the MD5 hex for a single-part upload). */
+    etag?: string;
+    /** The already-quoted form of {@link StorageObjectHead.etag}, when the binding reports one. */
+    httpEtag?: string;
+    /** Recorded HTTP metadata, notably the `Content-Type`. */
+    httpMetadata?: { contentType?: string };
+    /** The object's key. */
+    key: string;
+    /** Hex-encoded SHA-256 of the body, when R2 carries a checksum. */
+    sha256?: string;
+    /** Base64-encoded SHA-256 of the same checksum — the encoding RFC 9530 digest headers require. */
+    sha256Base64?: string;
+    /** The FULL object size in bytes: R2 reports the object's size, not a returned window's, which is what makes a head enough to resolve a `Range` against. */
+    size: number;
+    /** When the object was last written. */
+    uploaded?: Date;
+}
+
+/**
  * Read-only projection of `Storage` exposed on `QueryCtx` / `MutationCtx`.
  *
  * Queries are pure reads, and mutations run inside a transactional scope —
@@ -1712,6 +1750,37 @@ interface ReadOnlyStorage<Buckets extends string = string> {
     getSignedUrl: (key: string, options?: { expiresInSeconds?: number }) => Promise<string>;
     /** Public URL pointing at the configured base for `key`. */
     getUrl: (key: string) => string;
+
+    /**
+     * Read an object's metadata with NO body transfer, as the raw object shape —
+     * `etag` and the base64 digest included, which is what an HTTP layer needs to
+     * answer a `Range` request. Returns `null` when the object is absent.
+     *
+     * {@link ReadOnlyStorage.getMetadata} is the tidier summary over the same
+     * read; reach for this one when building a response.
+     */
+    head: (key: string) => Promise<StorageObjectHead | null>;
+}
+
+/**
+ * `ctx.storage` inside a **mutation**: the read surface, plus the one write a
+ * transactional context can safely express. See `@lunora/server`'s
+ * `deferred-deletes.ts` for why `delete` itself stays action-only.
+ */
+interface MutationStorage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
+    /** Select a named bucket; deletes queued on it are flushed against that bucket. */
+    bucket: (name: Buckets) => MutationStorage<Buckets>;
+
+    /**
+     * Queue `key` for deletion once this mutation commits.
+     *
+     * Returns `void`, not a promise: nothing has been attempted yet, so the object
+     * is still there on the next line. A rolled-back mutation never flushes, so
+     * the row deletion and the object cleanup cannot disagree. A failed delete
+     * leaks the object rather than failing a mutation that already succeeded, and
+     * is logged with its key.
+     */
+    deleteAfterCommit: (key: string) => void;
 }
 
 interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
@@ -2275,7 +2344,7 @@ interface MutationCtx {
     readonly secrets: Secrets;
     /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
     readonly span: LunoraWideEvent;
-    readonly storage: ReadOnlyStorage;
+    readonly storage: MutationStorage;
     /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
@@ -2406,6 +2475,7 @@ export type {
     LunoraTracer,
     LunoraWideEvent,
     MutationCtx,
+    MutationStorage,
     OnDeleteAction,
     PaginationOptions,
     PaginationResult,
@@ -2439,6 +2509,7 @@ export type {
     SpanOptions,
     Storage,
     StorageMetadata,
+    StorageObjectHead,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,

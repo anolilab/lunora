@@ -72,6 +72,46 @@ const rollbackDeployment = async (options: RollbackOptions): Promise<{ scriptNam
     return (await response.json()) as { scriptName: string; version?: number };
 };
 
+interface EjectOptions {
+    apiUrl: string;
+    deployKey: string;
+    deploymentId: string;
+    fetch?: typeof globalThis.fetch;
+}
+
+/** The eject package: the data snapshot plus the identity the BYO config is named after. */
+interface EjectPackage {
+    projectSlug: string;
+    scriptName: string;
+    snapshot: string;
+    url: string;
+}
+
+/**
+ * `POST /v1/eject` — pull a deployment's data snapshot and BYO identity.
+ *
+ * The control plane holds the tenant's admin token and never hands it over: it
+ * unseals it, calls the tenant's export, and returns only the bytes. So the exit
+ * hatch never leaves a long-lived tenant bearer on a developer's machine.
+ */
+const fetchEjectPackage = async (options: EjectOptions): Promise<EjectPackage> => {
+    const fetchImpl = options.fetch ?? globalThis.fetch;
+
+    const response = await fetchImpl(`${stripTrailingSlashes(options.apiUrl)}/v1/eject`, {
+        body: JSON.stringify({ deploymentId: options.deploymentId }),
+        headers: { authorization: `Bearer ${options.deployKey}`, "content-type": "application/json" },
+        method: "POST",
+    });
+
+    if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+
+        throw new Error(`eject failed (${String(response.status)})${detail ? `: ${detail}` : ""}`);
+    }
+
+    return (await response.json()) as EjectPackage;
+};
+
 /** `POST /v1/deploy` — push a prebuilt bundle and stream NDJSON progress via `onEvent`. */
 const deployToCloud = async (options: DeployToCloudOptions, onEvent: (event: DeployEvent) => void): Promise<DeployResult> => {
     const fetchImpl = options.fetch ?? globalThis.fetch;
@@ -183,5 +223,15 @@ const parseWranglerManifest = (wrangler: WranglerConfig): DeployManifest => {
     };
 };
 
-export { deployToCloud, parseWranglerManifest, rollbackDeployment };
-export type { DeployEvent, DeployManifest, DeployManifestBindings, DeployResult, DeployToCloudOptions, RollbackOptions, WranglerConfig };
+export { deployToCloud, fetchEjectPackage, parseWranglerManifest, rollbackDeployment };
+export type {
+    DeployEvent,
+    DeployManifest,
+    DeployManifestBindings,
+    DeployResult,
+    DeployToCloudOptions,
+    EjectOptions,
+    EjectPackage,
+    RollbackOptions,
+    WranglerConfig,
+};

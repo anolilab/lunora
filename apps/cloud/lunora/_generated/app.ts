@@ -4,7 +4,7 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { createD1CtxDb, emitD1QueryCost, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
+import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { AdminTableResolver, ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
@@ -69,6 +69,7 @@ interface ComposedApp extends LunoraWorker {
 class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private authDeclaration?: AuthDeclaration<Env>;
+    private cdcEnabled = false;
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private globalDeclaration?: GlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
@@ -82,6 +83,19 @@ class AppBuilder<Env extends object> {
     /** Bearer token gating the `/_lunora/admin/*` endpoints the studio calls. */
     public admin(selector: Selector<Env, string>): this {
         this.adminToken = selector;
+
+        return this;
+    }
+
+    /**
+     * Opt into change-data-capture: every write records a post-image to `__cdc_log` — on this shard AND, when the app has `.global()` tables, on the global backend. Backs streaming export, replay-PITR, and the `.global()` half of `defineShape` replication (whose poll tick asks the global changelog which tables moved). Off by default: it costs a changelog row per write, which an app using none of the above should not pay.
+     *
+     * REQUIRED for a shard-local `defineShape`: those replicate out of `__cdc_log`, and a `shape_subscribe` is refused with `SHAPE_REQUIRES_CDC` without it.
+     *
+     * It also changes how fresh a `.global()` shape is against writes made OUTSIDE `ctx.db` — an admin import, a PITR replay, an external ETL job, or a predicate over wall clock. With CDC off the poll re-reads every shape every 2s. With it on the poll asks the global changelog which tables moved and skips the rest, so a change the changelog never saw waits for the 30s unconditional resync instead. Writes through `ctx.db` are unaffected: they append, so the poll sees them on the next tick either way.
+     */
+    public cdc(enabled = true): this {
+        this.cdcEnabled = enabled;
 
         return this;
     }
@@ -181,9 +195,10 @@ class AppBuilder<Env extends object> {
     /** Build the shard DO + compose the worker (standalone or framework-hosted), wrapping the lazy per-isolate singletons + auth init. */
     private assemble(): ComposedApp {
         const ShardDO = createShardDO({
+            cdc: this.cdcEnabled,
             ...(this.globalDeclaration
                 ? {
-                      d1: (rawEnv: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string | null }) => {
+                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
                           const env = rawEnv as Env;
                           const database = this.globalDeclaration?.d1(env);
 
@@ -198,8 +213,15 @@ class AppBuilder<Env extends object> {
 
                           return createD1CtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
+                              ...(this.schedulerDeclaration ? { scheduler: this.resolveScheduler(env) as unknown as D1CtxDbOptions["scheduler"] } : {}),
+                              ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
                               auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
-                              exec: buildExec(database),
+                              // Forwarded from the shard's own `cdc` config, so ONE
+                              // switch governs both changelogs. Built without it, the
+                              // global `__cdc_log` is never written and the shape
+                              // poll's changed-tables fast path is unreachable.
+                              cdc: request?.cdc ?? false,
+                              exec: buildExec(database, request?.bookmark, request?.onBookmark),
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },
@@ -207,13 +229,7 @@ class AppBuilder<Env extends object> {
                 : {}),
             ...(this.schedulerDeclaration
                 ? {
-                      scheduler: (rawEnv: Record<string, unknown>) => {
-                          const env = rawEnv as Env;
-                          const namespace = this.schedulerDeclaration?.namespace(env);
-                          const origin = this.schedulerDeclaration?.origin?.(env);
-
-                          return namespace && origin ? createScheduler({ namespace, originUrl: origin }) : undefined;
-                      },
+                      scheduler: (rawEnv: Record<string, unknown>) => this.resolveScheduler(rawEnv as Env),
                   }
                 : {}),
             ...this.shardExtras,
@@ -277,6 +293,14 @@ class AppBuilder<Env extends object> {
         return composed;
     }
 
+    /** Resolve the `SchedulerDO`-backed scheduler for this env; `undefined` until both the namespace and origin are wired. */
+    private resolveScheduler(env: Env): ReturnType<typeof createScheduler> | undefined {
+        const namespace = this.schedulerDeclaration?.namespace(env);
+        const origin = this.schedulerDeclaration?.origin?.(env);
+
+        return namespace && origin ? createScheduler({ namespace, originUrl: origin }) : undefined;
+    }
+
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
     private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null): WorkerOptions {
         const options: WorkerOptions = {
@@ -310,7 +334,18 @@ class AppBuilder<Env extends object> {
                 // happened. Both are mechanical over the schema this file already
                 // imports, so there is nothing project-specific to configure.
                 options.resolveTableSharding = buildTableShardingResolver();
-                options.importGlobals = buildGlobalImporter(database);
+                options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
+                // The read/replay half of the same admin plane. Each one is the
+                // only reason its endpoint can see the global storage plane at
+                // all, and every one of them fails SILENTLY when unset — export
+                // and `lunora backup create` answer 200 having written only
+                // shard-local rows (an export→import round trip then restores
+                // cleanly minus every global row), CDC sync answers with only
+                // shard changes, and point-in-time apply reports
+                // `globalApplied: 0`. Nothing here is project-specific either.
+                options.exportGlobals = buildGlobalExporter(database);
+                options.syncGlobals = buildGlobalCdcSync(database);
+                options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);
             }
         }
 
@@ -375,19 +410,37 @@ class AppBuilder<Env extends object> {
 }
 
 /**
- * Adapt the raw D1 binding to `@lunora/d1`'s `D1Exec` (reads via `all`, writes
- * via `run`, and — when the binding exposes it — several writes in one round
- * trip via `batch`).
+ * Adapt the raw D1 binding to `@lunora/d1`'s `D1Exec` (reads via `all`, writes via `run`, and — when the binding exposes it — several writes in one round trip via `batch`).
  *
- * Every read and write records D1's own `meta` accounting (`rows_read` /
+ * Opens a D1 Sessions API session pinned to `bookmark` (the caller's own
+ * last-known write, when supplied) so reads observe it — read-your-writes
+ * across replicas. `onBookmark`, when supplied, is invoked with the bookmark
+ * produced by each write so the caller (the generated DO) can record it via
+ * `setOutboundBookmark` and echo `x-d1-bookmark` on the response.
+ *
+ * Wrapped in `retryingExec` so D1's documented baseline of transient failures
+ * (storage-object resets, isolate memory evictions, dropped connections) does
+ * not surface on every `.global()` read. Only statements that are provably
+ * read-only retry; writes — including the `UPDATE … RETURNING` the store's
+ * optimistic-concurrency check issues through `all` — pass straight through,
+ * because a transient error never says whether the write applied.
+ *
+ * Every read and write also records D1's own `meta` accounting (`rows_read` /
  * `rows_written` / `duration`) against a low-cardinality `verb:table` tag.
  * Rows READ is rows SCANNED, not returned, so this is the number that explains
  * a D1 bill and the one a missing index inflates without anything being
  * deployed; the dashboard's own metric is per-database and can't name the query.
  * The emit is best-effort — instrumentation must never fail a served query.
  */
-const buildExec = (database: D1DatabaseLike): D1Exec => {
-    const batchFn = database.batch;
+const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
+    // Real D1 always exposes `withSession`; guarded the same way as `batch`
+    // below so a hand-rolled test double that omits it keeps working via
+    // `prepare()` straight on the raw binding — today's behaviour. With no
+    // inbound bookmark, `"first-unconstrained"` is the documented no-op
+    // equivalent (lowest latency, may read any replica) — see `D1Client.withSession`.
+    const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
+    const target = session ?? database;
+    const batchFn = target.batch;
     const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
         try {
             emitD1QueryCost(sql, meta);
@@ -396,9 +449,9 @@ const buildExec = (database: D1DatabaseLike): D1Exec => {
         }
     };
 
-    return {
+    return retryingExec({
         all: async (sql, parameters) => {
-            const result = await database
+            const result = await target
                 .prepare(sql)
                 .bind(...parameters)
                 .all<Record<string, unknown>>();
@@ -408,34 +461,36 @@ const buildExec = (database: D1DatabaseLike): D1Exec => {
             return result.results;
         },
         // D1's own `batch` runs the whole array as one atomic SQLite
-        // transaction. Guarded because `D1DatabaseLike.batch` is optional in
-        // the structural type (test doubles may omit it) — real D1 always has
-        // it; a double without it still works through the store's sequential
-        // fallback. Invoked via `.call(database, ...)` rather than
-        // `database.batch(...)` directly so TS can narrow the captured
-        // `batchFn` across the closure boundary (a property-access narrowing
-        // like `hasBatch = typeof database.batch === "function"` does not
-        // survive into a nested arrow function); `.call` still binds `this`
-        // to `database`, so the real workerd `D1Database` doesn't throw
+        // transaction. Guarded because `batch` is optional in the structural
+        // type (test doubles may omit it) — real D1 always has it; a double
+        // without it still works through the store's sequential fallback.
+        // Invoked via `.call(target, ...)` rather than `target.batch(...)`
+        // directly so TS can narrow the captured `batchFn` across the closure
+        // boundary (a property-access narrowing like
+        // `hasBatch = typeof target.batch === "function"` does not survive
+        // into a nested arrow function); `.call` still binds `this` to
+        // `target`, so the real workerd `D1Database`/session doesn't throw
         // `TypeError: Illegal invocation` the way a detached
-        // `const fn = database.batch; fn(...)` capture would.
+        // `const fn = target.batch; fn(...)` capture would.
         batch: batchFn
             ? async (statements) => {
                   await batchFn.call(
-                      database,
-                      statements.map(({ params, sql }) => database.prepare(sql).bind(...params)),
+                      target,
+                      statements.map(({ params, sql }) => target.prepare(sql).bind(...params)),
                   );
+                  onBookmark?.(session?.getBookmark() ?? undefined);
               }
             : undefined,
         run: async (sql, parameters) => {
-            const result = await database
+            const result = await target
                 .prepare(sql)
                 .bind(...parameters)
                 .run();
 
             meter(sql, result.meta);
+            onBookmark?.(session?.getBookmark() ?? undefined);
         },
-    };
+    });
 };
 
 /** Introspect `.global()` (D1-backed) tables for the studio's global data browser. */
@@ -478,16 +533,89 @@ const buildTableShardingResolver = (): AdminTableResolver => (table) => {
  * falls back to the position-derived count otherwise.
  */
 const buildGlobalImporter =
-    (database: D1DatabaseLike) =>
+    (database: D1DatabaseLike, cdc: boolean) =>
     (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
         const exec = buildExec(database);
-        const writer = createD1CtxDb({ exec, schema: schema as unknown as D1CtxDbOptions["schema"] });
+        // Same reason the PITR applier carries it: a bulk import that skips the
+        // changelog restores rows no downstream consumer is ever told about.
+        const writer = createD1CtxDb({ cdc, exec, schema: schema as unknown as D1CtxDbOptions["schema"] });
 
         return importGlobalRows(writer, schema as unknown as D1CtxDbOptions["schema"], {
             exec,
             rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
             startLine: request.startLine,
         });
+    };
+
+/**
+ * `exportGlobals` for the admin export endpoint (and the scheduled R2 backup,
+ * which drains the same stream): the read twin of {@link buildGlobalImporter},
+ * over the same D1 handle. `@lunora/d1`'s `exportGlobalRows` keyset-paginates
+ * each table and provisions the schema's global tables first, so a table that
+ * was never written exports as empty instead of throwing `no such table`.
+ *
+ * `tables` is forwarded as-is: the runtime passes an empty array for "every
+ * table" (its `tables === undefined` case), which is exactly what
+ * `selectGlobalTables` reads an empty allowlist as.
+ */
+const buildGlobalExporter =
+    (database: D1DatabaseLike) =>
+    (request: { tables: ReadonlyArray<string> }) =>
+        exportGlobalRows(buildExec(database), schema as unknown as D1CtxDbOptions["schema"], { tables: request.tables });
+
+/**
+ * `syncGlobals` for the admin CDC sync + warehouse-connector endpoints: pages
+ * the global `__cdc_log` past `sinceSeq`, the global-plane twin of the shard's
+ * `runShardCdcSync`.
+ *
+ * Probes `sqlite_master` first, exactly as the shard twin does. The changelog
+ * table is only created when the global writer runs with CDC enabled, so on
+ * every other app a straight read would throw `no such table: __cdc_log` and
+ * turn "nothing has changed yet" into a 500. Absent log ⇒ an empty page that
+ * leaves the caller's cursor where it was.
+ */
+const buildGlobalCdcSync =
+    (database: D1DatabaseLike) =>
+    async (request: { limit?: number; sinceSeq: number }): Promise<{ changes: ReadonlyArray<Record<string, unknown>>; cursor: number }> => {
+        const exec = buildExec(database);
+        const present = await exec.all(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, ["__cdc_log"]);
+
+        if (present.length === 0) {
+            return { changes: [], cursor: request.sinceSeq };
+        }
+
+        const page = await readD1CdcChanges(exec, { limit: request.limit, sinceSeq: request.sinceSeq });
+
+        // `as unknown as`, because `CdcChange` is an interface and interfaces carry
+        // no implicit index signature — the shapes are otherwise identical.
+        return { changes: page.changes as unknown as ReadonlyArray<Record<string, unknown>>, cursor: page.cursor };
+    };
+
+/**
+ * `applyGlobals` for the admin point-in-time-recovery apply endpoint: replays a
+ * batch of global CDC changes through the same D1 writer `.global()` writes go
+ * through, and reports how many were replayed.
+ *
+ * `applyCdcChanges` is order-sensitive and idempotent per row (insert, falling
+ * back to replace on conflict), so the batch is handed over untouched — the
+ * caller already emits it in commit order. The changes arrive as plain parsed
+ * JSON off the wire, hence the cast to the replayer's own change shape.
+ *
+ * The writer carries the app's own `cdc` setting, so a replay APPENDS to the
+ * global changelog like any other write. Built without it the restored rows
+ * reach the tables and nothing else: a warehouse connector's cursor walks past a
+ * range that has no entries and its mirror silently diverges from the database,
+ * with nothing on either side able to notice — and every live `.global()` shape
+ * misses the restore until the next unconditional resync.
+ */
+const buildGlobalCdcApplier =
+    (database: D1DatabaseLike, cdc: boolean) =>
+    async (request: { changes: ReadonlyArray<Record<string, unknown>> }): Promise<number> => {
+        const writer = createD1CtxDb({ cdc, exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] });
+
+        await applyCdcChanges(writer, request.changes as unknown as Parameters<typeof applyCdcChanges>[1]);
+
+        return request.changes.length;
     };
 
 /**

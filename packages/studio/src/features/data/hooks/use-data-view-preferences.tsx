@@ -3,8 +3,7 @@ import { useState } from "react";
 import type { MaskStrategy } from "../../../lib/admin";
 import { usePersistedValue } from "../../../lib/browser-storage";
 import type { MaskView } from "../../../lib/mask-preview";
-import { maskColumnsForTable, mergeSensitiveColumns } from "../../../lib/mask-preview";
-import useMaskPolicies from "./use-mask-policies";
+import { useMaskView } from "./use-mask-view";
 
 /**
  * Where a browser remembers its per-table pins. The name is load-bearing — it is
@@ -20,6 +19,8 @@ interface DataViewPreferences {
     readonly maskOn: boolean;
     /** The threaded view the grid/JSON/transposed renderers read. */
     readonly maskView: MaskView;
+    /** A view for a table other than the open one — the FK hover preview's target. */
+    readonly maskViewFor: (table: string, columns: ReadonlyArray<string>) => MaskView;
     readonly onToggleMask: () => void;
     readonly onTogglePin: (column: string) => void;
     readonly onToggleTranspose: () => void;
@@ -79,34 +80,11 @@ const useDataViewPreferences = ({
         setTransposed((current) => !current);
     };
 
-    // The deployment's codegen-discovered mask policies (table + column + strategy),
-    // loaded once. Drives the "Mask sensitive columns" preview: a render-only
-    // redaction of what a `.use(mask(...))` caller would see, plus the per-column
-    // "masked" header chips. The operator keeps full DB access — this is a preview,
-    // not enforcement.
-    const maskPolicies = useMaskPolicies();
-    // Default the preview ON so plaintext secrets are hidden out of the box (the
-    // operator reveals them by toggling). The toggle is only rendered when the
-    // active table actually has sensitive columns, so an ordinary table is
-    // unaffected; when it does, the safe-by-default state is masked.
-    const [maskOn, setMaskOn] = useState<boolean>(true);
-    const onToggleMask = (): void => {
-        setMaskOn((current) => !current);
-    };
+    // The "Mask sensitive columns" preview for the open table — shared verbatim
+    // with the `.global()` browser, which has no pins or transpose to bundle in.
+    const { maskColumns, maskOn, maskView, maskViewFor, onToggleMask } = useMaskView({ columns, selectedTable });
 
-    // The active table's masked columns (column → strategy). Explicit codegen
-    // policies (`.use(mask(...))`) are layered with a name-heuristic fallback so a
-    // plaintext `password` / `api_key` / `token` column with no declared policy is
-    // still masked by default (as `"redact"`). Explicit policies always win.
-    const explicitMaskColumns = maskColumnsForTable(maskPolicies, selectedTable ?? "");
-    const maskColumns = mergeSensitiveColumns(explicitMaskColumns, columns);
-
-    // The threaded view the grid/JSON/transposed renderers read. The chips show
-    // whenever a column is covered; cell values are only rewritten when the toggle
-    // is on.
-    const maskView = { columns: maskColumns, enabled: maskOn };
-
-    return { maskColumns, maskOn, maskView, onToggleMask, onTogglePin, onToggleTranspose, pinnedColumns, transposed };
+    return { maskColumns, maskOn, maskView, maskViewFor, onToggleMask, onTogglePin, onToggleTranspose, pinnedColumns, transposed };
 };
 
 export type { DataViewPreferences };

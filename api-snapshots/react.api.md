@@ -1118,13 +1118,7 @@ Re-exported from `@tanstack/react-query` — signature tracked at its source.
 
 ### `LunoraQueryOptions` (interface)
 
-```ts
-interface LunoraQueryOptions<F extends FunctionReference> {
-    queryFn: () => Promise<ReturnOf<F>>;
-    queryKey: QueryKey;
-    staleTime: number;
-}
-```
+Re-exported from `@lunora/react` — signature tracked in that section.
 
 ### `Preloaded` (interface)
 
@@ -1186,11 +1180,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `lunoraQueryOptions` (const)
 
-```ts
-const lunoraQueryOptions: <F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
-    shardKey?: string;
-}) => LunoraQueryOptions<F>;
-```
+Re-exported from `@lunora/react` — signature tracked in that section.
 
 ### `prefetchQuery` (const)
 

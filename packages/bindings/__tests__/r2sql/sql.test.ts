@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isSql, joinSql, lit, raw, Sql, sql, toText } from "../../src/r2sql/sql";
+import { assertLimit, isSql, joinSql, lit, raw, Sql, sql, tableRef, toText } from "../../src/r2sql/sql";
 
 describe("lit", () => {
     it("renders null and undefined as NULL", () => {
@@ -37,6 +37,13 @@ describe("lit", () => {
         expect.assertions(1);
 
         expect(lit(new Date("2025-09-24T01:00:00.000Z"))).toBe("'2025-09-24T01:00:00.000Z'");
+    });
+
+    it("throws a TypeError on an invalid Date, not the RangeError toISOString would raise", () => {
+        expect.assertions(2);
+
+        expect(() => lit(new Date(Number.NaN))).toThrow(TypeError);
+        expect(() => lit(new Date(Number.NaN))).toThrow(/invalid Date/);
     });
 
     it("renders arrays as a parenthesised IN list", () => {
@@ -112,5 +119,104 @@ describe("joinSql", () => {
         expect.assertions(1);
 
         expect(joinSql([sql`a = ${1}`, "b = 2", raw("c = 3")], " AND ").text).toBe("a = 1 AND b = 2 AND c = 3");
+    });
+});
+
+describe("tableRef", () => {
+    it("accepts a plain and a dotted identifier", () => {
+        expect.assertions(3);
+
+        expect(tableRef("orders")).toBe("orders");
+        expect(tableRef("s.orders")).toBe("s.orders");
+        expect(tableRef("db.schema.orders")).toBe("db.schema.orders");
+    });
+
+    it("accepts one alias, bare or with AS, in either case", () => {
+        expect.assertions(4);
+
+        expect(tableRef("s.zones z")).toBe("s.zones z");
+        expect(tableRef("users AS u")).toBe("users AS u");
+        expect(tableRef("users as u")).toBe("users as u");
+        expect(tableRef("db.schema.orders o")).toBe("db.schema.orders o");
+    });
+
+    // `\s` matches a newline, so the alias separator may be one. Not a hole: the
+    // alias is still `\w+` and the pattern is anchored, so what gets spliced is
+    // exactly the space-separated form SQL already treats it as.
+    it("treats a newline as the alias separator, same as a space", () => {
+        expect.assertions(1);
+
+        expect(tableRef("orders\nx")).toBe("orders\nx");
+    });
+
+    it("rejects punctuation that could break out of the FROM position", () => {
+        expect.assertions(8);
+
+        expect(() => tableRef("orders'")).toThrow(TypeError);
+        expect(() => tableRef('"orders"')).toThrow(/invalid table reference/);
+        expect(() => tableRef("orders; DROP TABLE x")).toThrow(/invalid table reference/);
+        expect(() => tableRef("orders -- x")).toThrow(/invalid table reference/);
+        expect(() => tableRef("orders /* x */")).toThrow(/invalid table reference/);
+        expect(() => tableRef("(SELECT 1)")).toThrow(/invalid table reference/);
+        expect(() => tableRef("orders, users")).toThrow(/invalid table reference/);
+        expect(() => tableRef("s.orders o AND 1=1")).toThrow(/invalid table reference/);
+    });
+
+    it("rejects a second alias and an empty reference", () => {
+        expect.assertions(3);
+
+        expect(() => tableRef("orders o p")).toThrow(/invalid table reference/);
+        expect(() => tableRef("orders AS o p")).toThrow(/invalid table reference/);
+        expect(() => tableRef("")).toThrow(/invalid table reference/);
+    });
+
+    it("rejects a non-string reference", () => {
+        expect.assertions(1);
+
+        expect(() => tableRef(42 as unknown as string)).toThrow(TypeError);
+    });
+});
+
+describe("assertLimit", () => {
+    it("accepts the inclusive 1..10,000 bounds", () => {
+        expect.assertions(3);
+
+        expect(() => {
+            assertLimit(1);
+        }).not.toThrow();
+        expect(() => {
+            assertLimit(10_000);
+        }).not.toThrow();
+        expect(() => {
+            assertLimit(500);
+        }).not.toThrow();
+    });
+
+    it("rejects values outside the range", () => {
+        expect.assertions(3);
+
+        expect(() => {
+            assertLimit(0);
+        }).toThrow(RangeError);
+        expect(() => {
+            assertLimit(-1);
+        }).toThrow(/between 1 and 10000/);
+        expect(() => {
+            assertLimit(10_001);
+        }).toThrow(/between 1 and 10000/);
+    });
+
+    it("rejects non-integers", () => {
+        expect.assertions(3);
+
+        expect(() => {
+            assertLimit(3.5);
+        }).toThrow(/must be an integer/);
+        expect(() => {
+            assertLimit(Number.NaN);
+        }).toThrow(RangeError);
+        expect(() => {
+            assertLimit(Number.POSITIVE_INFINITY);
+        }).toThrow(RangeError);
     });
 });

@@ -9,6 +9,15 @@ public let lunoraRPCBatchPath = "/_lunora/rpc-batch"
 /// The live-subscription endpoint.
 public let lunoraWSPath = "/_lunora/ws"
 
+/// How many un-applied poke buffers a client retains before evicting the oldest.
+///
+/// A buffer is only released at its `pokeEnd`; a socket that drops mid-poke never
+/// sends one, so without a bound the abandoned buffers accumulate for the life of
+/// the client — one per reconnect, and unbounded against a peer that opens pokes
+/// it never closes. Concurrent in-flight pokes number in the low single digits,
+/// so this is far above any legitimate working set.
+public let lunoraMaxPendingPokes = 64
+
 /// Which RPC method a call dispatches to. Generated code emits these cases
 /// rather than raw strings, so a typo in a target template is a compile error
 /// instead of a read silently sent over the write path.
@@ -69,7 +78,12 @@ public final class LunoraClient {
     var send: LunoraFrameSender?
     var subscriptions: [String: Subscription] = [:]
     private var shapes: [String: ShapeSubscription] = [:]
-    private var pokes: [String: [String: [[String: Any]]]] = [:]
+    private var pokes: [String: PokeBuffer] = [:]
+
+    /// Insertion order of `pokes`, oldest first — a Swift `Dictionary` has no
+    /// order of its own, so the eviction in `handleFrame` needs this to know
+    /// which buffer is the oldest.
+    private var pokeOrder: [String] = []
     private var nextID = 0
     private var nextShapeID = 0
 
@@ -128,6 +142,21 @@ public final class LunoraClient {
 
             if let onData { state.callbacks.append(onData) }
         }
+    }
+
+    /// One in-flight poke: the row ops buffered per shape, plus the shapes whose
+    /// part carried `reset: true`.
+    ///
+    /// The flag is tracked per SHAPE, not per poke: one poke can re-seed one shape
+    /// while delivering an ordinary diff to another on the same socket.
+    private struct PokeBuffer {
+        var parts: [String: [[String: Any]]] = [:]
+
+        /// Shapes whose `rowsPatch` is the shape's COMPLETE membership rather than a
+        /// diff, so the view has to be dropped before it is applied. A seed carries
+        /// inserts only, so merging one leaves every row that left the shape while
+        /// the socket was down on screen for the life of the client.
+        var resets: Set<String> = []
     }
 
     private final class ShapeSubscription {
@@ -776,7 +805,17 @@ public final class LunoraClient {
             return kind
         case "pokeStart":
             withLock {
-                if let pokeID = frame["pokeId"] as? String { pokes[pokeID] = [:] }
+                if let pokeID = frame["pokeId"] as? String {
+                    if pokes[pokeID] == nil { pokeOrder.append(pokeID) }
+
+                    pokes[pokeID] = PokeBuffer()
+
+                    // Evict oldest-first at the cap; a poke that old is no
+                    // longer going to see its `pokeEnd`.
+                    while pokeOrder.count > lunoraMaxPendingPokes {
+                        pokes.removeValue(forKey: pokeOrder.removeFirst())
+                    }
+                }
             }
 
             return kind
@@ -808,7 +847,13 @@ public final class LunoraClient {
             else { return }
 
             let operations = (frame["rowsPatch"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
-            pokes[pokeID]?[shapeID, default: []].append(contentsOf: operations)
+            pokes[pokeID]?.parts[shapeID, default: []].append(contentsOf: operations)
+
+            // Recorded sticky (never cleared) so a server that splits one seed across
+            // several parts still replaces rather than merges. `reset` is the ONLY
+            // signal: a missing `baseCheckpoint` does not imply a seed, and a
+            // retention re-seed arrives with the epoch unchanged.
+            if frame["reset"] as? Bool == true { pokes[pokeID]?.resets.insert(shapeID) }
         }
     }
 
@@ -819,10 +864,24 @@ public final class LunoraClient {
         let deliveries = try withLock { () -> [(([Any]) -> Void, [Any])] in
             guard let pokeID = frame["pokeId"] as? String, let buffer = pokes.removeValue(forKey: pokeID) else { return [] }
 
+            // Drop it from the eviction order too, or that array grows a stale
+            // entry per completed poke and stops tracking the map.
+            pokeOrder.removeAll { $0 == pokeID }
+
             var deliveries: [(([Any]) -> Void, [Any])] = []
 
-            for (shapeID, operations) in buffer {
+            for (shapeID, operations) in buffer.parts {
                 guard let shape = shapes[shapeID] else { continue }
+
+                // A reset part is the shape's complete membership, so it is
+                // authoritative on its own: drop what we hold before applying it.
+                // `.global()` shapes re-seed in full on EVERY reconnect and an op-log
+                // shape past changelog retention does too, so without this a row
+                // deleted while the socket was down is never removed.
+                if buffer.resets.contains(shapeID) {
+                    shape.rows.removeAll()
+                    shape.order.removeAll()
+                }
 
                 for operation in operations {
                     guard let key = operation["key"] as? String else { continue }

@@ -171,14 +171,17 @@ client-supplied address, so cross-shard reads must be authorized. Lunora
 (`FORBIDDEN_SHARD` / `FORBIDDEN_FANOUT`). A single-DO app never names a
 non-default shard and is unaffected.
 
-A sharded app must either configure `authorizeShard(identity, shardKey)` (return
+A sharded app must either configure `authorizeShard({ identity, shardKey })` (return
 `true` to allow), plus `authorizeFanOut` for cross-shard reads, or set
 `allowUnauthenticatedShardAccess: true` to opt into open access:
 
 ```ts
 createWorker({
     shardDO: env.SHARD,
-    authorizeShard: (identity, shardKey) => identity?.userId === shardKey,
+    // Runs for every shard the caller names, the default one included — so an
+    // unsharded table (which resolves to `__root__`) needs an explicit pass, or
+    // this gate 403s it. See [Sharding](/docs/concepts/sharding).
+    authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === shardKey,
 });
 ```
 

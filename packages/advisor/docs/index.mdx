@@ -173,6 +173,7 @@ Storage, AI, containers & payments:
 | `nondeterministic_query_mutation`   | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation                                        |
 | `hyperdrive_outside_action`         | `WARN`  | `ctx.sql` used outside an action                                                                   |
 | `r2sql_outside_action`              | `WARN`  | `ctx.r2sql` used outside an action                                                                 |
+| `flag_read_in_subscription`         | `WARN`  | `ctx.flags` read in a query; a flag flip re-runs no subscription, so the branch goes stale         |
 | `mutator_full_row_replace`          | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                     |
 | `queue_without_dlq`                 | `WARN`  | A `defineQueue` with no `deadLetterQueue`; exhausted messages are dropped, not captured            |
 | `table_without_insert`              | `INFO`  | A table no function inserts into                                                                   |

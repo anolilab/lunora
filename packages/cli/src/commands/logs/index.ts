@@ -3,15 +3,20 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 import { TARGET_OPTION } from "../../util/deploy-target";
 
 /**
- * `lunora logs [worker]` — stream live logs from a deployed Lunora Worker by
- * wrapping `wrangler tail`, OR (with `--durable`) read the persisted `ctx.log`
- * archive back from R2 via R2 SQL (what `pipelineLogSink` writes). The live path
- * needs a deployed Worker; the durable path needs a configured Pipeline → R2 Data
- * Catalog table plus the `R2_SQL_*` credentials.
+ * `lunora logs [worker]` — three independent sources, one command:
+ *
+ * Default — stream a DEPLOYED Worker live by wrapping `wrangler tail`.
+ *
+ * `--durable` — read the persisted `ctx.log` archive back from R2 via R2 SQL
+ * (what `pipelineLogSink` writes). Needs a configured Pipeline → R2 Data Catalog
+ * table plus the `R2_SQL_*` credentials.
+ *
+ * `--local` — read what the RUNNING dev server captured. Needs no deploy and no
+ * credentials at all, so it is the one source the inner loop can actually use.
  */
 const logsCommand: Command = {
     argument: { description: "Worker name (defaults to the name in wrangler config)", name: "worker", type: String },
-    description: "Stream live logs from a deployed Worker, or read the durable log archive with --durable",
+    description: "Stream live logs from a deployed Worker, the running dev server with --local, or the durable archive with --durable",
     group: "Deploy",
     loader: () =>
         import("./handler").then((m) => {
@@ -29,6 +34,9 @@ const logsCommand: Command = {
             name: "temporary",
             type: Boolean,
         },
+        // --- local dev-server capture (--local) ---
+        { description: "Read what the running dev server captured instead of tailing a deployment (no deploy needed)", name: "local", type: Boolean },
+        { description: "local: dev-server base URL when it is not on http://localhost:5173", name: "url", type: String },
         // --- durable-archive path (--durable) ---
         { description: "Read the durable log archive (pipelineLogSink → R2) via R2 SQL instead of tailing live", name: "durable", type: Boolean },
         { description: "durable: Iceberg table the Pipeline writes to (required with --durable)", name: "table", type: String },
@@ -62,6 +70,7 @@ export type LogsOptions = CreateOptions<{
     "function-prefix": string | undefined;
     level: string | undefined;
     limit: string | undefined;
+    local: boolean | undefined;
     "min-level": string | undefined;
     namespace: string | undefined;
     ndjson: boolean | undefined;
@@ -74,5 +83,6 @@ export type LogsOptions = CreateOptions<{
     temporary: boolean | undefined;
     "trace-id": string | undefined;
     until: string | undefined;
+    url: string | undefined;
     "user-id": string | undefined;
 }>;

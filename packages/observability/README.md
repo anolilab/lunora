@@ -27,7 +27,7 @@ Three details are Cloudflare's rather than this package's, so the host passes th
 
 - **AI model** — `explainIssue(binding, args, { defaultModel })`. `DEFAULT_EXPLAIN_ISSUE_MODEL` is a Workers AI id, exported so the Cloudflare host has a name to pass rather than a string literal.
 - **Query batch size** — `readIssueStates(sql, hashes, { hashQueryBatch })`. `DEFAULT_HASH_QUERY_BATCH` is 100, the Durable Object SQLite bound-parameter cap; a host with a different cap passes its own.
-- **Span projections** — `HostSpanLike`, `HostTracingLike`, `HostTracingResolver`, `resolveHostTracing`, `fuseHostSpans`, `applyHostSpanAttributes`. Named for the role, not the provider. Cloudflare's `enterSpan` callback argument is one shape that satisfies them.
+- **Span projections** — the exported types `HostSpanLike`, `HostTracingLike` and `HostTracingResolver`. Named for the role, not the provider; Cloudflare's `enterSpan` callback argument is one shape that satisfies them. The host injects its tracer through the `TracerDeps` option fields `fuseHostSpans?: boolean` and `resolveHostTracing?: HostTracingResolver` — those are option names, not exported values, and the resolver itself lives in the host (`@lunora/do`'s `shard-do.ts` guards a dynamic `import("cloudflare:workers")`).
 
 ## Importing it
 

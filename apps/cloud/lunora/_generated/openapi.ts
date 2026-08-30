@@ -158,6 +158,10 @@ export const openApiSpec: Record<string, unknown> = {
                                                     {
                                                         "const": "llm_cost",
                                                         "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "deploy",
+                                                        "type": "string"
                                                     }
                                                 ]
                                             },
@@ -2278,6 +2282,76 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "mutation"
             }
         },
+        "/_lunora/rpc#deploy_keys:roll": {
+            "post": {
+                "description": "Invoke the `mutation` `deploy_keys:roll` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "deploy_keys:roll",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "id": {
+                                                "description": "Id<\"deployKeys\">",
+                                                "type": "string",
+                                                "x-lunora-table": "deployKeys"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            }
+                                        },
+                                        "required": [
+                                            "id",
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "deploy_keys:roll",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: deploy_keys:roll",
+                "tags": [
+                    "deploy_keys"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
         "/_lunora/rpc#deploy_keys:verify": {
             "post": {
                 "description": "Invoke the `mutation` `deploy_keys:verify` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -2334,6 +2408,76 @@ export const openApiSpec: Record<string, unknown> = {
                 "summary": "mutation: deploy_keys:verify",
                 "tags": [
                     "deploy_keys"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
+        "/_lunora/rpc#deployments:abortRollout": {
+            "post": {
+                "description": "Invoke the `mutation` `deployments:abortRollout` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "deployments:abortRollout",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "projectId": {
+                                                "description": "Id<\"projects\">",
+                                                "type": "string",
+                                                "x-lunora-table": "projects"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId",
+                                            "projectId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "deployments:abortRollout",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: deployments:abortRollout",
+                "tags": [
+                    "deployments"
                 ],
                 "x-lunora-function-kind": "mutation"
             }
@@ -2718,6 +2862,76 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "query"
             }
         },
+        "/_lunora/rpc#deployments:promoteRollout": {
+            "post": {
+                "description": "Invoke the `mutation` `deployments:promoteRollout` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "deployments:promoteRollout",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "projectId": {
+                                                "description": "Id<\"projects\">",
+                                                "type": "string",
+                                                "x-lunora-table": "projects"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId",
+                                            "projectId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "deployments:promoteRollout",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: deployments:promoteRollout",
+                "tags": [
+                    "deployments"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
         "/_lunora/rpc#deployments:rollback": {
             "post": {
                 "description": "Invoke the `mutation` `deployments:rollback` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -2847,6 +3061,80 @@ export const openApiSpec: Record<string, unknown> = {
                     "deployments"
                 ],
                 "x-lunora-function-kind": "query"
+            }
+        },
+        "/_lunora/rpc#deployments:setRollout": {
+            "post": {
+                "description": "Invoke the `mutation` `deployments:setRollout` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "deployments:setRollout",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "id": {
+                                                "description": "Id<\"deployments\">",
+                                                "type": "string",
+                                                "x-lunora-table": "deployments"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "percent": {
+                                                "type": "number"
+                                            }
+                                        },
+                                        "required": [
+                                            "id",
+                                            "organizationId",
+                                            "percent"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "deployments:setRollout",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: deployments:setRollout",
+                "tags": [
+                    "deployments"
+                ],
+                "x-lunora-function-kind": "mutation"
             }
         },
         "/_lunora/rpc#deployments:updateStatus": {
@@ -3872,7 +4160,26 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "role": {}
+                                            "role": {
+                                                "anyOf": [
+                                                    {
+                                                        "const": "owner",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "admin",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "member",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "viewer",
+                                                        "type": "string"
+                                                    }
+                                                ]
+                                            }
                                         },
                                         "required": [
                                             "email",
@@ -4475,7 +4782,26 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "role": {},
+                                            "role": {
+                                                "anyOf": [
+                                                    {
+                                                        "const": "owner",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "admin",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "member",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "viewer",
+                                                        "type": "string"
+                                                    }
+                                                ]
+                                            },
                                             "userId": {}
                                         },
                                         "required": [
@@ -4991,6 +5317,70 @@ export const openApiSpec: Record<string, unknown> = {
                 "summary": "query: metrics:series",
                 "tags": [
                     "metrics"
+                ],
+                "x-lunora-function-kind": "query"
+            }
+        },
+        "/_lunora/rpc#onboarding:checklist": {
+            "post": {
+                "description": "Invoke the `query` `onboarding:checklist` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "onboarding:checklist",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "onboarding:checklist",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "query: onboarding:checklist",
+                "tags": [
+                    "onboarding"
                 ],
                 "x-lunora-function-kind": "query"
             }
@@ -5649,6 +6039,85 @@ export const openApiSpec: Record<string, unknown> = {
                     }
                 },
                 "summary": "mutation: projects:rename",
+                "tags": [
+                    "projects"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
+        "/_lunora/rpc#projects:setPreviewProtection": {
+            "post": {
+                "description": "Invoke the `mutation` `projects:setPreviewProtection` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "projects:setPreviewProtection",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "id": {
+                                                "description": "Id<\"projects\">",
+                                                "type": "string",
+                                                "x-lunora-table": "projects"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "password": {
+                                                "anyOf": [
+                                                    {
+                                                        "type": "null"
+                                                    },
+                                                    {}
+                                                ]
+                                            }
+                                        },
+                                        "required": [
+                                            "id",
+                                            "organizationId",
+                                            "password"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "projects:setPreviewProtection",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: projects:setPreviewProtection",
                 "tags": [
                     "projects"
                 ],
@@ -6646,6 +7115,144 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "action"
             }
         },
+        "/_lunora/rpc#traffic:live": {
+            "post": {
+                "description": "Invoke the `query` `traffic:live` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "traffic:live",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "limit": {
+                                                "type": "number"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "traffic:live",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "query: traffic:live",
+                "tags": [
+                    "traffic"
+                ],
+                "x-lunora-function-kind": "query"
+            }
+        },
+        "/_lunora/rpc#traffic:snapshot": {
+            "post": {
+                "description": "Invoke the `action` `traffic:snapshot` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "traffic:snapshot",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "from": {
+                                                "type": "number"
+                                            },
+                                            "hostname": {},
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "to": {
+                                                "type": "number"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "traffic:snapshot",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "action: traffic:snapshot",
+                "tags": [
+                    "traffic"
+                ],
+                "x-lunora-function-kind": "action"
+            }
+        },
         "/_lunora/rpc#uptime:recent": {
             "post": {
                 "description": "Invoke the `query` `uptime:recent` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -6802,7 +7409,150 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "deployments"
                                             },
-                                            "kind": {},
+                                            "kind": {
+                                                "anyOf": [
+                                                    {
+                                                        "const": "aeDataPoints",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "aeReadQueries",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "browserHours",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "containerCpuSeconds",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "containerDiskGbSeconds",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "containerMemoryGibSeconds",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "cpuMs",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "d1RowsRead",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "d1RowsWritten",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "d1StorageGbMonths",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "doDurationGbS",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "doRequests",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "doRowsRead",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "doRowsWritten",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "doStorageGbMonths",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "imagesDelivered",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "imagesStored",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "imagesTransformations",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "kvDeletes",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "kvLists",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "kvReads",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "kvStorageGbMonths",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "kvWrites",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "logEvents",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "logpushRequests",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "queueOperations",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "r2ClassAOps",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "r2ClassBOps",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "r2StorageGbMonths",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "requests",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "vectorizeQueriedDimensions",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "vectorizeStoredDimensions",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "workersAiNeurons",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "workflowSteps",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "workflowStorageGbMonths",
+                                                        "type": "string"
+                                                    }
+                                                ]
+                                            },
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -7071,6 +7821,10 @@ export const openApiSpec: Record<string, unknown> = {
             "name": "metrics"
         },
         {
+            "description": "Operations declared in `lunora/onboarding`.",
+            "name": "onboarding"
+        },
+        {
             "description": "Operations declared in `lunora/organizations`.",
             "name": "organizations"
         },
@@ -7093,6 +7847,10 @@ export const openApiSpec: Record<string, unknown> = {
         {
             "description": "Operations declared in `lunora/traces`.",
             "name": "traces"
+        },
+        {
+            "description": "Operations declared in `lunora/traffic`.",
+            "name": "traffic"
         },
         {
             "description": "Operations declared in `lunora/uptime`.",

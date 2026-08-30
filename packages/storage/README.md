@@ -34,7 +34,7 @@
 
 ---
 
-R2-backed file storage for Lunora. Wraps a Cloudflare `R2Bucket` binding with a typed API (`upload`/`store`, `download`, `delete`, `list`, `getMetadata`, multipart), worker-signed URLs for app-gated access, and native S3 presigned URLs for direct-to-R2 transfer.
+R2-backed file storage for Lunora. Wraps a Cloudflare `R2Bucket` binding with a typed API (`upload`/`store`, `download`, `head`, `delete`, `list`, `getMetadata`, multipart), worker-signed URLs for app-gated access, and native S3 presigned URLs for direct-to-R2 transfer.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -104,7 +104,7 @@ await storage.upload("uploads/avatar.png", bytes, { contentType: "image/png", ma
 const url = await storage.getSignedUrl("uploads/avatar.png", { expiresInSeconds: 600 });
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/storage)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/storage)**.
 
 ## Related
 

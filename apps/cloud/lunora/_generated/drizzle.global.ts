@@ -3,6 +3,7 @@
 
 import { blob, index, integer, real, sqliteTable, text, uniqueIndex } from "@lunora/server/drizzle";
 import type { AnySQLiteColumn } from "@lunora/server/drizzle";
+import type { Id } from "./dataModel.js";
 
 export const cells = sqliteTable("cells", {
     _id: text("_id").primaryKey(),
@@ -24,7 +25,7 @@ export const organizations = sqliteTable("organizations", {
     cellId: text("cellId").references((): AnySQLiteColumn => cells._id).notNull(),
     createdAt: real("createdAt").notNull(),
     name: text("name").notNull(),
-    plan: text("plan").notNull(),
+    plan: text("plan", { mode: "json" }).$type<"free" | "pro" | "enterprise">().notNull(),
     slug: text("slug").notNull(),
     spendCapMinor: real("spendCapMinor"),
     suspendedAt: real("suspendedAt"),
@@ -52,11 +53,14 @@ export const projects = sqliteTable("projects", {
     _creationTime: integer("_creationTime").notNull(),
     activeDeploymentId: text("activeDeploymentId"),
     activeScriptName: text("activeScriptName"),
+    rollout: text("rollout", { mode: "json" }).$type<{ deploymentId: Id<"deployments">; percent: number; scriptName: string }>(),
     createdAt: real("createdAt").notNull(),
     framework: text("framework"),
     githubRepo: text("githubRepo"),
     name: text("name").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    previewPasswordHash: text("previewPasswordHash"),
+    previewPasswordSalt: text("previewPasswordSalt"),
     slug: text("slug").notNull(),
 }, (t) => ({
     by_org_slug: uniqueIndex("by_org_slug").on(t.organizationId, t.slug),
@@ -376,7 +380,7 @@ export const alertRules = sqliteTable("alertRules", {
     mode: text("mode", { mode: "json" }).$type<"threshold" | "deviation">(),
     name: text("name").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy">().notNull(),
     threshold: real("threshold").notNull(),
     updatedAt: real("updatedAt").notNull(),
     windowMinutes: real("windowMinutes"),
@@ -412,7 +416,7 @@ export const alerts = sqliteTable("alerts", {
     ruleId: text("ruleId").references((): AnySQLiteColumn => alertRules._id).notNull(),
     status: text("status", { mode: "json" }).$type<"firing" | "delivered" | "failed">().notNull(),
     subject: text("subject").notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy">().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_status: index("by_status").on(t.status),

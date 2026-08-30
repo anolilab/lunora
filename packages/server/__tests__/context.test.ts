@@ -26,15 +26,43 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
             getMetadata: async (_key) => null,
             getSignedUrl: async (key, options) => `signed://${key}?expires=${String(options?.expiresInSeconds ?? 60)}`,
             getUrl: (key) => `https://cdn.example.com/${key}`,
+            head: async (_key) => null,
         };
 
         const queryContext: QueryContext["storage"] = storage;
-        const mutationContext: MutationContext["storage"] = storage;
+        // A mutation's storage is the read surface PLUS `deleteAfterCommit`, so a
+        // bare `ReadOnlyStorage` double no longer satisfies it — deliberately: the
+        // extra member is the contract, and a widening that dropped it should fail
+        // right here.
+        const mutationStorage: MutationContext["storage"] = {
+            ...storage,
+            bucket: () => mutationStorage,
+            deleteAfterCommit: () => undefined,
+        };
+        const mutationContext: MutationContext["storage"] = mutationStorage;
 
         expectTypeOf(queryContext.getSignedUrl).toBeFunction();
         expectTypeOf(queryContext.getUrl).toBeFunction();
         expectTypeOf(queryContext.download).toBeFunction();
         expectTypeOf(mutationContext.getSignedUrl).toBeFunction();
+    });
+
+    it("exposes deleteAfterCommit on a mutation only, and never a direct delete", () => {
+        expect.assertions(1);
+
+        // The deferral is mutation-only: a query has no transaction to commit, and
+        // an action has the real `delete` instead. And it is an ADDITION to the read
+        // surface, not a way back to `delete` — a mutation still cannot destroy an
+        // object from inside a span that may roll back.
+        type MutationStorageType = MutationContext["storage"];
+
+        type HasDeferred = Assert<Extends<"deleteAfterCommit", keyof MutationStorageType>>;
+        type NoDirectDelete = Assert<Extends<"delete", keyof MutationStorageType> extends true ? false : true>;
+        type QueryHasNoDeferred = Assert<Extends<"deleteAfterCommit", keyof QueryContext["storage"]> extends true ? false : true>;
+
+        const storageChecks: [HasDeferred, NoDirectDelete, QueryHasNoDeferred] = [true, true, true];
+
+        expect(storageChecks).toEqual([true, true, true]);
     });
 
     it("does NOT expose write operations on QueryCtx.storage at the type level", () => {
@@ -78,6 +106,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
                 return `signed://${key}`;
             },
             getUrl: (key) => `https://cdn.example.com/${key}`,
+            head: async () => null,
         };
 
         const getAvatar = query.input({ userId: v.id("users") }).query(async ({ args: { userId }, ctx }): Promise<{ url: string }> => {

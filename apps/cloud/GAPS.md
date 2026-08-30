@@ -40,17 +40,71 @@ document, which had drifted). Findings:
 
 **Confirmed still open (code-tractable, no infra needed):**
 
-| Item                             | Blocker                                                     |
-| -------------------------------- | ----------------------------------------------------------- |
-| D2 `lunora eject` CLI subcommand | Core exists (`src/cli/eject.ts`); no `lunora eject` command |
-| R3#2 deployment health charts    | Needs `outcome` on the AE data point first                  |
-| R3#5 onboarding checklist        | Not started                                                 |
-| R3#7 deploy-key roll UX          | Not started                                                 |
-| R3#9 integrations hub            | Not started                                                 |
+| Item                  | Blocker     |
+| --------------------- | ----------- |
+| R3#9 integrations hub | Not started |
 
-`D2` is the notable one: the packaging core is written and tested, but nothing
-in `packages/cli` invokes it, so the no-lock-in exit hatch is unreachable by a
-user. That is a small wiring job, not a build.
+The rest of this list has since shipped — see the status pass below.
+
+### Status pass — 2026-08-28
+
+| Item                             | Now                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D2 `lunora eject` CLI subcommand | ✅ **Shipped** as `lunora cloud eject <deployment-id> [--out]`. The packaging core moved to `packages/cli/src/util/eject.ts` (its output is files on the user's disk) and is fed by a new deploy-key-authorized `POST /v1/eject`, which unseals the tenant admin token at the edge and returns only the snapshot — so the CLI never holds a tenant bearer. |
+| R3#2 deployment health charts    | ✅ **Shipped.** The blocker row above was stale: `outcome` (blob3) landed 2026-08-13. `src/telemetry/traffic-read.ts` reads the metering stream per script, so passing a single script name gives one deployment's volume, error rate and latency.                                                                                                         |
+| R3#5 onboarding checklist        | ✅ **Shipped** — `lunora/onboarding.ts` + `src/client/OnboardingChecklist.tsx`, on the Projects tab until the org's first deployment is live. Derived from real rows, never stored.                                                                                                                                                                        |
+| R3#7 deploy-key roll UX          | ✅ **Shipped** — `deploy_keys.roll` does issue+revoke in one transactional mutation, so neither the two-live-keys nor the no-keys window exists. Ingest keys are refused (their stored cipher would point at a revoked secret).                                                                                                                            |
+| R3#9 integrations hub            | 🔨 Still open — nothing in `src/client/`.                                                                                                                                                                                                                                                                                                                  |
+
+Also shipped in that pass: a **Traffic tab** (`lunora/traffic.ts`,
+`src/client/TrafficSection.tsx`) — visitors by country, top paths, response-code
+breakdown, volume/bytes over time, a live request stream and true latency
+percentiles. The AE data point gained `country`/`hostname`/`status` blobs and
+`durationMs`/`bytes` doubles, appended so the billing rollup's `blob1`/`blob2`
+positions never move.
+
+Shipped since (2026-08-28, same pass):
+
+| Item                                  | Now                                                                                                                                                                                                                                                                                             |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Deployment protection on previews** | ✅ A per-project password gates every PREVIEW deployment at the dispatcher, before dispatch. The salted hash stays in the control plane (`POST /v1/tenants/preview-auth`); the dispatcher mints a signed, script-scoped cookie so later requests cost no round trip. Production is never gated. |
+| **Staged rollouts (A1 follow-on)**    | ✅ `setRollout` / `promoteRollout` / `abortRollout` serve a candidate to a share of traffic alongside the active release. The split is deterministic per client and monotonic in the percentage, so advancing never moves anyone back. Error rate per script is already readable on Traffic.    |
+
+### Status pass — 2026-08-30
+
+Three loops that were each half-built, closed at the end nobody had reached.
+
+| Item                             | Now                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Rollout guard (A1 follow-on)** | ✅ `src/deploy/rollout-guard.ts`, on the every-minute tick. A staged rollout whose candidate returns materially more 5xx than the release it is replacing is aborted, audited as `deployment.rollout.auto_abort`, and notified. Judged against the ACTIVE release rather than a constant, because the two scripts are two builds of one app splitting the same traffic.                 |
+| **Release-path notifications**   | ✅ A new `deploy` alert target. `builds.fail`, `deployments.updateStatus` (on the transition into `failed` only) and the rollout guard raise it. Previously the alert rules could only watch telemetry the tenant's own app had to send — so the one failure class where the app never starts could raise nothing.                                                                      |
+| **Undelivered-alert drain**      | ✅ `src/telemetry/alert-drain.ts`, every minute. Sends `alerts` rows left in `firing` past a grace window. Release-path alerts are raised inside mutations, which have no `fetch`; this is also the first thing that re-sends an alert whose delivering request died mid-send, which used to be silently lost forever.                                                                  |
+| **A4 commit-status write-back**  | 🌐 Code complete, infrastructure-blocked. `src/github/app.ts` mints an installation token and posts a `lunora/deploy` commit status; `runBuild` reports pending → success/failure through an optional port. Inert without `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` (`createGitHubApp` returns `null`) — and see the note below on why that credential alone does not make builds run. |
+
+The commit-status half deserves an honest note, corrected from an earlier draft
+of this row that overstated it. The App credential lights the **reporter** only.
+`builds.dispatch` sets `fetchSource` and `execute` to `unconfigured()`
+unconditionally, and `execute` additionally needs a build container that does not
+exist — so provisioning the App id and private key does not make a single build
+run. It only means that when the container does land, the loop is already closed
+on our side.
+
+Until both exist, a build fails at its first port on every push. Those failures
+are deliberately **not** reported: `isUnconfiguredInfrastructure` suppresses both
+the commit status and the `deploy` alert for them, because a red check reading
+"build execution is not configured" on every push to every connected repository
+teaches people to ignore the check and the page together. The failure is still
+recorded on the build and in `buildLogs`.
+
+**Unchanged 🌐 set** still includes D1 backups/PITR, which remains the
+highest-risk item on this page and is still not built.
+
+**A3/A4 remain the largest gap and share one blocker.** Server-side builds,
+push-to-deploy, per-PR previews and dashboard deploys are all code-complete
+except for `BuildRunnerPorts.execute` (`src/builds/runner.ts`) — the one
+unimplemented port. It needs a container image running `lunora build` and
+speaking the `@lunora/container` exec protocol; no Dockerfile exists in the repo
+yet, so this is genuinely 🌐 rather than 🔨.
 
 **Confirmed still 🧩 (logic exists, no caller):** `applyCreditPurchase`
 (`src/billing/creem-credits.ts`) — unchanged, and genuinely gated on live Creem
@@ -360,11 +414,13 @@ D1 Time Travel export to platform R2 in a _different_ cell, on a cron; tested
 restore runbook. The single most-critical 🌐 item — the control-plane DB is the
 crown jewel.
 
-### D2. `lunora eject` — self-serve full export (✅ packaging core shipped)
+### D2. `lunora eject` — self-serve full export (✅ shipped end to end)
 
-Data-plane export/import RPCs already exist in the framework; the missing part
-is the one-command CLI packaging (export all shards + D1 + R2 + scaffold a BYO
-`wrangler.jsonc`). Portability is the trust feature that eases adoption.
+Data-plane export/import RPCs already existed in the framework; the missing part
+was the one-command CLI packaging. Now `lunora cloud eject <deployment-id>`,
+writing `export.ndjson`, a BYO `wrangler.jsonc` and a restore README into
+`./eject` (or `--out`). Portability is the trust feature that eases adoption, and
+it is only a feature once a user can actually run it.
 
 ### D3. Right-to-erasure / org offboarding (✅ shipped)
 

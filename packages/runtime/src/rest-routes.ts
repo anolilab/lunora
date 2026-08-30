@@ -16,12 +16,15 @@
  * contract that the OpenAPI emitter also uses, so the published spec and the live
  * surface cannot drift.
  */
+import type { HttpCacheLike } from "@lunora/platform";
+
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
 import { assertArgsObject } from "./assert-args-object";
 import { methodGuard } from "./method-guard";
 import { applyRestCache } from "./rest-cache";
+import { restEdgeCacheFor, VARY_KEY_PARAM } from "./rest-edge-cache";
 
 /** The bits of a registered function the REST router reads: its kind and its `.expose` tag. */
 interface RestRegistryEntry {
@@ -62,6 +65,14 @@ type RestRateLimit = (request: Request, functionPath: string) => Promise<Respons
 type RestRoute = (request: Request, env: unknown, url?: URL, context?: ExecutionContextLike) => Promise<Response>;
 
 interface RestRouteDeps {
+    /**
+     * The shared HTTP cache a declared `cache` policy is stored in. Defaults to
+     * the host's own (`caches.default` on Cloudflare); pass a double in tests, or
+     * `null` to keep the surface headers-only on a host whose cache should not be
+     * used. A host with no cache at all needs no opt-out — `undefined` is what
+     * `rest-edge-cache` already finds there.
+     */
+    edgeCache?: HttpCacheLike | null;
     /** The generated function registry — the source of which procedures are exposed. */
     functions: RestRegistryLike;
     /** The shared RPC dispatch (bound in `create-worker`). */
@@ -101,7 +112,8 @@ const readShardKey = (url: URL, request: Request): string | undefined => {
 /**
  * Decode GET args from the query string. Each value is parsed as JSON when it
  * looks like a JSON scalar/array/object (so `?limit=10` → number, `?ids=[1,2]` →
- * array), else kept as a string. `shardKey` is reserved for routing and excluded.
+ * array), else kept as a string. `shardKey` (routing) and `__lunora_vary` (the
+ * edge cache key) are reserved and excluded.
  */
 const argsFromQuery = (url: URL): Record<string, unknown> => {
     // `Object.create(null)` so the result has no prototype chain — a query key
@@ -112,7 +124,11 @@ const argsFromQuery = (url: URL): Record<string, unknown> => {
     const args: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
 
     for (const [key, value] of url.searchParams.entries()) {
-        if (key === "shardKey") {
+        // `shardKey` is reserved for routing; `VARY_KEY_PARAM` is reserved for the
+        // edge cache key. Neither is an argument, and letting the latter through
+        // would hand a caller the one query key it can vary without varying the
+        // cache key.
+        if (key === "shardKey" || key === VARY_KEY_PARAM) {
             continue;
         }
 
@@ -133,7 +149,7 @@ const argsFromQuery = (url: URL): Record<string, unknown> => {
  * `POST` (args from a JSON body); a `mutation` / `action` accepts `POST` only.
  */
 const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
-    const { functions, invoke, rateLimit, readJsonBody } = deps;
+    const { edgeCache, functions, invoke, rateLimit, readJsonBody } = deps;
     const routes: Record<string, RestRoute> = {};
 
     for (const entry of restSurfaceFromRegistry(functions)) {
@@ -144,13 +160,12 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
         // no response policy. `entry.functionPath` came out of this same map, so
         // the lookup cannot miss.
         const cache = (functions[entry.functionPath] as RestRegistryEntry).expose?.cache;
+        // Built once per route: `undefined` when this route can never edge-cache,
+        // so the whole path drops out of the handler for a procedure that declared
+        // no policy (or opted out with `edgeCache: null`).
+        const edge = restEdgeCacheFor(cache, edgeCache);
 
-        routes[entry.path] = async (
-            request: Request,
-            env: unknown,
-            _url?: URL,
-            context?: { waitUntil?: (promise: Promise<unknown>) => void },
-        ): Promise<Response> => {
+        routes[entry.path] = async (request: Request, env: unknown, _url?: URL, context?: ExecutionContextLike): Promise<Response> => {
             const wrongMethod = methodGuard(request, allowed);
 
             if (wrongMethod) {
@@ -167,6 +182,16 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
                 if (limited) {
                     return limited;
                 }
+            }
+
+            // After the limiter, before the dispatch — the order a CDN uses. A
+            // cache hit must still be metered (it is a request this caller made,
+            // and it still costs a Worker invocation), but it must not cost a
+            // shard round trip.
+            const hit = await edge?.lookup(request, context);
+
+            if (hit) {
+                return hit;
             }
 
             let args: Record<string, unknown>;
@@ -203,7 +228,11 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
             // `private`, see `rest-cache`). The context is passed because one
             // credential — the Cloudflare Access identity under a Worker-scoped
             // policy — arrives there rather than on the request.
-            return applyRestCache(response, cache, request, context);
+            const answered = applyRestCache(response, cache, request, context);
+
+            // Stored only once the headers are on it, so a later hit replays the
+            // exact response the first caller got rather than a bare body.
+            return edge ? edge.store(answered, request, context) : answered;
         };
     }
 

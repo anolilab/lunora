@@ -196,4 +196,48 @@ describe("export-tap — continuous CDC drain", () => {
         expect(puts[0]?.key).toBe("cdc/tenant-a/7.ndjson");
         expect(puts[0]?.value.trim()).toBe(JSON.stringify(sanitizeChange(change("t", "1", 7))));
     });
+
+    it("decodes wire-tagged bigint and bytes docs before a sink sees them", async () => {
+        expect.assertions(4);
+
+        // The raw CDC record arrives wire-form from the shard admin RPC; both
+        // built-in sinks NDJSON-encode it straight to a third party, so the tags
+        // must be values by the time `sanitizeChange` hands the batch over.
+        const wireChange = {
+            doc: { _id: "r1", blob: ["$lunora.wire$", "bytes", "AQID"], count: ["$lunora.wire$", "bigint", "42"] },
+            id: "r1",
+            op: "insert",
+            seq: 1,
+            table: "rows",
+            ts: 5,
+        };
+        const batch: ExportBatch = { changes: [sanitizeChange(wireChange)], cursor: 1, shardKey: "s", sink: "hook" };
+
+        expect(batch.changes[0]?.doc).toEqual({ _id: "r1", blob: "AQID", count: "42" });
+
+        const seen: string[] = [];
+        const fetchImpl = vi.fn<(url: string, init: { body: string }) => Promise<{ ok: boolean; status: number }>>(async (_url, init) => {
+            seen.push(init.body);
+
+            return { ok: true, status: 200 };
+        });
+
+        await webhookExportSink({ fetchImpl, name: "hook", url: "https://sink.example/ingest" }).deliver(batch);
+
+        expect(seen[0]).toContain('"count":"42"');
+        expect(seen[0]).not.toContain("$lunora.wire$");
+
+        const puts: string[] = [];
+
+        await r2Sink({
+            bucket: {
+                put: async (_key: string, value: string) => {
+                    puts.push(value);
+                },
+            },
+            name: "r2",
+        }).deliver({ ...batch, sink: "r2" });
+
+        expect(puts[0]).not.toContain("$lunora.wire$");
+    });
 });

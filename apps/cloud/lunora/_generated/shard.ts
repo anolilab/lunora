@@ -2,8 +2,8 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, RunShardApplyCdcArgs, RunShardExportArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike, TelemetrySink } from "@lunora/do";
-import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
-import { asBucketStorage, createSecrets, LunoraError } from "@lunora/server";
+import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
+import { asBucketStorage, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
 import type { AiBindingLike, LunoraAi } from "@lunora/ai";
 import { createAi } from "@lunora/ai";
@@ -645,7 +645,10 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
 };
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
-const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>> = {
+const LUNORA_TABLE_COLUMNS: Record<
+    string,
+    Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>
+> = {
     "cells": [
         {
             "name": "_id",
@@ -686,7 +689,12 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "status",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "active",
+                "draining",
+                "suspended"
+            ]
         },
         {
             "name": "usageReadAtMs",
@@ -725,7 +733,12 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "plan",
             "optional": false,
-            "type": "any"
+            "type": "union",
+            "enumValues": [
+                "free",
+                "pro",
+                "enterprise"
+            ]
         },
         {
             "name": "slug",
@@ -789,7 +802,13 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "role",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "owner",
+                "admin",
+                "member",
+                "viewer"
+            ]
         },
         {
             "name": "userId",
@@ -820,6 +839,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "type": "string"
         },
         {
+            "name": "rollout",
+            "optional": true,
+            "type": "object"
+        },
+        {
             "name": "createdAt",
             "optional": false,
             "type": "number"
@@ -844,6 +868,16 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "optional": false,
             "type": "id",
             "ref": "organizations"
+        },
+        {
+            "name": "previewPasswordHash",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "previewPasswordSalt",
+            "optional": true,
+            "type": "string"
         },
         {
             "name": "slug",
@@ -921,7 +955,12 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "kind",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "production",
+                "preview",
+                "dev"
+            ]
         },
         {
             "name": "organizationId",
@@ -943,7 +982,17 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "status",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "queued",
+                "provisioning",
+                "building",
+                "verifying",
+                "live",
+                "superseded",
+                "failed",
+                "destroyed"
+            ]
         },
         {
             "name": "updatedAt",
@@ -1116,7 +1165,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "capability",
             "optional": true,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "deploy",
+                "ingest"
+            ]
         },
         {
             "name": "createdAt",
@@ -1163,7 +1216,12 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "type",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "production",
+                "dev",
+                "preview"
+            ]
         }
     ],
     "overageDebits": [
@@ -1230,7 +1288,16 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "level",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "trace",
+                "debug",
+                "info",
+                "log",
+                "warn",
+                "error",
+                "fatal"
+            ]
         },
         {
             "name": "message",
@@ -1330,12 +1397,21 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "kind",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "container",
+                "generation",
+                "worker"
+            ]
         },
         {
             "name": "level",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "error",
+                "info"
+            ]
         },
         {
             "name": "model",
@@ -1505,7 +1581,13 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "status",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "pending",
+                "building",
+                "successful",
+                "failed"
+            ]
         },
         {
             "name": "updatedAt",
@@ -1554,7 +1636,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "level",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "info",
+                "error"
+            ]
         },
         {
             "name": "line",
@@ -1713,12 +1799,23 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "role",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "owner",
+                "admin",
+                "member",
+                "viewer"
+            ]
         },
         {
             "name": "status",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "pending",
+                "accepted",
+                "revoked"
+            ]
         },
         {
             "name": "tokenHash",
@@ -1752,7 +1849,44 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "kind",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "aeDataPoints",
+                "aeReadQueries",
+                "browserHours",
+                "containerCpuSeconds",
+                "containerDiskGbSeconds",
+                "containerMemoryGibSeconds",
+                "cpuMs",
+                "d1RowsRead",
+                "d1RowsWritten",
+                "d1StorageGbMonths",
+                "doDurationGbS",
+                "doRequests",
+                "doRowsRead",
+                "doRowsWritten",
+                "doStorageGbMonths",
+                "imagesDelivered",
+                "imagesStored",
+                "imagesTransformations",
+                "kvDeletes",
+                "kvLists",
+                "kvReads",
+                "kvStorageGbMonths",
+                "kvWrites",
+                "logEvents",
+                "logpushRequests",
+                "queueOperations",
+                "r2ClassAOps",
+                "r2ClassBOps",
+                "r2StorageGbMonths",
+                "requests",
+                "vectorizeQueriedDimensions",
+                "vectorizeStoredDimensions",
+                "workersAiNeurons",
+                "workflowSteps",
+                "workflowStorageGbMonths"
+            ]
         },
         {
             "name": "organizationId",
@@ -1838,7 +1972,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "status",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "open",
+                "resolved"
+            ]
         },
         {
             "name": "title",
@@ -1912,7 +2050,12 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "kind",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "crash_loop",
+                "oom",
+                "error_spike"
+            ]
         },
         {
             "name": "lastSeen",
@@ -1933,7 +2076,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "status",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "open",
+                "resolved"
+            ]
         },
         {
             "name": "title",
@@ -1966,12 +2113,22 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "channel",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "email",
+                "webhook",
+                "slack",
+                "pagerduty"
+            ]
         },
         {
             "name": "comparator",
             "optional": true,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "gt",
+                "lt"
+            ]
         },
         {
             "name": "createdAt",
@@ -1996,7 +2153,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "mode",
             "optional": true,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "threshold",
+                "deviation"
+            ]
         },
         {
             "name": "name",
@@ -2012,7 +2173,16 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "target",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "issue",
+                "incident",
+                "uptime",
+                "error_rate",
+                "latency_p95",
+                "llm_cost",
+                "deploy"
+            ]
         },
         {
             "name": "threshold",
@@ -2100,7 +2270,13 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "channel",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "email",
+                "webhook",
+                "slack",
+                "pagerduty"
+            ]
         },
         {
             "name": "createdAt",
@@ -2137,7 +2313,12 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "status",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "firing",
+                "delivered",
+                "failed"
+            ]
         },
         {
             "name": "subject",
@@ -2147,7 +2328,16 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "target",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "issue",
+                "incident",
+                "uptime",
+                "error_rate",
+                "latency_p95",
+                "llm_cost",
+                "deploy"
+            ]
         },
         {
             "name": "updatedAt",
@@ -2280,7 +2470,13 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "environment",
             "optional": false,
-            "type": "union"
+            "type": "union",
+            "enumValues": [
+                "all",
+                "production",
+                "preview",
+                "dev"
+            ]
         },
         {
             "name": "iv",
@@ -3017,6 +3213,24 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public write emits no structured event"
     },
     {
+        "cacheKey": "procedure_without_structured_event:deploy-keys:roll",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public mutation `roll` (deploy-keys) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "roll",
+            "file": "deploy-keys",
+            "kind": "mutation"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
         "cacheKey": "procedure_without_structured_event:deploy-keys:verify",
         "categories": [
             "SCHEMA"
@@ -3117,6 +3331,60 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "level": "INFO",
         "metadata": {
             "exportName": "updateStatus",
+            "file": "deployments",
+            "kind": "mutation"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
+        "cacheKey": "procedure_without_structured_event:deployments:setRollout",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public mutation `setRollout` (deployments) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "setRollout",
+            "file": "deployments",
+            "kind": "mutation"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
+        "cacheKey": "procedure_without_structured_event:deployments:promoteRollout",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public mutation `promoteRollout` (deployments) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "promoteRollout",
+            "file": "deployments",
+            "kind": "mutation"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
+        "cacheKey": "procedure_without_structured_event:deployments:abortRollout",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public mutation `abortRollout` (deployments) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "abortRollout",
             "file": "deployments",
             "kind": "mutation"
         },
@@ -3539,6 +3807,24 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public write emits no structured event"
     },
     {
+        "cacheKey": "procedure_without_structured_event:projects:setPreviewProtection",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public mutation `setPreviewProtection` (projects) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "setPreviewProtection",
+            "file": "projects",
+            "kind": "mutation"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
         "cacheKey": "procedure_without_structured_event:secrets:store",
         "categories": [
             "SCHEMA"
@@ -3622,6 +3908,24 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "metadata": {
             "exportName": "getArchived",
             "file": "traces",
+            "kind": "action"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
+        "cacheKey": "procedure_without_structured_event:traffic:snapshot",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public action `snapshot` (traffic) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "snapshot",
+            "file": "traffic",
             "kind": "action"
         },
         "name": "procedure_without_structured_event",
@@ -4180,6 +4484,31 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesRateLimit": false,
         "usesRls": false,
         "analyzableBody": true,
+        "exportName": "reportTarget",
+        "file": "builds",
+        "hasEmailArg": false,
+        "kind": "query",
+        "visibility": "internal"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": false,
+        "usesRls": false,
+        "analyzableBody": true,
         "exportName": "listByProject",
         "file": "builds",
         "hasEmailArg": false,
@@ -4630,6 +4959,31 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
+        "exportName": "roll",
+        "file": "deploy-keys",
+        "hasEmailArg": false,
+        "kind": "mutation",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
         "exportName": "verify",
         "file": "deploy-keys",
         "hasEmailArg": false,
@@ -4931,6 +5285,106 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "updateStatus",
+        "file": "deployments",
+        "hasEmailArg": false,
+        "kind": "mutation",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": false,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "ejectTarget",
+        "file": "deployments",
+        "hasEmailArg": false,
+        "kind": "query",
+        "visibility": "internal"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "setRollout",
+        "file": "deployments",
+        "hasEmailArg": false,
+        "kind": "mutation",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "promoteRollout",
+        "file": "deployments",
+        "hasEmailArg": false,
+        "kind": "mutation",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "abortRollout",
         "file": "deployments",
         "hasEmailArg": false,
         "kind": "mutation",
@@ -5805,6 +6259,31 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesRateLimit": false,
         "usesRls": false,
         "analyzableBody": true,
+        "exportName": "checklist",
+        "file": "onboarding",
+        "hasEmailArg": false,
+        "kind": "query",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": false,
+        "usesRls": false,
+        "analyzableBody": true,
         "exportName": "list",
         "file": "organizations",
         "hasEmailArg": false,
@@ -6085,6 +6564,56 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "hasEmailArg": false,
         "kind": "mutation",
         "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "setPreviewProtection",
+        "file": "projects",
+        "hasEmailArg": false,
+        "kind": "mutation",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": false,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "verifyPreviewPassword",
+        "file": "projects",
+        "hasEmailArg": false,
+        "kind": "query",
+        "visibility": "internal"
     },
     {
         "callsMail": false,
@@ -6427,6 +6956,56 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "snapshot",
+        "file": "traffic",
+        "hasEmailArg": false,
+        "kind": "action",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": false,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "live",
+        "file": "traffic",
+        "hasEmailArg": false,
+        "kind": "query",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
         "usesRateLimit": false,
         "usesRls": false,
         "analyzableBody": true,
@@ -6722,7 +7301,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
 };
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
-const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "90f6864e11d0ce38", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"alertRuleState\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"firing\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"lastEvaluatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"lastValue\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"ruleId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_rule\": {\n          \"fields\": [\n            \"ruleId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"alertRules\": {\n      \"fields\": {\n        \"baselineWindows\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"channel\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"comparator\": {\n          \"kind\": \"union\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"destination\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"enabled\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"functionPath\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"mode\": {\n          \"kind\": \"union\",\n          \"optional\": true\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"target\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"threshold\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"windowMinutes\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"alerts\": {\n      \"fields\": {\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"channel\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deliveredAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"destination\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"hash\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"ruleId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"subject\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"target\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_status\": {\n          \"fields\": [\n            \"status\"\n          ],\n          \"unique\": false\n        },\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"aliasOwnership\": {\n      \"fields\": {\n        \"alias\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_project\": {\n          \"fields\": [\n            \"projectId\"\n          ],\n          \"unique\": false\n        },\n        \"by_alias\": {\n          \"fields\": [\n            \"alias\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"auditLog\": {\n      \"fields\": {\n        \"action\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"actorUserId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"target\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"buildLogs\": {\n      \"fields\": {\n        \"buildId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"level\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"line\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_build\": {\n          \"fields\": [\n            \"buildId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"builds\": {\n      \"fields\": {\n        \"branch\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"bundleHash\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"commitSha\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"error\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"processingBy\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"processingStartedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"buildingAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"successfulAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"failedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_project_commit\": {\n          \"fields\": [\n            \"projectId\",\n            \"commitSha\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"cells\": {\n      \"fields\": {\n        \"cloudflareAccountId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"dispatchNamespacePrefix\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"jurisdiction\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"usageReadAtMs\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_name\": {\n          \"fields\": [\n            \"name\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"cloudflareBilling\": {\n      \"fields\": {\n        \"cloudflareAccountId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"ciphertext\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"iv\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"customers\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerCustomerId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_customer\": {\n          \"fields\": [\n            \"provider\",\n            \"providerCustomerId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"dashboards\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"panels\": {\n          \"kind\": \"array\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"deployKeys\": {\n      \"fields\": {\n        \"capability\": {\n          \"kind\": \"union\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"encryptedSecret\": {\n          \"kind\": \"object\",\n          \"optional\": true\n        },\n        \"hashedKey\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"lastUsedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"revokedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"type\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_hash\": {\n          \"fields\": [\n            \"hashedKey\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"deployments\": {\n      \"fields\": {\n        \"adminToken\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"adminTokenCiphertext\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"adminTokenIv\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"alias\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"branch\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"cronSpecs\": {\n          \"kind\": \"array\",\n          \"optional\": true\n        },\n        \"bindings\": {\n          \"kind\": \"array\",\n          \"optional\": true\n        },\n        \"bundleHash\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"createdBy\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"expiresAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"kind\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"scriptName\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"url\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"version\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"runtimeVersion\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"queuedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"provisioningAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"verifyingAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"liveAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"supersededAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"failedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"destroyedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"teardownAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_script\": {\n          \"fields\": [\n            \"scriptName\"\n          ],\n          \"unique\": false\n        },\n        \"by_project\": {\n          \"fields\": [\n            \"projectId\"\n          ],\n          \"unique\": false\n        },\n        \"by_kind\": {\n          \"fields\": [\n            \"kind\"\n          ],\n          \"unique\": false\n        },\n        \"by_alias\": {\n          \"fields\": [\n            \"alias\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"domains\": {\n      \"fields\": {\n        \"customHostnameId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"hostname\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"redirectStatusCode\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"redirectTo\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"txtToken\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"verifiedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_project\": {\n          \"fields\": [\n            \"projectId\"\n          ],\n          \"unique\": false\n        },\n        \"by_hostname\": {\n          \"fields\": [\n            \"hostname\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"events\": {\n      \"fields\": {\n        \"processedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerEventId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"type\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_provider_event\": {\n          \"fields\": [\n            \"provider\",\n            \"providerEventId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"githubInstallations\": {\n      \"fields\": {\n        \"accountLogin\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"claimedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"installationId\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_installation\": {\n          \"fields\": [\n            \"installationId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"incidents\": {\n      \"fields\": {\n        \"closedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"container\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"count\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"hash\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"instance\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"investigatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"investigation\": {\n          \"kind\": \"object\",\n          \"optional\": true\n        },\n        \"kind\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"lastSeen\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"openedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_hash\": {\n          \"fields\": [\n            \"organizationId\",\n            \"hash\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"invitations\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"expiresAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"invitedBy\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"role\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"tokenHash\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_token\": {\n          \"fields\": [\n            \"tokenHash\"\n          ],\n          \"unique\": true\n        },\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"issues\": {\n      \"fields\": {\n        \"count\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"culprit\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"firstSeen\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"hash\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"lastSeen\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"sampleMessage\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"sampleTraceId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_culprit\": {\n          \"fields\": [\n            \"organizationId\",\n            \"culprit\"\n          ],\n          \"unique\": false\n        },\n        \"by_org_hash\": {\n          \"fields\": [\n            \"organizationId\",\n            \"hash\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"members\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"role\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"userId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_user\": {\n          \"fields\": [\n            \"organizationId\",\n            \"userId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"metricPoints\": {\n      \"fields\": {\n        \"at\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"functionPath\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"kind\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"serviceName\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_name_at\": {\n          \"fields\": [\n            \"organizationId\",\n            \"name\",\n            \"at\"\n          ],\n          \"unique\": false\n        },\n        \"by_org_at\": {\n          \"fields\": [\n            \"organizationId\",\n            \"at\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"observations\": {\n      \"fields\": {\n        \"attributes\": {\n          \"kind\": \"record\",\n          \"optional\": true\n        },\n        \"completionTokens\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"durationMs\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"endedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"evaluations\": {\n          \"kind\": \"array\",\n          \"optional\": true\n        },\n        \"functionPath\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"input\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"kind\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"level\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"model\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"output\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"parentSpanId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"promptTokens\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"serviceName\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"sessionId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"spanId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"startedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"statusMessage\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"traceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_deployment_started\": {\n          \"fields\": [\n            \"organizationId\",\n            \"deploymentId\",\n            \"startedAt\"\n          ],\n          \"unique\": false\n        },\n        \"by_org_session\": {\n          \"fields\": [\n            \"organizationId\",\n            \"sessionId\"\n          ],\n          \"unique\": false\n        },\n        \"by_org_started\": {\n          \"fields\": [\n            \"organizationId\",\n            \"startedAt\"\n          ],\n          \"unique\": false\n        },\n        \"by_trace\": {\n          \"fields\": [\n            \"organizationId\",\n            \"traceId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"organizations\": {\n      \"fields\": {\n        \"cellId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"plan\": {\n          \"kind\": \"any\",\n          \"optional\": false\n        },\n        \"slug\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"spendCapMinor\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"suspendedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"suspendedReason\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"paymentFailedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"creditsAccountId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"deletionRequestedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_slug\": {\n          \"fields\": [\n            \"slug\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"overageDebits\": {\n      \"fields\": {\n        \"debitedCredits\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"periodStart\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_period\": {\n          \"fields\": [\n            \"organizationId\",\n            \"periodStart\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"paymentSessions\": {\n      \"fields\": {\n        \"amountMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"capturedMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"currency\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerSessionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"refundedMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_session\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSessionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"platformUsage\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"kind\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"periodStart\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"projects\": {\n      \"fields\": {\n        \"activeDeploymentId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"activeScriptName\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"framework\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"githubRepo\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"slug\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_slug\": {\n          \"fields\": [\n            \"organizationId\",\n            \"slug\"\n          ],\n          \"unique\": true\n        },\n        \"by_github_repo\": {\n          \"fields\": [\n            \"githubRepo\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"rateLimits\": {\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"secrets\": {\n      \"fields\": {\n        \"ciphertext\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"environment\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"iv\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_project_env_name\": {\n          \"fields\": [\n            \"projectId\",\n            \"environment\",\n            \"name\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"subscriptions\": {\n      \"fields\": {\n        \"cancelAtPeriodEnd\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"currentPeriodEnd\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"currentPeriodStart\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"priceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerSubscriptionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_subscription\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSubscriptionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"tenantLogs\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"fields\": {\n          \"kind\": \"record\",\n          \"optional\": true\n        },\n        \"functionPath\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"level\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"message\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"scriptName\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"shardKey\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"spanId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"traceId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"userId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_trace\": {\n          \"fields\": [\n            \"organizationId\",\n            \"traceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_script_time\": {\n          \"fields\": [\n            \"scriptName\",\n            \"createdAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"uptimeChecks\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"error\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"latencyMs\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"ok\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"statusCode\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_org_deployment\": {\n          \"fields\": [\n            \"organizationId\",\n            \"deploymentId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"uptimeState\": {\n      \"fields\": {\n        \"consecutiveFailures\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"lastCheckedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"lastOk\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_deployment\": {\n          \"fields\": [\n            \"deploymentId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"usageEvents\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"featureId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"idempotencyKey\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"reportedToProvider\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference_feature\": {\n          \"fields\": [\n            \"referenceId\",\n            \"featureId\"\n          ],\n          \"unique\": false\n        },\n        \"by_idempotency\": {\n          \"fields\": [\n            \"provider\",\n            \"idempotencyKey\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    }\n  },\n  \"version\": 1\n}\n" };
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "7604ba2f0f2e7e09", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"alertRuleState\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"firing\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"lastEvaluatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"lastValue\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"ruleId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_rule\": {\n          \"fields\": [\n            \"ruleId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"alertRules\": {\n      \"fields\": {\n        \"baselineWindows\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"channel\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"comparator\": {\n          \"kind\": \"union\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"destination\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"enabled\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"functionPath\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"mode\": {\n          \"kind\": \"union\",\n          \"optional\": true\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"target\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"threshold\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"windowMinutes\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"alerts\": {\n      \"fields\": {\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"channel\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deliveredAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"destination\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"hash\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"ruleId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"subject\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"target\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_status\": {\n          \"fields\": [\n            \"status\"\n          ],\n          \"unique\": false\n        },\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"aliasOwnership\": {\n      \"fields\": {\n        \"alias\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_project\": {\n          \"fields\": [\n            \"projectId\"\n          ],\n          \"unique\": false\n        },\n        \"by_alias\": {\n          \"fields\": [\n            \"alias\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"auditLog\": {\n      \"fields\": {\n        \"action\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"actorUserId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"target\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"buildLogs\": {\n      \"fields\": {\n        \"buildId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"level\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"line\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_build\": {\n          \"fields\": [\n            \"buildId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"builds\": {\n      \"fields\": {\n        \"branch\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"bundleHash\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"commitSha\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"error\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"processingBy\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"processingStartedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"buildingAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"successfulAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"failedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_project_commit\": {\n          \"fields\": [\n            \"projectId\",\n            \"commitSha\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"cells\": {\n      \"fields\": {\n        \"cloudflareAccountId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"dispatchNamespacePrefix\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"jurisdiction\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"usageReadAtMs\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_name\": {\n          \"fields\": [\n            \"name\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"cloudflareBilling\": {\n      \"fields\": {\n        \"cloudflareAccountId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"ciphertext\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"iv\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"customers\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerCustomerId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_customer\": {\n          \"fields\": [\n            \"provider\",\n            \"providerCustomerId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"dashboards\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"panels\": {\n          \"kind\": \"array\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"deployKeys\": {\n      \"fields\": {\n        \"capability\": {\n          \"kind\": \"union\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"encryptedSecret\": {\n          \"kind\": \"object\",\n          \"optional\": true\n        },\n        \"hashedKey\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"lastUsedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"revokedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"type\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_hash\": {\n          \"fields\": [\n            \"hashedKey\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"deployments\": {\n      \"fields\": {\n        \"adminToken\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"adminTokenCiphertext\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"adminTokenIv\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"alias\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"branch\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"cronSpecs\": {\n          \"kind\": \"array\",\n          \"optional\": true\n        },\n        \"bindings\": {\n          \"kind\": \"array\",\n          \"optional\": true\n        },\n        \"bundleHash\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"createdBy\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"expiresAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"kind\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"scriptName\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"url\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"version\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"runtimeVersion\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"queuedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"provisioningAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"verifyingAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"liveAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"supersededAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"failedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"destroyedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"teardownAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_script\": {\n          \"fields\": [\n            \"scriptName\"\n          ],\n          \"unique\": false\n        },\n        \"by_project\": {\n          \"fields\": [\n            \"projectId\"\n          ],\n          \"unique\": false\n        },\n        \"by_kind\": {\n          \"fields\": [\n            \"kind\"\n          ],\n          \"unique\": false\n        },\n        \"by_alias\": {\n          \"fields\": [\n            \"alias\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"domains\": {\n      \"fields\": {\n        \"customHostnameId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"hostname\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"redirectStatusCode\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"redirectTo\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"txtToken\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"verifiedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_project\": {\n          \"fields\": [\n            \"projectId\"\n          ],\n          \"unique\": false\n        },\n        \"by_hostname\": {\n          \"fields\": [\n            \"hostname\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"events\": {\n      \"fields\": {\n        \"processedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerEventId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"type\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_provider_event\": {\n          \"fields\": [\n            \"provider\",\n            \"providerEventId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"githubInstallations\": {\n      \"fields\": {\n        \"accountLogin\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"claimedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"installationId\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_installation\": {\n          \"fields\": [\n            \"installationId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"incidents\": {\n      \"fields\": {\n        \"closedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"container\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"count\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"hash\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"instance\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"investigatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"investigation\": {\n          \"kind\": \"object\",\n          \"optional\": true\n        },\n        \"kind\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"lastSeen\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"openedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_hash\": {\n          \"fields\": [\n            \"organizationId\",\n            \"hash\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"invitations\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"expiresAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"invitedBy\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"role\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"tokenHash\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_token\": {\n          \"fields\": [\n            \"tokenHash\"\n          ],\n          \"unique\": true\n        },\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"issues\": {\n      \"fields\": {\n        \"count\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"culprit\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"firstSeen\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"hash\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"lastSeen\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"sampleMessage\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"sampleTraceId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_culprit\": {\n          \"fields\": [\n            \"organizationId\",\n            \"culprit\"\n          ],\n          \"unique\": false\n        },\n        \"by_org_hash\": {\n          \"fields\": [\n            \"organizationId\",\n            \"hash\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"members\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"role\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"userId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_user\": {\n          \"fields\": [\n            \"organizationId\",\n            \"userId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"metricPoints\": {\n      \"fields\": {\n        \"at\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"functionPath\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"kind\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"serviceName\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_name_at\": {\n          \"fields\": [\n            \"organizationId\",\n            \"name\",\n            \"at\"\n          ],\n          \"unique\": false\n        },\n        \"by_org_at\": {\n          \"fields\": [\n            \"organizationId\",\n            \"at\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"observations\": {\n      \"fields\": {\n        \"attributes\": {\n          \"kind\": \"record\",\n          \"optional\": true\n        },\n        \"completionTokens\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"durationMs\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"endedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"evaluations\": {\n          \"kind\": \"array\",\n          \"optional\": true\n        },\n        \"functionPath\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"input\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"kind\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"level\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"model\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"output\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"parentSpanId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"promptTokens\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"serviceName\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"sessionId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"spanId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"startedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"statusMessage\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"traceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_deployment_started\": {\n          \"fields\": [\n            \"organizationId\",\n            \"deploymentId\",\n            \"startedAt\"\n          ],\n          \"unique\": false\n        },\n        \"by_org_session\": {\n          \"fields\": [\n            \"organizationId\",\n            \"sessionId\"\n          ],\n          \"unique\": false\n        },\n        \"by_org_started\": {\n          \"fields\": [\n            \"organizationId\",\n            \"startedAt\"\n          ],\n          \"unique\": false\n        },\n        \"by_trace\": {\n          \"fields\": [\n            \"organizationId\",\n            \"traceId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"organizations\": {\n      \"fields\": {\n        \"cellId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"plan\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"slug\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"spendCapMinor\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"suspendedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"suspendedReason\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"paymentFailedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"creditsAccountId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"deletionRequestedAt\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_slug\": {\n          \"fields\": [\n            \"slug\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"overageDebits\": {\n      \"fields\": {\n        \"debitedCredits\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"periodStart\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_period\": {\n          \"fields\": [\n            \"organizationId\",\n            \"periodStart\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"paymentSessions\": {\n      \"fields\": {\n        \"amountMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"capturedMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"currency\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerSessionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"refundedMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_session\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSessionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"platformUsage\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": true\n        },\n        \"kind\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"periodStart\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"projects\": {\n      \"fields\": {\n        \"activeDeploymentId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"activeScriptName\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"rollout\": {\n          \"kind\": \"object\",\n          \"optional\": true\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"framework\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"githubRepo\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"previewPasswordHash\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"previewPasswordSalt\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"slug\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_slug\": {\n          \"fields\": [\n            \"organizationId\",\n            \"slug\"\n          ],\n          \"unique\": true\n        },\n        \"by_github_repo\": {\n          \"fields\": [\n            \"githubRepo\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"rateLimits\": {\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"secrets\": {\n      \"fields\": {\n        \"ciphertext\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"environment\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"iv\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"projectId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_project_env_name\": {\n          \"fields\": [\n            \"projectId\",\n            \"environment\",\n            \"name\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"subscriptions\": {\n      \"fields\": {\n        \"cancelAtPeriodEnd\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"currentPeriodEnd\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"currentPeriodStart\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"priceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerSubscriptionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_subscription\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSubscriptionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"tenantLogs\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"fields\": {\n          \"kind\": \"record\",\n          \"optional\": true\n        },\n        \"functionPath\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"level\": {\n          \"kind\": \"union\",\n          \"optional\": false\n        },\n        \"message\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"scriptName\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"shardKey\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"spanId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"traceId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"userId\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_trace\": {\n          \"fields\": [\n            \"organizationId\",\n            \"traceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_script_time\": {\n          \"fields\": [\n            \"scriptName\",\n            \"createdAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"uptimeChecks\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"error\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"latencyMs\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"ok\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"statusCode\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_org_deployment\": {\n          \"fields\": [\n            \"organizationId\",\n            \"deploymentId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"uptimeState\": {\n      \"fields\": {\n        \"consecutiveFailures\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"deploymentId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"lastCheckedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"lastOk\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org\": {\n          \"fields\": [\n            \"organizationId\"\n          ],\n          \"unique\": false\n        },\n        \"by_deployment\": {\n          \"fields\": [\n            \"deploymentId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    },\n    \"usageEvents\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"featureId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"idempotencyKey\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"reportedToProvider\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference_feature\": {\n          \"fields\": [\n            \"referenceId\",\n            \"featureId\"\n          ],\n          \"unique\": false\n        },\n        \"by_idempotency\": {\n          \"fields\": [\n            \"provider\",\n            \"idempotencyKey\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -6733,7 +7312,7 @@ export interface ShardDOConfig {
     storage?: (env: Record<string, unknown>) => unknown;
     ai?: (env: Record<string, unknown>) => AiBindingLike;
     payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;
-    d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;
+    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;
 }
 
 const schedulerStub = {
@@ -6762,6 +7341,9 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
     getUrl: () => {
+        throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
+    },
+    head: async () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
     list: async () => {
@@ -6925,7 +7507,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // The main `/rpc` path always supplies one; `dispatchLifecycle` /
             // `handleRunAs` don't mint their own and omit it, so they keep the
             // prior fallback behavior unchanged.
-            const ctx = this.buildCtx({ functionPath, headroom });
+            const ctx = this.buildCtx({ functionPath, headroom, trusted: registered.lifecycle === "init" });
 
             // A mutation's writes must commit all-or-nothing: wrap its dispatch in
             // the DO's BEGIN/COMMIT span so any throw (a validator, an RLS denial,
@@ -6941,16 +7523,47 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // watermark are atomic — a crash can't leave the writes durable without
             // the replay guard.
             if (registered.kind === "mutation") {
-                return this.runInTransaction(async () => {
-                    const result = await registered.handler(ctx, args);
+                const result = await this.runInTransaction(async () => {
+                    const value = await registered.handler(ctx, args);
 
-                    this.commitMutationBookkeeping(result);
+                    this.commitMutationBookkeeping(value);
 
-                    return result;
+                    return value;
                 });
+
+                // The transaction committed, so the rows are durable and the objects
+                // their deletion orphaned can go. Deliberately AFTER the span, never
+                // inside it: an R2 delete cannot roll back, so a delete issued from
+                // within a transaction that later aborts destroys data the surviving
+                // row still points at. A throw above skips this entirely and the
+                // queue dies with `ctx`.
+                //
+                // `flushDeferredDeletes` never rejects — the mutation has already
+                // succeeded, so a failed cleanup must not turn into a failed response.
+                // A leaked object is reported through `ctx.log` instead, with its key.
+                await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+                return result;
             }
 
-            return registered.handler(ctx, args);
+            const result = await registered.handler(ctx, args);
+
+            // An action is not itself transactional, but `ctx.runMutation` runs its
+            // submutations on THIS ctx, so their queued deletes land here — this is
+            // the first point at which those writes are known to have committed. A
+            // dispatch with nothing queued no-ops.
+            await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+            return result;
+        }
+
+        // Only a `mutation` may enter the base class's single-writer gate for
+        // mutation-replay dedup — it is `blockConcurrencyWhile`, so gating an
+        // action would stall every other dispatch on the shard for the length of
+        // its outbound I/O, on nothing but a caller-supplied header. Unregistered
+        // paths answer `false`; `handleRpc` above rejects them anyway.
+        protected override isMutationFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.kind === "mutation";
         }
 
         protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
@@ -6997,9 +7610,59 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             };
         }
 
-        protected override lifecycleHookPaths(event: "connect" | "disconnect"): readonly string[] {
+        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
+
+        protected override async runShardInit(): Promise<void> {
+            this.ensureMigrated();
+
+            await this.dispatchShardInit();
+        }
+
+        // One `onQueryChange` dispatch. Mirrors `executeSubscription` — the
+        // socket-terminated half of the same reactivity — and differs only in who
+        // consumes the result: the base's `dispatchReactors` stores the digest as
+        // the new baseline and the footprint as the "should I even re-run this"
+        // gate, instead of pushing a frame down a socket.
+        //
+        // Wrapped in `runInTransaction` because a reactor handler is a mutation
+        // and its writes must commit all-or-nothing. Safe to open here: the refresh
+        // drain runs OUTSIDE any dispatch transaction (it is post-flush background
+        // work), so this never nests.
+        //
+        // NO identity is threaded, and the ctx is built `trusted`. A reactor fires
+        // because data moved, not because anyone asked, so there is no user for RLS
+        // to scope to — it runs in the same system tier as migrations and the
+        // external-source poll loop. Inheriting the shared per-request identity
+        // would instead run an app's reactor as whichever user happened to write
+        // last, which is worse than running it as nobody.
+        protected override async runReactor(functionPath: string, previousDigest?: string): Promise<{ digest: string; ran: boolean; tables: readonly string[] } | undefined> {
+            const registered = LUNORA_FUNCTIONS[functionPath];
+
+            if (!registered || registered.kind !== "mutation") {
+                return undefined;
+            }
+
+            this.ensureMigrated();
+
+            const footprint = createReadFootprint();
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
+            const outcome = (await this.runInTransaction(async () => registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>))) as {
+                digest: string;
+                ran: boolean;
+            };
+
+            // A reactor IS a mutation, so its ctx carries the deferred-delete queue
+            // and its transaction has just committed. Without this the queue would
+            // die with `ctx` and the objects would leak with nothing to find: no
+            // error, no warning, no failed request — a reactor that reaps orphaned
+            // rows is a textbook use of one.
+            await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+            return { digest: outcome.digest, ran: outcome.ran, tables: [...footprint.tables] };
+        }
+
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
             return LUNORA_TABLE_REFS[table];
@@ -7013,7 +7676,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_TTL_SWEEPS;
         }
 
-        protected override tableColumns(table: string): Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }> {
+        protected override tableColumns(
+            table: string,
+        ): Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }> {
             return LUNORA_TABLE_COLUMNS[table] ?? [];
         }
 
@@ -7067,6 +7732,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -7110,6 +7777,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -7164,6 +7833,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -7191,6 +7862,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -7252,6 +7925,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -7280,6 +7955,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -7311,6 +7988,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -7330,7 +8009,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.migrated = true;
         }
 
-        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void } = {}): unknown {
+        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
             // refresh — both run in deferred/interleaved contexts), use it by
@@ -7356,12 +8035,47 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const secrets = createSecrets(env);
 
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            // `list`/`get` are the two methods `ctx.db.system.query("_scheduled_functions")`
+            // reaches through, and pending jobs live in the SchedulerDO — nothing the
+            // CDC changelog records — so reading them must forfeit a delta resume.
+            // The scheduler's own `runAfter`/`runAt`/`cancel` are writes and stay unstamped.
+            const scheduler = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally
             // (its `list`/`getMetadata` throw the "no storage configured" error).
-            const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
+            //
+            // Wrapped BEFORE the split so both consumers share one stamping facade.
+            // Only the methods that actually reach R2 are stamped: `getUrl` and
+            // `getSignedUrl` build a URL from the configured base (and an HMAC) and
+            // read nothing, and they are what handlers overwhelmingly call — stamping
+            // them would forfeit resumes for a dependency that cannot move the result.
+            // `bucket` IS stamped: it hands back a sub-facade this wrapper does not
+            // reach, so the selection is the last point at which the read can be seen.
+            const storage = markUnvouchableReads(asBucketStorage(config.storage?.(env) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
+                "bucket",
+                "download",
+                "getMetadata",
+                "list",
+            ]);
+            // `ctx.storage.deleteAfterCommit(key)`, on every dispatch that can host
+            // a MUTATION handler — which is not only a mutation dispatch:
+            // `ctx.runMutation` hands the CALLER's ctx to the callee, so a mutation
+            // reached from an action runs on the action's ctx. Wrapping mutations
+            // alone made that composition throw a bare TypeError on a method the
+            // handler's own type promises. Queries stay unwrapped: they cannot host
+            // one, and their ctx is built on the hot subscription path.
+            //
+            // Every dispatch wrapped here also flushes (see `handleRpc` and
+            // `runReactor`) — a queue nothing drains leaks silently, which is worse
+            // than not having the method at all.
+            //
+            // Wrapped OUTSIDE the read-stamping facade so `bucket(name)` still
+            // resolves through it and stays stamped, and applied only to
+            // `ctx.storage` so `ctx.db.system._storage` (which shares the adapter
+            // above) is untouched.
+            const contextKind = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind;
+            const contextStorage = contextKind === "mutation" || contextKind === "action" ? withDeferredDeletes(storage) : storage;
             // `ctx.log`: the DO base builds the attributed logger (structured
             // fields + `.with(...)` child + trace correlation) and routes each call
             // to the optional `observability` sink. It also buffers the line (studio
@@ -7382,7 +8096,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // so both write to the same trace.
             const span = this.makeDispatchSpan(traceAnchor, observability);
 
-            const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;
+            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };
+            const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;
             // `ctx.db`, wrapped in automatic instrumentation: by default this
             // adds aggregate counters (call count, total time, per-operation
             // breakdown) to the wide event rather than a span per call, so a
@@ -7394,8 +8109,20 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
-                enforceRls: true,
+                // A dispatch with NO caller identity runs system-trusted: RLS scopes
+                // rows to a user, and these have no user to scope to. This is the tier
+                // migrations, imports and the external-source poll loop already run in
+                // (see `adminWriterPrelude`). Only `onShardInit` and `onQueryChange`
+                // reach it; `onConnect`/`onDisconnect` carry a verified identity and
+                // stay guarded like any request.
+                enforceRls: options.trusted !== true,
                 headroom: options.headroom ?? this.transactionHeadroom(),
+                // A live predicate, not a flag: the transaction opens AFTER this ctx
+                // is built (a mutation dispatch wraps the handler), so only a call-time
+                // read reports the truth. `_commitSeq` reuses one sequence across
+                // writes only while they commit together — an action is not wrapped, so
+                // each of its writes allocates its own.
+                inTransaction: () => this.isInTransaction(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
                 onReadRange: options.onReadRange,
@@ -7480,7 +8207,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 orm: bindOrm(facade),
                 scheduler,
                 span,
-                storage,
+                storage: contextStorage,
                 trace,
                 ai,
                 env: envConfig,
@@ -7490,7 +8217,25 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);
             ctx.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx);
-            ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("query", reference.__lunoraRef, fnArgs, ctx);
+            // `ctx.runQuery(ref, args, { untracked: true })` runs the sub-query on
+            // its OWN context, built without the read-footprint hooks — so its
+            // reads never enter this subscription's footprint and a write to the
+            // tables it touched does not re-run us. Everything else is inherited:
+            // `functionPath` (log/metric attribution), `headroom` (the sub-query
+            // must not escape this dispatch's resource ceiling), and — load-bearing
+            // — the identity BY VALUE. Omitting identity would let `buildCtx` fall
+            // back to the shared per-request fields, which a concurrent RPC may
+            // have re-set, and an RLS-scoped sub-query would then read as the wrong
+            // user. A tracked call keeps sharing `ctx` exactly as before.
+            ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) =>
+                dispatchRun(
+                    "query",
+                    reference.__lunoraRef,
+                    fnArgs,
+                    runOptions?.untracked === true
+                        ? this.buildCtx({ functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId } })
+                        : ctx,
+                );
 
             return ctx;
         }

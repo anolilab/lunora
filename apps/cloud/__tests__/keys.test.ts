@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { rollRefusalReason } from "../lunora/deploy-keys";
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
 
 describe("deploy key helpers", () => {
@@ -38,5 +39,28 @@ describe("deploy key helpers", () => {
 
         expect(secret).toMatch(/^[0-9a-f]{64}$/u);
         expect(randomSecret()).not.toBe(secret);
+    });
+});
+
+describe(rollRefusalReason, () => {
+    it("allows rolling a live deploy key", () => {
+        expect(rollRefusalReason({})).toBeUndefined();
+        expect(rollRefusalReason({ capability: "deploy" })).toBeUndefined();
+    });
+
+    it("refuses a key that is already revoked", () => {
+        expect(rollRefusalReason({ revokedAt: 1 })).toMatch(/already revoked/);
+    });
+
+    /**
+     * The trap this guards. A platform-managed ingest key stores an
+     * envelope-encrypted copy of its plaintext, which the deploy path re-injects
+     * into the tenant's `otlpSink`. Rolling one would mint a new secret and leave
+     * that cipher pointing at the revoked one, so every later deploy would inject
+     * a dead token — and nothing reads telemetry back to notice, so the org's
+     * traces would simply stop with no error raised anywhere.
+     */
+    it("refuses a platform-managed ingest key", () => {
+        expect(rollRefusalReason({ capability: "ingest" })).toMatch(/platform-managed/);
     });
 });

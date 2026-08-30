@@ -1,8 +1,42 @@
 /// <reference types="vitest" />
+import { availableParallelism } from "node:os";
+
 import type { ViteUserConfig } from "vitest/config";
-import { defineConfig, configDefaults, coverageConfigDefaults } from "vitest/config";
+import { configDefaults, coverageConfigDefaults, defineConfig } from "vitest/config";
 
 const VITEST_SEQUENCE_SEED = Date.now();
+
+/**
+ * Worker cap per vitest instance, so concurrent instances do not oversubscribe
+ * the machine between them.
+ *
+ * Vitest defaults to roughly one worker per core. That is right for ONE instance
+ * and wrong for how this repo runs its suite: `vis` starts several package tasks
+ * at a time, so on a 10-core machine five instances each claimed ~9 workers —
+ * about 45 processes competing for 10 cores.
+ *
+ * That 4.5x oversubscription is what produced this repo's "flaky" tests. They
+ * were not flaky. A `findByTestId` that resolves instantly in isolation missed a
+ * 1s budget by 3-6 seconds, and a CLI test was reported at 10,063 ms against a
+ * 10,000 ms limit — the signature of starvation, not of a race. Capping the
+ * workers made three consecutive full-suite runs clean AND cut wall time from
+ * ~290-380s to ~190-250s: the contention was costing more than it bought.
+ *
+ * Keyed on `VIS_TASK_SLOTS`, which vis sets in every task it spawns to declare
+ * how many it runs at once. Reading it rather than mirroring `vis.config.ts`
+ * means the two cannot drift, and a STANDALONE run
+ * (`pnpm --filter <pkg> run test`) sees no variable and keeps vitest's default —
+ * which matters, because the cap makes a single-package run about twice as slow
+ * and that is the inner dev loop.
+ *
+ * The divisor is `availableParallelism()`, not `cpus().length`: the two agree on
+ * a developer machine but not inside a CPU-limited container, which is what a CI
+ * runner is. `cpus()` reports the HOST's processors, so a 2-core executor on a
+ * 64-core host would compute a cap of 12 and rebuild the oversubscription this
+ * exists to prevent.
+ */
+const visTaskSlots = Number.parseInt(process.env["VIS_TASK_SLOTS"] ?? "", 10);
+const MAX_WORKERS = Number.isFinite(visTaskSlots) && visTaskSlots > 1 ? Math.max(1, Math.floor((availableParallelism() || visTaskSlots) / visTaskSlots)) : undefined;
 
 export interface CoverageThresholds {
     branches?: number;
@@ -70,12 +104,29 @@ export const getVitestConfig = (options: ViteUserConfig = {}, coverageThresholds
             },
             environment: "node",
             hideSkippedTests: true,
-            // vis runs coverage for many projects concurrently; under that CI
-            // contention (v8 instrumentation + oversubscribed cores) individual
-            // tests that finish in <1s locally can blow past the 5s default and
-            // fail spuriously. Give them generous headroom in CI.
-            testTimeout: process.env.CI ? 30_000 : 10_000,
-            hookTimeout: process.env.CI ? 30_000 : 10_000,
+            // vis runs many projects concurrently; under that contention (v8
+            // instrumentation + oversubscribed cores) a test that finishes in
+            // well under a second can blow past a small timeout and fail
+            // spuriously.
+            //
+            // NOT keyed on CI, which is the mistake this replaces. `pnpm run test`
+            // fans 108 tasks across a developer's machine — one already running an
+            // editor, a browser and whatever else — while CI gets a dedicated
+            // runner doing nothing else. Local is the MORE contended environment,
+            // and it was the one given the shorter fuse: the flakes this caused
+            // were reported at 10,063 ms against a 10,000 ms local limit.
+            //
+            // A timeout only bounds how long a PASSING assertion is willing to
+            // wait, so raising it costs nothing when the suite is healthy. The
+            // only price is that a genuinely hung test takes longer to say so,
+            // which is a far better trade than a false failure that costs a
+            // three-minute re-run of the whole suite.
+            testTimeout: 30_000,
+            hookTimeout: 30_000,
+            // See MAX_WORKERS: the timeouts above are the backstop, this is the
+            // fix. Without it five concurrent vitest instances each spawn a
+            // worker per core and starve each other.
+            ...(MAX_WORKERS === undefined ? {} : { maxWorkers: MAX_WORKERS }),
             reporters: process.env.CI
                 ? process.env.CI_PREFLIGHT
                     ? ["dot", "github-actions"]

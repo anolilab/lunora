@@ -41,6 +41,23 @@ choose the response status.
 `LunoraError`, so even "should never happen" assertions participate in the layer
 (redacted to a generic message on the wire, detailed in logs).
 
+## Throwing in expression position
+
+`throw` is a statement, so it can't sit on the right of `??` or in a ternary arm.
+`raise(code, message?, options?)` can, and — because its declaration is annotated
+`=> never` — it also ends the control-flow path, so the value flowing through it
+narrows:
+
+```ts
+import { raise } from "@lunora/errors";
+
+const thread = (await ctx.db.threads.get(id)) ?? raise("NOT_FOUND", `thread ${id}`);
+//    ^ non-nullable, no assertion needed
+```
+
+Unlike `invariant`/`unreachable`, which are pinned to `INTERNAL`, `raise` takes
+the code — use it for failures the caller can act on.
+
 ## Rendering
 
 `LunoraError` mirrors `@visulima/error`'s error model (`type: "VisulimaError"`

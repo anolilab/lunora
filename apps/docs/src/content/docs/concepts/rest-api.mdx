@@ -149,6 +149,86 @@ createRestRateLimit(limiter, {
 A rejected call gets a `429` with `Retry-After`. The gate applies only to REST;
 typed RPC is unaffected.
 
+## Caching
+
+A `GET`-able exposed query can declare an HTTP cache policy. Unlike RPC — which is
+a `POST` and therefore not edge-cacheable at all — a REST `GET` has a URL the
+colo cache can key on:
+
+```ts
+export const list = query
+    .input({ limit: v.optional(v.number()) })
+    .expose({ rest: true, cache: { scope: "public", maxAge: 60, staleWhileRevalidate: 300 } })
+    .query(async ({ ctx, args }) => ctx.db.query("posts").take(args.limit ?? 20));
+```
+
+This does two things. It emits the `Cache-Control` / `Vary` headers the response
+advertises — which browsers and any CDN in front of you honour — and, on a host
+with a cache the Worker can write to (`caches.default` on Cloudflare), it stores
+the response there. A subsequent identical request is answered from the colo with
+**no shard dispatch**, and comes back with `X-Lunora-Edge-Cache: hit`. The
+rate-limit gate still runs first — a cache hit is still a request this caller
+made — so caching changes what a request costs you, not what it costs them.
+
+### `scope` is a request, not a promise
+
+The hazard of caching a procedure-backed endpoint is that the procedure runs under
+`ctx.auth` and RLS, so its body is frequently caller-specific. Lunora therefore
+re-derives the effective scope from the live request and downgrades `public` →
+`private` whenever the caller presented a credential — an `Authorization` header,
+a cookie, a Cloudflare Access identity, or any header you named in
+`credentialHeaders`. A downgraded exchange is never written to the shared cache
+and never served from it.
+
+So the cost of a wrong `scope` is a missed cache hit, never a cross-user leak. A
+policy declared `scope: "private"` is never stored at the edge at all — it is
+caller-specific by definition.
+
+If your app authenticates on something outside the built-in list, you must say so,
+or those callers read as anonymous:
+
+```ts
+.expose({ rest: true, cache: { scope: "public", maxAge: 60, credentialHeaders: ["x-api-key"] } })
+```
+
+The same applies to a body that varies on something the request does not carry as
+a credential. A `scope: "public"` query whose result depends on `ctx.ip` — geo
+content, a per-IP quota display — has one caller's answer served to the whole
+colo. Either declare `vary: "cf-connecting-ip"` (which keys per IP, and so caches
+almost nothing) or leave the endpoint `private`.
+
+### `Vary` is enforced in the key
+
+Cloudflare's cache honours `Vary` for `Accept-Encoding` only, so Lunora does not
+delegate it: every header the policy varies on — including `x-lunora-shard-key`
+and `x-d1-bookmark`, which select _which_ data a request sees — is folded into the
+cache key itself. Two requests that differ on any of them can never share an entry.
+
+Only a `200` is stored, and a response carrying `Set-Cookie` is skipped. So is a
+response advertising a `Vary` header the key does not fence on — a procedure that
+negotiates on `Accept-Language` of its own accord costs a cache miss rather than
+risking one variant being served in place of another.
+
+The stored copy also drops the headers that describe the exchange rather than the
+resource (`X-D1-Bookmark`, `X-Lunora-Shard-Key`): the first caller still receives
+them, but replaying them would hand a later caller someone else's read cursor.
+
+### Opting out
+
+Pass `restEdgeCache: null` to `createWorker` to keep the surface headers-only —
+the declared `Cache-Control` still goes out and browsers and any CDN in front
+still honour it, but nothing is written to the colo:
+
+```ts
+export default createWorker({
+    // …schema, functions…
+    restEdgeCache: null,
+});
+```
+
+A host with no cache of its own needs no opt-out: there is nothing to find, and
+the surface degrades to the same headers-only behaviour.
+
 ## OpenAPI
 
 The exposed surface is described by the generated OpenAPI 3.1 document, so

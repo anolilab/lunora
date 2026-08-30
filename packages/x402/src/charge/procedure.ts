@@ -16,6 +16,7 @@
  * // handed to createWorker({ x402Charge: gate })
  * ```
  */
+import { memoizePromise } from "../../../../shared/promise-memo";
 import type { X402ChargeConfig, X402Price } from "../config";
 import type { ChargeHandlerDeps, ChargeMiddleware } from "./middleware";
 import { createChargeMiddleware } from "./middleware";
@@ -71,19 +72,11 @@ export const createProcedureChargeGate = (config: X402ProcedureChargeConfig): X4
     const middlewareByFunction = new Map<string, Promise<ChargeMiddleware>>();
 
     return async (request: Request, spec: X402ProcedureSpec, dispatch: () => Promise<Response>, deps?: ChargeHandlerDeps): Promise<Response> => {
-        let pending = middlewareByFunction.get(spec.functionPath);
-
-        if (pending === undefined) {
-            pending = createChargeMiddleware({ ...config, price: spec.price }, { resource: spec.functionPath }).catch((error: unknown) => {
-                // Don't cache a failed init — let the next request retry.
-                middlewareByFunction.delete(spec.functionPath);
-
-                throw error;
-            });
-            middlewareByFunction.set(spec.functionPath, pending);
-        }
-
-        const middleware = await pending;
+        // `memoizePromise` owns the coalescing and the don't-cache-a-failure
+        // eviction, so a transient facilitator outage retries on the next request.
+        const middleware = await memoizePromise(middlewareByFunction, spec.functionPath, async () =>
+            createChargeMiddleware({ ...config, price: spec.price }, { resource: spec.functionPath }),
+        );
 
         return middleware.handle(request, dispatch, deps);
     };

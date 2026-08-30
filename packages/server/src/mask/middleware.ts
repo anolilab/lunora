@@ -86,6 +86,7 @@
  * `.use(rls(...)).use(mask(...))` yields rows that are both row-filtered and
  * column-masked.
  */
+import { fnv1aHex } from "../../../../shared/fnv1a";
 import type { Middleware } from "../builder/types";
 import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
@@ -205,35 +206,17 @@ interface MaskContextIn {
 }
 
 /**
- * FNV-1a (32-bit) digest as 8-char hex — the `"hash"` strategy's token. A fast,
- * deterministic, NON-cryptographic hash: same input → same token, so a hashed
- * column stays joinable/groupable on the client.
- *
- * SECURITY: this is NOT a confidentiality control. It is unsalted, deterministic
- * and narrow (~2^32 outputs), so a low-entropy input (email / phone / SSN) is
- * brute-force-recoverable by the same caller the mask is meant to blind, and
- * equal values always yield equal tokens (cross-row/tenant correlation). The
- * `"hash"` strategy exists for stable pseudonymous grouping/joining ONLY; PII
- * that must stay hidden must use `"redact"`. See `MaskStrategy` docs.
- * `Math.imul` keeps the multiply in 32-bit space.
- */
-const fnv1aHex = (input: string): string => {
-    /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and an unsigned shift; the bit ops ARE the algorithm */
-    let hash = 0x81_1c_9d_c5;
-
-    for (let index = 0; index < input.length; index += 1) {
-        hash ^= input.codePointAt(index) ?? 0;
-        hash = Math.imul(hash, 0x01_00_01_93);
-    }
-
-    return (hash >>> 0).toString(16).padStart(8, "0");
-    /* eslint-enable no-bitwise */
-};
-
-/**
  * Apply one column strategy to one cell value. **Fails closed**: any thrown
  * error (a custom `MaskFn` that blows up, a non-serialisable value handed to
  * `"hash"`) redacts to `null` rather than leak the raw value.
+ *
+ * `"hash"` passes `null`/`undefined` through and hashes a `bigint` over its
+ * decimal form (`123n` → `fnv1aHex("123")`) — `JSON.stringify` throws on a
+ * bigint, so without the case a `v.bigint()` column would fail closed to `null`
+ * instead of producing the stable token `"hash"` exists for. The digest itself is
+ * `shared/fnv1a.ts`, shared with the studio's preview
+ * (`packages/studio/src/lib/mask-preview.ts`) so the two cannot drift; that file
+ * also carries the security caveats of `"hash"`.
  */
 const applyStrategy = <Context>(strategy: MaskColumns<Context>[string], value: unknown, context: MaskContext<Context>): unknown => {
     try {
@@ -245,6 +228,10 @@ const applyStrategy = <Context>(strategy: MaskColumns<Context>[string], value: u
         if (strategy === "hash") {
             if (value === null || value === undefined) {
                 return value;
+            }
+
+            if (typeof value === "bigint") {
+                return fnv1aHex(value.toString());
             }
 
             return fnv1aHex(typeof value === "string" ? value : JSON.stringify(value));

@@ -16,6 +16,7 @@ import {
     PackageProcessIcon,
     Pulse01Icon,
     Route01Icon,
+    SatelliteIcon,
     SquareLockPasswordIcon,
     UserMultipleIcon,
 } from "@hugeicons/core-free-icons";
@@ -39,6 +40,7 @@ export const TABS = [
     { id: "secrets", label: "Secrets", to: "/orgs/$organizationId/secrets", group: "Deploy", icon: SquareLockPasswordIcon },
     { id: "domains", label: "Domains", to: "/orgs/$organizationId/domains", group: "Deploy", icon: Globe02Icon },
     { id: "builds", label: "Builds", to: "/orgs/$organizationId/builds", group: "Deploy", icon: PackageProcessIcon },
+    { id: "traffic", label: "Traffic", to: "/orgs/$organizationId/traffic", group: "Observability", icon: SatelliteIcon },
     { id: "logs", label: "Logs", to: "/orgs/$organizationId/logs", group: "Observability", icon: File01Icon },
     { id: "traces", label: "Traces", to: "/orgs/$organizationId/traces", group: "Observability", icon: Route01Icon },
     { id: "sessions", label: "Sessions", to: "/orgs/$organizationId/sessions", group: "Observability", icon: Clock01Icon },

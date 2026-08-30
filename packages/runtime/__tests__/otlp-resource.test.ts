@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { otlpRandomHex } from "../../../shared/otlp";
 import { detectCloudflareResource, detectHostResource, detectServiceResource, mergeResourceAttributes, readerFromRecord } from "../../../shared/otlp-resource";
 import { createResourceAttributeResolver } from "../src/resource-detect";
 
@@ -164,5 +165,80 @@ describe("createResourceAttributeResolver", () => {
         expect.assertions(1);
 
         expect(createResourceAttributeResolver(undefined)()).toStrictEqual({});
+    });
+});
+
+/**
+ * `otlpRandomHex` serves ids out of a buffer refilled from
+ * `crypto.getRandomValues` rather than drawing per call — the draw was ~9% of
+ * the worker's RPC dispatch path. The pool must stay invisible: same alphabet,
+ * same length, same one-use-per-byte stream, and no reuse across a refill
+ * boundary. It must also not corrupt an id larger than the pool itself.
+ */
+describe(otlpRandomHex, () => {
+    it("returns lowercase hex of exactly the requested byte length", () => {
+        expect.assertions(4);
+
+        expect(otlpRandomHex(8)).toMatch(/^[0-9a-f]{16}$/u);
+        expect(otlpRandomHex(16)).toMatch(/^[0-9a-f]{32}$/u);
+        expect(otlpRandomHex(8)).toHaveLength(16);
+        expect(otlpRandomHex(16)).toHaveLength(32);
+    });
+
+    it("never repeats an id across many refills of the pool", () => {
+        expect.assertions(1);
+
+        // The pool holds 512 bytes, so 4096 x 16-byte ids cross its refill
+        // boundary ~128 times. A slot handed out twice — the one way a pooled
+        // implementation can go wrong that a per-call draw cannot — shows up
+        // here as a duplicate; a collision by chance is ~2^-128.
+        const ids = new Set<string>();
+
+        for (let index = 0; index < 4096; index += 1) {
+            ids.add(otlpRandomHex(16));
+        }
+
+        expect(ids.size).toBe(4096);
+    });
+
+    it("stays hex for an id larger than the pool", () => {
+        expect.assertions(2);
+
+        // Past the pool size the buffer cannot serve the id and must be
+        // bypassed. Getting this wrong reads off the end of the pool and
+        // splices "undefined" into a value that goes on the wire.
+        const oversized = otlpRandomHex(1024);
+
+        expect(oversized).toHaveLength(2048);
+        expect(oversized).toMatch(/^[0-9a-f]{2048}$/u);
+    });
+
+    it("draws uniformly across all 256 byte values", () => {
+        expect.assertions(1);
+
+        // Head sampling derives its verdict from the span id, so a skewed id
+        // would skew which traces are kept. Chi-squared over 255 degrees of
+        // freedom: the 99.9th percentile is ~345, so a uniform stream clears
+        // this threshold essentially always and a biased one would not.
+        // A typed array is zero-filled by construction, so no fill/from dance.
+        const counts = new Uint32Array(256);
+        let drawn = 0;
+
+        while (drawn < 200_000) {
+            const hex = otlpRandomHex(16);
+
+            for (let index = 0; index < hex.length; index += 2) {
+                const value = Number.parseInt(hex.slice(index, index + 2), 16);
+
+                counts[value] = (counts[value] ?? 0) + 1;
+            }
+
+            drawn += 16;
+        }
+
+        const expected = drawn / 256;
+        const chiSquared = counts.reduce((accumulator, count) => accumulator + ((count - expected) * (count - expected)) / expected, 0);
+
+        expect(chiSquared).toBeLessThan(345);
     });
 });

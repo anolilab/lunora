@@ -71,6 +71,8 @@ final class ConformanceTests: XCTestCase {
             case "shape_subscribe_frame": try caseShapeSubscribeFrame()
             case "poke_sequence_materialises_rows": try casePokeSequenceMaterialisesRows()
             case "poke_parts_do_not_apply_before_poke_end": try casePokePartsDoNotApplyBeforePokeEnd()
+            case "shape_reset_poke_replaces_membership": try testResetPokeReplacesShapeMembership()
+            case "pending_poke_buffers_are_bounded": try testPendingPokeBuffersAreBounded()
             case "optimistic_layer_rebases_onto_server_frame": try caseOptimisticLayerRebasesOntoServerFrame()
             case "optimistic_layer_drops_on_commit_cursor": try caseOptimisticLayerDropsOnCommitCursor()
             case "optimistic_layer_drops_on_settled_frame": try caseOptimisticLayerDropsOnSettledFrame()
@@ -387,6 +389,84 @@ final class ConformanceTests: XCTestCase {
         }
 
         XCTAssertEqual(fired, 0, "the view would be torn if parts applied before pokeEnd")
+    }
+
+    /// A `reset` part carries the shape's COMPLETE membership, so the view has to
+    /// be dropped before the ops are applied.
+    ///
+    /// Not a manifest case — the shared manifest does not name one — so it is a
+    /// `test` method rather than a `case` one, but the shared fixture carries the
+    /// sequence and this is the same assertion every port makes. It starts from
+    /// the cold-seed state on purpose: a re-seed is inserts-only, so `m1` leaves
+    /// the shape with no delete op behind it, and a client that merges renders it
+    /// for the rest of its life.
+    func testResetPokeReplacesShapeMembership() throws {
+        let shape = try XCTUnwrap(fixture("ws-frames.json")["shape"] as? [String: Any])
+
+        let client = LunoraClient(url: "https://app.example")
+        client.attachSocket { _ in }
+
+        var delivered: [[Any]] = []
+        client.subscribeShape("roomMessages", args: ["room": "general"], onRows: { delivered.append($0) })
+
+        for entry in try XCTUnwrap(shape["pokeSequence"] as? [Any]) {
+            let raw = try JSONSerialization.data(withJSONObject: entry)
+            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+        }
+
+        XCTAssertEqual(canonical(delivered.last), canonical(shape["expectedRows"]), "the cold seed lands before the re-seed")
+
+        for entry in try XCTUnwrap(shape["resetPokeSequence"] as? [Any]) {
+            let raw = try JSONSerialization.data(withJSONObject: entry)
+            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+        }
+
+        XCTAssertEqual(
+            canonical(delivered.last),
+            canonical(shape["resetExpectedRows"]),
+            "a reset poke replaces the shape's membership rather than merging into it"
+        )
+    }
+
+    /// A buffer is only released at its `pokeEnd`. A socket that drops mid-poke
+    /// never sends one, so its buffer would be retained for the life of the
+    /// client — one leak per reconnect, and unbounded against a peer that opens
+    /// pokes it never closes.
+    ///
+    /// Asserted black-box: an evicted poke behaves exactly like one that was
+    /// never opened, which is the only form of this all eight ports can share.
+    func testPendingPokeBuffersAreBounded() throws {
+        let client = LunoraClient(url: "https://app.example")
+        client.attachSocket { _ in }
+
+        var delivered: [[Any]] = []
+        client.subscribeShape("roomMessages", args: ["room": "general"], onRows: { delivered.append($0) })
+
+        // A poke opened, part-filled, then abandoned when the socket dropped.
+        try client.handleFrame(#"{"type":"pokeStart","pokeId":"stale"}"#)
+        try client.handleFrame(
+            #"{"type":"pokePart","pokeId":"stale","shapeId":"shape_1","rowsPatch":[{"op":"insert","key":"ghost","value":"ghost-row"}]}"#
+        )
+
+        for index in 0..<lunoraMaxPendingPokes {
+            try client.handleFrame(#"{"type":"pokeStart","pokeId":"filler-\#(index)"}"#)
+        }
+
+        // The abandoned buffer is gone, so its late pokeEnd is a no-op.
+        try client.handleFrame(#"{"type":"pokeEnd","pokeId":"stale"}"#)
+
+        XCTAssertTrue(delivered.isEmpty, "the ghost row of an evicted poke must never reach the view")
+
+        // ...and eviction is oldest-first, not a blanket drop: a live poke still applies.
+        let newest = "filler-\(lunoraMaxPendingPokes - 1)"
+
+        try client.handleFrame(
+            #"{"type":"pokePart","pokeId":"\#(newest)","shapeId":"shape_1","rowsPatch":[{"op":"insert","key":"m1","value":"kept"}]}"#
+        )
+        try client.handleFrame(#"{"type":"pokeEnd","pokeId":"\#(newest)"}"#)
+
+        XCTAssertEqual(delivered.count, 1, "the newest buffer must survive and apply")
+        XCTAssertEqual(canonical(delivered.first), canonical(["kept"]), "the surviving poke applies its rows")
     }
 
     // MARK: - Generated-model projection

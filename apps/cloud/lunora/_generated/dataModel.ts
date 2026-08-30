@@ -40,7 +40,7 @@ export interface Doc_organizations {
     cellId: Id<"cells">;
     createdAt: number;
     name: string;
-    plan: unknown;
+    plan: "free" | "pro" | "enterprise";
     slug: string;
     spendCapMinor?: number;
     suspendedAt?: number;
@@ -64,11 +64,14 @@ export interface Doc_projects {
     _creationTime: number;
     activeDeploymentId?: string;
     activeScriptName?: string;
+    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
     createdAt: number;
     framework?: string;
     githubRepo?: string;
     name: string;
     organizationId: Id<"organizations">;
+    previewPasswordHash?: string;
+    previewPasswordSalt?: string;
     slug: string;
 }
 
@@ -337,7 +340,7 @@ export interface Doc_alertRules {
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
     threshold: number;
     updatedAt: number;
     windowMinutes?: number;
@@ -368,7 +371,7 @@ export interface Doc_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
     updatedAt: number;
 }
 
@@ -724,7 +727,7 @@ export interface Insert_organizations {
     cellId: Id<"cells">;
     createdAt: number;
     name: string;
-    plan: unknown;
+    plan: "free" | "pro" | "enterprise";
     slug: string;
     spendCapMinor?: number;
     suspendedAt?: number;
@@ -748,11 +751,14 @@ export interface Insert_projects {
     _creationTime?: number;
     activeDeploymentId?: string;
     activeScriptName?: string;
+    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
     createdAt: number;
     framework?: string;
     githubRepo?: string;
     name: string;
     organizationId: Id<"organizations">;
+    previewPasswordHash?: string;
+    previewPasswordSalt?: string;
     slug: string;
 }
 
@@ -1021,7 +1027,7 @@ export interface Insert_alertRules {
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
     threshold: number;
     updatedAt: number;
     windowMinutes?: number;
@@ -1052,7 +1058,7 @@ export interface Insert_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
     updatedAt: number;
 }
 

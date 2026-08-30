@@ -9,7 +9,7 @@ import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Action } from "@/kit/action";
 import { Kicker, Shell } from "@/kit/layout";
 import { ArticleHeader } from "@/kit/page-header";
-import posthog from "@/lib/posthog";
+import { posthog } from "@/lib/posthog";
 
 /**
  * Lunora Cloud landing — the managed tier (still in progress), behind an

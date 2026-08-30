@@ -170,6 +170,35 @@ describe("createNodeR2Bucket", () => {
         await expect(bucket.delete("gone")).resolves.toBeUndefined();
     });
 
+    it("seeks past startAfter, and lets a cursor override it", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("a/1", "1");
+        await bucket.put("a/2", "2");
+        await bucket.put("a/3", "3");
+        await bucket.put("a/4", "4");
+
+        // Exclusive, like R2: the key named is the last one already seen.
+        const after = await bucket.list({ prefix: "a/", startAfter: "a/2" });
+
+        expect(after.objects.map((object) => object.key)).toStrictEqual(["a/3", "a/4"]);
+
+        // A caller that seeks and then pages holds both. The cursor is a
+        // position inside an in-progress listing, so it wins where they differ —
+        // taking the earlier of the two would re-serve keys already delivered.
+        const both = await bucket.list({ cursor: "a/3", prefix: "a/", startAfter: "a/1" });
+
+        expect(both.objects.map((object) => object.key)).toStrictEqual(["a/4"]);
+
+        // A startAfter past every key is an empty page, not the whole listing —
+        // the failure mode of ignoring the option entirely.
+        const beyond = await bucket.list({ prefix: "a/", startAfter: "a/9" });
+
+        expect(beyond.objects).toHaveLength(0);
+    });
+
     it("lists objects with prefix, delimiter, limit and an opaque cursor", async () => {
         expect.hasAssertions();
 

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { claimDevServerState, DEV_LOG_FILE, readDevServerState, writeDevServerState } from "@lunora/config";
+import { claimDevServerState, clearDevServerState, DEV_LOG_FILE, readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevOptions } from "../../src/commands/dev/index";
@@ -320,6 +320,40 @@ describe("lunora dev lifecycle", () => {
             // the default way to lose the flag.
             expect(args).toContain("--target");
             expect(args?.[(args.indexOf("--target") ?? 0) + 1]).toBe("aws");
+        });
+
+        it("forwards --no-codegen to the vite child as LUNORA_CODEGEN=0", async () => {
+            expect.assertions(2);
+
+            // The vite branch spawns the framework dev script directly — not the
+            // daemon — so `daemonArguments`' forwarding never applies to it, and
+            // the flag reaches `@lunora/vite` (which owns the watch there) only
+            // as env. Without it, `_generated/**` kept being rewritten on save.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/vite": "1.0.0" }, name: "app" }), "utf8");
+
+            const seen: (Record<string, string | undefined> | undefined)[] = [];
+
+            const run = (options: { env?: Record<string, string | undefined> }): Promise<{ code: number }> => {
+                seen.push(options.env);
+
+                return Promise.resolve({ code: 0 });
+            };
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: { codegen: false } as DevOptions,
+                remote: false,
+                run,
+            });
+
+            clearDevServerState(workdir, process.pid);
+
+            await startBackground({ cwd: workdir, jsonLogs: false, logger: recordingLogger().logger, options: {} as DevOptions, remote: false, run });
+
+            expect(seen[0]?.LUNORA_CODEGEN).toBe("0");
+            expect(seen[1]?.LUNORA_CODEGEN).toBeUndefined();
         });
 
         it("omits --target when none was given", async () => {

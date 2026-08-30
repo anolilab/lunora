@@ -12,7 +12,7 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useShardKey } from "../../hooks/use-shard-key";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
-import type { FanoutMetricsResult, FanoutPathCounters } from "../../lib/admin";
+import type { FanoutMetricsResult, FanoutPathCounters, GlobalPollCounters, ShapeProbeCounters } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 
 interface FanoutPanelProps {
@@ -23,8 +23,31 @@ interface FanoutPanelProps {
 /** Format a coarse millisecond duration for a stat card. */
 const formatMs = (ms: number): string => `${ms.toString()} ms`;
 
-/** True once a result has loaded and the shard has no connections and has run no fan-out passes yet. */
-const isFanoutIdle = (result: FanoutMetricsResult): boolean => result.totalConnections === 0 && result.shapePoke.passes === 0 && result.whisper.passes === 0;
+/**
+ * True once a result has loaded and the shard has no connections and has recorded
+ * no work at all on any counted path.
+ *
+ * Every counter the panel renders has to appear here: the probe and global-poll
+ * tallies outlive the sockets that produced them (they reset on hibernation, not
+ * on disconnect), so a predicate that ignored one would replace a shard's whole
+ * recorded history with an empty state the moment its last socket dropped —
+ * exactly when someone is looking at the panel to find out what it just did.
+ *
+ * Spelled out rather than scanned over the counter objects. A scan cannot fall
+ * behind the fields it scans, but it also cannot tell a WORK count from a
+ * derived one: `maxMs` and `peakSocketsIterated` are dimensions of the passes,
+ * not passes, and a scan reads either as activity. One `passes`/`run`/`drains`
+ * per path is the honest test, and a path added without a term here is a visible
+ * omission rather than a silent over-reach.
+ */
+const isFanoutIdle = (result: FanoutMetricsResult): boolean =>
+    result.totalConnections === 0 &&
+    result.shapePoke.passes === 0 &&
+    result.whisper.passes === 0 &&
+    result.shapeProbe.run === 0 &&
+    result.shapeProbe.served === 0 &&
+    result.globalPoll.drains === 0 &&
+    result.globalPoll.pairsSkipped === 0;
 
 /**
  * The running counters for one delivery path as a titled grid of stat cards.
@@ -54,6 +77,49 @@ const PathCounters = ({
             <StatCard label={t("Peak width")} testId={`${prefix}-peak`} value={counters.peakSocketsIterated} />
             {includeTiming && <StatCard label={t("Total time")} testId={`${prefix}-total-ms`} value={formatMs(counters.totalMs)} />}
             {includeTiming && <StatCard label={t("Max time")} testId={`${prefix}-max-ms`} value={formatMs(counters.maxMs)} />}
+        </dl>
+    </section>
+);
+
+/**
+ * Read sharing on the shape-poke path: how many reads the shard issued to SQLite
+ * versus how many the per-flush cache answered because another socket had
+ * already asked the identical question. Both halves of the diff are counted —
+ * the changed-key scan, keyed by `(table, op range)`, and the membership probe,
+ * keyed by `(predicate, that same range)`.
+ *
+ * The two numbers are only meaningful together. `served` near zero is not a
+ * problem to fix — it means this app's shape predicates genuinely vary per
+ * caller (RLS on the caller's own id), so there is nothing to share. `served`
+ * far above `run` is the shape of a broadly-subscribed public shape, where the
+ * cache is doing the work a per-socket loop would have repeated.
+ */
+const ProbeCounters = ({ counters, t }: { counters: ShapeProbeCounters; t: TFunction }): ReactElement => (
+    <section className="flex flex-col gap-2" data-testid="fanout-probe-section">
+        <h3 className="text-sm font-medium text-foreground">{t("Membership probes")}</h3>
+        <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="fanout-probe-stats">
+            <StatCard label={t("Queries run")} testId="fanout-probe-run" value={counters.run} />
+            <StatCard label={t("Shared from cache")} testId="fanout-probe-served" value={counters.served} />
+        </dl>
+    </section>
+);
+
+/**
+ * The `.global()` poll tallies, as their own section rather than another
+ * {@link ProbeCounters} with different labels.
+ *
+ * The two are two numbers each and mean different things: a membership probe is
+ * one question asked of the shard's own storage and answered from cache or not,
+ * a global poll is a whole membership drain over the network against the
+ * `(socket, shape)` pairs a tick never had to ask about. Rendering them through
+ * one component made the captions the only thing keeping them apart.
+ */
+const GlobalPollCountersSection = ({ counters, t }: { counters: GlobalPollCounters; t: TFunction }): ReactElement => (
+    <section className="flex flex-col gap-2" data-testid="fanout-global-poll-section">
+        <h3 className="text-sm font-medium text-foreground">{t("Global shape polls")}</h3>
+        <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="fanout-global-poll-stats">
+            <StatCard label={t("Global reads")} testId="fanout-global-poll-drains" value={counters.drains} />
+            <StatCard label={t("Pairs skipped")} testId="fanout-global-poll-pairs-skipped" value={counters.pairsSkipped} />
         </dl>
     </section>
 );
@@ -167,6 +233,8 @@ const FanoutPanel = ({ initialShardKey }: FanoutPanelProps): ReactElement => {
                         <h2 className="text-sm font-medium text-muted-foreground">{t("Fan-out cost since this instance woke")}</h2>
                         <PathCounters counters={result.shapePoke} includeTiming prefix="fanout-poke" t={t} title={t("Shape pokes")} />
                         <PathCounters counters={result.whisper} includeTiming={false} prefix="fanout-whisper" t={t} title={t("Whisper broadcasts")} />
+                        <ProbeCounters counters={result.shapeProbe} t={t} />
+                        <GlobalPollCountersSection counters={result.globalPoll} t={t} />
                     </section>
                 </>
             )}

@@ -16,6 +16,16 @@ export const env = defineEnv({
     CLOUDFLARE_ACCOUNT_ID: v.optional(v.string()),
     /** Cloudflare API token with Analytics-Engine read scope (metric-series read-back). A secret. */
     CLOUDFLARE_API_TOKEN: v.optional(v.string()),
+
+    /**
+     * GitHub App id, and its PKCS#8 private key. The pair authenticates as the App
+     * so the build dispatcher can mint an installation token — used both to fetch a
+     * repository's source and to write the build's outcome back as a commit status.
+     * Absent → builds report to nobody (and cannot fetch source). The key is a
+     * secret; it must be PKCS#8, not the PKCS#1 form GitHub hands you.
+     */
+    GITHUB_APP_ID: v.optional(v.string()),
+    GITHUB_APP_PRIVATE_KEY: v.optional(v.string()),
     /** Bearer token for R2 SQL (archived-span read-back). Absent → the archive read no-ops. A secret. */
     R2_SQL_TOKEN: v.optional(v.string()),
 
@@ -32,4 +42,6 @@ export const env = defineEnv({
     TELEMETRY_DATASET: v.optional(v.string()),
     /** Iceberg table the span archive lands in (`namespace.table`); defaults to `default.telemetry_spans`. */
     TELEMETRY_SPAN_TABLE: v.optional(v.string()),
+    /** AE dataset the dispatcher meters tenant requests into (`traffic.snapshot`). Defaults to `lunora_tenant_usage`. */
+    USAGE_ANALYTICS_DATASET: v.optional(v.string()),
 });

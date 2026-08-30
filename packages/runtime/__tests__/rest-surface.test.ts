@@ -109,7 +109,8 @@ describe("createWorker — opt-in public REST surface", () => {
         const response = await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list"), {}, fakeContext);
 
         expect(response.status).toBe(403);
-        expect(authorizeShard).toHaveBeenCalledWith(null, "__root__");
+
+        expect(authorizeShard).toHaveBeenCalledWith({ identity: null, shardKey: "__root__" });
     });
 
     it("forwards resolved identity to the shard (so ctx.auth / RLS apply)", async () => {
@@ -236,7 +237,7 @@ describe("createWorker — opt-in public REST surface", () => {
 
             expect(response.headers.get("cache-control")).toBe("public, max-age=60");
             expect(response.headers.get("cache-tag")).toBe("messages");
-            expect(response.headers.get("vary")).toBe("authorization, cf-access-jwt-assertion, cookie, x-d1-bookmark, x-lunora-shard-key");
+            expect(response.headers.get("vary")).toBe("authorization, cf-access-jwt-assertion, cookie, x-payment, x-d1-bookmark, x-lunora-shard-key");
         });
 
         it("varies on the shard-key header, which selects which rows the caller sees", async () => {

@@ -14,6 +14,8 @@
  */
 
 /** A plain, JSON-serialisable Web Push subscription (the shape `ctx.push.register` accepts). */
+import { fromBase64Url } from "../../../shared/base64";
+
 interface SerializedPushSubscription {
     endpoint: string;
     expirationTime: number | null;
@@ -42,18 +44,7 @@ interface SubscribeToPushOptions {
 }
 
 /** Convert a base64url string to the `Uint8Array` `pushManager.subscribe` wants for `applicationServerKey`. */
-const urlBase64ToUint8Array = (base64: string): Uint8Array => {
-    const padding = "=".repeat((4 - (base64.length % 4)) % 4);
-    const normalized = (base64 + padding).replaceAll("-", "+").replaceAll("_", "/");
-    const raw = atob(normalized);
-    const output = new Uint8Array(raw.length);
-
-    for (let index = 0; index < raw.length; index += 1) {
-        output[index] = raw.codePointAt(index) ?? 0;
-    }
-
-    return output;
-};
+const urlBase64ToUint8Array = (base64: string): Uint8Array => fromBase64Url(base64);
 
 /** Byte-for-byte equality of two `Uint8Array`s (VAPID application-server keys). */
 const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((byte, index) => byte === b[index]);

@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/server";
+
 import { isDeployCapable } from "../src/deploy/capability";
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
@@ -99,6 +101,101 @@ export const revoke = mutation
         await assertRowInOrg(context, id, organizationId, "deploy key");
 
         await context.db.patch(id, { revokedAt: context.now });
+    });
+
+/** The subset of a key row that decides whether it can be rolled. */
+interface RollCandidate {
+    capability?: "deploy" | "ingest";
+    revokedAt?: number;
+}
+
+/**
+ * Why this key cannot be rolled, or `undefined` when it can.
+ *
+ * Split out of the mutation so the refusals are directly testable: the mutation
+ * itself needs a member session and a live row, which makes the two conditions
+ * that actually matter awkward to reach.
+ */
+export const rollRefusalReason = (existing: RollCandidate): string | undefined => {
+    if (existing.revokedAt != null) {
+        return "this key is already revoked — issue a new one instead of rolling it";
+    }
+
+    // Platform-managed ingest keys carry an envelope-encrypted copy of their
+    // plaintext so the deploy path can re-inject the token into a tenant's
+    // `otlpSink`. Minting a replacement here would leave that cipher pointing at
+    // the revoked secret, and every later deploy would inject a dead token —
+    // silently, because nothing reads telemetry back to notice. Rolling one needs
+    // `recordIngestKey` in the same breath, which is a different (edge-side,
+    // master-key-holding) call path.
+    if (existing.capability === "ingest") {
+        return "ingest keys are platform-managed and cannot be rolled from here";
+    }
+
+    return undefined;
+};
+
+/**
+ * Roll a deploy key: mint a replacement and revoke the old one in a single
+ * mutation (GAPS.md ring 3 #7). Owners/admins only.
+ *
+ * **Why this is one operation rather than two calls.** Rolling by hand is
+ * `issue` then `revoke`, and between those two calls the org sits in one of two
+ * bad states depending on the order: two live keys (the one you are retiring
+ * still deploys) or none (CI is broken until someone pastes the new secret). A
+ * Lunora mutation is transactional, so doing both here means neither window
+ * exists — the key is replaced, or nothing happened.
+ *
+ * The replacement inherits name, type and project scope, so the only thing that
+ * changes anywhere else is the secret value itself.
+ *
+ * **Ceiling worth knowing:** the old key stops working the moment this returns.
+ * `verify` treats `revokedAt` as a presence flag rather than a deadline, so an
+ * overlap window would require making that check time-based first. A deploy
+ * already in flight on the old key can fail — roll between deploys.
+ */
+export const roll = mutation
+    .use(rateLimit("sensitive"))
+    .input({ id: v.id("deployKeys"), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ id: Id<"deployKeys">; key: string }> => {
+        await assertMember(context, organizationId, ["owner", "admin"]);
+        await assertRowInOrg(context, id, organizationId, "deploy key");
+
+        const existing = (await context.db.get(id)) as DeployKeyRow | null;
+
+        if (!existing) {
+            throw new LunoraError("NOT_FOUND", "deploy key not found");
+        }
+
+        const refusal = rollRefusalReason(existing);
+
+        if (refusal !== undefined) {
+            throw new LunoraError("BAD_REQUEST", refusal);
+        }
+
+        const key = formatDeployKey({
+            organizationId,
+            ...(existing.projectId ? { projectId: existing.projectId } : {}), // secret-scanner:allow -- domain field name
+            secret: randomSecret(),
+            type: existing.type,
+        });
+        const hashedKey = await hashDeployKey(key);
+
+        const replacementId = await context.db.insert("deployKeys", {
+            createdAt: context.now,
+            hashedKey,
+            name: existing.name,
+            organizationId,
+            projectId: existing.projectId, // secret-scanner:allow -- domain field name
+            type: existing.type,
+        });
+
+        // Revoke AFTER the insert. If the insert fails — a hash collision violates
+        // the unique `by_hash` index — the whole mutation rolls back and the caller
+        // keeps a working key, rather than losing it to a half-applied roll.
+        await context.db.patch(id, { revokedAt: context.now });
+
+        return { id: replacementId, key };
     });
 
 /**

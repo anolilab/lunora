@@ -16,23 +16,12 @@
  * adversary-resistant digest wants `@lunora/fingerprint`'s SHA-256 path instead.
  */
 
-/** One FNV-1a pass over `text` from `offset`, as 8 lowercase hex chars. */
-const fnv1a = (text: string, offset: number): string => {
-    let hash = offset;
-
-    for (let index = 0; index < text.length; index += 1) {
-        hash ^= text.codePointAt(index) ?? 0;
-        // FNV prime 16777619, applied with `Math.imul` to stay inside 32-bit int math.
-        hash = Math.imul(hash, 0x01_00_01_93) >>> 0;
-    }
-
-    return hash.toString(16).padStart(8, "0");
-};
+import { FNV1A_OFFSET_BASIS, FNV1A_PRIME, fnv1aHex } from "./fnv1a";
 
 /**
  * Digest `text` to a 16-character hex string.
  * @returns the digest — stable for identical input, across runs and hosts.
  */
-const contentDigest = (text: string): string => `${fnv1a(text, 0x81_1c_9d_c5)}${fnv1a(text, 0x01_00_01_93)}`;
+const contentDigest = (text: string): string => `${fnv1aHex(text, FNV1A_OFFSET_BASIS)}${fnv1aHex(text, FNV1A_PRIME)}`;
 
 export { contentDigest };

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { RegisteredRoute } from "../src/deploy/route-registry";
 import { createDeployRouter } from "../src/deploy/router";
 import { createMcpRouteHandler } from "../src/mcp/handler";
+import { MCP_DENY_PATHS } from "../src/mcp/tools";
 import readJson from "./_helpers/read-json";
 
 const noop = (): Promise<Response> => Promise.resolve(new Response());
@@ -54,6 +55,35 @@ describe(createMcpRouteHandler, () => {
         const payload = await readJson<{ result: { tools: { name: string }[] } }>(response);
 
         expect(payload.result.tools.map((tool) => tool.name)).toStrictEqual(["deployments.rollback"]);
+    });
+
+    /**
+     * The deny-list is the belt to the opt-in's suspenders, and nothing proved it
+     * holds — "sensitive routes can never become tools even if one is mistakenly
+     * annotated" was a claim with no test behind it. This annotates every denied
+     * path as a tool, which is exactly the mistake the list exists to survive, and
+     * asserts none of them surface.
+     */
+    it("hard-denies sensitive paths even when they are annotated as tools", async () => {
+        const annotated = [...MCP_DENY_PATHS].map((path) => route(path, { auth: "deployKey", mcp: { description: "should never appear" } }));
+        const handler = createMcpRouteHandler({
+            jsonError,
+            routes: [...annotated, rollbackRoute],
+            verifyKey: () => Promise.resolve(true),
+        });
+        const response = await handler(rpc("tools/list"), {});
+        const payload = await readJson<{ result: { tools: { name: string }[] } }>(response);
+
+        expect(payload.result.tools.map((tool) => tool.name)).toStrictEqual(["deployments.rollback"]);
+    });
+
+    /**
+     * `/v1/eject` returns a tenant's entire data snapshot in one response. It is a
+     * deliberate, authorized bulk export — which is exactly why an agent holding a
+     * deploy key must not be able to trigger it as a side effect of another task.
+     */
+    it("never exposes the bulk-export route as a tool", () => {
+        expect(MCP_DENY_PATHS.has("/v1/eject")).toBe(true);
     });
 
     it("tools/call dispatches to the tool route with the credential + forwarded client IP", async () => {

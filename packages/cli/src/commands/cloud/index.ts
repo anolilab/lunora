@@ -7,12 +7,13 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
  * from `LUNORA_DEPLOY_KEY` (never a flag or a file — it is a secret).
  */
 const cloudCommand: Command = {
-    argument: { description: "deploy | rollback <deployment-id>", name: "subcommand", type: String },
-    description: "Deploy / roll back on the managed Lunora Cloud (auth: LUNORA_DEPLOY_KEY)",
+    argument: { description: "deploy | eject <deployment-id> | rollback <deployment-id>", name: "subcommand", type: String },
+    description: "Deploy, eject or roll back on the managed Lunora Cloud (auth: LUNORA_DEPLOY_KEY)",
     examples: [
         ["LUNORA_DEPLOY_KEY=… lunora cloud deploy --project prj_123 --bundle dist/index.js", "Deploy the prebuilt worker"],
         ["lunora cloud deploy --project prj_123 --bundle dist/index.js --kind preview --branch feat/x", "Deploy a preview"],
         ["lunora cloud rollback dep_456 --org org_789 --yes", "Roll the stable URL back to a retained release"],
+        ["lunora cloud eject dep_456", "Package your data + a BYO wrangler.jsonc into ./eject"],
     ],
     group: "Deploy",
     loader: () =>
@@ -29,6 +30,7 @@ const cloudCommand: Command = {
         { description: "Originating git branch to record (deploy)", name: "branch", type: String },
         { description: "Organization id (rollback)", name: "org", type: String },
         { description: "Confirm a rollback (it shifts live traffic)", name: "yes", type: Boolean },
+        { description: "Output directory for `eject` (default: ./eject)", name: "out", type: String },
     ],
 };
 
@@ -40,6 +42,7 @@ export type CloudOptions = CreateOptions<{
     kind: string | undefined;
     name: string | undefined;
     org: string | undefined;
+    out: string | undefined;
     project: string | undefined;
     url: string | undefined;
     yes: boolean | undefined;

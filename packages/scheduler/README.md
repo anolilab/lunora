@@ -104,7 +104,7 @@ crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, 
 export default crons;
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/scheduler)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/scheduler)**.
 
 ## Related
 

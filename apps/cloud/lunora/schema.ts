@@ -150,6 +150,16 @@ export default defineSchema({
         // Denormalized script id of the active deployment, so the dispatcher's
         // route lookup resolves alias → script in one read.
         activeScriptName: v.optional(v.string()),
+        // Staged rollout in progress (GAPS.md A1 follow-on). Blue/green promotes
+        // all at once; a rollout keeps the candidate live alongside the active
+        // release and serves it `percent` of traffic, so a regression reaches a
+        // fraction of users instead of everyone.
+        //
+        // Nested so the three fields cannot disagree: they are meaningless apart
+        // (a percentage with no candidate splits traffic toward nothing), and one
+        // column makes "a rollout is running" a presence check and clearing it a
+        // single assignment.
+        rollout: v.optional(v.object({ deploymentId: v.id("deployments"), percent: v.number(), scriptName: v.string() })),
         createdAt: v.number(),
         // Optional meta-framework hint (tanstack-start, astro, …) for the build step.
         framework: v.optional(v.string()),
@@ -157,6 +167,14 @@ export default defineSchema({
         githubRepo: v.optional(v.string()),
         name: v.string(),
         organizationId: v.id("organizations"),
+        // Deployment protection for this project's PREVIEW deployments. A preview
+        // URL is publicly addressable the moment it exists, which is the point —
+        // you paste it to a colleague — but it also serves unreleased work to
+        // anyone who is forwarded the link. Presence of a hash turns the gate on.
+        // Salted SHA-256; the plaintext is never stored and never leaves the
+        // browser that set it.
+        previewPasswordHash: v.optional(v.string()),
+        previewPasswordSalt: v.optional(v.string()),
         slug: v.string(),
     })
         .global()
@@ -654,7 +672,10 @@ export default defineSchema({
         // group's event count), `uptime` (a deployment's consecutive failed
         // synthetic checks, see lunora/uptime.ts). Metric-window: `error_rate`
         // (% error spans), `latency_p95` (p95 durationMs), `llm_cost` (summed
-        // generation cost) over `windowMinutes`.
+        // generation cost) over `windowMinutes`. Event: `deploy` (a build or a
+        // deployment failed, or the rollout guard aborted a canary) — it carries
+        // no threshold, because a failed release is not a quantity that crosses a
+        // line, it is one thing that happened.
         target: v.union(
             v.literal("issue"),
             v.literal("incident"),
@@ -662,6 +683,7 @@ export default defineSchema({
             v.literal("error_rate"),
             v.literal("latency_p95"),
             v.literal("llm_cost"),
+            v.literal("deploy"),
         ),
         // Count-crossing: fire when the source's count first reaches this value.
         // Metric-window: the value the window metric is compared against.
@@ -710,7 +732,9 @@ export default defineSchema({
         createdAt: v.number(),
         deliveredAt: v.optional(v.number()),
         destination: v.string(),
-        // Fingerprint hash of the issue/incident that tripped the rule.
+        // Fingerprint of what tripped the rule: the issue/incident hash, or — for a
+        // `deploy` alert — the failing build/deployment id, which is what makes a
+        // re-fire for the same release identifiable.
         hash: v.string(),
         organizationId: v.id("organizations"),
         ruleId: v.id("alertRules"),
@@ -723,6 +747,7 @@ export default defineSchema({
             v.literal("error_rate"),
             v.literal("latency_p95"),
             v.literal("llm_cost"),
+            v.literal("deploy"),
         ),
         updatedAt: v.number(),
     })

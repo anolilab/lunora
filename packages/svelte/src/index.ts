@@ -42,11 +42,19 @@ export type { MutationHandle } from "./mutation";
 export { mutation } from "./mutation";
 export type { MutatorHandle, MutatorHandleStore, MutatorTransaction } from "./mutator";
 export { mutator } from "./mutator";
-export type { InfiniteQueryHandle, InfiniteQueryOptions, PageItemOf, PaginatedArgs, PaginatedQueryHandle, PaginatedQueryOptions } from "./paginated-query";
+export type {
+    InfiniteQueryHandle,
+    InfiniteQueryOptions,
+    PageItemOf,
+    PaginatedArgs,
+    PaginatedQueryHandle,
+    PaginatedQueryOptions,
+    ReactivePaginatedArgs,
+} from "./paginated-query";
 export { infiniteQuery, paginatedQuery } from "./paginated-query";
 export type { HeartbeatReference, ListPresentReference, PresenceHandle, PresenceOptions } from "./presence";
 export { presence } from "./presence";
-export type { QueryStore, QueryStoreOptions } from "./query";
+export type { QueryStore, QueryStoreOptions, ReactiveArgs } from "./query";
 export { query } from "./query";
 export type { RateLimitHandle, RateLimitOptions } from "./rate-limit";
 export { rateLimit } from "./rate-limit";

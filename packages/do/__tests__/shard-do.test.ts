@@ -341,6 +341,27 @@ describe("shardDO", () => {
         expect(JSON.parse(matching.sent[0]!)).toMatchObject({ delta: { op: "insert", table: "messages" }, id: "a", type: "delta" });
     });
 
+    it("broadcastDelta visits own subscriptions only, never inherited ones", () => {
+        expect.assertions(2);
+
+        // Pins the iteration choice. The per-socket loop walks `Object.keys`,
+        // which is own-only — the same set `Object.entries` gave before it. A
+        // bare `for...in` measures marginally faster and would pass every other
+        // test in this file, but it also walks the prototype chain, so a polluted
+        // `Object.prototype` would turn into phantom subscriptions delivered to
+        // every socket. Cheap to state, invisible otherwise.
+        const socket = createFakeWebSocket();
+        const subs = Object.create({ inherited: { table: "messages" } }) as Record<string, { table: string }>;
+
+        subs["own"] = { table: "messages" };
+
+        shard.registerSocket(socket, { subs });
+        shard.emit({ key: "m1", op: "insert", row: { id: "m1" }, table: "messages" });
+
+        expect(socket.sent).toHaveLength(1);
+        expect(JSON.parse(socket.sent[0]!)).toMatchObject({ id: "own" });
+    });
+
     it("broadcastDelta wire-encodes the row, so a bigint column does not throw", () => {
         expect.assertions(2);
 

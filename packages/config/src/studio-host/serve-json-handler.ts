@@ -124,6 +124,14 @@ const originRejectionReason = (request: IncomingMessage): string | undefined => 
  * `text/plain`/`application/x-www-form-urlencoded` WITHOUT a preflight, but
  * cannot set `application/json` without one (which same-origin policy then
  * blocks). Combined with layer 1 this denies the browser-driven CSRF vector.
+ *
+ * Module-private on purpose: this runs inside {@link serveJsonHandler}, before
+ * a body is read or a handler runs, so every host that routes an endpoint
+ * through that adapter is gated without doing anything. The Vite host used to
+ * carry its own line-for-line copy and call it first — the exact drift pattern
+ * `./transport-guard` records (the two hosts diverged on a guard and the
+ * token-bearing document went to a relay). One implementation, no call sites
+ * to keep in step.
  */
 const csrfRejectionReason = (request: IncomingMessage): string | undefined => {
     const method = (request.method ?? "GET").toUpperCase();
