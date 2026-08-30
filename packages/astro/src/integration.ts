@@ -57,15 +57,21 @@ interface ConfigDoneContext {
 
 /** Copy/paste wiring snippet shown when `serverEntry` doesn't call `withLunora`. */
 const WITH_LUNORA_SNIPPET = [
-    'import { withLunora } from "@lunora/astro/server";',
+    "// src/worker.ts",
+    'import { handle } from "@astrojs/cloudflare/handler";',
+    'import { withLunora } from "@lunora/astro";',
     "",
-    "export default withLunora(astroWorker, { shardDO: env.SHARD /* , … */ });",
+    "// `shardDO` lives on `env` (per request), so pass an `(env) => options` factory.",
+    "export default withLunora(",
+    "  (req, env, ctx) => handle(req, env, ctx),",
+    "  (env) => ({ shardDO: env.SHARD /* , … */ }),",
+    ");",
 ].join("\n");
 
 /**
  * Matches an actual `withLunora(...)` CALL — e.g. `withLunora(astroWorker, …)`,
  * `export default withLunora(…)`, or `ns.withLunora(…)`. Deliberately does NOT
- * match `import { withLunora } from "@lunora/astro/server";`: that specifier is
+ * match `import { withLunora } from "@lunora/astro";`: that specifier is
  * followed by `}`/whitespace/`from`, never directly by `(`, so a file that
  * imports the helper but forgets to invoke it is correctly reported as missing
  * the wiring instead of passing on the import alone.

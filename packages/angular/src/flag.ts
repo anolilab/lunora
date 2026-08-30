@@ -3,6 +3,7 @@ import { DestroyRef, inject, signal } from "@angular/core";
 import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
 
 import { resolveLunoraClient } from "./client";
+import { shouldOpenSubscription } from "./platform";
 
 /**
  * The reserved runtime path the generated flag-subscription read override
@@ -72,7 +73,8 @@ export interface FlagOptions {
  *
  * Evaluation runs through whatever OpenFeature provider the app wired in
  * `lunora/flags.ts`; the read never throws — a provider error resolves the
- * default (the same fail-open contract as server-side `ctx.flags`).
+ * default (the same fail-open contract as server-side `ctx.flags`). No
+ * subscription opens during SSR; the signal stays at `defaultValue`.
  *
  * Call from an injection context:
  * ```ts
@@ -82,10 +84,21 @@ export interface FlagOptions {
  */
 export const flag = <T extends FlagValue>(key: string, defaultValue: T, options: FlagOptions = {}): Signal<T> => {
     const client = resolveLunoraClient(options.client);
+    const fromInjectionContext = options.destroyRef === undefined;
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
     const type = flagKind(defaultValue);
 
     const value = signal<T>(defaultValue);
+
+    // Skip the socket on the Angular server platform (SSR): Angular runs field
+    // initializers during a server render and Node 22+ ships a global
+    // `WebSocket`, so an un-gated subscribe either throws on the default relative
+    // `/_lunora/ws` (swallowed below, leaving the flag permanently unresolved) or
+    // opens a real server-side socket per render. The signal stays at
+    // `defaultValue` — the fail-open contract — and the browser render attaches.
+    if (!shouldOpenSubscription(fromInjectionContext)) {
+        return value.asReadonly();
+    }
 
     let unsubscribe: Unsubscribe | undefined;
 
@@ -146,9 +159,15 @@ export interface FlagsOptions {
  */
 export const flags = <T extends Record<string, FlagValue>>(flagDefaults: T, options: FlagsOptions = {}): Signal<T> => {
     const client = resolveLunoraClient(options.client);
+    const fromInjectionContext = options.destroyRef === undefined;
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
 
     const values = signal<T>({ ...flagDefaults });
+
+    // Client-only, for the same reason as {@link flag}.
+    if (!shouldOpenSubscription(fromInjectionContext)) {
+        return values.asReadonly();
+    }
 
     const unsubscribes: Unsubscribe[] = [];
 

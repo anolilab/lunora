@@ -136,11 +136,23 @@ type AgentToolEvent = {
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `AuthImpersonation` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AuthLoading` (const)
 
 ```ts
 const AuthLoading: ({ children }: AuthGateProps) => ReactNode;
 ```
+
+### `AuthPage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `AuthSession` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `AuthState` (interface)
 
@@ -150,6 +162,10 @@ interface AuthState {
     isLoading: boolean;
 }
 ```
+
+### `AuthUser` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `Authenticated` (const)
 
@@ -377,6 +393,14 @@ interface Subscription {
     readonly updatedAt: number;
 }
 ```
+
+### `SubscriptionError` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `SubscriptionErrorCallback` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `Unauthenticated` (const)
 
@@ -717,6 +741,7 @@ interface UsePresenceResult<L extends ListPresentReference> {
 
 ```ts
 interface UseQueryOptions {
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```

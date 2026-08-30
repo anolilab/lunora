@@ -17,9 +17,16 @@ import { subscribeToQuery } from "./use-query";
  *
  * The subscription tears down with the surrounding effect scope (component
  * unmount or `effectScope().stop()`), inherited from `subscribeToQuery`.
+ *
+ * The ref is `Ref<T>`, not `Ref<T | undefined>`: `subscribeToQuery`'s ref widens
+ * to `undefined` because it also serves the unseeded `useQuery` case, but this
+ * entry point always passes `seed: preloaded.value`, so the "seeded
+ * synchronously, no loading flash" contract means it is never undefined. Every
+ * other adapter's `hydratePreloaded` returns `T`; narrowing here stops Vue
+ * consumers guarding a state that cannot occur.
  */
 // eslint-disable-next-line import/prefer-default-export -- the package barrel re-exports every composable by name; a default here would break the `import { hydratePreloaded } from "@lunora/vue"` surface.
-export const hydratePreloaded = <T>(preloaded: Preloaded<T>): Ref<T | undefined> => {
+export const hydratePreloaded = <T>(preloaded: Preloaded<T>): Ref<T> => {
     const client = useLunora();
 
     const { args, functionPath, shardKey, value } = preloaded;
@@ -32,5 +39,5 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>): Ref<T | undefined>
     return subscribeToQuery<FunctionReference, T>(client, functionReference, args, {
         seed: value,
         shardKey,
-    });
+    }) as Ref<T>;
 };

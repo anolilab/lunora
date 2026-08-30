@@ -87,9 +87,20 @@ const createFlag = <T extends FlagValue>(key: MaybeAccessor<string>, defaultValu
             let unsubscribe: Unsubscribe;
 
             try {
-                unsubscribe = client.subscribe(flagsReference, { context: currentContext, default: defaultValue, key: currentKey, type }, (next) => {
-                    setValue(() => next as T);
-                });
+                unsubscribe = client.subscribe(
+                    flagsReference,
+                    { context: currentContext, default: defaultValue, key: currentKey, type },
+                    (next) => {
+                        setValue(() => next as T);
+                    },
+                    {
+                        // Fail open: a provider error resolves the default rather than
+                        // freezing on the last resolved value.
+                        onError: () => {
+                            setValue(() => defaultValue);
+                        },
+                    },
+                );
             } catch {
                 // The attach threw (e.g. the client is closed). Keep the default;
                 // a flag read has no error channel — it fails open by design.
@@ -133,11 +144,23 @@ const createFlags = <T extends Record<string, FlagValue>>(flags: T, context?: Ma
             for (const [key, defaultValue] of Object.entries(flags)) {
                 try {
                     unsubscribes.push(
-                        client.subscribe(flagsReference, { context: currentContext, default: defaultValue, key, type: flagKind(defaultValue) }, (next) => {
-                            setValues((previous) => {
-                                return { ...previous, [key]: next };
-                            });
-                        }),
+                        client.subscribe(
+                            flagsReference,
+                            { context: currentContext, default: defaultValue, key, type: flagKind(defaultValue) },
+                            (next) => {
+                                setValues((previous) => {
+                                    return { ...previous, [key]: next };
+                                });
+                            },
+                            {
+                                // Fail open: a provider error resolves this flag's default.
+                                onError: () => {
+                                    setValues((previous) => {
+                                        return { ...previous, [key]: defaultValue };
+                                    });
+                                },
+                            },
+                        ),
                     );
                 } catch {
                     // The attach threw — keep this flag's default; flags fail open.

@@ -219,6 +219,21 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     // replay-safety rule governs the durable loop, not this hook).
     const nextIdRef = useRef(0);
 
+    // Optimistic rows belong to the thread they were sent in. `reconcileOptimistic`
+    // retires them by comparing `maxDurableSeqAtSend` against durable `seq`s, and
+    // `seq` is monotonic PER THREAD — so a row carried into another thread can never
+    // be claimed there and renders as a ghost user bubble until that thread's `seq`
+    // happens to pass the old thread's. Drop them DURING render (guarded by a ref)
+    // so the first paint of the new thread never shows the previous thread's turn.
+    const threadKeyRef = useRef(threadKey);
+
+    // react-doctor-disable-next-line react-hooks-js/refs -- intentional: React's sanctioned "reset state when an input changes" pattern — compare a render-phase ref to the current thread key and set state during render, guarded so it runs once per change.
+    if (threadKeyRef.current !== threadKey) {
+        // react-doctor-disable-next-line react-hooks-js/refs -- intentional: writing the ref guard here is what makes the render-phase reset fire exactly once per thread change.
+        threadKeyRef.current = threadKey;
+        setOptimistic([]);
+    }
+
     const thread = threadData as unknown as AgentThreadRecord | undefined;
     const status = thread?.status;
     const instanceId = thread?.instanceId;

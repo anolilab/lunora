@@ -1,7 +1,13 @@
-import type { OptimisticUpdate, User } from "@lunora/client";
+import type { OptimisticUpdate, SubscriptionErrorCallback, User } from "@lunora/client";
 import type { PaginationStatus } from "@lunora/client/pagination";
 
 export interface UseQueryOptions {
+    /**
+     * Called when the server pushes a subscription-scoped error (an RLS denial, a
+     * query that starts failing server-side). Without a handler such an error has
+     * nowhere to go and the hook's value simply freezes at its last good result.
+     */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
@@ -79,6 +85,8 @@ export {
     type OptimisticUpdate,
     type Preloaded,
     type ReturnOf,
+    type SubscriptionError,
+    type SubscriptionErrorCallback,
     type User,
 } from "@lunora/client";
 export { type PaginationResult, type PaginationStatus } from "@lunora/client/pagination";

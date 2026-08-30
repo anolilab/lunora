@@ -74,6 +74,10 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
  *
  * Call inside `setup()` (or any active effect scope). For SSR seeding with no
  * loading flash, use `hydratePreloaded` instead.
+ *
+ * Pass `onError` to surface a subscription-scoped error the server pushes (an RLS
+ * denial, a query that starts failing server-side). Without it such an error is
+ * dropped and the ref just freezes at its last good value.
  */
 export const useQuery = <F extends FunctionReference>(
     function_: F,
@@ -108,6 +112,7 @@ export const useQuery = <F extends FunctionReference>(
                     onData: (value) => {
                         data.value = value;
                     },
+                    onError: options.onError,
                     onReset: () => {
                         data.value = undefined;
                     },

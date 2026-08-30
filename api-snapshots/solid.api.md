@@ -346,6 +346,7 @@ interface CreatePresenceResult<L extends ListPresentReference> {
 
 ```ts
 interface CreateQueryOptions {
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -573,6 +574,14 @@ type SolidChildren = SolidChildrenArray | boolean | null | number | (object & {
     readonly call?: never;
 }) | (string & {}) | undefined;
 ```
+
+### `SubscriptionError` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `SubscriptionErrorCallback` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `Unauthenticated` (const)
 

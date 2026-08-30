@@ -2,6 +2,7 @@ import type { FunctionReference, Unsubscribe } from "@lunora/client";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { shallowRef, toValue, watch } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { stableStringify } from "../../../shared/stable-key";
 import { useLunora } from "./lunora-provider";
 
@@ -61,8 +62,10 @@ const serializeContext = (context: FlagContext | undefined): string => (context 
  *
  * Evaluation runs through whatever OpenFeature provider the app wired in
  * `lunora/flags.ts`; the read never throws — a provider error resolves the
- * default (the same fail-open contract as server-side `ctx.flags`). Call inside
- * `setup()` (or any active effect scope); the subscription tears down on unmount.
+ * default (the same fail-open contract as server-side `ctx.flags`) — both an
+ * attach throw and a provider error pushed mid-session. Call inside `setup()`
+ * (or any active effect scope); the subscription tears down on unmount. During
+ * SSR no subscription opens at all and the ref stays at `defaultValue`.
  */
 const useFlag = <T extends FlagValue>(
     key: MaybeRefOrGetter<string>,
@@ -86,12 +89,32 @@ const useFlag = <T extends FlagValue>(
             // the UI shows this flag's default until its first evaluation lands.
             value.value = defaultValue;
 
+            // Client-only: `{ immediate: true }` fires this synchronously inside
+            // `setup()`, so during `renderToString` an un-guarded subscribe opens a
+            // socket that no unmount ever tears down (see `use-presence.ts`'s guard
+            // rationale) — one stranded subscription per rendered request. The ref
+            // already holds the default, which is what SSR HTML should show.
+            if (!isBrowser()) {
+                return;
+            }
+
             let unsubscribe: Unsubscribe;
 
             try {
-                unsubscribe = client.subscribe(flagsReference, { context: currentContext, default: defaultValue, key: currentKey, type }, (next) => {
-                    value.value = next as T;
-                });
+                unsubscribe = client.subscribe(
+                    flagsReference,
+                    { context: currentContext, default: defaultValue, key: currentKey, type },
+                    (next) => {
+                        value.value = next as T;
+                    },
+                    {
+                        // Fail open: a provider error mid-session resolves the default
+                        // rather than freezing on the last resolved value.
+                        onError: () => {
+                            value.value = defaultValue;
+                        },
+                    },
+                );
             } catch {
                 // The attach threw (e.g. the client is closed). Keep the default;
                 // there is no error channel for a flag read — it fails open by design.
@@ -131,14 +154,31 @@ const useFlags = <T extends Record<string, FlagValue>>(flags: T, context?: Maybe
             // Reset to defaults so a changed context never shows stale values.
             values.value = flags;
 
+            // Client-only, for the same reason as {@link useFlag}: this watcher body
+            // runs synchronously inside `setup()` during `renderToString`, and
+            // nothing on the server ever unmounts to run `onCleanup`.
+            if (!isBrowser()) {
+                return;
+            }
+
             const unsubscribes: Unsubscribe[] = [];
 
             for (const [key, defaultValue] of Object.entries(flags)) {
                 try {
                     unsubscribes.push(
-                        client.subscribe(flagsReference, { context: currentContext, default: defaultValue, key, type: flagKind(defaultValue) }, (next) => {
-                            values.value = { ...values.value, [key]: next };
-                        }),
+                        client.subscribe(
+                            flagsReference,
+                            { context: currentContext, default: defaultValue, key, type: flagKind(defaultValue) },
+                            (next) => {
+                                values.value = { ...values.value, [key]: next };
+                            },
+                            {
+                                // Fail open: a provider error resolves this flag's default.
+                                onError: () => {
+                                    values.value = { ...values.value, [key]: defaultValue };
+                                },
+                            },
+                        ),
                     );
                 } catch {
                     // The attach threw — keep this flag's default; flags fail open.

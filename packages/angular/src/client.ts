@@ -12,7 +12,8 @@ import { LunoraClient } from "@lunora/client";
  * is absent on the server.
  *
  * The `""` server fallback is safe for the common flow: the reactive primitives
- * (`liveQuery`, `subscription`, `paginatedQuery`, `presence`, `hydratePreloaded`)
+ * (`liveQuery`, `subscription`, `paginatedQuery`, `presence`, `hydratePreloaded`,
+ * `flag`, `flags`)
  * gate their `client.subscribe(...)` on the Angular browser platform, so an SSR
  * render opens no socket even though Node 22+ exposes a global `WebSocket` (see
  * `shouldOpenSubscription` in `./platform`). But **server-side data-loading** (a

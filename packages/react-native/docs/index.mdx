@@ -8,13 +8,24 @@ related:
 ---
 
 `@lunora/react-native` is the React Native / Expo entry to Lunora. It
-**re-exports the entire [`@lunora/react`](/docs/packages/react) surface**: the
-hooks are `react-dom`-free and touch no browser-only global, so `useQuery`,
-`useMutation`, `useSubscription`, `useAuth`, `useConnectionStatus` and the rest
-run unchanged on native. On top of that it adds the two things a native app
-needs that a browser gives you for free: an `AsyncStorage`-backed offline queue,
-and credentialed requests (React Native has no cookie jar, so the session has to
-be attached to every HTTP RPC call and the WebSocket upgrade explicitly).
+**re-exports the [`@lunora/react`](/docs/packages/react) surface, minus the
+payment components**: the hooks are `react-dom`-free and touch no browser-only
+global, so `useQuery`, `useMutation`, `useSubscription`, `useAuth`,
+`useConnectionStatus` and the rest run unchanged on native. On top of that it
+adds the two things a native app needs that a browser gives you for free: an
+`AsyncStorage`-backed offline queue, and credentialed requests (React Native has
+no cookie jar, so the session has to be attached to every HTTP RPC call and the
+WebSocket upgrade explicitly).
+
+`CheckoutButton`, `CustomerPortalButton`, and `useCheckout` are deliberately
+**not** re-exported: they render a DOM `<button>` and navigate via
+`globalThis.location`, so on a phone the component throws at render and
+`checkout()` throws on `location`. Drive purchases through the platform's own
+purchase flow, or a WebView pointed at the web checkout URL.
+
+`useVoiceAgent` _is_ re-exported, but its defaults are Web APIs (`getUserMedia`,
+Web Audio, `WebSocket`) — on native, supply your own `createMicrophone` /
+`createSpeaker` implementations.
 
 See the [React Native / Expo guide](/docs/frameworks/react-native) for the
 task-oriented walkthrough.

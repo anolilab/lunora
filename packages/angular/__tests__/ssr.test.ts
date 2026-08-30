@@ -4,6 +4,7 @@ import type { FunctionReference, Preloaded } from "@lunora/client";
 import { describe, expect, it } from "vitest";
 
 import { LUNORA_CLIENT } from "../src/client";
+import { flag, flags } from "../src/flag";
 import { hydratePreloaded } from "../src/hydrate-preloaded";
 import { liveQuery } from "../src/live-query";
 import { paginatedQuery } from "../src/paginated-query";
@@ -79,6 +80,30 @@ describe("ssr platform gating", () => {
         expect(fake.connectionContexts).toHaveLength(0);
         expect(present()).toBeUndefined();
         expect(sessionId).toBe("sess-1");
+    });
+
+    it("flag/flags open no subscription on the server platform and hold their defaults", () => {
+        const fake = createFakeClient();
+
+        // Regression: `flag`/`flags` were the only reactive primitives without the
+        // platform gate. With the default same-origin client the relative
+        // `/_lunora/ws` throws and is swallowed, so the flag never resolves; with an
+        // explicit absolute `url` it opens a real server-side socket every render.
+        const injector = makeInjector(fake, "server");
+        const dark = runInInjectionContext(injector, () => flag("dark-mode", false));
+        const set = runInInjectionContext(injector, () => flags({ "new-editor": false, "page-size": 10 }));
+
+        expect(fake.subscriptions).toHaveLength(0);
+        expect(dark()).toBe(false);
+        expect(set()).toStrictEqual({ "new-editor": false, "page-size": 10 });
+    });
+
+    it("flag DOES subscribe on the browser platform", () => {
+        const fake = createFakeClient();
+
+        runInInjectionContext(makeInjector(fake, "browser"), () => flag("dark-mode", false));
+
+        expect(fake.subscriptions).toHaveLength(1);
     });
 
     it("hydratePreloaded keeps its synchronous seed but opens no subscription on the server platform", () => {

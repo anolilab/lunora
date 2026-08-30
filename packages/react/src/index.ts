@@ -19,6 +19,10 @@ export type { LunoraQueryOptions } from "./query-options";
 export { lunoraQueryOptions } from "./query-options";
 export type {
     ArgsOf,
+    AuthImpersonation,
+    AuthPage,
+    AuthSession,
+    AuthUser,
     FunctionReference,
     HttpStreamArgsOf,
     HttpStreamChunkOf,
@@ -30,6 +34,8 @@ export type {
     PaginationStatus,
     Preloaded,
     ReturnOf,
+    SubscriptionError,
+    SubscriptionErrorCallback,
     UseAuthResult,
     UseInfiniteQueryOptions,
     UseInfiniteQueryResult,

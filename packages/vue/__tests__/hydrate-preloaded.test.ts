@@ -1,4 +1,4 @@
-import type { FunctionReference, Preloaded } from "@lunora/client";
+import type { FunctionReference, Preloaded, SubscriptionError } from "@lunora/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectScope, nextTick, ref } from "vue";
 
@@ -154,6 +154,37 @@ describe(subscribeToQuery, () => {
         // … but the seed still gives SSR HTML its value (the `hydratePreloaded`
         // contract this primitive backs).
         expect(data?.value).toStrictEqual(["hello", "world"]);
+
+        scope.stop();
+    });
+});
+
+describe("hydratePreloaded return type", () => {
+    beforeEach(() => {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
+    });
+
+    it("is Ref<T>, not Ref<T | undefined> — the seed makes undefined unreachable", () => {
+        const fake = createFakeClient();
+        const scope = effectScope();
+
+        scope.run(() => {
+            fake.provide(() => {
+                const data = hydratePreloaded(makePreloaded(["hello"]));
+
+                // Regression: this assignment did not compile while the return type
+                // inherited `| undefined` from `subscribeToQuery` (which widens only
+                // because it also serves the unseeded `useQuery` case), forcing every
+                // Vue consumer to guard a state the primitive's contract forbids.
+                const rows: string[] = data.value;
+
+                expect(rows).toStrictEqual(["hello"]);
+            });
+        });
 
         scope.stop();
     });
@@ -318,6 +349,28 @@ describe(useQuery, () => {
 
         expect(fake.subscribeCalls).toHaveLength(0);
         expect(data?.value).toBeUndefined();
+
+        scope.stop();
+    });
+
+    it("forwards onError so a server-pushed subscription error reaches the caller", () => {
+        // Regression: `client.subscribe` accepts `onError` and
+        // `createQuerySubscription` forwards it, but `useQuery` never exposed one —
+        // an RLS denial or a query that starts failing server-side left the ref
+        // frozen at its last good value with nothing surfaced.
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const errors: SubscriptionError[] = [];
+
+        scope.run(() => {
+            fake.provide(() => {
+                useQuery(listMessages, { channelId: "c1" }, { onError: (error) => errors.push(error) });
+            });
+        });
+
+        fake.subscribeCalls[0]?.options.onError?.({ code: "FORBIDDEN", message: "row-level security denied the read" });
+
+        expect(errors).toStrictEqual([{ code: "FORBIDDEN", message: "row-level security denied the read" }]);
 
         scope.stop();
     });

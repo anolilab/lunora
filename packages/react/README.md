@@ -94,24 +94,29 @@ function MessageList({ room }: { room: string }) {
 
 ## Hooks
 
-| Hook                                                 | Returns                                                         | Notes                                                                          |
-| ---------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `useQuery(fn, args, options?)`                       | `T \| undefined`                                                | Live query; shares one WS subscription across consumers of the same key.       |
-| `useMutation(fn)`                                    | `{ mutate, pending, data, error, reset, withOptimisticUpdate }` | Per-call `optimistic` / `optimisticUpdate` options pass through to the client. |
-| `useSubscription(fn, args, options?)`                | `{ data, error }`                                               | No initial fetch — only server-pushed values.                                  |
-| `usePaginatedQuery(fn, args, { initialNumItems })`   | `{ results, status, isLoading, loadMore }`                      | Cursor-paginated feed that stays consistent under live edits.                  |
-| `useInfiniteQuery(fn, args, { initialNumItems })`    | `{ pages, status, hasNextPage, fetchNextPage, … }`              | Page-array variant of the same paginator.                                      |
-| `usePreloadedQuery(preloaded)`                       | `T`                                                             | Reads a server `Preloaded` token, then goes live.                              |
-| `usePresence({ heartbeat, listPresent, roomId, … })` | present members                                                 | Drives the `definePresence` heartbeat + list functions.                        |
-| `useFlag(key, default, context?)`                    | flag value (live)                                               | Live OpenFeature flag over the WS; reads `default` until the server answers.   |
-| `useFlags(defaults, context?)`                       | `{ [key]: value }`                                              | Batch variant — one live value per key in the `defaults` map.                  |
-| `useStream(fn, args, options?)`                      | `{ chunks, status, error, cancel }`                             | Consumes a streamed action response chunk by chunk.                            |
-| `useRateLimit(config, options?)`                     | `{ ok, disabled, retryAfter, check, consume, reset }`           | Client-side mirror of a `@lunora/ratelimit` budget for instant UX.             |
-| `useConnectionStatus()`                              | `ConnectionStatus`                                              | `idle` / `connecting` / `connected` / `offline`.                               |
-| `useAuth()`                                          | `{ user, token, setToken }`                                     | Call `setToken(jwt)` after sign-in; RPC then carries the token.                |
-| `useAuthState()`                                     | `{ isAuthenticated, isLoading }`                                | Hydration-safe three-state gate.                                               |
+| Hook                                                                       | Returns                                                         | Notes                                                                            |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `useQuery(fn, args, options?)`                                             | `T \| undefined`                                                | Live query; shares one WS subscription across consumers of the same key.         |
+| `useMutation(fn)`                                                          | `{ mutate, pending, data, error, reset, withOptimisticUpdate }` | Per-call `optimistic` / `optimisticUpdate` options pass through to the client.   |
+| `useSubscription(fn, args, options?)`                                      | `{ data, error }`                                               | No initial fetch — only server-pushed values.                                    |
+| `usePaginatedQuery(fn, args, { initialNumItems })`                         | `{ results, status, isLoading, loadMore }`                      | Cursor-paginated feed that stays consistent under live edits.                    |
+| `useInfiniteQuery(fn, args, { initialNumItems })`                          | `{ pages, status, hasNextPage, fetchNextPage, … }`              | Page-array variant of the same paginator.                                        |
+| `usePreloadedQuery(preloaded)`                                             | `T`                                                             | Reads a server `Preloaded` token, then goes live.                                |
+| `usePresence({ heartbeat, listPresent, roomId, … })`                       | present members                                                 | Drives the `definePresence` heartbeat + list functions.                          |
+| `useFlag(key, default, context?)`                                          | flag value (live)                                               | Live OpenFeature flag over the WS; reads `default` until the server answers.     |
+| `useFlags(defaults, context?)`                                             | `{ [key]: value }`                                              | Batch variant — one live value per key in the `defaults` map.                    |
+| `useStream(fn, args, options?)`                                            | `{ chunks, status, error, cancel }`                             | Consumes a streamed action response chunk by chunk.                              |
+| `useRateLimit(config, options?)`                                           | `{ ok, disabled, retryAfter, check, consume, reset }`           | Client-side mirror of a `@lunora/ratelimit` budget for instant UX.               |
+| `useConnectionStatus()`                                                    | `ConnectionStatus`                                              | `idle` / `connecting` / `connected` / `offline`.                                 |
+| `useAuth()`                                                                | `{ user, token, setToken }`                                     | Call `setToken(jwt)` after sign-in; RPC then carries the token.                  |
+| `useAuthState()`                                                           | `{ isAuthenticated, isLoading }`                                | Hydration-safe three-state gate.                                                 |
+| `useAgentToolEvents({ api, threadKey, … })`                                | `{ events }`                                                    | One agent thread's tool lifecycle: call / result / awaiting-approval / progress. |
+| `useVoiceAgent({ voice, threadKey, … })`                                   | `{ status, transcript, startCall, endCall, … }`                 | Full-duplex voice call: mic capture, playback, live transcripts, barge-in.       |
+| `useAuthUsers` / `useAuthSessions` / `useOrganizations` / `useImpersonate` | `{ data, error, loading, refresh }` (+ `impersonate`/`stop`)    | Admin-plane auth reads for a console UI; each needs an admin-capable token.      |
 
 `Authenticated`, `Unauthenticated`, and `AuthLoading` are gate components built on `useAuthState`. `CheckoutButton`, `CustomerPortalButton`, and `useCheckout` wrap `@lunora/payment` flows.
+
+`useVoiceAgent` opens nothing until you call `startCall()` — that is what requests the microphone, so it has to run from a user gesture; `endCall()` releases the socket, the mic tracks and the Web Audio graph, and also runs on unmount. See the [voice-agent docs](https://lunora.sh/docs/packages/react#voice-agents--usevoiceagentoptions) for the silence/barge-in thresholds.
 
 ## Server Components
 

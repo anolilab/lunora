@@ -238,3 +238,111 @@ optimistic-mutation handle, presence, a client-side rate-limit mirror, an
 directly against [`@lunora/client`](/docs/packages/client) (or the shared
 `@lunora/client/query` primitives `liveQuery` is built on) until they land in
 this adapter.
+
+## Agent tool events — `agentToolEvents(options)`
+
+Observes one agent thread's **tool activity**, separate from its chat
+transcript: which tools the model called, what they returned, which are parked
+on a human approval, and any in-flight `ctx.reportProgress(...)` updates.
+
+`options`: `{ api, threadKey, stream?, limit?, client?, destroyRef? }` — `api`
+is the generated `api` (it reads `api.agents.agentMessages`), and `stream` is
+the same app stream reference `agentChat` takes. Returns `{ events }`, a
+`Signal`. Call it from an injection context (a field initializer or constructor)
+so the default `inject(DestroyRef)` owns the teardown; pass `client` +
+`destroyRef` to call it anywhere else.
+
+Each event discriminates on `type`:
+
+| `type`              | Fields                                                 | Source      |
+| ------------------- | ------------------------------------------------------ | ----------- |
+| `call`              | `toolCallId`, `toolName`, `input`, `seq`               | durable     |
+| `result`            | `toolCallId?`, `toolName?`, `output`, `status?`, `seq` | durable     |
+| `awaiting-approval` | `toolCallId?`, `toolName?`, `seq`                      | durable     |
+| `progress`          | `toolCallId`, `data`                                   | live stream |
+
+Durable events come first, oldest first by `seq`, followed by the ephemeral
+`progress` events for the in-flight turn. With no `stream` reference only the
+durable lifecycle is surfaced. The array is rebuilt on every update — treat it
+as derived, not identity-stable, and key rendered rows on `toolCallId`/`seq`.
+
+```ts
+import { Component } from "@angular/core";
+import { agentToolEvents } from "@lunora/angular";
+import { api } from "./lunora/_generated/api";
+
+@Component({
+    selector: "tool-timeline",
+    template: `<ol>
+        @for (event of events(); track $index) {
+            <li>{{ event.type }}</li>
+        }
+    </ol>`,
+})
+export class ToolTimelineComponent {
+    readonly events = agentToolEvents({ api, stream: api.chat.liveEvents, threadKey: "thread-1" }).events;
+}
+```
+
+## Voice agents — `voiceAgent(options)`
+
+Opens a full-duplex voice call against a voice-enabled agent — the
+`api.agents.<name>Voice` reference codegen emits. Microphone capture goes up the
+agent's WebSocket, synthesized speech comes back down, and transcripts plus
+barge-in are surfaced along the way.
+
+`options`: `{ voice, threadKey, silenceThreshold?, silenceDurationMs?,
+interruptThreshold?, interruptChunks?, createMicrophone?, createSocket?,
+createSpeaker?, client?, destroyRef? }`. `threadKey` is shared with the agent's
+text turns, so a voice call continues the very same conversation `agentChat`
+renders.
+
+Returns `{ status, connected, transcript, interimTranscript, audioLevel,
+isMuted, error, startCall, endCall, sendText, toggleMute }`, where every value
+is a `Signal`. `status` is
+`"idle" | "listening" | "thinking" | "speaking"`.
+
+```ts
+import { Component } from "@angular/core";
+import { voiceAgent } from "@lunora/angular";
+import { api } from "./lunora/_generated/api";
+
+@Component({
+    selector: "call-button",
+    template: `
+        <button (click)="call.status() === 'idle' ? call.startCall() : call.endCall()">
+            {{ call.status() === "idle" ? "Call" : "Hang up" }}
+        </button>
+        <meter max="1" [value]="call.audioLevel()"></meter>
+        <p>{{ call.transcript() }}</p>
+    `,
+})
+export class CallButtonComponent {
+    readonly call = voiceAgent({ threadKey: "thread-1", voice: api.agents.supportVoice });
+}
+```
+
+### Microphone and audio lifecycle
+
+The part the type signature does not tell you:
+
+- **Nothing opens until `startCall()`.** Creating the handle touches neither the
+  microphone nor the socket. `startCall` is what calls `getUserMedia`, so it has
+  to run from a user gesture — browsers block both the permission prompt and
+  `AudioContext` resumption outside one. It is idempotent while a call is
+  active, and a denied permission lands in `error` rather than throwing at the
+  call site.
+- **`endCall()` releases everything** — the socket, the microphone tracks, and
+  the Web Audio graph — and is idempotent. The owning `DestroyRef` calls it on
+  destroy, so a destroyed component ends its call.
+- **`audioLevel` is the live input RMS (0–1).** It drives a mic meter, and it is
+  also what the heuristics read: `silenceThreshold` + `silenceDurationMs` decide
+  when an utterance auto-commits (defaults `0.01` / `1200`ms), and
+  `interruptThreshold` + `interruptChunks` decide when the user barges in on the
+  agent mid-sentence (defaults `0.15` / `3` consecutive chunks). These are
+  room-dependent; tune them against real hardware rather than trusting the
+  defaults.
+- **`createMicrophone` / `createSpeaker` / `createSocket` are injection seams**
+  for tests and non-DOM hosts. The defaults are `getUserMedia` + Web Audio +
+  `new WebSocket(url)`, so the primitive is inert (and mockable) anywhere those
+  are missing.

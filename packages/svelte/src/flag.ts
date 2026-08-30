@@ -51,9 +51,21 @@ const subscribeFlag = <T extends FlagValue>(
     set: (value: T) => void,
 ): Unsubscribe => {
     try {
-        return client.subscribe(flagsReference, { context, default: defaultValue, key, type: flagKind(defaultValue) }, (next) => {
-            set(next as T);
-        });
+        return client.subscribe(
+            flagsReference,
+            { context, default: defaultValue, key, type: flagKind(defaultValue) },
+            (next) => {
+                set(next as T);
+            },
+            {
+                // Fail open on a server-pushed evaluation error too, not just on an
+                // attach throw — otherwise a provider that starts failing mid-session
+                // freezes the store on its last resolved value.
+                onError: () => {
+                    set(defaultValue);
+                },
+            },
+        );
     } catch {
         // The attach threw (e.g. the client is closed). Keep the default; a flag
         // read has no error channel — it fails open by design.

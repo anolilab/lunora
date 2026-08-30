@@ -16,7 +16,8 @@ two seams a native app needs that a browser gives you for free: a durable offlin
 queue backed by `AsyncStorage`, and credentialed requests (there is no cookie jar
 in React Native, so the session has to be attached explicitly).
 
-This package **re-exports the entire `@lunora/react` surface**, so you import
+This package **re-exports the `@lunora/react` surface minus the payment
+components** (see [below](#re-exported-lunorareact-surface)), so you import
 your hooks and provider from here, and adds:
 
 - `createLunoraClient(options)` — a `LunoraClient` factory tuned for React
@@ -212,6 +213,18 @@ Everything on `LunoraClientOptions` (`url`, `wsUrl`, `authBasePath`,
 
 An explicit `persistence`, `fetch`, or `WebSocket` always takes precedence over
 the convenience derived from `storage` / `getAuthHeaders`.
+
+### Re-exported `@lunora/react` surface
+
+Every hook, provider, and auth gate from [`@lunora/react`](../react) is
+re-exported here **except the payment components** — `CheckoutButton`,
+`CustomerPortalButton`, and `useCheckout` render a DOM `<button>` and navigate
+via `globalThis.location`, so they cannot work on a phone. Drive purchases
+through the platform's own flow (or a WebView pointed at the web checkout URL).
+
+`useVoiceAgent` is re-exported but its defaults are Web APIs (`getUserMedia`,
+Web Audio, `WebSocket`): on native, pass your own `createMicrophone` /
+`createSpeaker` implementations.
 
 ### `@lunora/react-native/auth`
 
