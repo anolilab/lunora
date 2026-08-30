@@ -1,3 +1,25 @@
+## @lunora/server [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.93...@lunora/server@1.0.0-alpha.94) (2026-08-30)
+
+### ⚠ BREAKING CHANGES
+
+* **values,server:** `.output()` rejects keys the validator does not declare — add
+them, or call `.strip()` to keep dropping them. `.output()` followed by
+`.stream()` no longer type-checks.
+
+
+Claude-Session: https://claude.ai/code/session_019dhrsvdiJJuDAMjmiKVrae
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **values,server:** reject undeclared keys on the way out, and refuse output on a stream ([#531](https://github.com/anolilab/lunora/issues/531)) ([6532aab](https://github.com/anolilab/lunora/commit/6532aab31e678ab4117c676bc546a8edcd6813d0))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.34
+
 ## @lunora/server [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.92...@lunora/server@1.0.0-alpha.93) (2026-08-29)
 
 ### ⚠ BREAKING CHANGES
