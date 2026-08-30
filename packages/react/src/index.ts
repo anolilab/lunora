@@ -5,7 +5,16 @@
 // module here declares `"use client"` and is meant to run only in Client
 // Components. In a Next.js / RSC app, import these from your own `"use client"`
 // files (see the provider/hook examples in the docs); server-side data loading
-// lives in the socket-free `@lunora/react/server` entry. The framework-neutral
+// lives in the socket-free `@lunora/react/server` entry.
+//
+// Everything here is renderer-agnostic — it runs unchanged under React Native,
+// which is why `@lunora/react-native` re-exports this barrel wholesale. The
+// payment kit (`CheckoutButton`, `CustomerPortalButton`, `useCheckout`) is the
+// one part that is not: it renders a DOM `<button>` and navigates via
+// `globalThis.location`, so it lives behind the `@lunora/react/payment` subpath
+// rather than in this barrel. Keep DOM-only surfaces out of here.
+//
+// The framework-neutral
 // error discriminators re-exported from `@lunora/client` at the bottom are pure
 // helpers (no hooks) surfaced here so a React-only user gets them in one import.
 export { Authenticated, AuthLoading, Unauthenticated } from "./auth-gates";
@@ -13,8 +22,6 @@ export type { AuthState } from "./auth-state";
 export { useAuthState } from "./auth-state";
 export type { LunoraProviderProps } from "./lunora-provider";
 export { LunoraProvider, useLunora } from "./lunora-provider";
-export type { CheckoutButtonProps, CustomerPortalButtonProps, RedirectTarget, RedirectTrigger, Subscription, UseCheckoutResult } from "./payment";
-export { CheckoutButton, CustomerPortalButton, useCheckout } from "./payment";
 export type { LunoraQueryOptions } from "./query-options";
 export { lunoraQueryOptions } from "./query-options";
 export type {

@@ -114,7 +114,9 @@ function MessageList({ room }: { room: string }) {
 | `useVoiceAgent({ voice, threadKey, … })`                                   | `{ status, transcript, startCall, endCall, … }`                 | Full-duplex voice call: mic capture, playback, live transcripts, barge-in.       |
 | `useAuthUsers` / `useAuthSessions` / `useOrganizations` / `useImpersonate` | `{ data, error, loading, refresh }` (+ `impersonate`/`stop`)    | Admin-plane auth reads for a console UI; each needs an admin-capable token.      |
 
-`Authenticated`, `Unauthenticated`, and `AuthLoading` are gate components built on `useAuthState`. `CheckoutButton`, `CustomerPortalButton`, and `useCheckout` wrap `@lunora/payment` flows.
+`Authenticated`, `Unauthenticated`, and `AuthLoading` are gate components built on `useAuthState`.
+
+The payment kit — `CheckoutButton`, `CustomerPortalButton`, and `useCheckout`, which wrap `@lunora/payment` flows — ships from the `@lunora/react/payment` subpath, not the package root: it renders a DOM `<button>` and navigates via `globalThis.location`, so it is the one part of this package that is browser-only (the root barrel stays renderer-agnostic, which is what lets `@lunora/react-native` re-export it wholesale).
 
 `useVoiceAgent` opens nothing until you call `startCall()` — that is what requests the microphone, so it has to run from a user gesture; `endCall()` releases the socket, the mic tracks and the Web Audio graph, and also runs on unmount. See the [voice-agent docs](https://lunora.sh/docs/packages/react#voice-agents--usevoiceagentoptions) for the silence/barge-in thresholds.
 

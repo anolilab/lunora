@@ -1,48 +1,12 @@
 "use client";
 
-import type { FunctionReference, Unsubscribe } from "@lunora/client";
+import type { Unsubscribe } from "@lunora/client";
 import { useEffect, useRef, useState } from "react";
 
+import type { FlagContext, FlagValue } from "../../../shared/flag-subscription";
+import { flagKind, subscribeFlag } from "../../../shared/flag-subscription";
 import { useLunora } from "./lunora-provider";
 import { stableStringify } from "./query-key";
-
-/**
- * The reserved runtime path the generated flag-subscription read override
- * answers. Any `__lunora_flags__:` path routes there (the suffix is free), and
- * the studio's admin reads use `__lunora_admin__:listFlags`; this is the
- * client-facing reactive channel. Unlike `useQuery`, a flag read never issues an
- * HTTP fetch — the reserved prefix isn't a registered function, so an HTTP RPC
- * would 404. It rides Lunora's WebSocket only, seeded on subscribe.
- */
-const FLAGS_EVAL_PATH = "__lunora_flags__:eval";
-
-/** A targeting context merged on top of the app's default (`defineFlags({ identify })`). */
-type FlagContext = Record<string, unknown>;
-
-/** The value kinds a flag resolves to — OpenFeature's boolean / number / string / structured (JSON) flags. */
-type FlagValue = boolean | number | string | { [key: string]: unknown } | unknown[] | null;
-
-/** Wire args the generated flag-subscription read override reads: the key, its value kind, the fallback, and the targeting context. */
-interface FlagSubscribeArgs extends Record<string, unknown> {
-    context?: FlagContext;
-    default: unknown;
-    key: string;
-    type: "boolean" | "number" | "object" | "string";
-}
-
-/** Map a default value to the OpenFeature flag kind the server evaluates it as. */
-const flagKind = (value: unknown): FlagSubscribeArgs["type"] => {
-    const kind = typeof value;
-
-    if (kind === "boolean" || kind === "number" || kind === "string") {
-        return kind;
-    }
-
-    return "object";
-};
-
-/** A typed reference to the reserved flags channel so `client.subscribe` infers its args/return. */
-const flagsReference = { __lunoraRef: FLAGS_EVAL_PATH } as FunctionReference<"query", FlagSubscribeArgs, FlagValue>;
 
 /**
  * Subscribe to a single feature flag, live over Lunora's WebSocket.
@@ -98,34 +62,13 @@ const useFlag = <T extends FlagValue>(key: string, defaultValue: T, context?: Fl
         // UI shows this flag's default until its first evaluation lands.
         setValue(currentDefault);
 
-        let unsubscribe: Unsubscribe;
-
-        try {
-            unsubscribe = client.subscribe(
-                flagsReference,
-                { context: currentContext, default: currentDefault, key, type },
-                (next) => {
-                    if (!cancelled) {
-                        setValue(next as T);
-                    }
-                },
-                {
-                    // Fail open: a provider error resolves the default rather than
-                    // freezing on the last resolved value.
-                    onError: () => {
-                        if (!cancelled) {
-                            setValue(currentDefault);
-                        }
-                    },
-                },
-            );
-        } catch {
-            // The attach threw (e.g. the client is closed). Keep the default; there
-            // is no error channel for a flag read — it fails open by design.
-            return () => {
-                cancelled = true;
-            };
-        }
+        // `subscribeFlag` owns the fail-open contract (attach throw and
+        // server-pushed provider error both resolve the default).
+        const unsubscribe = subscribeFlag<T>(client, { context: currentContext, default: currentDefault, key }, (next) => {
+            if (!cancelled) {
+                setValue(next);
+            }
+        });
 
         return () => {
             cancelled = true;
@@ -186,33 +129,15 @@ const useFlags = <T extends Record<string, FlagValue>>(flags: T, context?: FlagC
         const unsubscribes: Unsubscribe[] = [];
 
         for (const [key, defaultValue] of Object.entries(currentFlags)) {
-            try {
-                unsubscribes.push(
-                    client.subscribe(
-                        flagsReference,
-                        { context: currentContext, default: defaultValue, key, type: flagKind(defaultValue) },
-                        (next) => {
-                            if (!cancelled) {
-                                setValues((previous) => {
-                                    return { ...previous, [key]: next };
-                                });
-                            }
-                        },
-                        {
-                            // Fail open: a provider error resolves this flag's default.
-                            onError: () => {
-                                if (!cancelled) {
-                                    setValues((previous) => {
-                                        return { ...previous, [key]: defaultValue };
-                                    });
-                                }
-                            },
-                        },
-                    ),
-                );
-            } catch {
-                // The attach threw — keep this flag's default; flags fail open.
-            }
+            unsubscribes.push(
+                subscribeFlag(client, { context: currentContext, default: defaultValue, key }, (next) => {
+                    if (!cancelled) {
+                        setValues((previous) => {
+                            return { ...previous, [key]: next };
+                        });
+                    }
+                }),
+            );
         }
 
         return () => {
@@ -227,5 +152,5 @@ const useFlags = <T extends Record<string, FlagValue>>(flags: T, context?: FlagC
     return values;
 };
 
-export type { FlagContext, FlagValue };
+export type { FlagContext, FlagValue } from "../../../shared/flag-subscription";
 export { useFlag, useFlags };

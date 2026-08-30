@@ -1,6 +1,6 @@
 import type { FunctionReference, LunoraClient, SubscriptionErrorCallback } from "@lunora/client";
 import { get } from "svelte/store";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { flag, flags } from "../src/flag";
 
@@ -57,6 +57,20 @@ const createFakeClient = () => {
         unsubscribeSpy,
     };
 };
+
+// `subscribeFlag` gates on a browser `window` (the SSR guard every other
+// subscribing primitive in this package already applies); the vitest env is
+// `node`, so define one for the client-path tests. Mirrors the same stub in
+// `presence.test.ts`.
+/* eslint-disable vitest/require-top-level-describe -- the `window` stub is shared by every describe in this file, so it belongs at file scope */
+beforeAll(() => {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+});
+
+afterAll(() => {
+    Reflect.deleteProperty(globalThis, "window");
+});
+/* eslint-enable vitest/require-top-level-describe */
 
 describe("flag store", () => {
     it("subscribes on the reserved flags channel, holds the default, then resolves on push", () => {
@@ -184,5 +198,37 @@ describe("flags store", () => {
         stop();
 
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe("flag store during SSR", () => {
+    // `readable`'s start function runs on its first subscriber, and `$flag` in a
+    // template subscribes during `renderToString`. Without the guard the store
+    // opened a socket on the server for every rendered request — against a client
+    // whose same-origin URL does not resolve there.
+    it("opens no subscription without a browser window, and holds the default", () => {
+        expect.assertions(3);
+
+        const original = Reflect.getOwnPropertyDescriptor(globalThis, "window");
+
+        Reflect.deleteProperty(globalThis, "window");
+
+        try {
+            const { calls, client } = createFakeClient();
+            const store = flag(client, "dark", false);
+
+            const unsubscribe = store.subscribe(() => {});
+
+            expect(calls).toHaveLength(0);
+            expect(get(store)).toBe(false);
+
+            unsubscribe();
+
+            expect(calls).toHaveLength(0);
+        } finally {
+            if (original) {
+                Object.defineProperty(globalThis, "window", original);
+            }
+        }
     });
 });

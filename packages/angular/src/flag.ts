@@ -1,49 +1,23 @@
 import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
-import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
+import type { LunoraClient, Unsubscribe } from "@lunora/client";
 
+import type { FlagContext as SharedFlagContext, FlagValue as SharedFlagValue } from "../../../shared/flag-subscription";
+import { subscribeFlag } from "../../../shared/flag-subscription";
 import { resolveLunoraClient } from "./client";
 import { shouldOpenSubscription } from "./platform";
-
-/**
- * The reserved runtime path the generated flag-subscription read override
- * answers. Any `__lunora_flags__:` path routes there (the suffix is free).
- */
-const FLAGS_EVAL_PATH = "__lunora_flags__:eval";
 
 /**
  * The value kinds a flag resolves to — OpenFeature's boolean / number / string / structured (JSON) flags.
  * @experimental
  */
-type FlagValue = boolean | number | string | Record<string, unknown> | unknown[] | null;
+type FlagValue = SharedFlagValue;
 
 /**
  * Targeting context bag forwarded to the OpenFeature provider.
  * @experimental
  */
-type FlagContext = Record<string, unknown>;
-
-/** Wire args the generated flag-subscription read override reads. */
-interface FlagSubscribeArgs extends Record<string, unknown> {
-    context?: Record<string, unknown>;
-    default: unknown;
-    key: string;
-    type: "boolean" | "number" | "object" | "string";
-}
-
-/** Map a default value to the OpenFeature flag kind. */
-const flagKind = (value: unknown): FlagSubscribeArgs["type"] => {
-    const kind = typeof value;
-
-    if (kind === "boolean" || kind === "number" || kind === "string") {
-        return kind;
-    }
-
-    return "object";
-};
-
-/** A typed reference to the reserved flags channel. */
-const flagsReference = { __lunoraRef: FLAGS_EVAL_PATH } as FunctionReference<"query", FlagSubscribeArgs, FlagValue>;
+type FlagContext = SharedFlagContext;
 
 /**
  * `FlagOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
@@ -86,7 +60,6 @@ export const flag = <T extends FlagValue>(key: string, defaultValue: T, options:
     const client = resolveLunoraClient(options.client);
     const fromInjectionContext = options.destroyRef === undefined;
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
-    const type = flagKind(defaultValue);
 
     const value = signal<T>(defaultValue);
 
@@ -100,28 +73,13 @@ export const flag = <T extends FlagValue>(key: string, defaultValue: T, options:
         return value.asReadonly();
     }
 
-    let unsubscribe: Unsubscribe | undefined;
-
-    try {
-        unsubscribe = client.subscribe(
-            flagsReference,
-            { context: options.context, default: defaultValue, key, type },
-            (next) => {
-                value.set(next as T);
-            },
-            {
-                onError: () => {
-                    value.set(defaultValue);
-                },
-            },
-        );
-    } catch {
-        // The attach threw (e.g. the client is closed). Keep the default.
-    }
-
-    if (unsubscribe) {
-        destroyRef.onDestroy(unsubscribe);
-    }
+    // `subscribeFlag` owns the fail-open contract (attach throw and
+    // server-pushed provider error both resolve the default).
+    destroyRef.onDestroy(
+        subscribeFlag<T>(client, { context: options.context, default: defaultValue, key }, (next) => {
+            value.set(next);
+        }),
+    );
 
     return value.asReadonly();
 };
@@ -172,24 +130,11 @@ export const flags = <T extends Record<string, FlagValue>>(flagDefaults: T, opti
     const unsubscribes: Unsubscribe[] = [];
 
     for (const [key, defaultValue] of Object.entries(flagDefaults)) {
-        try {
-            const unsub = client.subscribe(
-                flagsReference,
-                { context: options.context, default: defaultValue, key, type: flagKind(defaultValue) },
-                (next) => {
-                    values.set({ ...values(), [key]: next });
-                },
-                {
-                    onError: () => {
-                        values.set({ ...values(), [key]: defaultValue });
-                    },
-                },
-            );
-
-            unsubscribes.push(unsub);
-        } catch {
-            // Keep this flag's default; flags fail open.
-        }
+        unsubscribes.push(
+            subscribeFlag(client, { context: options.context, default: defaultValue, key }, (next) => {
+                values.set({ ...values(), [key]: next });
+            }),
+        );
     }
 
     destroyRef.onDestroy(() => {

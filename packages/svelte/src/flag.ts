@@ -1,77 +1,34 @@
-import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
+import type { LunoraClient, Unsubscribe } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
+import type { FlagContext, FlagValue } from "../../../shared/flag-subscription";
+import { subscribeFlag } from "../../../shared/flag-subscription";
+import { isBrowser } from "../../../shared/is-browser";
 import { isClient } from "./agent";
 import { getLunoraClient } from "./context";
 
 /**
- * The reserved runtime path the generated flag-subscription read override
- * answers. Any `__lunora_flags__:` path routes there (the suffix is free).
- * Unlike `query`, a flag read never issues an HTTP fetch — the reserved prefix
- * isn't a registered function, so an HTTP RPC would 404. It rides Lunora's
- * WebSocket only, seeded on subscribe.
+ * Open one flag subscription, gated on a browser `window`. The fail-open
+ * contract itself lives in the shared {@link subscribeFlag}.
+ *
+ * A `readable`'s start function runs on its first subscriber, and `$flag` in a
+ * template subscribes during `renderToString` — so without this the store opens
+ * a socket on the server. Svelte unsubscribes synchronously once the render
+ * completes, so this is a per-render open rather than the permanent leak the
+ * same defect caused in `@lunora/vue` and `@lunora/angular` (which never
+ * unmount). It is still a socket per rendered request against a client whose
+ * same-origin URL does not resolve server-side, and every other subscribing
+ * primitive in this package already guards — `presence.ts`, `agent.ts`,
+ * `agent-chat.ts`, `rate-limit.ts`. The store holds its default until hydration.
  */
-const FLAGS_EVAL_PATH = "__lunora_flags__:eval";
-
-/** A targeting context merged on top of the app's default (`defineFlags({ identify })`). */
-type FlagContext = Record<string, unknown>;
-
-/** The value kinds a flag resolves to — OpenFeature's boolean / number / string / structured (JSON) flags. */
-type FlagValue = boolean | number | string | { [key: string]: unknown } | unknown[] | null;
-
-/** Wire args the generated flag-subscription read override reads: the key, its value kind, the fallback, and the targeting context. */
-interface FlagSubscribeArgs extends Record<string, unknown> {
-    context?: FlagContext;
-    default: unknown;
-    key: string;
-    type: "boolean" | "number" | "object" | "string";
-}
-
-/** Map a default value to the OpenFeature flag kind the server evaluates it as. */
-const flagKind = (value: unknown): FlagSubscribeArgs["type"] => {
-    const kind = typeof value;
-
-    if (kind === "boolean" || kind === "number" || kind === "string") {
-        return kind;
-    }
-
-    return "object";
-};
-
-/** A typed reference to the reserved flags channel so `client.subscribe` infers its args/return. */
-const flagsReference = { __lunoraRef: FLAGS_EVAL_PATH } as FunctionReference<"query", FlagSubscribeArgs, FlagValue>;
-
-/** Open one flag subscription into a readable store's `set`, failing open to the default. */
-const subscribeFlag = <T extends FlagValue>(
+const openFlag = <T extends FlagValue>(
     client: LunoraClient,
     key: string,
     defaultValue: T,
     context: FlagContext | undefined,
     set: (value: T) => void,
-): Unsubscribe => {
-    try {
-        return client.subscribe(
-            flagsReference,
-            { context, default: defaultValue, key, type: flagKind(defaultValue) },
-            (next) => {
-                set(next as T);
-            },
-            {
-                // Fail open on a server-pushed evaluation error too, not just on an
-                // attach throw — otherwise a provider that starts failing mid-session
-                // freezes the store on its last resolved value.
-                onError: () => {
-                    set(defaultValue);
-                },
-            },
-        );
-    } catch {
-        // The attach threw (e.g. the client is closed). Keep the default; a flag
-        // read has no error channel — it fails open by design.
-        return () => {};
-    }
-};
+): Unsubscribe => (isBrowser() ? subscribeFlag<T>(client, { context, default: defaultValue, key }, set) : () => {});
 
 /**
  * Open a single feature flag as a Svelte readable store, live over Lunora's
@@ -103,7 +60,7 @@ export function flag<T extends FlagValue>(
     const defaultValue = (hasExplicitClient ? defaultOrContext : keyOrDefault) as T;
     const context = (hasExplicitClient ? maybeContext : (defaultOrContext as FlagContext | undefined)) ?? undefined;
 
-    return readable<T>(defaultValue, (set) => subscribeFlag(client, key, defaultValue, context, set));
+    return readable<T>(defaultValue, (set) => openFlag(client, key, defaultValue, context, set));
 }
 
 /**
@@ -137,7 +94,7 @@ export function flags<T extends Record<string, FlagValue>>(
 
         for (const [key, defaultValue] of Object.entries(flagDefaults)) {
             unsubscribes.push(
-                subscribeFlag(client, key, defaultValue, context, (next) => {
+                openFlag(client, key, defaultValue, context, (next) => {
                     current = { ...current, [key]: next };
                     set(current);
                 }),
@@ -152,4 +109,4 @@ export function flags<T extends Record<string, FlagValue>>(
     });
 }
 
-export type { FlagContext, FlagValue };
+export type { FlagContext, FlagValue } from "../../../shared/flag-subscription";

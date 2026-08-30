@@ -9,12 +9,13 @@ description: Use Lunora in a React Native / Expo app — the same live hooks, pl
 `useConnectionStatus`, `<LunoraProvider>` and the auth gates are `react-dom`-free
 and touch no browser-only global, so they run unchanged on a phone.
 
-What is **not** re-exported is the payment kit — `CheckoutButton`,
+The payment kit is not part of that surface. `CheckoutButton`,
 `CustomerPortalButton` and `useCheckout` render a DOM `<button>` and navigate
-with `globalThis.location`, neither of which exists in React Native. Drive a
-checkout from a native screen instead: call the action that returns the
-provider's `{ url }` (with `useMutation`) and open it with Expo's `Linking` or
-`WebBrowser`.
+with `globalThis.location`, neither of which exists in React Native, so they
+live at `@lunora/react/payment` rather than on the root barrel — a native app
+never imports them by accident. Drive a checkout from a native screen instead:
+call the action that returns the provider's `{ url }` (with `useMutation`) and
+open it with Expo's `Linking` or `WebBrowser`.
 
 On top of that it adds the two things a native app needs that a browser gives
 you for free:
