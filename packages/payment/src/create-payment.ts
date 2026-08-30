@@ -619,7 +619,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 // Upstream metering is best-effort: the durable ledger is already updated, so a
                 // transient provider error can never fail the caller's request. For a locally-evaluated
                 // provider that ledger is what `check` reads; for a provider that owns entitlements the
-                // forward is retried out-of-band (the `usage.report_failed` signal + `reconcile`).
+                // row stays `reportedToProvider: false` and `reconcile` retries the forward from
+                // `store.listUnreportedUsage` (plus this `usage.report_failed` signal for alerting).
                 notifyObserver(options.observability, {
                     featureId: input.featureId,
                     provider: adapter.identifier,

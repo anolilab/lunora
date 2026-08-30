@@ -23,19 +23,21 @@ interface BucketStorage extends Storage {
  *
  * ```ts
  * storage: (env) => createBucketStorage({
- *     default: createStorage({ bucket: env.FILES }),
- *     avatars: createStorage({ bucket: env.AVATARS }),
+ *     default: createStorage({ bucket: env.FILES, bucketName: "default" }),
+ *     avatars: createStorage({ bucket: env.AVATARS, bucketName: "avatars" }),
  * }),
  * // → ctx.storage.download(key)             // default bucket
  * // → ctx.storage.bucket("avatars").store() // the avatars bucket
  * ```
  *
- * The bare accessor is tagged `"default"` — the canonical name a
- * `defineStorageRule({ bucket: "default" })` rule and the generated
- * `StorageBucketName` union both use — unless `options.default` names another
- * bucket (then the bare accessor takes that name). The binding it delegates to is
- * `options.default`, else the `"default"` key when present, else the first
- * registered bucket. Named buckets are reached with `bucket(name)`.
+ * The bare accessor is tagged with the name of the binding it actually
+ * delegates to: `options.default` when given, else `"default"` when that key
+ * exists (the canonical name a `defineStorageRule({ bucket: "default" })` rule
+ * and the generated `StorageBucketName` union use), else the first registered
+ * bucket. Tag and binding must agree or a `{ bucket: "avatars" }` rule would
+ * gate `bucket("avatars").download()` and not the identical bare
+ * `ctx.storage.download()` reaching the same R2 bucket. Named buckets are
+ * reached with `bucket(name)`.
  */
 export const createBucketStorage = (buckets: Record<string, Storage>, options: { default?: string } = {}): BucketStorage => {
     const names = Object.keys(buckets);
@@ -49,11 +51,13 @@ export const createBucketStorage = (buckets: Record<string, Storage>, options: {
         throw new LunoraError("INTERNAL", `@lunora/storage: default bucket "${options.default}" is not in the bucket map (have: ${names.join(", ")})`);
     }
 
-    // The bare `ctx.storage` is tagged `"default"` unless an explicit default
-    // names another bucket, so a `{ bucket: "default" }` rule reliably guards it
-    // and the tag stays consistent with `asBucketStorage` (single-bucket apps).
-    const defaultTag = options.default ?? "default";
-    const defaultBinding = buckets[defaultTag] ?? buckets[firstName];
+    // The bare `ctx.storage` is tagged with the name of the bucket it delegates
+    // to, never with `"default"` over some other binding: the tag is what
+    // `storageRules` matches, so tagging `{ avatars }`'s only bucket `"default"`
+    // would leave a `{ bucket: "avatars" }` rule gating `bucket("avatars")` and
+    // not the bare accessor that reaches the very same R2 bucket.
+    const defaultTag = options.default ?? (buckets.default ? "default" : firstName);
+    const defaultBinding = buckets[defaultTag];
 
     // Belt-and-suspenders + type narrowing: `buckets[firstName]` is runtime-present
     // (it's the first `Object.keys` entry, and the empty case already threw), but

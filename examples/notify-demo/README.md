@@ -12,7 +12,7 @@ and broadcasts to it from an action.
 - **`lunora/push.ts`** —
     - `registerDevice` (mutation) → `ctx.push.register(...)`
     - `announce` (mutation) → records the announcement row
-    - `broadcast` (action) → `ctx.notify.send(...)` (targeted) + `ctx.push.broadcast(...)` (fan-out)
+    - `broadcast` (action) → `ctx.push.send(...)` (targeted) + `ctx.push.broadcast(...)` (fan-out)
 - **Browser** — `subscribeToPush` from `@lunora/notify/web` registers `/sw.js`
   and returns a subscription the `registerDevice` mutation persists.
 - **Studio** — registered devices (endpoint / kind / last-send status / delivery

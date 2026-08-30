@@ -23,7 +23,7 @@ export type { CreateNotifyOptions } from "./notify";
 export { createNotify } from "./notify";
 export type { ResolvedProviders, RoutingPushOptions } from "./providers";
 export { buildEngine, routingPushProvider } from "./providers";
-export type { PushBroadcastJob, QueueProducerLike } from "./queue";
+export type { PushBroadcastJob, PushBroadcastJobResult, QueueProducerLike } from "./queue";
 export { enqueuePushBroadcast, runPushBroadcastJob } from "./queue";
 export type { D1Like, D1PreparedLike, D1StoreOptions } from "./subscriptions/d1-store";
 export { d1SubscriptionStore } from "./subscriptions/d1-store";

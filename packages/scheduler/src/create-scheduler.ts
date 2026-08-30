@@ -21,11 +21,18 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         const scheduledFor = date instanceof Date ? date.getTime() : date;
 
         // Shared envelope; the target-specific field (`functionPath` xor
-        // `workflow`) is merged in below. Optional workpool / retry-policy
-        // passthrough is absent for ordinary calls, keeping the wire payload (and
-        // the DO's behaviour) identical to before this feature.
+        // `workflow`) is merged in below.
+        //
+        // `instanceName` travels on EVERY call, pooled or not: the DO resolves
+        // the pool's reserved slot against it, so omitting it made a job
+        // scheduled on `tenant-a` release its slot on `default` — a slot leaked
+        // per job (fatal at a cap of 1) plus a phantom pool row on the wrong
+        // instance. `maxConcurrency` only means anything for a pooled job, so it
+        // rides along only when `pool` is set (mirroring `createWorkpool`).
         const base = {
             args,
+            instanceName: options.instanceName ?? "default",
+            maxConcurrency: options_.pool === undefined ? undefined : options_.maxConcurrency,
             originUrl: options.originUrl,
             pool: options_.pool,
             retry: options_.retry,

@@ -32,28 +32,59 @@ describe("queue-backed fan-out", () => {
         expect(broadcastPage).toHaveBeenCalledWith(job.payload, undefined);
     });
 
-    it("rejects a job with a transient failure so the queue retries JUST this page", async () => {
+    it("returns the page (cursor included) instead of throwing when some recipients failed", async () => {
         expect.hasAssertions();
 
-        // Any `result.failed > 0` is a transient page failure worth another
-        // attempt — re-thrown so the queue does NOT ack it.
-        const broadcastPage = vi.fn().mockResolvedValue({ nextCursor: undefined, result: { failed: 2, outcomes: [], pruned: 0, sent: 0, total: 2 } });
+        // Regression: throwing discarded `nextCursor`, so one permanently-failing
+        // device stalled the broadcast forever — every retry re-POSTed the
+        // recipients this page already delivered to, then dead-lettered, and the
+        // later pages were never reached.
+        const broadcastPage = vi.fn().mockResolvedValue({
+            nextCursor: "wp2_page2",
+            result: {
+                failed: 1,
+                outcomes: [
+                    { id: "a", status: "ok" },
+                    { id: "b", error: "403 VapidPkHashMismatch", status: "failed" },
+                ],
+                pruned: 0,
+                sent: 1,
+                total: 2,
+            },
+        });
         const push = { broadcastPage } as unknown as LunoraPush;
         const job: PushBroadcastJob = { payload: { body: "hi" }, type: "lunora.push.broadcast" };
 
-        await expect(runPushBroadcastJob(push, job)).rejects.toThrow(/transient failure/u);
+        const outcome = await runPushBroadcastJob(push, job);
+
+        expect(outcome.nextCursor).toBe("wp2_page2");
+        expect(outcome.failedIds).toStrictEqual(["b"]);
     });
 
-    it("rejects a partial success that still had a transient failure", async () => {
+    it("a retryIds job redelivers to exactly those ids and never walks a page", async () => {
         expect.hasAssertions();
 
-        // `sent > 0` but `failed > 0`: the failed recipients are worth a retry, so
-        // this page's job is re-thrown (retry re-runs the page, not the whole broadcast).
-        const broadcastPage = vi.fn().mockResolvedValue({ nextCursor: undefined, result: { failed: 1, outcomes: [], pruned: 0, sent: 1, total: 2 } });
-        const push = { broadcastPage } as unknown as LunoraPush;
-        const job: PushBroadcastJob = { payload: { body: "hi" }, type: "lunora.push.broadcast" };
+        const broadcastPage = vi.fn();
+        const send = vi.fn().mockResolvedValue({ errorMessages: [], successful: true });
+        const push = { broadcastPage, send } as unknown as LunoraPush;
+        const job: PushBroadcastJob = { payload: { body: "hi" }, retryIds: ["b"], type: "lunora.push.broadcast" };
 
-        await expect(runPushBroadcastJob(push, job)).rejects.toThrow(/transient failure/u);
+        const outcome = await runPushBroadcastJob(push, job);
+
+        expect(broadcastPage).not.toHaveBeenCalled();
+        expect(send).toHaveBeenCalledWith("b", job.payload);
+        expect(outcome.failedIds).toStrictEqual([]);
+    });
+
+    it("a retryIds job that still fails throws, so only the failing ids reach the DLQ", async () => {
+        expect.hasAssertions();
+
+        const send = vi.fn().mockRejectedValue(new Error("403 VapidPkHashMismatch"));
+        const push = { broadcastPage: vi.fn(), send } as unknown as LunoraPush;
+        const job: PushBroadcastJob = { payload: { body: "hi" }, retryIds: ["b"], type: "lunora.push.broadcast" };
+
+        await expect(runPushBroadcastJob(push, job)).rejects.toThrow(/retry failed/u);
+        expect(send).toHaveBeenCalledTimes(1);
     });
 
     it("does NOT throw when the whole page was pruned (a successful prune, not a failure)", async () => {

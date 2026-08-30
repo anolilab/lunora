@@ -38,18 +38,22 @@ export const listAnnouncements = query.query(async ({ ctx }): Promise<Announceme
 /**
  * Fan a push out to every registered device. Sends are external I/O, so they
  * live in an **action** (the `notify_send_outside_action` advisor lint enforces
- * this). Demonstrates both facades: `ctx.notify.send` (multi-channel, targeted at
- * the first registered device) and `ctx.push.broadcast` (fan-out to all).
+ * this). Demonstrates both push paths: `ctx.push.send` (one targeted device) and
+ * `ctx.push.broadcast` (fan-out to all).
  */
 export const broadcast = action
     .input({ body: v.string(), title: v.string() })
     .action(async ({ args: { body, title }, ctx }): Promise<{ failed: number; pruned: number; sent: number; total: number }> => {
-        // Multi-channel send through `ctx.notify` — targeted at the first registered
-        // device (a push payload requires an explicit `to` target).
+        // A targeted single send. It goes through `ctx.push.send`, which resolves
+        // the stored subscription and derives the delivery target from it: a target
+        // cannot be rebuilt out here, because `push.list()` strips the delivery
+        // secrets (the web-push `keys`, the FCM token). Handing `ctx.notify.send` a
+        // bare `endpoint` URL routed the message to FCM — the push router treats
+        // any non-`{`-prefixed string as an opaque FCM registration token.
         const [first] = await ctx.push.list();
 
         if (first !== undefined) {
-            await ctx.notify.send({ push: { body, title, to: first.endpoint ?? first.id } });
+            await ctx.push.send(first.id, { body, title });
         }
 
         // Fan out to EVERY stored subscription — the primary broadcast path.

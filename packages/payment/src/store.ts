@@ -22,6 +22,22 @@ export interface PaymentStore {
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
 
     /**
+     * Usage events that still owe an upstream forward, oldest first, at most `limit`.
+     *
+     * "Owes a forward" is narrower than `reportedToProvider === false`: only an
+     * ADDITIVE event with a positive `quantity` qualifies. A `"set"` event's
+     * upstream delta was measured against the period total at the moment it was
+     * recorded and is not recoverable afterwards, and a non-positive quantity was
+     * never sent, so neither is a retry candidate — returning them would make the
+     * sweep re-send the same rows forever (or double-count on an additive meter).
+     *
+     * Read by `reconcile` to retry a forward the provider rejected transiently;
+     * without it a single 5xx loses that metered unit upstream for good, which for
+     * a provider that owns entitlements under-bills and over-entitles the customer.
+     */
+    listUnreportedUsage: (provider: ProviderId, limit: number) => Promise<UsageEvent[]>;
+
+    /**
      * Claims a provider event id for processing. Resolves `true` the first time an event is seen
      * and `false` for a duplicate — the inbound-idempotency primitive.
      */
@@ -125,6 +141,14 @@ export class MemoryPaymentStore implements PaymentStore {
 
     public listSubscriptionsByReference(referenceId: string): Promise<Subscription[]> {
         return Promise.resolve([...this.subscriptions.values()].filter((subscription) => subscription.referenceId === referenceId));
+    }
+
+    public listUnreportedUsage(provider: ProviderId, limit: number): Promise<UsageEvent[]> {
+        const pending = [...this.usageEvents.values()]
+            .filter((event) => event.provider === provider && !event.reportedToProvider && event.mode !== "set" && event.quantity > 0)
+            .toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
+
+        return Promise.resolve(pending.slice(0, Math.max(0, limit)));
     }
 
     public markEventProcessed(provider: ProviderId, eventId: string): Promise<boolean> {

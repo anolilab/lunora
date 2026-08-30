@@ -13,8 +13,8 @@
  *
  * `publicBaseUrl` must NOT carry a path (a bare origin, optionally with a
  * trailing slash) — {@link buildSignedUrl} rejects a subpath base, because the
- * signature binds only host + key and {@link verifySignedUrl} reconstructs the
- * key from the full URL pathname, so a subpath base would make every minted
+ * signature binds host + bucket + key and {@link verifySignedUrl} reconstructs
+ * the key from the full URL pathname, so a subpath base would make every minted
  * URL fail verification.
  *
  * Reach for native S3 presigned URLs instead when you want clients to hit R2
@@ -46,12 +46,17 @@ const LEADING_SLASH_RE = /^\//;
 // Host is lowercased so a signature minted for `Example.com` verifies against
 // `example.com` — DNS is case-insensitive, but the URL parser preserves case.
 //
-// `contentType` (a PUT-only pin) is appended as a fifth line only when present,
-// so a plain GET/PUT signature canonicalizes byte-for-byte the way it always
-// has — existing URLs (no `ct`) keep verifying. When present, the uploader's
-// request `Content-Type` is bound into the signature.
-const canonicalize = (method: "GET" | "PUT", host: string, key: string, exp: number, contentType?: string): string => {
-    const base = `${method}\n${host.toLowerCase()}\n${key}\n${String(exp)}`;
+// `bucketName` is bound as its own line: every bucket in a `.storage({ bucket,
+// buckets })` declaration shares one `publicBaseUrl` + `signingSecret`, so
+// without it a URL minted for a bucket the caller IS allowed on is byte-identical
+// to one for a bucket it is not — and the serving route has nothing to select a
+// bucket from. It is mirrored on the URL as `&bucket=...` so verify can rebuild
+// the same canonical and tell the route which bucket to serve.
+//
+// `contentType` (a PUT-only pin) is appended as a last line only when present.
+// When present, the uploader's request `Content-Type` is bound into the signature.
+const canonicalize = (method: "GET" | "PUT", host: string, bucketName: string, key: string, exp: number, contentType?: string): string => {
+    const base = `${method}\n${host.toLowerCase()}\n${bucketName}\n${key}\n${String(exp)}`;
 
     return contentType === undefined ? base : `${base}\n${contentType}`;
 };
@@ -61,10 +66,12 @@ const canonicalize = (method: "GET" | "PUT", host: string, key: string, exp: num
  * string carrying `exp` (unix seconds), `method` (`GET` or `PUT`) and `sig`
  * (a base64url HMAC).
  *
- * The HMAC canonical includes the URL host so a signature minted for one bucket
- * cannot be replayed against another host on the same signing secret. Even so,
- * the signing secret MUST NOT be shared across buckets/tenants — host binding
- * narrows replay surface but is not a substitute for per-tenant key isolation.
+ * The HMAC canonical includes the URL host AND the `bucketName`, so a signature
+ * minted for one bucket cannot be replayed against another bucket (all buckets
+ * of one `.storage()` declaration share a base URL and signing secret) or
+ * another host. Even so, the signing secret MUST NOT be shared across
+ * tenants — this binding narrows replay surface but is not a substitute for
+ * per-tenant key isolation.
  *
  * The Worker route handling the signed download/upload (mounted at
  * `publicBaseUrl`'s origin, e.g. `GET /:key`) should call
@@ -73,11 +80,13 @@ const canonicalize = (method: "GET" | "PUT", host: string, key: string, exp: num
  * docstring.
  */
 export const buildSignedUrl = async (
-    args: SignedUrlOptions & {
+    args: {
         baseUrl: string;
+        /** The bucket the URL addresses — bound into the HMAC and mirrored as `&bucket=`. */
+        bucketName: string;
         key: string;
         secret: string;
-    },
+    } & SignedUrlOptions,
 ): Promise<string> => {
     const method = args.method ?? "GET";
     const expiresInSeconds = args.expiresInSeconds ?? 60 * 60;
@@ -99,8 +108,8 @@ export const buildSignedUrl = async (
     // pathname (`${base}/${safeKey}`), but `verifySignedUrl` reconstructs the
     // key from the ENTIRE `url.pathname` and can't know the base prefix — so a
     // base mounted at a subpath makes every minted URL fail verification. The
-    // signature only binds host + key, not the base path, so we can't recover
-    // it on verify; reject it loudly here instead of silently minting dead URLs.
+    // signature binds host + bucket + key, not the base path, so we can't
+    // recover it on verify; reject it loudly instead of minting dead URLs.
     // A pathname of only slashes is fine — `trimTrailingSlashes` collapses it to
     // the bare origin (see `isOnlySlashesPath` in `shared/hmac-url.ts`).
     let basePath = "";
@@ -123,10 +132,16 @@ export const buildSignedUrl = async (
     // re-split — reject it here rather than minting a URL two different keys
     // could both satisfy. See `shared/hmac-url.ts#assertCanonicalSafe`.
     assertCanonicalSafe(args.key);
+    // Same reason as the key: `bucketName` is not the canonical's last field.
+    assertCanonicalSafe(args.bucketName);
+
+    if (args.bucketName === "") {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: bucketName must not be empty");
+    }
 
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
     const host = extractHost(args.baseUrl);
-    const sig = await signCanonical(args.secret, canonicalize(method, host, args.key, exp, contentType));
+    const sig = await signCanonical(args.secret, canonicalize(method, host, args.bucketName, args.key, exp, contentType));
 
     const base = trimTrailingSlashes(args.baseUrl);
     const safeKey = args.key
@@ -136,10 +151,16 @@ export const buildSignedUrl = async (
 
     const ctParameter = contentType === undefined ? "" : `&ct=${encodeURIComponent(contentType)}`;
 
-    return `${base}/${safeKey}?exp=${String(exp)}&method=${method}&sig=${sig}${ctParameter}`;
+    return `${base}/${safeKey}?exp=${String(exp)}&method=${method}&bucket=${encodeURIComponent(args.bucketName)}&sig=${sig}${ctParameter}`;
 };
 
 export interface VerifyResult {
+    /**
+     * The bucket the URL was minted for. The serving route MUST resolve its R2
+     * binding from this (never from a caller-supplied bucket), since one signing
+     * secret covers every bucket of a `.storage()` declaration.
+     */
+    bucketName?: string;
     /** The pinned upload `Content-Type` carried by a PUT URL, when present. */
     contentType?: string;
     key?: string;
@@ -183,11 +204,15 @@ export const verifySignedUrl = async (input: string | URL, secret: string, optio
     // runtime check (a `as "GET" | "PUT"` cast would make the linter — and the
     // type system — treat the guard as dead code).
     const method = url.searchParams.get("method") ?? "GET";
+    // The bucket the signature was minted for. Every minted URL carries it, so a
+    // URL without one is malformed — never silently treated as the default
+    // bucket, which is the cross-bucket confusion this parameter exists to stop.
+    const bucketName = url.searchParams.get("bucket");
     // A PUT-only content-type pin. Absent → undefined, which canonicalizes the
-    // legacy (no-`ct`) form so old URLs keep verifying.
+    // no-`ct` (GET / unpinned PUT) form.
     const contentType = url.searchParams.get("ct") ?? undefined;
 
-    if (!sig || !Number.isInteger(exp)) {
+    if (!sig || !bucketName || !Number.isInteger(exp)) {
         return { reason: "malformed", valid: false };
     }
 
@@ -215,6 +240,7 @@ export const verifySignedUrl = async (input: string | URL, secret: string, optio
         // A percent-decoded key carrying a raw CR/LF is rejected the same as a
         // decode failure — see the build-side comment on `assertCanonicalSafe`.
         assertCanonicalSafe(key);
+        assertCanonicalSafe(bucketName);
         sigBytes = fromBase64Url(sig);
     } catch {
         return { reason: "malformed", valid: false };
@@ -224,11 +250,11 @@ export const verifySignedUrl = async (input: string | URL, secret: string, optio
     // rewrite topologies); otherwise bind to the inbound host, which equals the
     // build-side host whenever the verified URL is the minted URL.
     const host = options?.expectedHost === undefined ? url.host : extractHost(options.expectedHost);
-    const valid = await verifyCanonical(secret, canonicalize(method, host, key, exp, contentType), sigBytes);
+    const valid = await verifyCanonical(secret, canonicalize(method, host, bucketName, key, exp, contentType), sigBytes);
 
     if (!valid) {
         return { reason: "bad_signature", valid: false };
     }
 
-    return { contentType, key, method, valid: true };
+    return { bucketName, contentType, key, method, valid: true };
 };

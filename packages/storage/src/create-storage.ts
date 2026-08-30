@@ -393,7 +393,10 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         return object && toMetadata(object);
     };
 
-    const list = async (prefix?: string, listOptions: ListOptions = {}): Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }> => {
+    const list = async (
+        prefix?: string,
+        listOptions: ListOptions = {},
+    ): Promise<{ cursor?: string; delimitedPrefixes?: string[]; objects: R2ObjectLike[]; truncated?: boolean }> => {
         // `prefix` is intentionally permissive: it's read-only and a malformed
         // value just produces an empty result. We still reject NUL bytes since
         // the R2 binding silently truncates at the NUL on some runtimes.
@@ -405,11 +408,19 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         const limit = Math.min(Math.max(1, Math.floor(requested)), MAX_LIST_LIMIT);
         const result = await options.bucket.list({ cursor: listOptions.cursor, delimiter: listOptions.delimiter, limit, prefix });
 
+        // With a delimiter, R2 puts the rolled-up "folders" in `delimitedPrefixes`
+        // and leaves them OUT of `objects` — dropping them made
+        // `list("photos/", { delimiter: "/" })` over a bucket full of
+        // `photos/2026/*.png` look like an empty directory. `R2BucketLike.list`
+        // does not declare the field yet (packages/platform/src/bindings.ts), so
+        // it is read structurally until it does.
+        const { delimitedPrefixes } = result as { delimitedPrefixes?: string[] };
+
         // Forward R2's `truncated` flag so callers can paginate with a clean
         // `while (truncated)` loop instead of inferring "more" from `cursor`.
         // `toListObject` (not the `withSha256` Proxy) so `sha256`/`sha256Base64`
         // survive JSON serialization when the list is returned from a query.
-        return { cursor: result.cursor, objects: result.objects.map((object) => toListObject(object)), truncated: result.truncated };
+        return { cursor: result.cursor, delimitedPrefixes, objects: result.objects.map((object) => toListObject(object)), truncated: result.truncated };
     };
 
     const getUrl = (key: string): string => {
@@ -444,6 +455,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
 
         return buildSignedUrl({
             baseUrl: options.publicBaseUrl,
+            bucketName: options.bucketName ?? "default",
             contentType: signedOptions.contentType,
             expiresInSeconds: signedOptions.expiresInSeconds,
             key,

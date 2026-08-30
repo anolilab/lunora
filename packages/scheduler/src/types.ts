@@ -89,6 +89,14 @@ export interface RetryPolicy {
 
 export interface RunOptions {
     /**
+     * Cap for the {@link RunOptions.pool} this job joins, applied when the pool
+     * is first created and refreshed on every enqueue that carries one. Ignored
+     * without `pool`. A pool created by a `runAfter`/`runAt` that omits it caps
+     * at 1 — {@link Workpool} is the usual way to set it.
+     */
+    maxConcurrency?: number;
+
+    /**
      * Logical workpool this job belongs to. When set, the SchedulerDO gates the
      * job behind the pool's `maxConcurrency` (see {@link WorkpoolOptions}).
      * Usually populated by {@link Workpool.enqueue}; callers rarely set it on a

@@ -54,7 +54,7 @@ interface ForwardableEmailMessageLike {
     readonly raw: ReadableStream<Uint8Array>;
     /** Reply to the sender with a new message. */
     reply: (message: { from: string; raw: string; to: string }) => Promise<unknown>;
-    /** Reject the message with a permanent SMTP error (Cloudflare bounces/retries). */
+    /** Reject the message with a PERMANENT SMTP error — Cloudflare bounces it to the sender, it is never redelivered. */
     setReject: (reason: string) => void;
     /** Envelope `To`. */
     readonly to: string;
@@ -89,12 +89,16 @@ interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
     dispatch: InboundDispatch<TEnv>;
 
     /**
-     * Called when `parse`/`verify`/`dispatch` throws. The default rejects the
-     * message via `message.setReject` so Cloudflare bounces/retries rather than
-     * silently dropping it. SECURITY: the reject reason is delivered to the
-     * (attacker-controlled) sender as a bounce, so the default reason is a fixed,
-     * generic string and the real error is logged server-side. Override to log,
-     * forward, or swallow — but never pass internal error text to `setReject`.
+     * Called when `parse` or `verify` throws — a message that is malformed or
+     * fails sender authentication, which every redelivery would fail identically.
+     * The default rejects it via `message.setReject` (a PERMANENT SMTP failure,
+     * so the sender gets a bounce instead of a silent drop). A `dispatch`/
+     * transport failure does NOT come here: it is rethrown so the platform
+     * retries — see {@link createInboundEmailHandler}. SECURITY: the reject reason
+     * is delivered to the (attacker-controlled) sender as a bounce, so the default
+     * reason is a fixed, generic string and the real error is logged server-side.
+     * Override to log, forward, or swallow — but never pass internal error text to
+     * `setReject`.
      */
     onError?: (error: unknown, context: InboundDispatchContext<TEnv>) => Promise<void> | void;
     /** Parses raw bytes into an {@link InboundEmail} (e.g. `parseInboundEmail`). */
@@ -121,7 +125,8 @@ const GENERIC_REJECT_REASON = "message could not be processed";
 /**
  * Default `onError`: reject the message so Cloudflare reports a permanent
  * failure, but with a fixed generic reason — the detailed error is logged
- * server-side, never reflected to the sender's bounce.
+ * server-side, never reflected to the sender's bounce. Only reached for
+ * `parse`/`verify` failures, which are permanent by nature.
  */
 const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: InboundDispatchContext<TEnv>): void => {
     // eslint-disable-next-line no-console -- intentional server-side log of the detailed error before rejecting with a generic, non-reflecting reason
@@ -133,17 +138,28 @@ const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: 
 /**
  * Build the `email(message, env, ctx)` handler. It (a) reads `message.raw`,
  * (b) parses it via `parse`, (c) runs the optional `verify` gate, then
- * (d) calls `dispatch(parsed, { message, env, ctx })`. Any throw (or a falsy
- * `verify`) routes through `onError` (default: a generic `message.setReject`).
+ * (d) calls `dispatch(parsed, { message, env, ctx })`.
+ *
+ * The two failure classes are handled differently, because `setReject` is a
+ * PERMANENT SMTP failure and this path has no dead-letter queue:
+ *
+ * - `parse` / `verify` (including a falsy `verify`) → `onError` (default: a
+ * generic `message.setReject`). A malformed or unauthenticated message fails
+ * the same way on every redelivery, so bouncing it is the honest answer.
+ * - `dispatch` (or its transport) → RETHROWN. A two-second shard 502 or a
+ * briefly-absent `LUNORA_ADMIN_TOKEN` is transient; rejecting it hands the
+ * sender an unrecoverable NDR for a message that would have delivered a
+ * moment later. Throwing lets the platform redeliver.
  */
 const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: InboundEmailHandlerOptions<TEnv>): InboundEmailHandler<TEnv> => {
     const onError = options.onError ?? rejectOnError;
 
     return async (message, env, context_) => {
         const context: InboundDispatchContext<TEnv> = { ctx: context_, env, message };
+        let parsed: InboundEmail;
 
         try {
-            const parsed = await options.parse(message.raw);
+            parsed = await options.parse(message.raw);
 
             if (options.verify) {
                 const verified = await options.verify(parsed, context);
@@ -152,11 +168,18 @@ const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: Inbo
                     throw new LunoraError("INTERNAL", "@lunora/mail/inbound: sender verification rejected the message");
                 }
             }
-
-            await options.dispatch(parsed, context);
         } catch (error) {
+            // Permanent by nature — a redelivery of the same bytes parses and
+            // verifies exactly the same way.
             await onError(error, context);
+
+            return;
         }
+
+        // Deliberately NOT wrapped: a dispatch/transport failure is transient, and
+        // `setReject` would turn it into an unrecoverable bounce with nothing to
+        // replay from. Let it propagate so the platform retries.
+        await options.dispatch(parsed, context);
     };
 };
 

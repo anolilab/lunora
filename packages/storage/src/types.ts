@@ -29,6 +29,18 @@ export interface PresignedUrlOptions {
 
 export interface LunoraStorageOptions {
     bucket: R2BucketLike;
+
+    /**
+     * The name this bucket is registered under — the same string a
+     * `defineStorageRule({ bucket })` rule and the generated `StorageBucketName`
+     * union use. Bound into every signed URL's HMAC and mirrored on it as
+     * `&bucket=`, so a URL minted for one bucket can't be replayed against
+     * another sharing the signing secret, and the serving route can resolve
+     * which bucket to read. Defaults to `"default"` (the tag a single-bucket
+     * app's bare `ctx.storage` carries); pass the registered name for any
+     * bucket reached through `createBucketStorage`.
+     */
+    bucketName?: string;
     /** Public base URL used by `getSignedUrl()`. Required for signed URLs. */
     publicBaseUrl?: string;
 
@@ -167,7 +179,14 @@ export interface Storage {
      * the same read.
      */
     head: (key: string) => Promise<R2ObjectLike | null>;
-    list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }>;
+
+    /**
+     * List objects under `prefix`. With `options.delimiter` set, keys sharing a
+     * segment are rolled up into `delimitedPrefixes` (the "folders") and are NOT
+     * in `objects` — a folder browser needs both, so a listing whose `objects` is
+     * empty is not an empty directory.
+     */
+    list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; delimitedPrefixes?: string[]; objects: R2ObjectLike[]; truncated?: boolean }>;
 
     /**
      * Resume an in-progress multipart upload by its `uploadId` (e.g. across

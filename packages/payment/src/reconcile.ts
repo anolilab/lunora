@@ -9,6 +9,9 @@
  *
  * The caller decides *which* ids to sweep (typically a `@lunora/scheduler` job querying the store
  * for non-terminal rows), keeping this function pure and testable.
+ *
+ * The same sweep also retries metered-usage forwards the provider never accepted (see
+ * `sweepUnreportedUsage`) — the out-of-band retry `track`'s swallowed forward failure relies on.
  */
 import type { PaymentAdapter } from "./adapter";
 import { compareMoney } from "./money";
@@ -28,6 +31,13 @@ interface ReconcileInput {
     readonly paymentSessionIds?: ReadonlyArray<string>;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;
+
+    /**
+     * How many unreported usage events to retry forwarding upstream this sweep
+     * (oldest first). Default {@link DEFAULT_USAGE_REPORT_LIMIT}; `0` skips the
+     * usage sweep entirely. Ignored by an adapter that does not meter usage.
+     */
+    readonly usageReportLimit?: number;
 }
 
 /**
@@ -37,11 +47,19 @@ interface ReconcileInput {
 interface ReconcileResult {
     readonly checkedPayments: number;
     readonly checkedSubscriptions: number;
+    readonly checkedUsage: number;
     readonly failedPayments: number;
     readonly failedSubscriptions: number;
+    /** Usage events whose retried forward failed again — still pending for the next sweep. */
+    readonly failedUsage: number;
     readonly updatedPayments: number;
     readonly updatedSubscriptions: number;
+    /** Usage events successfully forwarded upstream on this sweep. */
+    readonly updatedUsage: number;
 }
+
+/** Usage events retried per sweep when the caller does not say otherwise. */
+const DEFAULT_USAGE_REPORT_LIMIT = 100;
 
 const sameCurrencyAmount = (a: PaymentSession["amount"], b: PaymentSession["amount"]): boolean => a.currency === b.currency && compareMoney(a, b) === 0;
 
@@ -114,6 +132,67 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
     return true;
 };
 
+/**
+ * Retry the upstream forward for usage events that never reached the provider's
+ * meter — `track` records the ledger row first and forwards after, so a transient
+ * 5xx (or an adapter throw) leaves the row durable but the meter short. For a
+ * provider that OWNS entitlements that unit is otherwise lost for good: the
+ * customer is under-billed and over-entitled, and nothing else in the system ever
+ * reads `reportedToProvider`.
+ *
+ * Forwarding is idempotent on the event's `idempotencyKey`, so a retry that the
+ * provider had actually applied (a response we never saw) does not double-count.
+ * Only rows the store reports as still owing a forward are seen here — see
+ * {@link PaymentStore.listUnreportedUsage}.
+ */
+const sweepUnreportedUsage = async (
+    adapter: PaymentAdapter,
+    store: PaymentStore,
+    limit: number,
+    observer?: PaymentObserver,
+): Promise<SweepCounts & { checked: number }> => {
+    const { reportUsage } = adapter;
+
+    // `reportUsage` first: an adapter without it can't meter at all, and the check
+    // is total even for a partial test double that omits `capabilities`.
+    if (limit <= 0 || reportUsage === undefined || !adapter.capabilities.usageMetering) {
+        return { checked: 0, failed: 0, updated: 0 };
+    }
+
+    const pending = await store.listUnreportedUsage(adapter.identifier, limit);
+    let updated = 0;
+    let failed = 0;
+
+    for (const event of pending) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- a retry sweep against a provider that just failed: serial, not a stampede
+            const customer = await store.getCustomerByReference(adapter.identifier, event.referenceId);
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await reportUsage({
+                customerId: customer?.id,
+                featureId: event.featureId,
+                idempotencyKey: event.idempotencyKey,
+                quantity: event.quantity,
+                referenceId: event.referenceId,
+            });
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await store.markUsageReported(adapter.identifier, event.idempotencyKey);
+            updated += 1;
+        } catch {
+            failed += 1;
+            notifyObserver(observer, {
+                featureId: event.featureId,
+                provider: adapter.identifier,
+                referenceId: event.referenceId,
+                type: "usage.report_failed",
+            });
+        }
+    }
+
+    return { checked: pending.length, failed, updated };
+};
+
 interface SweepCounts {
     readonly failed: number;
     readonly updated: number;
@@ -165,6 +244,7 @@ const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
         observability,
     );
     const paymentCounts = await sweep(paymentSessionIds, "payment", (id) => reconcilePayment(adapter, store, id, observability), adapter, observability);
+    const usageCounts = await sweepUnreportedUsage(adapter, store, input.usageReportLimit ?? DEFAULT_USAGE_REPORT_LIMIT, observability);
 
     // Always fire `reconcile.completed` (even when some ids failed) so the sweep is never a monitoring
     // blind spot, and report the failed counts alongside the updated ones.
@@ -180,10 +260,13 @@ const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
     return {
         checkedPayments: paymentSessionIds.length,
         checkedSubscriptions: subscriptionIds.length,
+        checkedUsage: usageCounts.checked,
         failedPayments: paymentCounts.failed,
         failedSubscriptions: subscriptionCounts.failed,
+        failedUsage: usageCounts.failed,
         updatedPayments: paymentCounts.updated,
         updatedSubscriptions: subscriptionCounts.updated,
+        updatedUsage: usageCounts.updated,
     };
 };
 

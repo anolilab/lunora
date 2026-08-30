@@ -81,10 +81,39 @@ describe("createScheduler", () => {
         expect(calls[0]?.body).toEqual({
             args: { userId: "u-1" },
             functionPath: "messages.send",
+            instanceName: "default",
             originUrl: "https://app.test",
             scheduledFor: at.getTime(),
             shardKey: undefined,
         });
+    });
+
+    it("runAt() carries the scheduler's instanceName so a pooled slot is released on the right DO", async () => {
+        expect.assertions(3);
+
+        // Regression: the envelope omitted `instanceName`, so the DO released the
+        // slot on `default` while it had been reserved on `tenant-a` — one leaked
+        // slot per job (fatal at a cap of 1) plus a phantom pool row on the wrong
+        // instance.
+        const { calls, namespace } = fakeNamespace();
+        const scheduler = createScheduler({ instanceName: "tenant-a", namespace, originUrl: "https://app.test" });
+
+        await scheduler.runAfter(0, fnRef, { userId: "u-1" }, { maxConcurrency: 4, pool: "billing" });
+
+        expect(calls[0]?.body["instanceName"]).toBe("tenant-a");
+        expect(calls[0]?.body["pool"]).toBe("billing");
+        expect(calls[0]?.body["maxConcurrency"]).toBe(4);
+    });
+
+    it("runAt() omits maxConcurrency for an unpooled job", async () => {
+        expect.assertions(1);
+
+        const { calls, namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        await scheduler.runAfter(0, fnRef, { userId: "u-1" }, { maxConcurrency: 4 });
+
+        expect(calls[0]?.body).not.toHaveProperty("maxConcurrency");
     });
 
     it("runAt() sends a workflow binding (not functionPath) for an agent/workflow target", async () => {
@@ -100,6 +129,7 @@ describe("createScheduler", () => {
         // The wire payload carries the binding under `workflow` and omits `functionPath`.
         expect(calls[0]?.body).toEqual({
             args: { prompt: "summarize" },
+            instanceName: "default",
             originUrl: "https://app.test",
             scheduledFor: at.getTime(),
             workflow: "AGENT_SUPPORT",

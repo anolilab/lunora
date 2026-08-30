@@ -52,16 +52,35 @@ describe("createInboundEmailHandler", () => {
         expect(context).toMatchObject({ ctx: { ctxToken: 1 }, env, message });
     });
 
-    it("rejects with a generic reason (not internal error text) when dispatch throws", async () => {
+    it("rethrows a dispatch failure instead of bouncing it — the platform retries", async () => {
+        expect.assertions(2);
+
+        // Regression: `setReject` is a PERMANENT SMTP failure, so a two-second
+        // shard 502 (or a briefly-absent LUNORA_ADMIN_TOKEN) used to hand the
+        // sender an unrecoverable NDR for a message that had nowhere to be
+        // replayed from.
+        const message = fakeMessage();
+        const handler = createInboundEmailHandler({
+            dispatch: async () => {
+                throw new Error("shard 502");
+            },
+            parse: async () => fixture,
+        });
+
+        await expect(handler(message, {}, undefined)).rejects.toThrow(/shard 502/);
+        expect(message.setReject).not.toHaveBeenCalled();
+    });
+
+    it("rejects a parse failure with a generic reason (not internal error text)", async () => {
         expect.assertions(3);
 
         const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const message = fakeMessage();
         const handler = createInboundEmailHandler({
-            dispatch: async () => {
+            dispatch: async () => undefined,
+            parse: async () => {
                 throw new Error("internal secret detail");
             },
-            parse: async () => fixture,
         });
 
         await handler(message, {}, undefined);
@@ -293,10 +312,9 @@ describe("dispatchToLunoraFunction", () => {
         await expect(dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() })).rejects.toThrow(/returned an error/);
     });
 
-    it("end-to-end: handler + dispatcher rejects with a generic reason when the shard errors", async () => {
+    it("end-to-end: handler + dispatcher surfaces a shard error as a retryable throw, never a bounce", async () => {
         expect.assertions(2);
 
-        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const { shard } = stubShard({
             json: async () => {
                 return { error: "boom" };
@@ -310,13 +328,9 @@ describe("dispatchToLunoraFunction", () => {
             parse: async () => fixture,
         });
 
-        await handler(message, { LUNORA_ADMIN_TOKEN: "secret" }, undefined);
-
-        expect(message.setReject).toHaveBeenCalledTimes(1);
-        // The internal "returned an error" detail must not reach the sender's bounce.
-        expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
-
-        consoleError.mockRestore();
+        await expect(handler(message, { LUNORA_ADMIN_TOKEN: "secret" }, undefined)).rejects.toThrow(/returned an error/);
+        // A shard fault is transient — permanently rejecting it loses the mail.
+        expect(message.setReject).not.toHaveBeenCalled();
     });
 
     it("routes through a jurisdiction-pinned subnamespace when configured", async () => {

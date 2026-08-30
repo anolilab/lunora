@@ -489,6 +489,24 @@ describe("createStorage", () => {
         expect(result.cursor).toBe("c");
     });
 
+    it("list() forwards R2's delimitedPrefixes (the grouped folders)", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        // With a delimiter R2 rolls the matching keys into `delimitedPrefixes`
+        // and leaves `objects` empty — dropping the field made a folder browser
+        // render `photos/` as an empty directory with nothing under it.
+        const page = { delimitedPrefixes: ["photos/2026/"], objects: [], truncated: false };
+
+        vi.spyOn(bucket, "list").mockImplementation(async () => page);
+
+        const storage = createStorage({ bucket });
+        const result = await storage.list("photos/", { delimiter: "/" });
+
+        expect(result.delimitedPrefixes).toStrictEqual(["photos/2026/"]);
+        expect(result.objects).toStrictEqual([]);
+    });
+
     it("getUrl() requires publicBaseUrl", () => {
         expect.assertions(1);
 
@@ -536,6 +554,20 @@ describe("createStorage", () => {
         expect(url.pathname).toBe("/uploads/x.png");
         expect(url.searchParams.get("sig")).toMatch(/^[\w-]+$/);
         expect(Number(url.searchParams.get("exp"))).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    });
+
+    it("getSignedUrl() binds the configured bucketName into the URL", async () => {
+        expect.assertions(2);
+
+        const storage = createStorage({ bucket: fakeBucket(), bucketName: "avatars", publicBaseUrl: "https://cdn.test", signingSecret: "shh" });
+        const asDefault = createStorage({ bucket: fakeBucket(), publicBaseUrl: "https://cdn.test", signingSecret: "shh" });
+
+        const url = new URL(await storage.getSignedUrl("uploads/x.png", { expiresInSeconds: 60 }));
+
+        expect(url.searchParams.get("bucket")).toBe("avatars");
+        // An unnamed bucket signs under the canonical "default" tag the bare
+        // `ctx.storage` accessor carries.
+        expect(new URL(await asDefault.getSignedUrl("uploads/x.png", { expiresInSeconds: 60 })).searchParams.get("bucket")).toBe("default");
     });
 
     it("getSignedUrl() rejects a publicBaseUrl carrying a path", async () => {

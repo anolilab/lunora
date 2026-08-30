@@ -2,7 +2,9 @@
  * A {@link PaymentStore} backed by Lunora's own data layer.
  *
  * Rather than ship a bespoke `PaymentDO`, payment state rides the app's existing ShardDO: the
- * `paymentTables` are merged into the app schema and this store reads/writes them through a small
+ * payment tables are declared INLINE in the app's own `lunora/schema.ts` (codegen discovers tables
+ * by parsing that file, so it cannot resolve a cross-package `...paymentTables` spread — `./schema`
+ * is the canonical column reference to mirror), and this store reads/writes them through a small
  * `PaymentDb` port that `ctx.db` satisfies. That inherits Lunora's OCC, reactivity, sharding, and
  * `.global()`/D1 read path for free. The codecs below are the single source of truth for the
  * domain ⇄ row mapping (money split into `amountMinor` + `currency`, id ⇄ `provider<Thing>Id`).
@@ -135,6 +137,20 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
     };
 };
 
+const rowToUsageEvent = (row: PaymentRow): UsageEvent => {
+    return {
+        createdAt: readNumber(row, "createdAt"),
+        featureId: readString(row, "featureId"),
+        idempotencyKey: readString(row, "idempotencyKey"),
+        // An absent `mode` is "add" — see `usageEventToRow`.
+        mode: row["mode"] === "set" ? "set" : "add",
+        provider: readString(row, "provider") as ProviderId,
+        quantity: readNumber(row, "quantity"),
+        referenceId: readString(row, "referenceId"),
+        reportedToProvider: readBoolean(row, "reportedToProvider"),
+    };
+};
+
 const usageEventToRow = (event: UsageEvent): Record<string, unknown> => {
     return {
         createdAt: event.createdAt,
@@ -190,6 +206,19 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             const rows = await database.findMany("subscriptions", { referenceId });
 
             return rows.map((row) => rowToSubscription(row));
+        },
+
+        listUnreportedUsage: async (provider, limit) => {
+            // The `where` port is equality-only, so the additive/positive predicate
+            // (see `PaymentStore.listUnreportedUsage`) is applied in memory over the
+            // provider's unreported rows — the same shape `sumUsage` uses.
+            const rows = await database.findMany("usageEvents", { provider, reportedToProvider: false });
+
+            return rows
+                .map((row) => rowToUsageEvent(row))
+                .filter((event) => event.mode !== "set" && event.quantity > 0)
+                .toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey))
+                .slice(0, Math.max(0, limit));
         },
 
         markEventProcessed: async (provider, eventId) => {

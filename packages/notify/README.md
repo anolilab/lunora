@@ -91,7 +91,26 @@ Move a large broadcast off the request path with `@lunora/queue`:
 await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body: "…" } });
 
 // consumer (lunora/queues.ts)
-for (const message of batch.messages) await runPushBroadcastJob(ctx.push, message.body);
+for (const message of batch.messages) {
+    const { failedIds, nextCursor } = await runPushBroadcastJob(ctx.push, message.body);
+
+    // One message = ONE bounded page. Discarding `nextCursor` delivers only the
+    // first page (default 250 devices) and reports success for the whole audience.
+    if (nextCursor !== undefined) {
+        await enqueuePushBroadcast(ctx.queues.push, {
+            payload: message.body.payload,
+            filter: { ...message.body.filter, after: nextCursor },
+        });
+    }
+
+    // Redeliver ONLY the recipients that failed — a retry of the whole page would
+    // re-POST everyone it already reached.
+    if (failedIds.length > 0) {
+        await enqueuePushBroadcast(ctx.queues.push, { payload: message.body.payload, retryIds: failedIds });
+    }
+
+    message.ack();
+}
 ```
 
 ## Subscription storage
