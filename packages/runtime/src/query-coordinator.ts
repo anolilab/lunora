@@ -217,6 +217,13 @@ type ShardRpcRequest = Pick<FanOutRequest, "args" | "functionPath" | "headers">;
  */
 interface MigrationFanOutRequest {
     args?: Record<string, unknown>;
+
+    /**
+     * Shard to fall back to when registry discovery finds nothing — normally
+     * `"__root__"`. See {@link withDefaultShard}; omit it to keep an empty
+     * discovery as an empty fan-out.
+     */
+    defaultShardKey?: string;
     functionPath: string;
     headers?: Record<string, string>;
     /** Table whose live shard keys the migration runs across. */
@@ -490,6 +497,13 @@ interface ExportFanOutResult {
  */
 interface CdcSyncFanOutRequest {
     cursors?: Record<string, number>;
+
+    /**
+     * Shard to fall back to when registry discovery finds nothing — normally
+     * `"__root__"`. See {@link withDefaultShard}; omit it to keep an empty
+     * discovery as an empty fan-out.
+     */
+    defaultShardKey?: string;
     headers?: Record<string, string>;
     limit?: number;
     tables: ReadonlyArray<string>;
@@ -1288,6 +1302,27 @@ const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<str
     return [...new Set(perTableKeys.flat())];
 };
 
+/**
+ * Resolve the shards a fan-out should reach, falling back to the default shard
+ * when discovery finds nothing.
+ *
+ * Discovery is registry-driven, and a registry only knows the keys an app
+ * registers for its `.shardBy(...)` tables. A plain root-DO table has no entry
+ * and never will, so an empty result means "the registry cannot answer", NOT
+ * "there is nothing to do" — and the two are indistinguishable to the caller.
+ * Every fan-out that treats them as the same thing reports success having
+ * touched nothing: export streamed an empty file, and a data migration reported
+ * `status: "completed"` with `processed: 0`.
+ *
+ * `orchestrateImport` has always resolved this case to the default shard. This
+ * is that answer, made shareable.
+ *
+ * Callers that legitimately mean "no shards, no answer" pass no
+ * `defaultShardKey` and keep the empty list — see `orchestrateRank`.
+ */
+const withDefaultShard = (discovered: ReadonlyArray<string>, defaultShardKey: string | undefined): ReadonlyArray<string> =>
+    discovered.length > 0 || defaultShardKey === undefined ? discovered : [defaultShardKey];
+
 const runBoundedFanOut = async (
     namespace: ShardNamespaceInput,
     keys: ReadonlyArray<string>,
@@ -1576,14 +1611,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // holds either table. Skip globals — they live in D1, not a DO.
             const discovered = await unionShardKeys(options.registry, request.tables);
 
-            // Empty discovery is the common case, not the exotic one: a root-DO
-            // table is never in the registry, and neither is a `.shardBy(...)`
-            // table before its first shard registers. Falling back to the default
-            // shard makes export agree with `orchestrateImport`, which resolves
-            // exactly this case to `defaultShard`. Without it the fan-out hit zero
-            // shards and the caller got an empty body indistinguishable from a
-            // table with no rows.
-            const shardKeys = discovered.length > 0 || request.defaultShardKey === undefined ? discovered : [request.defaultShardKey];
+            const shardKeys = withDefaultShard(discovered, request.defaultShardKey);
 
             const exportRequest: ShardRpcRequest = {
                 // Spread the caller's `args` (`batchSize`, future export knobs)
@@ -1603,7 +1631,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // live shard keys. Unlike export, each shard resumes from its own
             // cursor, so (like import) we can't reuse `runBoundedFanOut`'s
             // same-args-to-all model; we drive a per-shard-args worker loop.
-            const shardKeys = await unionShardKeys(options.registry, request.tables);
+            const shardKeys = withDefaultShard(await unionShardKeys(options.registry, request.tables), request.defaultShardKey);
             const cursors = request.cursors ?? {};
 
             const results = await runBoundedJobs(shardKeys, maxConcurrency, async (shardKey) => {
@@ -1669,12 +1697,20 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             return rollUpApplyCdc(outcomes);
         },
         async orchestrateMigration(namespace: ShardNamespaceInput, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
-            const keys = await options.registry.listShardKeys(request.table);
+            // Without the fallback a migration on a root table fans out to nothing
+            // and rolls up as `completed` with `processed: 0` — a backfill the
+            // operator is told succeeded and that never ran.
+            const keys = withDefaultShard(await options.registry.listShardKeys(request.table), request.defaultShardKey);
 
             const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
 
             return rollUpMigration(results);
         },
+        // No `withDefaultShard` on the rank/rankPage/shardTraffic paths below, and
+        // that is deliberate: they answer questions ABOUT the shard set, so an empty
+        // registry genuinely means "no shards to rank across" rather than "ask the
+        // default one". A root-table read never reaches them — codegen routes it
+        // straight to the default shard instead of through the coordinator.
         async orchestrateRank(namespace: ShardNamespaceInput, request: RankFanOutRequest): Promise<RankFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);
 

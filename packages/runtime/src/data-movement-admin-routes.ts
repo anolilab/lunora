@@ -79,6 +79,8 @@ interface DataMovementAdminRouteDeps {
     applyGlobals?: (request: { changes: ReadonlyArray<Record<string, unknown>> }) => Promise<number>;
     /** Enforce the admin bearer for an endpoint that needs no optional dependency. */
     assertAdmin: (request: Request) => void;
+    /** The worker's default shard, so an empty discovery still reaches the root DO. */
+    defaultShardKey: string;
     /** Durable per-shard cursor store backing the continuous export tap; absent → the tap route reports not-configured. */
     exportCursorStore?: ExportCursorStore;
     /** Named export sinks (webhook / R2 / custom) the tap can drain to; absent / empty → the tap route reports not-configured. */
@@ -124,6 +126,7 @@ interface DataMovementAdminRouteDeps {
 const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
     const {
         applyGlobals,
+        defaultShardKey,
         exportCursorStore,
         exportSinks,
         knownTables,
@@ -208,6 +211,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const shardResult = await coordinator.orchestrateCdcSync(shardDO, {
             cursors,
+            defaultShardKey,
             headers: forwardedHeaders,
             limit,
             tables: probeTables,
