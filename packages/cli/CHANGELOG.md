@@ -1,3 +1,16 @@
+## @lunora/cli [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.209...@lunora/cli@1.0.0-alpha.210) (2026-08-30)
+
+### Bug Fixes
+
+* **cli:** teach the linter about generated output from codegen, not just init ([#534](https://github.com/anolilab/lunora/issues/534)) ([79781e7](https://github.com/anolilab/lunora/commit/79781e7c86a583ee5bfe8f399cc071f486f7d208)), closes [#516](https://github.com/anolilab/lunora/issues/516)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.177
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.100
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.83
+
 ## @lunora/cli [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.208...@lunora/cli@1.0.0-alpha.209) (2026-08-30)
 
 
