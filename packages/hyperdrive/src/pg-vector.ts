@@ -50,14 +50,17 @@ import type {
 import { isBareIdentifier } from "../../../shared/bare-identifier";
 import type { SqlClient } from "./types";
 
-/** Leaves room under Postgres' 63-byte identifier cap for the `__vec_` prefix and the longest derived suffix. */
-const MAX_NAME_LENGTH = 40;
+/**
+ * Postgres truncates identifiers at 63 bytes, and the longest name this module
+ * derives is `__vec_` + name + `__ann_` + `vector_cosine_ops` — 29 characters of
+ * fixed affixes. Anything longer than the remainder would truncate two distinct
+ * indexes onto one name, and the second `CREATE INDEX IF NOT EXISTS` would
+ * silently no-op.
+ */
+const MAX_NAME_LENGTH = 34;
 
 /** pgvector's HNSW index tops out here; the `vector` type itself allows far more. */
 const MAX_HNSW_DIMENSIONS = 2000;
-
-/** pgvector's own default `hnsw.ef_search`; the floor we widen from, never below. */
-const DEFAULT_EF_SEARCH = 40;
 
 /**
  * Postgres SQLSTATEs for "the object already exists": duplicate_object,
@@ -171,6 +174,14 @@ const assertContainmentFilter = (filter: Record<string, unknown>, name: string):
         for (const [key, nested] of Object.entries(value)) {
             if (key.startsWith("$")) {
                 reject("uses a comparison operator", path);
+            }
+
+            // Same trap as the top level, one layer down: `JSON.stringify` drops an
+            // undefined value, so `{ author: { role: undefined } }` narrows to
+            // `{"author":{}}` — which matches every row that has an `author` object
+            // at all, rather than the one the caller asked for.
+            if (nested === undefined) {
+                reject(`has an undefined value at "${key}"`, path);
             }
 
             walk(nested, path);
@@ -292,7 +303,17 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
                 // against a stale index and quietly demote every query to a
                 // sequential scan — the exact failure this index prevents.
                 `CREATE INDEX IF NOT EXISTS "${table}__ann_${operatorClass}" ON "${table}" USING hnsw (embedding ${operatorClass})`,
+                // Both filterable columns are indexed so the planner can answer a
+                // filter EXACTLY — a bitmap scan plus a sort over the matching rows.
+                // Without them the only usable path is the ANN index, and pgvector
+                // applies `WHERE` AFTER scanning it: a filter matching a small slice
+                // starves the result set and the caller gets a short page with no
+                // error. Session GUCs (`hnsw.iterative_scan`) are the documented
+                // alternative and were tried first — they cannot be relied on here,
+                // because `SqlClient` exposes one statement at a time and a pooled
+                // client may run the SET and the SELECT on different sessions.
                 `CREATE INDEX IF NOT EXISTS "${table}__ns" ON "${table}" (namespace)`,
+                `CREATE INDEX IF NOT EXISTS "${table}__meta" ON "${table}" USING gin (metadata)`,
             ]) {
                 try {
                     // eslint-disable-next-line no-await-in-loop -- DDL is ordered: the table must exist before its indexes.
@@ -310,40 +331,6 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
         });
 
         return provisioned;
-    };
-
-    /**
-     * Widen the ANN search before a filtered query.
-     *
-     * pgvector applies `WHERE` AFTER scanning the HNSW index, so a selective
-     * filter starves the result set: at the default `ef_search` of 40, a
-     * namespace matching 0.5% of rows yields well under one match and the caller
-     * gets an empty page with no error. Every `.shardBy()` table hits this —
-     * `ctx.vectors` requires a namespace there.
-     *
-     * `iterative_scan` (pgvector 0.8+) is the real fix: it keeps scanning until
-     * enough rows survive the filter. `ef_search` is raised alongside it so an
-     * unfiltered `topK` above 40 is not truncated either. Both are best-effort —
-     * an older pgvector rejects the GUC, and exact search without the index is
-     * still correct, only slower.
-     */
-    const widenSearch = async (topK: number, filtered: boolean): Promise<void> => {
-        const efSearch = String(Math.max(DEFAULT_EF_SEARCH, topK * 2));
-
-        try {
-            await client.query("SELECT set_config('hnsw.iterative_scan', $1, false), set_config('hnsw.ef_search', $2, false)", [
-                filtered ? "relaxed_order" : "off",
-                efSearch,
-            ]);
-        } catch {
-            try {
-                await client.query("SELECT set_config('hnsw.ef_search', $1, false)", [efSearch]);
-            } catch {
-                // Pre-0.8 pgvector, or a role that cannot set GUCs. Recall may be
-                // lower than Vectorize's on a filtered query; correctness of the
-                // rows returned is unaffected.
-            }
-        }
     };
 
     /**
@@ -457,8 +444,6 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
                 assertContainmentFilter(queryOptions.filter, name);
                 where.push(`metadata @> ${bind(JSON.stringify(queryOptions.filter))}::jsonb`);
             }
-
-            await widenSearch(topK, where.length > 0);
 
             const projection = ["id", "namespace", `${distance} AS distance`];
 

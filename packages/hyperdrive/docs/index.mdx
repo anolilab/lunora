@@ -415,8 +415,9 @@ createShardDO({
 Nothing else changes: `.vectorize()` in the schema, `ctx.vectors.query(...)` in a
 function, and the automatic write-through sync all behave the same.
 
-The table (`__vec_<name>` by default), the `vector` extension, and an HNSW index
-in the metric's operator class are provisioned lazily on first use — every
+The table (`__vec_<name>`), the `vector` extension, an HNSW index in the metric's
+operator class, and btree/GIN indexes on the two filterable columns are
+provisioned lazily on first use — every
 statement is `IF NOT EXISTS`, so it is safe against a live table. The connecting
 role needs to be able to run `CREATE EXTENSION vector`; on a managed Postgres
 where it cannot, install the extension once out-of-band and the statement becomes
@@ -424,29 +425,35 @@ a no-op.
 
 <Callout type="warn">
     Three deliberate differences from Vectorize. **Metadata filters are equality
-    only** (JSONB containment) — a comparison operator like `{ views: { $gt: 10 } }`
-    throws rather than being dropped, because a silently ignored filter returns
+    only** (JSONB containment) — a comparison operator like `{ views: { $gt: 10 } }`,
+    Vectorize's dot-addressed `"author.role"` syntax, or an `undefined` value all
+    throw rather than being dropped, because a silently ignored filter returns
     confidently wrong neighbours. **`returnMetadata: "indexed"` behaves as
     `"all"`**, since Postgres indexes the whole JSONB document. And **`mutationId`
     is a local counter**: Vectorize's is a handle for an async mutation queue,
-    while a Postgres write is already durable when its promise resolves. A filter
-    this store cannot express — a comparison operator, or Vectorize's dot-addressed
-    `"author.role"` syntax — throws rather than being dropped, because a silently
-    ignored filter returns confidently wrong neighbours.
+    while a Postgres write is already durable when its promise resolves.
 
 </Callout>
 
 <Callout type="info">
-    Two ceilings worth knowing. `dimensions` is capped at 2000, pgvector's HNSW limit — it is rejected at construction rather than failing opaquely at `CREATE
-    INDEX` (Vectorize itself tops out at 1536, so most ports are unaffected). And because pgvector applies `WHERE` **after** scanning the ANN index, a filtered
-    query widens the search first (`hnsw.iterative_scan`, pgvector 0.8+); on an older server that GUC is refused and a heavily-filtered query may return fewer
-    matches than Vectorize would.
+    Two ceilings worth knowing. `dimensions` is capped at 2000, pgvector's HNSW limit — rejected at construction rather than failing opaquely at `CREATE INDEX`
+    (Vectorize itself tops out at 1536, so most ports are unaffected). And `name` is capped at 34 characters, because the longest index name derived from it
+    (`__vec_` + name + `__ann_` + the operator class) has to stay under Postgres' 63-byte identifier truncation — past that, two indexes would collapse onto one
+    name and the second `CREATE INDEX IF NOT EXISTS` would silently no-op.
 </Callout>
 
 Pass the **same `metric` the schema's `.vectorize(...)` declares**. Nothing
 cross-checks the two: mismatch them and the index is built for one operator and
 queried with another, so the ordering is wrong for the declared metric and every
 score is on a different scale — with no error at any layer.
+
+The indexes on `namespace` and `metadata` are not an optimisation. pgvector
+applies `WHERE` **after** scanning the ANN index, so without a usable index on the
+filtered column the planner's only path is the approximate one, and a filter
+matching a small slice of the table returns a short page with no error. Indexing
+both lets the planner answer the filter exactly instead. (`hnsw.iterative_scan` is
+pgvector's own answer to this, but it is a session setting, and a pooled client can
+run the `SET` and the query on different sessions.)
 
 `metric` picks the distance operator and the matching index operator class —
 `cosine` (default), `euclidean`, or `dot-product`. `score` is reported the way

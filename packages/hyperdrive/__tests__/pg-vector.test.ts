@@ -178,7 +178,7 @@ describe("createPgVectorIndex", () => {
      * vectors" — the silent wrong answer this guard exists to prevent.
      */
     it("rejects filters it cannot honour instead of silently returning nothing", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const store = index();
 
@@ -191,6 +191,9 @@ describe("createPgVectorIndex", () => {
         await expect(store.query([1, 0, 0], { filter: { tags: [{ $in: ["a"] }] } })).rejects.toThrow(/comparison operator/);
         // Vectorize's dot-addressed nested key; `@>` would look for a literal "author.role".
         await expect(store.query([1, 0, 0], { filter: { "author.role": "admin" } })).rejects.toThrow(/dot-addressed/);
+        // `JSON.stringify` drops an undefined value, so this would narrow to
+        // `{"author":{}}` and match every row that has an `author` object at all.
+        await expect(store.query([1, 0, 0], { filter: { author: { role: undefined } } })).rejects.toThrow(/undefined/);
     });
 
     it("omits metadata and values unless the caller asks", async () => {
@@ -275,8 +278,10 @@ describe("createPgVectorIndex", () => {
         expect(() => index({ dimensions: 0 })).toThrow(/positive integer/);
         // Past the HNSW ceiling the CREATE INDEX fails opaquely, after the table exists.
         expect(() => index({ dimensions: 3072 })).toThrow(/HNSW limit/);
-        // Postgres truncates at 63 bytes; the derived index names would collide.
-        expect(() => index({ name: "a".repeat(60) })).toThrow(/at most/);
+        // Postgres truncates at 63 bytes and the longest derived name is
+        // `__vec_` + name + `__ann_` + `vector_cosine_ops` (29 fixed chars), so 35
+        // is one over and two names sharing a prefix would collide after truncation.
+        expect(() => index({ name: "a".repeat(35) })).toThrow(/at most/);
         expect(() => index({ metric: "manhattan" as never })).toThrow(/unknown metric/);
     });
 
