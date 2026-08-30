@@ -14,7 +14,7 @@ const noopShardDO: ShardNamespaceLike = {
     },
 };
 
-/** Build a fake coordinator whose `orchestrateCdcSync` returns scripted per-shard pages, recording the cursors it was called with. */
+/** Build a fake coordinator whose `orchestrateCdcSync` returns scripted per-shard pages, recording the requests it was called with. */
 const fakeCoordinator = (
     pages: (cursors: Record<string, number>) => {
         failed: number;
@@ -28,15 +28,17 @@ const fakeCoordinator = (
     },
 ) => {
     const calls: Record<string, number>[] = [];
+    const requests: { defaultShardKey?: string; limit?: number }[] = [];
     const coordinator = {
-        orchestrateCdcSync: async (_namespace: ShardNamespaceLike, request: { cursors?: Record<string, number> }) => {
+        orchestrateCdcSync: async (_namespace: ShardNamespaceLike, request: { cursors?: Record<string, number>; defaultShardKey?: string; limit?: number }) => {
             calls.push({ ...request.cursors });
+            requests.push({ defaultShardKey: request.defaultShardKey, limit: request.limit });
 
             return pages(request.cursors ?? {});
         },
     } as unknown as QueryCoordinator;
 
-    return { calls, coordinator };
+    return { calls, coordinator, requests };
 };
 
 const change = (table: string, id: string, seq: number): Record<string, unknown> => {
@@ -239,5 +241,93 @@ describe("export-tap — continuous CDC drain", () => {
         }).deliver({ ...batch, sink: "r2" });
 
         expect(puts[0]).not.toContain("$lunora.wire$");
+    });
+});
+
+describe("export-tap — empty shard discovery and page-size accounting", () => {
+    it("forwards `defaultShardKey` so a root-DO app is drained instead of fanning out to nothing", async () => {
+        expect.assertions(2);
+
+        // A registry only knows the keys an app registers for its `.shardBy(...)`
+        // tables, so a plain root-DO app discovers `[]`. Without this the tap fans
+        // out to no shards and returns `{ delivered: 0, hasMore: false }` against a
+        // full change feed — success reported over zero shards.
+        const { coordinator, requests } = fakeCoordinator(() => {
+            return { failed: 0, ok: 1, shards: [{ changes: [change("t", "r1", 1)], cursor: 1, shardKey: "__root__" }] };
+        });
+
+        const result = await runExportTap({
+            coordinator,
+            cursorStore: createMemoryCursorStore(),
+            defaultShardKey: "__root__",
+            shardDO: noopShardDO,
+            sink: defineExportSink({ deliver: async () => undefined, name: "warehouse" }),
+            tables: ["t"],
+        });
+
+        expect(requests[0]?.defaultShardKey).toBe("__root__");
+        expect(result.delivered).toBe(1);
+    });
+
+    it("omits `defaultShardKey` when the caller supplies none (an empty fan-out stays empty)", async () => {
+        expect.assertions(1);
+
+        const { coordinator, requests } = fakeCoordinator(() => {
+            return { failed: 0, ok: 0, shards: [] };
+        });
+
+        await runExportTap({
+            coordinator,
+            cursorStore: createMemoryCursorStore(),
+            shardDO: noopShardDO,
+            sink: defineExportSink({ deliver: async () => undefined, name: "warehouse" }),
+            tables: ["t"],
+        });
+
+        expect(requests[0]?.defaultShardKey).toBeUndefined();
+    });
+
+    it("reports `hasMore` on a full page even when the caller passed no `limit`", async () => {
+        expect.assertions(2);
+
+        // `limit` is optional and the shard clamps an absent one to 1000, so
+        // comparing the page length against `undefined` reported "caught up" while
+        // a full page was still pending — a cron drained 1000 rows per tick out of
+        // an arbitrarily large backlog and called itself done.
+        const full = Array.from({ length: 1000 }, (_value, index) => change("t", `r${String(index)}`, index + 1));
+        const { coordinator } = fakeCoordinator(() => {
+            return { failed: 0, ok: 1, shards: [{ changes: full, cursor: 1000, shardKey: "__root__" }] };
+        });
+
+        const result = await runExportTap({
+            coordinator,
+            cursorStore: createMemoryCursorStore(),
+            defaultShardKey: "__root__",
+            shardDO: noopShardDO,
+            sink: defineExportSink({ deliver: async () => undefined, name: "warehouse" }),
+            tables: ["t"],
+        });
+
+        expect(result.delivered).toBe(1000);
+        expect(result.hasMore).toBe(true);
+    });
+
+    it("reports `hasMore: false` on a short page with no `limit`", async () => {
+        expect.assertions(1);
+
+        const { coordinator } = fakeCoordinator(() => {
+            return { failed: 0, ok: 1, shards: [{ changes: [change("t", "r1", 1)], cursor: 1, shardKey: "__root__" }] };
+        });
+
+        const result = await runExportTap({
+            coordinator,
+            cursorStore: createMemoryCursorStore(),
+            defaultShardKey: "__root__",
+            shardDO: noopShardDO,
+            sink: defineExportSink({ deliver: async () => undefined, name: "warehouse" }),
+            tables: ["t"],
+        });
+
+        expect(result.hasMore).toBe(false);
     });
 });

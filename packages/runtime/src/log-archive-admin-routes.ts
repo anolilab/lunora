@@ -171,14 +171,28 @@ const parseQuery = (body: Record<string, unknown>): PipelineLogQuery => {
     assignNumber("untilTs");
     assignNumber("limit");
 
-    // The cursor is `{ ts }`; accept it as an object and validate the `ts`.
+    // The cursor is `{ ts, seen? }`. `seen` is NOT optional decoration: the
+    // reader resumes INCLUSIVELY (`ts <= cursorTs`) and uses those row hashes to
+    // drop the boundary rows it already emitted. Forwarding `ts` alone — which
+    // this route did — re-emits every row sharing the boundary `ts`, and when a
+    // whole page shares one `ts` (routine at the 500-row default) the boundary
+    // never advances and "Load more" returns the identical page forever.
     const rawCursor = body["cursor"];
 
     if (typeof rawCursor === "object" && rawCursor !== null) {
-        const cursorTs = parseFiniteNumber((rawCursor as Record<string, unknown>)["ts"], "cursor.ts");
+        const cursorRecord = rawCursor as Record<string, unknown>;
+        const cursorTs = parseFiniteNumber(cursorRecord["ts"], "cursor.ts");
 
         if (cursorTs !== undefined) {
-            query.cursor = { ts: cursorTs };
+            const rawSeen = cursorRecord["seen"];
+
+            if (rawSeen !== undefined && (!Array.isArray(rawSeen) || rawSeen.some((hash) => typeof hash !== "string"))) {
+                throw new LunoraError("logs archive: invalid `cursor.seen` — expected an array of strings", { code: "BAD_REQUEST", status: 400 });
+            }
+
+            const seen = rawSeen as string[] | undefined;
+
+            query.cursor = seen === undefined || seen.length === 0 ? { ts: cursorTs } : { seen, ts: cursorTs };
         }
     }
 

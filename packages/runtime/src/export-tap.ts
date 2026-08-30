@@ -20,6 +20,7 @@
  * un-advanced so the next pass re-delivers, while other shards (and the shard's
  * own writes) proceed unaffected.
  */
+import { shardCdcPageSize } from "./connector-cdc";
 import { toPortableDocument } from "./portable-json";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
@@ -95,6 +96,17 @@ interface RunExportTapOptions {
     coordinator: QueryCoordinator;
     /** Durable cursor store (per-shard watermark). */
     cursorStore: ExportCursorStore;
+
+    /**
+     * Shard to drain when registry discovery finds nothing — normally the
+     * worker's `"__root__"`. Forwarded to `orchestrateCdcSync`'s
+     * `withDefaultShard`: a registry only knows the keys an app registers for
+     * its `.shardBy(...)` tables, so on a plain root-DO app discovery is `[]`
+     * and, without this, the tap fans out to no shards and reports
+     * `{ delivered: 0, hasMore: false }` against a full change feed. Omit it to
+     * keep an empty discovery as an empty pass.
+     */
+    defaultShardKey?: string;
     /** Headers forwarded to each shard (identity / admin bearer). */
     headers?: Record<string, string>;
     /** Base backoff in ms for the first retry (doubles each attempt, capped at `maxBackoffMs`). Defaults to `100`. */
@@ -193,6 +205,7 @@ const runExportTap = async (options: RunExportTapOptions): Promise<ExportTapResu
     const {
         coordinator,
         cursorStore,
+        defaultShardKey,
         headers,
         initialBackoffMs = 100,
         limit,
@@ -205,7 +218,7 @@ const runExportTap = async (options: RunExportTapOptions): Promise<ExportTapResu
     } = options;
 
     const priorCursors = await cursorStore.read(sink.name);
-    const feed = await coordinator.orchestrateCdcSync(shardDO, { cursors: priorCursors, headers, limit, tables });
+    const feed = await coordinator.orchestrateCdcSync(shardDO, { cursors: priorCursors, defaultShardKey, headers, limit, tables });
 
     const nextCursors: Record<string, number> = { ...priorCursors };
     const failures: ExportTapFailure[] = [];
@@ -244,7 +257,12 @@ const runExportTap = async (options: RunExportTapOptions): Promise<ExportTapResu
             nextCursors[shard.shardKey] = shard.cursor;
             delivered += changes.length;
 
-            if (limit !== undefined && rawChanges.length >= limit) {
+            // Against the page size the SHARD applied, not the caller's `limit`:
+            // `limit` is optional on the tap and the shard defaults an absent one
+            // to 1000, so this used to report `hasMore: false` while a full page
+            // was still pending — a cron drained 1000 rows per tick and called it
+            // caught up.
+            if (rawChanges.length >= shardCdcPageSize(limit)) {
                 hasMore = true;
             }
         } catch (error: unknown) {

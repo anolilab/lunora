@@ -82,70 +82,6 @@ type MergeStrategy =
     | { kind: "sum" }
     | { kind: "groupBy"; op?: "max" | "min" | "sum" };
 
-/**
- * Convenience: build the right wire-serializable {@link MergeStrategy} for a
- * given aggregate read. The reader doesn't know which op the caller chose, so
- * a fan-out wrapper passes the user's op + by-keys through this to derive the
- * merge.
- *
- * - `count` → `sum`.
- * - `aggregate({ op })` → `sum`/`max`/`min` (or throws for `avg`).
- * - `groupBy({ by, agg })` → `groupBy({ op })` (defaults to `sum` since
- * `groupBy`'s default reducer is `count`).
- * @returns the derived {@link MergeStrategy}.
- */
-const mergeStrategyForAggregate = (
-    input:
-        | { agg?: { op?: "avg" | "count" | "max" | "min" | "sum" }; kind: "groupBy" }
-        | { kind: "count" }
-        | { kind: "scalar"; op: "avg" | "count" | "max" | "min" | "sum" },
-): MergeStrategy => {
-    if (input.kind === "count") {
-        return { kind: "sum" };
-    }
-
-    if (input.kind === "scalar") {
-        if (input.op === "count" || input.op === "sum") {
-            return { kind: "sum" };
-        }
-
-        if (input.op === "max") {
-            return { kind: "max" };
-        }
-
-        if (input.op === "min") {
-            return { kind: "min" };
-        }
-
-        // avg (or any op the union does not yet list) must fail loudly — a
-        // silent default would mis-merge per-shard aggregate results across the
-        // fan-out.
-        throw new LunoraError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
-            code: "BAD_REQUEST",
-            status: 400,
-        });
-    }
-
-    const op = input.agg?.op ?? "count";
-
-    if (op === "count" || op === "sum") {
-        return { kind: "groupBy", op: "sum" };
-    }
-
-    if (op === "max") {
-        return { kind: "groupBy", op: "max" };
-    }
-
-    if (op === "min") {
-        return { kind: "groupBy", op: "min" };
-    }
-
-    throw new LunoraError('groupBy({ agg: { op: "avg" } }) is not supported across shards in v1 — fan out sum + count separately', {
-        code: "BAD_REQUEST",
-        status: 400,
-    });
-};
-
 interface FanOutSpec {
     merge: MergeStrategy;
     /** Table whose shard keys drive the fan-out. */
@@ -1376,8 +1312,8 @@ const combineGroupByValue = (current: number, incoming: number, op: GroupByMerge
 
         default: {
             // Compile-time exhaustiveness guard; an op outside the union can
-            // only arrive via untyped input, and `mergeStrategyForAggregate`
-            // already rejected it upstream — never evaluate `Math[op]` on it.
+            // only arrive via untyped input, which the fan-out envelope
+            // validation rejects upstream — never evaluate `Math[op]` on it.
             op satisfies never;
 
             return current;
@@ -1841,7 +1777,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     };
 };
 
-export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate };
+export { createQueryCoordinator, createStaticShardRegistry };
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,

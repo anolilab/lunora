@@ -1,22 +1,14 @@
-import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import type { FanOutRequest } from "../src/query-coordinator";
-import { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "../src/query-coordinator";
+import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
-
-/** The (non-exported) input of `mergeStrategyForAggregate`; the invalid cases below widen it via a cast. */
-type MergeStrategyInput =
-    | { agg?: { op?: "avg" | "count" | "max" | "min" | "sum" }; kind: "groupBy" }
-    | { kind: "count" }
-    | { kind: "scalar"; op: "avg" | "count" | "max" | "min" | "sum" };
 
 /**
  * Cross-shard aggregate merge — `count` / `aggregate({sum/max/min})` /
  * `groupBy` fan-outs collapse per-shard payloads via the
  * `MergeStrategy` so the coordinator can serve a global answer over a
- * shardBy table. `avg` is explicitly unsupported in v1 and surfaces a
- * `LunoraError`.
+ * shardBy table.
  */
 
 interface ShardSpy {
@@ -173,60 +165,5 @@ describe("cross-shard merge — groupBy", () => {
 
         expect(result.data).toHaveLength(1);
         expect(result.data[0]?.value).toBe(8);
-    });
-});
-
-describe("mergeStrategyForAggregate", () => {
-    it("count → sum", () => {
-        expect.assertions(1);
-
-        expect(mergeStrategyForAggregate({ kind: "count" })).toEqual({ kind: "sum" });
-    });
-
-    it("aggregate(sum) → sum, max → max, min → min", () => {
-        expect.assertions(3);
-
-        expect(mergeStrategyForAggregate({ kind: "scalar", op: "sum" })).toEqual({ kind: "sum" });
-        expect(mergeStrategyForAggregate({ kind: "scalar", op: "max" })).toEqual({ kind: "max" });
-        expect(mergeStrategyForAggregate({ kind: "scalar", op: "min" })).toEqual({ kind: "min" });
-    });
-
-    it("aggregate(avg) throws — needs sum + count separately", () => {
-        expect.assertions(1);
-
-        expect(() => mergeStrategyForAggregate({ kind: "scalar", op: "avg" })).toThrow(/avg/);
-    });
-
-    it("groupBy → groupBy with op-derived reducer (default sum)", () => {
-        expect.assertions(2);
-
-        expect(mergeStrategyForAggregate({ kind: "groupBy" })).toEqual({ kind: "groupBy", op: "sum" });
-        expect(mergeStrategyForAggregate({ agg: { op: "max" }, kind: "groupBy" })).toEqual({ kind: "groupBy", op: "max" });
-    });
-
-    it("groupBy(avg) throws", () => {
-        expect.assertions(1);
-
-        expect(() => mergeStrategyForAggregate({ agg: { op: "avg" }, kind: "groupBy" })).toThrow(/avg/);
-    });
-
-    it("rejects an out-of-union scalar op with a 400 instead of silently mis-merging", () => {
-        expect.assertions(2);
-
-        // Only reachable via untyped callers (the union is closed) — an unknown
-        // op must fail loudly, never merge per-shard values as a raw array.
-        const invalid: MergeStrategyInput = { kind: "scalar", op: "median" as never };
-
-        expect(() => mergeStrategyForAggregate(invalid)).toThrow(LunoraError);
-        expect(() => mergeStrategyForAggregate(invalid)).toThrow(/not supported across shards/);
-    });
-
-    it("rejects an out-of-union groupBy agg op instead of defaulting it to sum", () => {
-        expect.assertions(2);
-
-        const invalid: MergeStrategyInput = { agg: { op: "median" as never }, kind: "groupBy" };
-
-        expect(() => mergeStrategyForAggregate(invalid)).toThrow(LunoraError);
-        expect(() => mergeStrategyForAggregate(invalid)).toThrow(/not supported across shards/);
     });
 });

@@ -63,19 +63,6 @@ export const createSqlJsAdapter = (database: {
             }
         },
 
-        lastInsertRowId(): number {
-            const result = database.exec("SELECT last_insert_rowid() AS id");
-            const firstRow = result[0];
-            if (result.length === 0 || !firstRow || firstRow.values.length === 0) {
-                return -1;
-            }
-            const value = firstRow.values[0];
-            if (!value || value.length === 0) {
-                return -1;
-            }
-            return Number(value[0]);
-        },
-
         close(): void {
             database.close();
         },

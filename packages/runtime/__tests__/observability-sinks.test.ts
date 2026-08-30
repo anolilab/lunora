@@ -665,6 +665,36 @@ describe("observability-sinks", () => {
             }).not.toThrow();
             expect(good).toHaveBeenCalledWith(logEvent, undefined);
         });
+
+        it("carries the sink CONFIG fields through, not just the callbacks", () => {
+            expect.assertions(4);
+
+            // `fuseCloudflareTraces` / `instrumentDatabase` / `metricHistory` /
+            // `traceFetch` are read off the sink OBJECT by `@lunora/do`, not through
+            // a hook. Returning only the five callbacks silently dropped them — so
+            // a combined sink with a `traceFetch.propagate` predicate reverted to
+            // the `true` default and injected `traceparent` into every outbound
+            // `ctx.fetch`, third-party hosts included.
+            const propagate = (url: URL): boolean => url.host.endsWith(".internal");
+            const sink = combineSinks(
+                { fuseCloudflareTraces: true, onRpc: vi.fn<(event: ObservabilityEvent) => void>(), traceFetch: { propagate } },
+                { instrumentDatabase: "spans", metricHistory: true, onRpc: vi.fn<(event: ObservabilityEvent) => void>() },
+            );
+
+            expect(sink.traceFetch).toStrictEqual({ propagate });
+            expect(sink.fuseCloudflareTraces).toBe(true);
+            expect(sink.instrumentDatabase).toBe("spans");
+            expect(sink.metricHistory).toBe(true);
+        });
+
+        it("resolves a config field first-wins, and leaves it undefined when no child sets it", () => {
+            expect.assertions(2);
+
+            const sink = combineSinks({ instrumentDatabase: "off" }, { instrumentDatabase: "spans" });
+
+            expect(sink.instrumentDatabase).toBe("off");
+            expect(combineSinks({ onRpc: vi.fn<(event: ObservabilityEvent) => void>() }).traceFetch).toBeUndefined();
+        });
     });
 
     describe("analyticsEngineSink", () => {

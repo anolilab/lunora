@@ -291,10 +291,6 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `UseLocalQueryOptions` (interface)
-
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
-
 ### `useLocalQuery` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

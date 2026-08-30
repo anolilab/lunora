@@ -924,12 +924,6 @@ interface WorkerOptions {
      */
     crons?: Record<string, CronHandler>;
 
-    /**
-     * D1 binding for `.global()` tables. Currently unused by the routing
-     * layer; downstream packages will read it from `env.DB` directly.
-     */
-    d1?: unknown;
-
     /** Default shard key used when an envelope omits one. */
     defaultShardKey?: string;
 
@@ -2810,8 +2804,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     /**
      * Release a workpool job's concurrency slot after its action settles, by
      * calling the SAME SchedulerDO instance's `/complete` (routed via the echoed
-     * `instanceName`). No-op for non-pooled jobs. Best-effort: a failure must not
-     * fail the dispatch the scheduler awaits — the pool's next drain reconciles.
+     * `instanceName`). No-op for non-pooled jobs.
+     *
+     * Best-effort in the sense that a failure must not fail the dispatch the
+     * scheduler awaits — but understand what that costs: there is NO
+     * reconciliation and NO lease. `reservePoolSlot` increments a durable counter
+     * and only a matching `/complete` decrements it, so a swallowed release leaks
+     * that slot for the lifetime of the pool. At the default `maxConcurrency: 1`
+     * one leak wedges the pool permanently, with every later job re-arming the
+     * alarm every 1000 ms and never running. Every early return from a dispatch
+     * that reserved a slot must reach this call.
      */
     const releasePoolSlot = async (candidate: { id?: unknown; instanceName?: unknown; pool?: unknown }): Promise<void> => {
         const pool = typeof candidate.pool === "string" && candidate.pool.length > 0 ? candidate.pool : undefined;
@@ -2831,7 +2833,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 }),
             );
         } catch {
-            // best-effort — reconciled by the pool's next drain pass
+            // Swallowed so a release failure can't fail the dispatch the scheduler
+            // awaits. Nothing reconciles it (see above): this leaks the slot.
         }
     };
 
@@ -2901,9 +2904,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // A workflow/agent target starts a fresh durable instance (the args become
         // its `params`) rather than dispatching a function to a shard — the
         // `WORKFLOW_*`/`AGENT_*` binding lives on the runtime's `env`, not the DO.
-        // Workflow jobs never hold a workpool slot, so there is nothing to release.
+        //
+        // It still releases its pool slot. `Scheduler.runAt` accepts a
+        // `WorkflowReference` alongside `RunOptions.pool`, and `reservePoolSlot`
+        // reserves for ANY record carrying `pool` — so a pooled workflow job DOES
+        // hold a slot, and returning before the release below wedged the pool for
+        // good at the default `maxConcurrency: 1`.
         if (typeof candidate.workflow === "string" && candidate.workflow.length > 0) {
             await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow");
+
+            await releasePoolSlot(candidate);
 
             return Response.json({ ok: true }, { status: 200 });
         }
@@ -2930,7 +2940,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const response = await dispatchToShard(candidate.functionPath, args, shardKey, mutationId, identity);
 
         // Workpool jobs hold a concurrency slot until the action settles; release
-        // it best-effort (a missed release is reconciled by the pool's next drain).
+        // it. Best-effort only in that a failure can't fail this dispatch — a
+        // missed release is NOT reconciled and leaks the slot (see
+        // `releasePoolSlot`).
         await releasePoolSlot(candidate);
 
         return response;
@@ -4349,7 +4361,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * identical per-shard authorization gate (`authorizeShard`), so an
      * unauthenticated / unauthorized call to an auth-gated function is rejected
      * here exactly as it is on `/_lunora/rpc` (same `FORBIDDEN_SHARD` 403).
-     * 3. `dispatchSingleShard(...)` — the identical shard routing, observability
+     * 3. `resolveX402Charge(...)` — the identical paid-procedure gate, so a
+     * `.x402({ price })` function is paywalled here (402 challenge, verify,
+     * settle) exactly as it is on `/_lunora/rpc` and the REST surface.
+     * 4. `dispatchSingleShard(...)` — the identical shard routing, observability
      * event, bookmark propagation, and `Response` shape.
      *
      * Result: byte-identical to what `POST /_lunora/rpc` returns for the same
@@ -4401,15 +4416,35 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
             // `undefined` resolves to `defaultShard` for both the gate and the
             // dispatch, mirroring `handleRpc` exactly.
-            await authorizeRpcEnvelope({ args, functionPath, shardKey: callOptions.shardKey }, identity);
+            const envelope: RpcEnvelope = { args, functionPath, shardKey: callOptions.shardKey };
+
+            await authorizeRpcEnvelope(envelope, identity);
 
             const shardKey = callOptions.shardKey ?? defaultShard;
             // Pass the caller's `waitUntil` when the SSR host has one: an OTLP body
             // past the gzip threshold is exported asynchronously, so without it an
             // error span can be dropped when the isolate tears down.
             const serverSinkContext = buildSinkContext(env, request, callOptions.waitUntil);
+            const dispatch = (): Promise<Response> => dispatchSingleShard(request, functionPath, args, shardKey, forwardedHeaders, serverSinkContext);
 
-            return await dispatchSingleShard(request, functionPath, args, shardKey, forwardedHeaders, serverSinkContext);
+            // Step 4 of the parity contract: a `.x402({ price })` procedure is
+            // paywalled here exactly as on `/_lunora/rpc` and the REST surface
+            // (challenge / verify / dispatch / settle around the shard call). This
+            // transport used to dispatch straight through, so an SSR loader served
+            // every paid result free — no 402, no settlement — while the option's
+            // own JSDoc promised the paywall was fail-closed by construction.
+            const x402Tag = resolveX402Charge(envelope, options);
+
+            if (x402Tag && options.x402Charge) {
+                return await options.x402Charge(
+                    request,
+                    { functionPath, price: x402Tag.price },
+                    dispatch,
+                    forwardWaitUntil(callOptions.waitUntil ? { waitUntil: callOptions.waitUntil } : callOptions.context),
+                );
+            }
+
+            return await dispatch();
         } catch (error: unknown) {
             return toErrorResponse(error);
         }
