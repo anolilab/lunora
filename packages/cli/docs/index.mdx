@@ -575,6 +575,16 @@ lunora codegen --api-spec both     # also emit openapi.json and openrpc.json
 lunora codegen --format json       # machine-readable output
 ```
 
+It also keeps your linter and formatter skipping what it just wrote. `lunora
+init` offers this and `lunora add` re-applies it, which covers a project Lunora
+scaffolded — but a codebase that adopted Lunora later runs neither, so nothing
+ever told its ESLint / Prettier / Biome / oxlint about `_generated/`, and the
+first lint after adoption buries the real findings under thousands of
+generated-file errors. Detection is driven by the tools already in the project,
+every writer is idempotent, and a config it cannot safely edit (an ESLint flat
+config is arbitrary JavaScript; a monorepo-root config belongs to the workspace)
+is printed for you to paste rather than rewritten.
+
 `--api-spec` selects which API description to emit alongside the generated
 modules: `openapi` (the default) writes `openapi.json`, `openrpc` writes
 `openrpc.json`, `both` writes both, and `none` writes neither.
