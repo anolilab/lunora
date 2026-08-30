@@ -47,10 +47,8 @@ import type {
     VectorMetric,
 } from "@lunora/platform";
 
+import { isBareIdentifier } from "../../../shared/bare-identifier";
 import type { SqlClient } from "./types";
-
-/** Bare SQL identifier: the only shape allowed for a caller-supplied table name. */
-const BARE_IDENTIFIER = /^[A-Z_]\w*$/i;
 
 /** Leaves room under Postgres' 63-byte identifier cap for the `__vec_` prefix and the longest derived suffix. */
 const MAX_NAME_LENGTH = 40;
@@ -205,7 +203,7 @@ const assertContainmentFilter = (filter: Record<string, unknown>, name: string):
  * onto one name, and `CREATE INDEX IF NOT EXISTS` silently no-ops the second.
  */
 const safeIdentifier = (value: string): string => {
-    if (!BARE_IDENTIFIER.test(value)) {
+    if (!isBareIdentifier(value)) {
         throw new TypeError(
             `@lunora/hyperdrive: pgvector \`name\` must be a bare SQL identifier (letters, digits, underscore; not starting with a digit) — got "${value}"`,
         );

@@ -21,6 +21,8 @@
  * May be synchronous: a Durable Object's SQLite is, and forcing it through a
  * promise would add a microtask per row batch for nothing.
  */
+import { isBareIdentifier } from "../../../../shared/bare-identifier";
+
 type RagSqlExec = (sql: string, parameters: ReadonlyArray<unknown>) => Promise<ReadonlyArray<Record<string, unknown>>> | ReadonlyArray<Record<string, unknown>>;
 
 /** A comma-separated `?` placeholder list for `count` bound parameters. */
@@ -60,20 +62,16 @@ const inListBatches = <T>(items: ReadonlyArray<T>, budget: number = IN_LIST_BUDG
     return batches;
 };
 
-/** A bare SQL identifier: letters, digits and underscore, not starting with a digit. */
-const BARE_IDENTIFIER = /^[A-Z_]\w*$/i;
-
 /**
  * Reject an identifier that is not a bare `[A-Za-z_][A-Za-z0-9_]*` name.
  *
- * Table names cannot be bound as parameters, so they are interpolated into the
- * statement — which makes them the one injection surface these stores have.
- * The allowlist is deliberately narrower than what SQL permits: a caller who
- * needs a quoted or schema-qualified name should be told so at construction,
- * not have their input concatenated in.
+ * The test itself lives in `shared/bare-identifier.ts` — it is the sole defense
+ * against identifier injection wherever a name is spliced into raw SQL, so it has
+ * one definition across the three packages that need it. The message stays here,
+ * because it names this package's option.
  */
 const assertSafeIdentifier = (name: string, label: string): string => {
-    if (!BARE_IDENTIFIER.test(name)) {
+    if (!isBareIdentifier(name)) {
         throw new TypeError(`@lunora/ai/rag: ${label} must be a bare SQL identifier (letters, digits, underscore; not starting with a digit) — got "${name}"`);
     }
 
