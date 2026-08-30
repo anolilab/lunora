@@ -12,7 +12,14 @@ import { LunoraError } from "./error";
  */
 const applyOutput = (output: Validator, result: unknown): unknown => {
     try {
-        return output.parse(result);
+        // `rejectUnknownKeys` — the asymmetry that makes this safe. Stripping is
+        // right on the way IN (it is what stops an over-posted field reaching a
+        // handler) and wrong on the way OUT, where the same behaviour deletes a
+        // field the server meant to send. A column present in the row and absent
+        // from the validator used to vanish from every response with no error
+        // anywhere; it is now a loud 500 naming the key. Narrowing on purpose
+        // stays available, and becomes visible, via `.strip()`.
+        return output.parse(result, { rejectUnknownKeys: true });
     } catch (error: unknown) {
         if (error instanceof ValidationError) {
             throw new LunoraError("INTERNAL_SERVER_ERROR", `Response did not match the declared output schema: ${error.message}`);
