@@ -19,7 +19,7 @@
  */
 import type { ControlPlaneDatabase } from "../store";
 import type { AlertChannel, AlertDelivery, MetricObservation, MetricRule, MetricTarget } from "./alerts";
-import { fireMetricRules } from "./alerts";
+import { fireMetricRules, METRIC_TARGETS } from "./alerts";
 
 /** An `alertRules` row as the control-plane store returns it. */
 interface AlertRuleRow {
@@ -67,7 +67,6 @@ export interface AlertSweepOptions {
 }
 
 /** The metric-window rule targets this sweep evaluates. */
-const METRIC_TARGETS = new Set<MetricTarget>(["error_rate", "latency_p95", "llm_cost"]);
 
 /** Recent spans scanned per org when slicing metric windows (bounds the read). */
 const DEFAULT_SCAN_LIMIT = 2000;

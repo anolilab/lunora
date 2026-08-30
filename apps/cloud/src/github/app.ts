@@ -21,17 +21,7 @@
  * caller skips reporting rather than failing a build over a notification.
  */
 
-/** Base64url without padding, as JWT requires. */
-const toBase64Url = (bytes: ArrayBuffer | Uint8Array): string => {
-    const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    let binary = "";
-
-    for (const byte of view) {
-        binary += String.fromCodePoint(byte);
-    }
-
-    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-};
+import { fromBase64, toBase64Url } from "../../../../shared/base64";
 
 const encoder = new TextEncoder();
 
@@ -58,14 +48,7 @@ export const pkcs8FromPem = (pem: string): ArrayBuffer => {
         throw new Error("github app private key must be PKCS#8 (-----BEGIN PRIVATE KEY-----); convert with `openssl pkcs8 -topk8 -nocrypt`");
     }
 
-    const binary = atob(body);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.codePointAt(index) ?? 0;
-    }
-
-    return bytes.buffer;
+    return fromBase64(body).buffer as ArrayBuffer;
 };
 
 /** How long a minted App JWT is valid. GitHub rejects anything past 10 minutes. */
@@ -84,7 +67,7 @@ export const mintAppJwt = async (appId: string, privateKeyPem: string, now: numb
     const payload = toBase64Url(encoder.encode(JSON.stringify({ exp: issuedAt + APP_JWT_TTL_SECONDS, iat: issuedAt, iss: appId })));
     const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, encoder.encode(`${header}.${payload}`));
 
-    return `${header}.${payload}.${toBase64Url(signature)}`;
+    return `${header}.${payload}.${toBase64Url(new Uint8Array(signature))}`;
 };
 
 /** The state a commit status reports. GitHub's own vocabulary. */
@@ -122,6 +105,9 @@ export const DEFAULT_STATUS_CONTEXT = "lunora/deploy";
 
 const GITHUB_API = "https://api.github.com";
 
+/** How long a minted installation token is reused. GitHub issues them for an hour. */
+const INSTALLATION_TOKEN_TTL_MS = 45 * 60 * 1000;
+
 /** Descriptions are truncated by GitHub at 140 characters; do it here so the text stays ours. */
 const MAX_DESCRIPTION = 140;
 
@@ -144,8 +130,21 @@ export const createGitHubApp = (options: GitHubAppOptions): GitHubApp | null => 
     const apiBase = options.apiBase ?? GITHUB_API;
     const statusContext = options.context ?? DEFAULT_STATUS_CONTEXT;
 
+    // One build posts up to three statuses, and each one minting a fresh JWT meant
+    // an RSA-2048 sign and two GitHub API calls per status — six calls and three
+    // signs to say three sentences, against the installation-token rate limit.
+    // GitHub's tokens live an hour; this reuses one until it is nearly expired.
+    const cached = new Map<number, { expiresAt: number; token: string }>();
+
     const installationToken = async (installationId: number): Promise<string> => {
-        const jwt = await mintAppJwt(appId, privateKeyPem, Date.now());
+        const now = Date.now();
+        const hit = cached.get(installationId);
+
+        if (hit && hit.expiresAt > now) {
+            return hit.token;
+        }
+
+        const jwt = await mintAppJwt(appId, privateKeyPem, now);
         const response = await fetchImpl(`${apiBase}/app/installations/${String(installationId)}/access_tokens`, {
             headers: { accept: "application/vnd.github+json", authorization: `Bearer ${jwt}`, "user-agent": "lunora-cloud" },
             method: "POST",
@@ -161,13 +160,24 @@ export const createGitHubApp = (options: GitHubAppOptions): GitHubApp | null => 
             throw new Error("github installation token response carried no token");
         }
 
+        // Well inside GitHub's own hour, so a token is never used near its edge.
+        cached.set(installationId, { expiresAt: now + INSTALLATION_TOKEN_TTL_MS, token: body.token });
+
         return body.token;
     };
 
     return {
         postCommitStatus: async (status) => {
             const token = await installationToken(status.installationId);
-            const response = await fetchImpl(`${apiBase}/repos/${status.repository}/statuses/${status.sha}`, {
+            // Each segment encoded: `repository` comes from a project's `githubRepo`,
+            // which is a bounded string with no `owner/name` format check — a value
+            // containing `../` or a `?` would otherwise re-target this POST at a
+            // different GitHub endpoint while carrying a live installation token.
+            const path = `${status.repository
+                .split("/")
+                .map((segment) => encodeURIComponent(segment))
+                .join("/")}/statuses/${encodeURIComponent(status.sha)}`;
+            const response = await fetchImpl(`${apiBase}/repos/${path}`, {
                 body: JSON.stringify({
                     context: statusContext,
                     description: status.description.slice(0, MAX_DESCRIPTION),

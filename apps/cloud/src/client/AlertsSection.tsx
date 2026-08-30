@@ -11,6 +11,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
+import type { AlertTarget } from "../telemetry/alerts";
+import { EVENT_TARGETS, METRIC_TARGETS } from "../telemetry/alerts";
 import { AsyncList } from "./AsyncList";
 import { formatDateTime } from "./format";
 import { COLUMN_LABEL } from "./section-styles";
@@ -18,14 +20,8 @@ import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge, Ups
 import type { SectionProps } from "./tabs";
 import type { OrgId } from "./types";
 
-/** Every alert-rule target — count-crossing, app-semantic / budget metric windows, and release events. */
-type RuleTarget = "deploy" | "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
-
-/** Metric-window targets, which take a rolling window (+ comparator + optional scope). */
-const METRIC_TARGETS = new Set<RuleTarget>(["error_rate", "latency_p95", "llm_cost"]);
-
-/** Event targets, which take no threshold at all — the rule is just "tell me when this happens". */
-const EVENT_TARGETS = new Set<RuleTarget>(["deploy"]);
+/** Every alert-rule target, from the one place the taxonomy is declared (`src/telemetry/alerts.ts`). */
+type RuleTarget = AlertTarget;
 
 /** Delivery channels — `email` via the mailer, the rest typed webhook POSTs. */
 type Channel = "email" | "pagerduty" | "slack" | "webhook";

@@ -136,6 +136,95 @@ const schema: SchemaLike = {
     },
 } as never;
 
+/**
+ * A field added to a `.global()` table after its first deployment.
+ *
+ * This is the regression that motivated the reconciliation: `CREATE TABLE IF NOT
+ * EXISTS` is a no-op against an existing table, so the new column was created on
+ * fresh databases and silently absent on every deployed one. Reads degraded
+ * quietly (the field just read as absent) but WRITES failed outright, because the
+ * writer builds its column list from the schema shape — and nothing anywhere
+ * failed on a fresh database, so CI and every local dev loop stayed green.
+ */
+describe("createSqlCtxDb — adding a field to an already-provisioned global table", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    /** `schema` plus one new optional column, as a later release would declare it. */
+    const widened: SchemaLike = {
+        tables: {
+            notes: {
+                indexes: [],
+                shape: { ...schema.tables["notes"]?.shape, pinnedAt: optionalCol("number") },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
+
+    it("adds the column to the existing table, so a write that names it succeeds", async () => {
+        expect.assertions(2);
+
+        const before = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema });
+
+        await before.insert("notes", { archived: false, body: "first", priority: 1, slug: "a" });
+
+        // A later release declares one more field against the SAME database.
+        const after = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema: widened });
+        const id = await after.insert("notes", { archived: false, body: "second", pinnedAt: 1234, priority: 2, slug: "b" });
+
+        await expect(after.get(id)).resolves.toMatchObject({ pinnedAt: 1234, slug: "b" });
+
+        // The row written before the column existed still reads — and reads the new
+        // field back as `null`, not `undefined`, because ALTER backfills NULL and
+        // that is what the decoder sees. Worth pinning: a consumer testing
+        // `=== undefined` on a column added this way silently takes the wrong branch.
+        const rows = await after.findMany("notes", { where: { slug: "a" } });
+
+        expect((rows.page[0] as Record<string, unknown>)["pinnedAt"]).toBeNull();
+    });
+
+    it("patches an existing row through the new column", async () => {
+        expect.assertions(1);
+
+        const before = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema });
+        const id = await before.insert("notes", { archived: false, body: "first", priority: 1, slug: "a" });
+
+        const after = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema: widened });
+
+        await after.patch(id, { pinnedAt: 99 });
+
+        await expect(after.get(id)).resolves.toMatchObject({ pinnedAt: 99 });
+    });
+
+    it("refuses a new REQUIRED field rather than letting the write fail with `no such column`", async () => {
+        expect.assertions(1);
+
+        const before = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema });
+
+        await before.insert("notes", { archived: false, body: "first", priority: 1, slug: "a" });
+
+        // SQLite cannot ADD COLUMN … NOT NULL without a default, and inventing one
+        // would write a value of the store's choosing into every existing row.
+        const required: SchemaLike = {
+            tables: {
+                notes: { indexes: [], shape: { ...schema.tables["notes"]?.shape, owner: col("string") }, shardMode: { kind: "global" } },
+            },
+        } as never;
+        const after = createSqlCtxDb({ dialect: makeSqliteDialect(), exec: harness.exec, schema: required });
+
+        await expect(after.insert("notes", { archived: false, body: "x", owner: "u1", priority: 1, slug: "c" })).rejects.toThrow(
+            'declares a new required field "owner"',
+        );
+    });
+});
+
 describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
     let harness: ReturnType<typeof createSqliteHarness>;
 

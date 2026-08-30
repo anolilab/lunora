@@ -155,12 +155,10 @@ export default defineSchema({
         // release and serves it `percent` of traffic, so a regression reaches a
         // fraction of users instead of everyone.
         //
-        // ONE nested column, not three flat ones. The fields are meaningless
-        // apart — a percentage with no candidate splits traffic toward nothing —
-        // and as three optional columns that invariant could only be restated in
-        // every reader and writer. Nested, "a rollout is running" is a single
-        // presence check and clearing it is a single assignment, which is what
-        // makes it impossible for a code path to clear two of three.
+        // Nested so the three fields cannot disagree: they are meaningless apart
+        // (a percentage with no candidate splits traffic toward nothing), and one
+        // column makes "a rollout is running" a presence check and clearing it a
+        // single assignment.
         rollout: v.optional(v.object({ deploymentId: v.id("deployments"), percent: v.number(), scriptName: v.string() })),
         createdAt: v.number(),
         // Optional meta-framework hint (tanstack-start, astro, …) for the build step.

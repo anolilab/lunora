@@ -373,12 +373,9 @@ export const activate = mutation
             await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
         }
 
-        // Clearing the rollout is not optional here. `activate` is the path CI takes
-        // on every deploy, and it supersedes the previously-live releases above —
-        // which includes a rollout candidate. Leaving the rollout set would point a
-        // share of production traffic at a script this very mutation just marked
-        // superseded, indefinitely and with nothing reporting it. A new release ends
-        // any rollout in progress, by definition.
+        // A new release ends any rollout in progress: the loop above supersedes the
+        // previously-live releases, which includes a rollout candidate, and leaving
+        // the rollout set would keep routing traffic to a script just retired.
         await context.db.patch(deployment.projectId, { activeDeploymentId: id, activeScriptName: deployment.scriptName, rollout: undefined });
     });
 

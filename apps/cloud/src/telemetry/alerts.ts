@@ -36,6 +36,39 @@ export type EventAlertTarget = "deploy";
 /** What a rule watches — a count-crossing counter, a metric window, or a one-off event. */
 export type AlertTarget = CountTarget | EventAlertTarget | MetricTarget;
 
+/**
+ * Which family a target belongs to, and the membership tests that decide it.
+ *
+ * Exported from here, with the type they classify, because they were previously
+ * re-declared in `lunora/alerts.ts`, `src/client/AlertsSection.tsx` and
+ * `src/telemetry/sweep.ts` — four copies of one taxonomy, with nothing enforcing
+ * that they agree. Adding `deploy` meant editing all of them, and a target missed
+ * in one copy falls into the wrong validation family or renders as a raw string
+ * with no type error anywhere.
+ */
+export const METRIC_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["error_rate", "latency_p95", "llm_cost"]);
+
+/** Event targets carry no threshold: the rule is "tell me when this happens". */
+export const EVENT_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["deploy"]);
+
+/** A rule target's family — the three shapes a rule's condition can take. */
+export type AlertFamily = "count" | "event" | "metric";
+
+/**
+ * Classify a target into its family.
+ *
+ * Replaces the `(isMetric, isEvent)` boolean pair the validator used to take,
+ * where `(true, true)` was representable and meaningless. One value, three arms,
+ * no impossible states.
+ */
+export const alertFamily = (target: AlertTarget): AlertFamily => {
+    if (METRIC_TARGETS.has(target)) {
+        return "metric";
+    }
+
+    return EVENT_TARGETS.has(target) ? "event" : "count";
+};
+
 /** How a metric value is compared to the rule threshold. Absent on a rule ⇒ `gt`. */
 export type Comparator = "gt" | "lt";
 
@@ -116,6 +149,56 @@ export const renderDeployAlert = (rule: { name: string }, source: DeployAlertSou
         body: `${DEPLOY_KIND_LABEL[source.kind]} for "${source.project}" (${source.reference}) on Lunora Cloud.\n\n${source.detail}`,
         subject: `[Lunora] ${rule.name}: ${source.project} — ${DEPLOY_KIND_LABEL[source.kind].toLowerCase()}`,
     };
+};
+
+/** An enabled `deploy` rule, as either store returns it. */
+export interface DeployRule {
+    channel: AlertChannel;
+    destination: string;
+    name: string;
+    ruleId: string;
+}
+
+/**
+ * Fire every enabled `deploy` rule for one release-path failure: render the
+ * notification and insert a `firing` alert row via the caller's `insertAlert`.
+ *
+ * Deliberately here, next to {@link fireCrossedRules}, and with the same injected
+ * `insertAlert`. Both callers — `lunora/alerts.ts` over the typed `ctx.db` and
+ * `src/telemetry/deploy-alerts.ts` over the structural `ControlPlaneDatabase` —
+ * hold different database handles and neither can borrow the other's, but the
+ * part that differs is one method call. The row shape is not; a third hand-written
+ * copy of these eleven fields is a third place to be wrong when a column is added.
+ *
+ * Returns nothing to deliver, unlike the count path: a `deploy` alert is raised
+ * from inside mutations that have no `fetch`, so the drain sweep sends it.
+ */
+export const fireDeployRules = async (
+    rules: ReadonlyArray<DeployRule>,
+    source: DeployAlertSource,
+    context: { hash: string; now: number; organizationId: string },
+    insertAlert: (row: Record<string, unknown>) => Promise<unknown>,
+): Promise<number> => {
+    for (const rule of rules) {
+        const rendered = renderDeployAlert(rule, source);
+
+        // eslint-disable-next-line no-await-in-loop -- an org configures a handful of rules; sequential keeps the writer simple
+        await insertAlert({
+            body: rendered.body,
+            channel: rule.channel,
+            createdAt: context.now,
+            destination: rule.destination,
+            hash: context.hash,
+            organizationId: context.organizationId,
+            ruleId: rule.ruleId,
+            status: "firing",
+            subject: rendered.subject,
+            target: "deploy",
+            updatedAt: context.now,
+        });
+    }
+
+    return rules.length;
 };
 
 /**

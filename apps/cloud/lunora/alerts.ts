@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
-import type { DeployAlertSource } from "../src/telemetry/alerts";
-import { isSafeWebhookUrl, renderDeployAlert } from "../src/telemetry/alerts";
+import type { AlertFamily, AlertTarget, DeployAlertSource } from "../src/telemetry/alerts";
+import { alertFamily, fireDeployRules, isSafeWebhookUrl } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
@@ -18,17 +18,8 @@ import { boundedString, LIMITS } from "./validators";
  * hosted `AlertsSection`; reads are members-only.
  */
 
-/** Every rule target — count-crossing (`issue`/`incident`/`uptime`) + metric-window + event. */
-type RuleTarget = "deploy" | "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
-
-/** Metric-window targets, which additionally require `windowMinutes` (+ optional comparator/scope). */
-const METRIC_TARGETS = new Set<RuleTarget>(["error_rate", "latency_p95", "llm_cost"]);
-
-/**
- * Event targets, which carry no threshold at all — the rule is "tell me when this
- * happens", and the only thing the operator configures is where to send it.
- */
-const EVENT_TARGETS = new Set<RuleTarget>(["deploy"]);
+/** Every rule target, from the one place the taxonomy is declared (`src/telemetry/alerts.ts`). */
+type RuleTarget = AlertTarget;
 
 interface AlertRuleRow {
     _id: Id<"alertRules">;
@@ -79,17 +70,20 @@ export const rules = query
  */
 const assertRuleShape = (
     args: { baselineWindows?: number; mode?: "deviation" | "threshold"; threshold: number; windowMinutes?: number },
-    isMetric: boolean,
-    isEvent = false,
+    family: AlertFamily,
 ): void => {
+    const isMetric = family === "metric";
+
     if (args.mode === "deviation" && !isMetric) {
         throw new LunoraError("BAD_REQUEST", "deviation mode applies to metric targets only");
     }
 
-    // An event rule has nothing numeric to validate: the caller's `threshold` is
-    // ignored rather than rejected, so a dashboard form that always sends one
-    // does not have to know which targets read it.
-    if (isEvent) {
+    // An event rule has nothing numeric to validate — it has no quantity at all —
+    // so the caller's `threshold` is ignored rather than rejected, and `createRule`
+    // stores 0 rather than whatever arrived. A dashboard form that always sends the
+    // field does not have to know which targets read it, and no reader inherits a
+    // number nothing checked.
+    if (family === "event") {
         return;
     }
 
@@ -141,9 +135,10 @@ export const createRule = mutation
     .mutation(async ({ ctx: context, args }): Promise<Id<"alertRules">> => {
         await assertMember(context, args.organizationId, ["owner", "admin"]);
 
-        const isMetric = METRIC_TARGETS.has(args.target);
+        const family = alertFamily(args.target);
+        const isMetric = family === "metric";
 
-        assertRuleShape(args, isMetric, EVENT_TARGETS.has(args.target));
+        assertRuleShape(args, family);
 
         // SSRF guard: the edge `fetch`es a `webhook`/`slack` destination when the
         // alert fires, so both must be an https URL to a public host. `pagerduty`'s
@@ -167,7 +162,10 @@ export const createRule = mutation
             name: args.name,
             organizationId: args.organizationId,
             target: args.target,
-            threshold: args.threshold,
+            // An event rule's threshold is never read, and storing an unvalidated
+            // one (a `NaN`, a negative) leaves a number in the row that a future
+            // reader could mistake for meaningful.
+            threshold: family === "event" ? 0 : args.threshold,
             updatedAt: now,
             // Only persist the metric-only fields for metric rules, so a count
             // rule stays exactly as before (no stray comparator/window columns).
@@ -272,26 +270,12 @@ export const fireDeployAlerts = async (
     const { page } = await context.db.alertRules.findMany({ where: { organizationId, target: "deploy" } });
     const enabled = (page as unknown as AlertRuleRow[]).filter((rule) => rule.enabled);
 
-    const { now } = context;
-
-    for (const rule of enabled) {
-        const { body, subject } = renderDeployAlert(rule, source);
-
-        // eslint-disable-next-line no-await-in-loop -- an org configures a handful of rules; sequential keeps the writer simple
-        await context.db.insert("alerts", {
-            body,
-            channel: rule.channel,
-            createdAt: now,
-            destination: rule.destination,
-            hash,
-            organizationId,
-            ruleId: rule._id,
-            status: "firing",
-            subject,
-            target: "deploy",
-            updatedAt: now,
-        });
-    }
-
-    return enabled.length;
+    return fireDeployRules(
+        enabled.map((rule) => {
+            return { channel: rule.channel, destination: rule.destination, name: rule.name, ruleId: rule._id };
+        }),
+        source,
+        { hash, now: context.now, organizationId },
+        async (row) => await context.db.insert("alerts", row),
+    );
 };

@@ -2,14 +2,6 @@
  * The rollout guard — the every-minute sweep that aborts a staged rollout whose
  * candidate is failing worse than the release it is replacing.
  *
- * `setRollout` splits traffic so a regression reaches a fraction of users instead
- * of everyone. That is only half of the promise: without something watching, the
- * fraction keeps being served the broken release for as long as nobody is looking
- * at a chart — overnight, over a weekend, for as long as it takes someone to
- * notice. The parts to close it were already here (the dispatcher meters outcome
- * per script; `abortRollout` returns all traffic to the active release) and
- * nothing joined them. This is that join.
- *
  * **The candidate is judged against the active release, not against a number.**
  * An absolute error-rate threshold is unusable across a platform: an API that
  * legitimately answers 5xx under load and a static site have nothing in common,
@@ -28,11 +20,9 @@ import type { ScriptHealth } from "../telemetry/traffic-read";
 /**
  * The window each judgement reads.
  *
- * Long enough that a handful of requests do not decide a release, short enough
- * that the abort lands while the regression is still the current event. It is
- * also a trailing window rather than "since the rollout started": a rollout left
- * open for days should be judged on how it is behaving now, not on an average
- * diluted by every healthy hour before the bad deploy.
+ * Trailing, not "since the rollout started": a rollout left open for days is
+ * judged on how it is behaving now, rather than on an average diluted by every
+ * healthy hour before the bad deploy.
  */
 export const ROLLOUT_GUARD_WINDOW_MS = 15 * 60 * 1000;
 
@@ -42,6 +32,12 @@ export const ROLLOUT_GUARD_WINDOW_MS = 15 * 60 * 1000;
  * Below this the rate is noise — one 500 out of three requests reads as 33%, and
  * aborting a rollout on three requests would make the guard fire mostly on
  * scanner traffic to a quiet preview.
+ *
+ * Measured in sample-weighted requests, which is the honest caveat: Analytics
+ * Engine retains one row per many past a write rate, so at high volume a single
+ * retained row can carry an interval of 100 and this floor is reached with fewer
+ * than 20 observations behind it. It still bounds the low-traffic case it exists
+ * for, where no sampling is engaged and the count is exact.
  */
 export const ROLLOUT_GUARD_MIN_REQUESTS = 20;
 
@@ -66,6 +62,17 @@ export const ROLLOUT_GUARD_ERROR_MARGIN = 0.05;
  * "whatever normal is for this app, it is not one request in three failing."
  */
 export const ROLLOUT_GUARD_ABSOLUTE_ERROR_RATE = 1 / 3;
+
+/**
+ * Projects scanned per tick.
+ *
+ * There is no index for "has a rollout" — the column is a nested optional, and
+ * open rollouts are a handful at any moment, so a flag column plus an index to
+ * find them would be more machinery than the scan it replaces. Past this many
+ * projects the oldest ones fall outside the scan and are silently unguarded; the
+ * fix at that size is the flag column, not a bigger number.
+ */
+export const ROLLOUT_GUARD_MAX_PROJECTS = 1000;
 
 /** An open rollout, as the sweep resolves it from `projects`. */
 export interface OpenRollout {
@@ -143,7 +150,16 @@ export const judgeRollouts = (rollouts: ReadonlyArray<OpenRollout>, health: Read
     return aborts;
 };
 
-/** Every script name one health read has to cover, deduplicated. */
+/**
+ * Every script name one health read has to cover, deduplicated.
+ *
+ * Emitted in candidate/active PAIRS rather than all candidates then all actives,
+ * because the query truncates at `MAX_TRAFFIC_SCRIPTS`: interleaved, a rollout
+ * that survives the cut keeps both sides of its comparison, so the guard either
+ * judges it properly or abstains. Grouped by role, the cut would land between a
+ * candidate and its baseline and send it down the no-baseline path — judging it
+ * against an absolute threshold while believing it had compared.
+ */
 export const scriptsToRead = (rollouts: ReadonlyArray<OpenRollout>): string[] => {
     const names = new Set<string>();
 
@@ -157,17 +173,6 @@ export const scriptsToRead = (rollouts: ReadonlyArray<OpenRollout>): string[] =>
 
     return [...names];
 };
-
-/**
- * Projects scanned per tick.
- *
- * There is no index for "has a rollout" — the column is a nested optional, and
- * open rollouts are a handful at any moment, so a flag column plus an index to
- * find them would be more machinery than the scan it replaces. The ceiling this
- * accepts is that a control plane past this many projects would start missing
- * rollouts on later pages; the fix at that size is the flag, not a bigger number.
- */
-export const ROLLOUT_GUARD_MAX_PROJECTS = 1000;
 
 /** A `projects` row as the control-plane store returns it. */
 interface ProjectRolloutRow {
@@ -192,7 +197,10 @@ export interface RolloutGuardResult {
 
 /** Read every open rollout on the platform. */
 export const openRollouts = async (database: ControlPlaneDatabase): Promise<OpenRollout[]> => {
-    const { page } = await database.findMany("projects", { limit: ROLLOUT_GUARD_MAX_PROJECTS });
+    // Newest first. The read defaults to oldest-first, which meant the projects
+    // past the page bound were the NEWEST ones — the ones most likely to be
+    // mid-deploy, and so exactly the set a rollout guard must not skip.
+    const { page } = await database.findMany("projects", { limit: ROLLOUT_GUARD_MAX_PROJECTS, orderBy: [{ _creationTime: "desc" }] });
 
     return (page as ProjectRolloutRow[])
         .filter((row): row is ProjectRolloutRow & { rollout: NonNullable<ProjectRolloutRow["rollout"]> } => Boolean(row.rollout?.scriptName))
@@ -213,14 +221,11 @@ export const openRollouts = async (database: ControlPlaneDatabase): Promise<Open
  *
  * Aborting is the same write `abortRollout` performs — clear the rollout, all
  * traffic returns to the active release, the candidate stays `live` so it can be
- * rolled out again after a fix. The audit action is deliberately its own
- * (`auto_abort`, not `abort`): "the guard pulled this" and "a person pulled this"
- * are different facts to read back six weeks later, and collapsing them would
- * make the guard's own behaviour invisible in the one place it is reviewed.
+ * rolled out again after a fix. The audit action is its own (`auto_abort`) so the
+ * guard's behaviour is legible in the log it is reviewed from.
  *
- * Nothing is aborted when the AE read fails — the read throwing means the guard
- * has no evidence, and a guard that reverts releases when its telemetry is down
- * is worse than one that does nothing.
+ * Nothing is aborted when the AE read fails: no evidence is not evidence of a bad
+ * release.
  */
 export const runRolloutGuard = async (database: ControlPlaneDatabase, options: { now: number; reader: RolloutHealthReader }): Promise<RolloutGuardResult> => {
     const rollouts = await openRollouts(database);
@@ -233,9 +238,30 @@ export const runRolloutGuard = async (database: ControlPlaneDatabase, options: {
     const health = await options.reader.readScriptHealth({ from: now - ROLLOUT_GUARD_WINDOW_MS, scriptNames: scriptsToRead(rollouts), to: now });
     const aborted = judgeRollouts(rollouts, health);
 
+    const applied: RolloutAbort[] = [];
+
     for (const abort of aborted) {
         const { reason, rollout } = abort;
 
+        // Re-read and compare before clearing.
+        //
+        // The judgement spans a network round trip to the AE SQL API, and in that
+        // window an operator can abort, fix and start a NEW rollout, or promote the
+        // one being judged. Neither is caught by the store's optimistic-concurrency
+        // check: `patch` re-reads its own snapshot and builds the compare-and-set
+        // from THAT, so a concurrent write is adopted rather than rejected. Without
+        // this, the guard clears whichever rollout happens to be there — cancelling
+        // a candidate it never looked at, and then paging its operator with the
+        // failing numbers of a different one.
+        // eslint-disable-next-line no-await-in-loop -- at most a handful of rollouts abort in one tick
+        const { page } = await database.findMany("projects", { where: { _id: rollout.projectId } });
+        const current = (page as ProjectRolloutRow[])[0];
+
+        if (current?.rollout?.scriptName !== rollout.candidateScriptName) {
+            continue;
+        }
+
+        applied.push(abort);
         // eslint-disable-next-line no-await-in-loop -- at most a handful of rollouts abort in one tick
         await database.patch(rollout.projectId, { rollout: undefined }, "projects");
         // eslint-disable-next-line no-await-in-loop -- see above
@@ -256,5 +282,5 @@ export const runRolloutGuard = async (database: ControlPlaneDatabase, options: {
         );
     }
 
-    return { aborted, examined: rollouts.length };
+    return { aborted: applied, examined: rollouts.length };
 };

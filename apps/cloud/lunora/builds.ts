@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { runBuildDispatch } from "../src/builds/dispatch";
 import type { BuildRunnerPorts } from "../src/builds/runner";
+import { isUnconfiguredInfrastructure } from "../src/builds/runner";
 import { createGitHubApp } from "../src/github/app";
 import type { Id } from "./_generated/dataModel.js";
 import { internalAction, internalMutation, internalQuery, query, v } from "./_generated/server.js";
@@ -211,6 +212,13 @@ export const fail = internalMutation
             status: "failed",
             updatedAt: now,
         });
+
+        // Not raised for the platform's own missing infrastructure — see
+        // `isUnconfiguredInfrastructure`. The build is recorded failed either way;
+        // this only decides whether a human is woken for it.
+        if (isUnconfiguredInfrastructure(error)) {
+            return;
+        }
 
         const project = (await context.db.get(build.projectId)) as null | { name: string };
 

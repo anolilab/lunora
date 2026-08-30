@@ -765,11 +765,31 @@ export default {
         // The control plane's own code crons fire on their declared expression.
         await worker.scheduled(controller, env, context);
 
-        // Run the sweeps whose bucket this tick matches (see SCHEDULED_SWEEPS).
-        for (const sweep of SCHEDULED_SWEEPS) {
-            if (controller.cron === sweep.cron) {
-                // eslint-disable-next-line no-await-in-loop -- sweeps run sequentially; each is independent + no-ops when unconfigured
+        // Run the sweeps whose bucket this tick matches (see SCHEDULED_SWEEPS),
+        // isolated from each other rather than chained.
+        //
+        // These ran in a bare loop with no `catch`, so the FIRST sweep to throw took
+        // out every sweep after it — and the tenant cron fan-out below, which is what
+        // fires customers' scheduled functions. Two every-minute sweeps each add a
+        // live throw source in front of it: the rollout guard deliberately propagates
+        // a failed Analytics Engine read (it must not abort releases on no evidence),
+        // and the alert drain issues up to a hundred outbound deliveries. An AE
+        // outage or one hung customer webhook would have stopped every tenant's crons
+        // for its duration.
+        //
+        // `allSettled` is what makes the "each is independent" claim true rather than
+        // aspirational. A throwing sweep is logged and skipped; the next tick retries
+        // it, which is safe because every one of them is idempotent by design.
+        const swept = await Promise.allSettled(
+            SCHEDULED_SWEEPS.filter((sweep) => sweep.cron === controller.cron).map(async (sweep) => {
                 await sweep.run(env);
+            }),
+        );
+
+        for (const result of swept) {
+            if (result.status === "rejected") {
+                // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
+                console.error("[sweep] scheduled sweep failed", result.reason);
             }
         }
 

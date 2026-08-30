@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ControlPlaneDatabase } from "../src/store";
 import { ALERT_DRAIN_GRACE_MS, ALERT_DRAIN_MAX, runAlertDrain } from "../src/telemetry/alert-drain";
+import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 
 const now = 10_000_000;
 
@@ -9,18 +10,7 @@ const firingRow = (id: string, createdAt: number): Record<string, unknown> => {
     return { _id: id, body: "it broke", channel: "webhook", createdAt, destination: "https://hook.example", status: "firing", subject: `[Lunora] ${id}` };
 };
 
-const fakeDb = (rows: unknown[], onFindMany?: (table: string, args?: unknown) => void): ControlPlaneDatabase => {
-    return {
-        delete: () => Promise.resolve(undefined),
-        findMany: (table, args) => {
-            onFindMany?.(table, args);
-
-            return Promise.resolve({ page: table === "alerts" ? rows : [] });
-        },
-        insert: () => Promise.resolve("row_id"),
-        patch: () => Promise.resolve(undefined),
-    };
-};
+const fakeDb = (rows: unknown[]): ControlPlaneDatabase => fakeControlPlaneDb({ alerts: rows });
 
 describe(runAlertDrain, () => {
     it("delivers a firing alert once it is past the grace window", async () => {
@@ -48,17 +38,10 @@ describe(runAlertDrain, () => {
     });
 
     it("reads only firing rows, bounded", async () => {
-        let seen: unknown;
+        const findMany = vi.fn<ControlPlaneDatabase["findMany"]>(() => Promise.resolve({ page: [] }));
 
-        await runAlertDrain(
-            fakeDb([], (table, args) => {
-                if (table === "alerts") {
-                    seen = args;
-                }
-            }),
-            { now },
-        );
+        await runAlertDrain(fakeControlPlaneDb({}, { findMany }), { now });
 
-        expect(seen).toStrictEqual({ limit: ALERT_DRAIN_MAX, where: { status: "firing" } });
+        expect(findMany).toHaveBeenCalledWith("alerts", { limit: ALERT_DRAIN_MAX, where: { status: "firing" } });
     });
 });

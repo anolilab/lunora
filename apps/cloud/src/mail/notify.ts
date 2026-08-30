@@ -43,6 +43,9 @@ export interface AlertNotification {
     subject: string;
 }
 
+/** How long an outbound webhook delivery may take before it is treated as failed. */
+const WEBHOOK_TIMEOUT_MS = 10_000;
+
 /**
  * Deliver a fired Observability alert over its channel. `email` goes through the
  * same env-driven mailer as invitations; every other channel is a typed JSON
@@ -77,6 +80,12 @@ export const deliverAlert = async (env: Record<string, unknown>, alert: AlertNot
         // an SSRF sink if we followed it. `redirect: "manual"` surfaces the redirect
         // here instead of the runtime chasing the `Location` header.
         redirect: "manual",
+        // A customer's webhook endpoint is not obliged to answer. Unbounded, one
+        // that accepts a connection and never responds holds this call open for as
+        // long as the runtime allows — blocking every other sweep on the same tick,
+        // and outliving the drain's grace window so the alert is sent a second time.
+        // A send that has not completed in this long has failed.
+        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     });
 
     if (response.status >= 300 && response.status < 400) {

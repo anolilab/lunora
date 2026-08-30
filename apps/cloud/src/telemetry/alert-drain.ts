@@ -2,20 +2,13 @@
  * The undelivered-alert drain — the every-minute sweep that sends `alerts` rows
  * still sitting in `firing`.
  *
- * Every other firing path delivers its own alerts: the telemetry ingest returns
- * them to the edge that called it, and the uptime and metric sweeps deliver what
- * they fire in the same tick. That works because each of those runs inside a
- * request or a scheduled invocation that has `fetch`.
+ * Every other firing path delivers inline, inside the request or scheduled
+ * invocation that fired it — which needs `fetch`. The release path raises its
+ * alerts from mutations, which have none, so those rows would never be sent at
+ * all. This drains them.
  *
- * The release path does not. `builds.fail`, `deployments.updateStatus` and the
- * rollout guard raise a `deploy` alert from inside a mutation, where there is no
- * `fetch` to deliver with — and splitting the write from the notification would
- * mean a failed build that is recorded but silent whenever the two disagree. So
- * they only insert the row, and this drains it.
- *
- * It also repairs the other paths. An alert whose delivering request died
- * mid-send stayed `firing` forever, because nothing ever looked at the table
- * again; now it goes out on the next tick.
+ * It also repairs the other paths: an alert whose delivering request died
+ * mid-send stayed `firing` forever, because nothing looked at the table again.
  *
  * Expressed as a pure function over the injected {@link ControlPlaneDatabase},
  * like `runAlertSweep` and `runUptimeSweep`. The edge supplies the real D1 and
@@ -27,12 +20,21 @@ import type { AlertChannel, AlertDelivery } from "./alerts";
 /**
  * How long a `firing` row is left alone before the drain claims it.
  *
- * The other paths insert and deliver within one request, and mark the row
- * `delivered`/`failed` as they go. Waiting out a window longer than any of those
- * requests can live is what keeps this from delivering an alert a second time
- * while the request that fired it is still working — without needing a "sending"
- * status, a claim column, or a lock. The cost is up to a minute of extra latency
- * on a release-path alert, which is the right trade against double-paging.
+ * The other paths insert and deliver within one request, marking the row
+ * `delivered`/`failed` as they go. Waiting out a window longer than those
+ * deliveries can take is what keeps this from sending an alert a second time
+ * while the request that fired it is still working — without a "sending" status,
+ * a claim column, or a lock.
+ *
+ * That only holds because delivery is now bounded: `deliverAlert` carries a
+ * 10s `AbortSignal.timeout`, so an inline send finishes or fails well inside this
+ * window. Without that bound the grace promised nothing at all — a hung webhook
+ * held its row `firing` indefinitely and this re-sent it every minute. If the
+ * delivery timeout is ever raised, raise this with it.
+ *
+ * The residual is honest and one-directional: a row whose status patch fails
+ * after a successful send is re-delivered. Duplicating a page is recoverable;
+ * dropping one is not.
  */
 export const ALERT_DRAIN_GRACE_MS = 60_000;
 

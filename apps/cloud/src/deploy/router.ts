@@ -436,6 +436,29 @@ const handleCloudflareBillingRoute = async (request: Request, environment: Route
 };
 
 /**
+ * Bearer-gate a platform-internal `/v1/tenants/*` route with `LUNORA_ADMIN_TOKEN`,
+ * returning the 401 response when it fails and `undefined` when it passes.
+ *
+ * Extracted because the check was copied per route and one copy was missing:
+ * `handlePreviewAuthRoute` documented the gate and never performed it. A shared
+ * helper does not make forgetting impossible, but it removes the reason to
+ * re-type it, which is what let the omission look like the others.
+ *
+ * Fails closed when the token is unset — an unconfigured control plane refuses
+ * these routes rather than opening them.
+ */
+const requireAdminToken = (request: Request, environment: RouterEnv): Response | undefined => {
+    const authorization = request.headers.get("authorization") ?? "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+
+    if (!environment.LUNORA_ADMIN_TOKEN || !constantTimeEqual(token, environment.LUNORA_ADMIN_TOKEN)) {
+        return jsonError(401, "unauthorized");
+    }
+
+    return undefined;
+};
+
+/**
  * `GET /v1/tenants/plan?script=&lt;id>` — resolve a tenant script's plan tier for
  * the dispatcher's per-plan runtime limits (§4). Bearer-gated with
  * `LUNORA_ADMIN_TOKEN` (the dispatcher is a trusted account-level Worker).
@@ -447,11 +470,10 @@ const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): 
         return jsonError(500, "lunora context unavailable");
     }
 
-    const authorization = request.headers.get("authorization") ?? "";
-    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+    const unauthorized = requireAdminToken(request, environment);
 
-    if (!environment.LUNORA_ADMIN_TOKEN || token !== environment.LUNORA_ADMIN_TOKEN) {
-        return jsonError(401, "unauthorized");
+    if (unauthorized) {
+        return unauthorized;
     }
 
     const scriptName = new URL(request.url).searchParams.get("script");
@@ -490,6 +512,17 @@ const handlePreviewAuthRoute = async (request: Request, environment: RouterEnv):
         return jsonError(500, "lunora context unavailable");
     }
 
+    // The check this route's own docblock claimed and did not perform. Without it
+    // this was an unauthenticated password oracle: anyone who could reach the
+    // control plane could POST a script name and a guess and read back yes or no,
+    // for any protected preview on the platform. Same form as every other
+    // `/v1/tenants/*` route, and now shared with them so a fourth cannot forget.
+    const unauthorized = requireAdminToken(request, environment);
+
+    if (unauthorized) {
+        return unauthorized;
+    }
+
     const body = (await request.json().catch(() => null)) as null | PreviewAuthBody;
 
     if (!body?.scriptName || !body.password) {
@@ -516,11 +549,10 @@ const handleTenantRouteRoute = async (request: Request, environment: RouterEnv):
         return jsonError(500, "lunora context unavailable");
     }
 
-    const authorization = request.headers.get("authorization") ?? "";
-    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+    const unauthorized = requireAdminToken(request, environment);
 
-    if (!environment.LUNORA_ADMIN_TOKEN || token !== environment.LUNORA_ADMIN_TOKEN) {
-        return jsonError(401, "unauthorized");
+    if (unauthorized) {
+        return unauthorized;
     }
 
     const alias = new URL(request.url).searchParams.get("alias");
@@ -1195,11 +1227,10 @@ const handleTenantCustomDomainRoute = async (request: Request, environment: Rout
         return jsonError(500, "lunora context unavailable");
     }
 
-    const authorization = request.headers.get("authorization") ?? "";
-    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+    const unauthorized = requireAdminToken(request, environment);
 
-    if (!environment.LUNORA_ADMIN_TOKEN || token !== environment.LUNORA_ADMIN_TOKEN) {
-        return jsonError(401, "unauthorized");
+    if (unauthorized) {
+        return unauthorized;
     }
 
     const host = new URL(request.url).searchParams.get("host");
@@ -1519,11 +1550,19 @@ export const createDeployRouter = (): HttpRouterLike => {
 
         if (pathname === "/v1/tenants/preview-auth") {
             // Keyed on the END USER's address, forwarded by the dispatcher. `ip` here
-            // is the dispatcher itself, so keying on it would put every user of every
-            // protected preview into one bucket — no isolation of a grinder, and one
-            // grinder throttles everybody. This is the only thing standing between an
-            // 8-character password and unlimited guesses by anyone holding the URL.
-            verdict = await limiter.limit("previewAuth", { key: request.headers.get("x-lunora-client-ip") ?? ip });
+            // is the dispatcher itself, so keying on it alone would put every user of
+            // every protected preview into one bucket — no isolation of a grinder, and
+            // one grinder throttles everybody. This is the only thing standing between
+            // an 8-character password and unlimited guesses by anyone holding the URL.
+            //
+            // COMPOSED with the caller's own address rather than trusting the header
+            // alone. Throttling runs before authorization, so the forwarded value is
+            // caller-controlled on every request that reaches the router: alone, it is
+            // both a bypass (rotate the header, get a fresh bucket per guess) and a
+            // DoS (send a victim's address ten times, lock them out of their own
+            // preview). Composed, a spoofer can only ever divide their OWN budget, and
+            // a victim's bucket is unreachable from another connection.
+            verdict = await limiter.limit("previewAuth", { key: `${ip}|${request.headers.get("x-lunora-client-ip") ?? ""}` });
         } else if (telemetryPaths.has(pathname)) {
             const ipVerdict = await limiter.limit("telemetryIp", { key: ip });
 

@@ -4,17 +4,7 @@ import type { OpenRollout, RolloutHealthReader } from "../src/deploy/rollout-gua
 import { judgeRollout, judgeRollouts, ROLLOUT_GUARD_MIN_REQUESTS, ROLLOUT_GUARD_WINDOW_MS, runRolloutGuard, scriptsToRead } from "../src/deploy/rollout-guard";
 import type { ControlPlaneDatabase } from "../src/store";
 import type { ScriptHealth } from "../src/telemetry/traffic-read";
-
-/** A fake ControlPlaneDatabase answering findMany per-table, mirroring alert-sweep.test.ts. */
-const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDatabase> = {}): ControlPlaneDatabase => {
-    return {
-        delete: () => Promise.resolve(undefined),
-        findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
-        insert: () => Promise.resolve("row_id"),
-        patch: () => Promise.resolve(undefined),
-        ...spies,
-    };
-};
+import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 
 const health = (entries: { errors: number; requests: number; scriptName: string }[]): Map<string, ScriptHealth> =>
     new Map(
@@ -160,7 +150,7 @@ describe(runRolloutGuard, () => {
     it("clears the rollout, audits it as automatic, and raises a deploy alert", async () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const database = fakeDb(
+        const database = fakeControlPlaneDb(
             {
                 alertRules: [{ _id: "rule1", channel: "slack", destination: "https://hooks.slack.com/x", enabled: true, name: "Releases", target: "deploy" }],
                 projects: [projectRow],
@@ -196,7 +186,7 @@ describe(runRolloutGuard, () => {
     it("leaves a healthy rollout completely alone", async () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const database = fakeDb({ projects: [projectRow] }, { insert, patch });
+        const database = fakeControlPlaneDb({ projects: [projectRow] }, { insert, patch });
 
         const result = await runRolloutGuard(database, {
             now: 1_000_000,
@@ -215,7 +205,7 @@ describe(runRolloutGuard, () => {
 
     it("reads no traffic at all when nothing is rolling out", async () => {
         const readScriptHealth = vi.fn<RolloutHealthReader["readScriptHealth"]>(() => Promise.resolve(new Map<string, ScriptHealth>()));
-        const database = fakeDb({ projects: [{ _id: "proj1", name: "Acme", organizationId: "org1" }] });
+        const database = fakeControlPlaneDb({ projects: [{ _id: "proj1", name: "Acme", organizationId: "org1" }] });
 
         const result = await runRolloutGuard(database, { now: 1_000_000, reader: { readScriptHealth } });
 
@@ -226,7 +216,7 @@ describe(runRolloutGuard, () => {
 
     it("reads exactly the trailing window it judges on", async () => {
         const readScriptHealth = vi.fn<RolloutHealthReader["readScriptHealth"]>(() => Promise.resolve(new Map<string, ScriptHealth>()));
-        const database = fakeDb({ projects: [projectRow] });
+        const database = fakeControlPlaneDb({ projects: [projectRow] });
         const now = 1_000_000;
 
         await runRolloutGuard(database, { now, reader: { readScriptHealth } });
@@ -236,7 +226,7 @@ describe(runRolloutGuard, () => {
 
     it("aborts nothing when the traffic read fails — no evidence is not evidence of a bad release", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const database = fakeDb({ projects: [projectRow] }, { patch });
+        const database = fakeControlPlaneDb({ projects: [projectRow] }, { patch });
 
         await expect(
             runRolloutGuard(database, { now: 1_000_000, reader: { readScriptHealth: () => Promise.reject(new Error("AE unreachable")) } }),

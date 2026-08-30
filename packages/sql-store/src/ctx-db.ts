@@ -668,9 +668,15 @@ const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
  */
 const globalColumnAffinity = (validator: ValidatorLike, dialect: SqlDialect): string => dialect.columnType(effectiveColumnKind(validator));
 
-/** Build the column DDL for a global table as a drizzle `SQL`: framework columns plus a typed column per declared field. */
-const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): SQL => {
-    const fieldColumns: SQL[] = [];
+/**
+ * The typed column each declared field needs, as `(name, type, nullability)`.
+ *
+ * Extracted so the CREATE path and the add-missing-columns reconciliation below
+ * read the same source. A column that two code paths describe differently is a
+ * write that succeeds against one of them.
+ */
+const globalTableFieldColumns = (definition: SchemaLike["tables"][string], dialect: SqlDialect): { field: string; notNull: boolean; type: string }[] => {
+    const columns: { field: string; notNull: boolean; type: string }[] = [];
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         if (!validator._meta?.column) {
@@ -679,10 +685,19 @@ const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables
 
         // Required, non-optional fields get NOT NULL; optional ones stay nullable
         // so an insert that omits them can't trip a constraint.
-        const notNull = validator._meta.column.notNull && validator.kind !== "optional" ? " NOT NULL" : "";
+        const notNull = Boolean(validator._meta.column.notNull) && validator.kind !== "optional";
 
-        fieldColumns.push(sql`${sql.identifier(field)} ${sql.raw(`${globalColumnAffinity(validator, dialect)}${notNull}`)}`);
+        columns.push({ field, notNull, type: globalColumnAffinity(validator, dialect) });
     }
+
+    return columns;
+};
+
+/** Build the column DDL for a global table as a drizzle `SQL`: framework columns plus a typed column per declared field. */
+const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): SQL => {
+    const fieldColumns = globalTableFieldColumns(definition, dialect).map(
+        (column) => sql`${sql.identifier(column.field)} ${sql.raw(`${column.type}${column.notNull ? " NOT NULL" : ""}`)}`,
+    );
 
     const frameworkColumns = dialect.frameworkColumns().map((column) => sql`${sql.identifier(column.name)} ${sql.raw(column.type)}`);
     const total = frameworkColumns.length + fieldColumns.length;
@@ -746,6 +761,72 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
 };
 
 /**
+ * Add columns a declared field needs that the live table does not have.
+ *
+ * `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, so
+ * before this, a field added to a `.global()` table after its first deployment
+ * was created on fresh databases and silently absent on every existing one. That
+ * asymmetry is the dangerous part: CI, a fresh `.wrangler/state`, and every test
+ * get the column, so nothing fails until a real deployment — where reads quietly
+ * return the field as absent and **writes fail outright**, because `patch` and
+ * `insert` build their column lists from the schema shape and emit a column the
+ * table does not have.
+ *
+ * Additive only, which is what makes it safe to run on every migration: it adds
+ * nullable columns and touches nothing that exists. A NEW REQUIRED field cannot
+ * be reconciled this way — SQLite refuses `ADD COLUMN … NOT NULL` without a
+ * default, and inventing one would put a value of this module's choosing into
+ * every existing row. That case throws, naming the table and column, because a
+ * clear failure at migration time beats `no such column` from a write path that
+ * cannot say which schema change caused it.
+ *
+ * SQLite/D1 only, like the aggregate companion's `__count__` reshape above:
+ * `PRAGMA table_info` is the check, and D1 is the engine this reconciliation
+ * exists for. Other dialects create their tables from the same shape and are left
+ * to their own migration tooling.
+ */
+const reconcileGlobalTableColumns = async (
+    exec: SqlCtxExec,
+    tableName: string,
+    definition: SchemaLike["tables"][string],
+    dialect: SqlDialect,
+): Promise<void> => {
+    if (dialect.name !== "sqlite") {
+        return;
+    }
+
+    const live = await queryAll(exec, dialect, sql`PRAGMA table_info(${sql.identifier(tableName)})`);
+    const present = new Set(live.map((column) => column["name"]).filter((name): name is string => typeof name === "string"));
+
+    // No named columns came back, so the pragma told us nothing — which is NOT the
+    // same as "the table has no columns". `CREATE TABLE IF NOT EXISTS` ran
+    // immediately above, so a real table always reports at least its framework
+    // columns; an unreadable answer means an exec that does not model pragmas.
+    // Reading it as "every column is missing" would ALTER a table we cannot see,
+    // and would reject a perfectly valid schema on the required-field branch below.
+    // Doing nothing is the only safe reading.
+    if (present.size === 0) {
+        return;
+    }
+
+    for (const column of globalTableFieldColumns(definition, dialect)) {
+        if (present.has(column.field)) {
+            continue;
+        }
+
+        if (column.notNull) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/sql-store: global table "${tableName}" declares a new required field "${column.field}" that the existing table does not have — SQLite cannot add a NOT NULL column without a default, so this needs an explicit migration (add it as optional, backfill, then require it)`,
+            );
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection.
+        await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(column.field)} ${sql.raw(column.type)}`);
+    }
+};
+
+/**
  * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
  * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
  * declared field, then its secondary and `.unique()` indexes. This is the D1
@@ -755,9 +836,9 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
  * column set and dialect match exactly what this module reads and writes
  * (`columnRef`, `serializeColumnValue`, `decodeGlobalRow`).
  *
- * Idempotent (`CREATE TABLE/INDEX IF NOT EXISTS`); additive only — it never
- * drops or retypes an existing column, so destructive schema changes still need
- * an explicit migration.
+ * Idempotent (`CREATE TABLE/INDEX IF NOT EXISTS`, plus an add-only column
+ * reconciliation); additive only — it never drops or retypes an existing column,
+ * so destructive schema changes still need an explicit migration.
  */
 const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
@@ -769,6 +850,8 @@ const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike,
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared D1 connection; the table must exist before its indexes below.
         await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; the table must have its columns before its indexes.
+        await reconcileGlobalTableColumns(exec, tableName, definition, dialect);
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; indexes follow the table.
         await createGlobalTableIndexes(exec, tableName, definition, dialect);
     }

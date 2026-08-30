@@ -15,7 +15,7 @@
  */
 import type { ControlPlaneDatabase } from "../store";
 import type { AlertChannel, DeployAlertSource } from "./alerts";
-import { renderDeployAlert } from "./alerts";
+import { fireDeployRules } from "./alerts";
 
 /** An `alertRules` row as the control-plane store returns it. */
 interface DeployRuleRow {
@@ -37,24 +37,12 @@ export const raiseDeployAlerts = async (
     const { page } = await database.findMany("alertRules", { where: { organizationId, target: "deploy" } });
     const enabled = (page as DeployRuleRow[]).filter((rule) => rule.enabled);
 
-    for (const rule of enabled) {
-        const { body, subject } = renderDeployAlert(rule, source);
-
-        // eslint-disable-next-line no-await-in-loop -- an org configures a handful of rules; sequential keeps the writer simple
-        await database.insert("alerts", {
-            body,
-            channel: rule.channel,
-            createdAt: now,
-            destination: rule.destination,
-            hash,
-            organizationId,
-            ruleId: rule._id,
-            status: "firing",
-            subject,
-            target: "deploy",
-            updatedAt: now,
-        });
-    }
-
-    return enabled.length;
+    return fireDeployRules(
+        enabled.map((rule) => {
+            return { channel: rule.channel, destination: rule.destination, name: rule.name, ruleId: rule._id };
+        }),
+        source,
+        { hash, now, organizationId },
+        async (row) => await database.insert("alerts", row),
+    );
 };

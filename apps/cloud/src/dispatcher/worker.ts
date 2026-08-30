@@ -351,11 +351,14 @@ export default {
             }
         }
 
+        // Captured outside the `try` so the catch can still measure how long the
+        // failing dispatch took.
+        const startedAt = Date.now();
+
         try {
             // Per-plan runtime caps (§4): CPU + subrequests scale with the tenant's
             // plan, falling back to the free tier when the plan is unknown.
             const limits = limitsForPlan(route.plan);
-            const startedAt = Date.now();
             const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits });
             // A WebSocket upgrade returns a 101 response carrying `webSocket`;
             // returning it verbatim hands the hibernatable socket back to the
@@ -378,6 +381,23 @@ export default {
 
             return stamped;
         } catch (error) {
+            // Meter the FAILED dispatch too.
+            //
+            // This was the metering stream's blind spot, and it was the worst
+            // possible one: a dispatch rejects when the tenant's own `fetch` throws,
+            // when the script is missing from the namespace, and when a plan limit is
+            // exceeded — which is exactly how a bad release fails. Only successful
+            // responses were recorded, so a candidate that threw on every request
+            // produced NO rows at all, and one that threw intermittently produced a
+            // sample containing only the requests it survived. Both read as healthy.
+            //
+            // Everything downstream of the meter inherits that: the Traffic tab's
+            // error rate, the per-deployment health chart, and the rollout guard,
+            // whose entire job is to notice a candidate failing this way.
+            const failure = new Response(null, { status: 502 });
+
+            meterRequest(env.USAGE_ANALYTICS, request, failure, route, url, startedAt);
+
             if (error instanceof Error && error.message.startsWith("Worker not found")) {
                 return NOT_FOUND("worker not found");
             }
