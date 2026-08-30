@@ -214,17 +214,6 @@ interface AdvisorFlagSecurityDefault {
 }
 ```
 
-### `AdvisorFunctionMetrics` (interface)
-
-```ts
-interface AdvisorFunctionMetrics {
-    calls: number;
-    errors: number;
-    maxDurationMs: number;
-    path: string;
-}
-```
-
 ### `AdvisorGeoIndexUsage` (interface)
 
 ```ts
@@ -966,7 +955,6 @@ interface LintContext {
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
     flagReads?: ReadonlyArray<AdvisorFlagRead>;
     flagSecurityDefaults?: ReadonlyArray<AdvisorFlagSecurityDefault>;
-    functionMetrics?: ReadonlyArray<AdvisorFunctionMetrics>;
     geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<AdvisorHttpActionGuard>;
     httpHeaderWrites?: ReadonlyArray<AdvisorHttpHeaderWrite>;
@@ -1305,12 +1293,6 @@ const duplicateIndex: Lint;
 
 ```ts
 const emptyIndex: Lint;
-```
-
-### `errorRateOutlier` (const)
-
-```ts
-const errorRateOutlier: Lint;
 ```
 
 ### `errorWithoutCatalog` (const)
