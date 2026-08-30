@@ -1,4 +1,9 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { defineQueue } from "@lunora/queue";
+import { defineWorkflow } from "@lunora/workflow";
 import { describe, expect, it } from "vitest";
 
 import { createNodePlatform } from "../src";
@@ -44,6 +49,47 @@ describe("createNodePlatform", () => {
         expect(bare.queues).toBeUndefined();
     });
 
+    it("binds declared workflows and object storage, and binds neither when undeclared", async () => {
+        expect.hasAssertions();
+
+        const bucketDirectory = mkdtempSync(join(tmpdir(), "lunora-node-platform-bucket-"));
+
+        try {
+            const orderPipeline = defineWorkflow<{ id: string }, string>({ handler: (ctx) => ctx.params.id });
+
+            using platform = createNodePlatform({ objectStorageDirectory: bucketDirectory, workflows: { orderPipeline } });
+
+            // Same reasoning as queues: both are rated `emulated`, so codegen
+            // emits `ctx.workflows` / `ctx.storage` for this target. A platform
+            // that declared the capability and bound nothing failed at the first
+            // call with no diagnostic anywhere before it.
+            expect(platform.capabilities.features.workflows?.level).toBe("emulated");
+            expect(platform.capabilities.features.objectStorage?.level).toBe("emulated");
+
+            const bucket = platform.objectStorage!;
+
+            await bucket.put("greeting", "hello");
+
+            const object = await bucket.get("greeting");
+
+            await expect(object?.text()).resolves.toBe("hello");
+
+            const workflows = platform.workflows!;
+
+            expect(workflows.env.WORKFLOW_ORDER_PIPELINE).toBe(workflows.bindings.orderPipeline);
+
+            // Nothing declared, nothing bound — an empty host would suggest
+            // `ctx.workflows` / `ctx.storage` work with no workflow to trigger
+            // and no directory to write into.
+            using bare = createNodePlatform();
+
+            expect(bare.workflows).toBeUndefined();
+            expect(bare.objectStorage).toBeUndefined();
+        } finally {
+            rmSync(bucketDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("composes every contract over one in-memory database", async () => {
         expect.assertions(7);
 
@@ -62,6 +108,22 @@ describe("createNodePlatform", () => {
         await platform.kv.put("k", { hello: "world" });
 
         await expect(platform.kv.get("k")).resolves.toStrictEqual({ hello: "world" });
+    });
+
+    it("omits bufferedAmount on a socket handle rather than reporting a frozen zero", () => {
+        expect.assertions(1);
+
+        using platform = createNodePlatform();
+
+        const handle = platform.sockets.accept({});
+
+        // `SocketHandle.bufferedAmount` reads as "assume drained" when ABSENT
+        // and as a positive claim of an empty queue when present. This host has
+        // no outbound queue to measure — `send` appends to an in-process array —
+        // so the `0` it used to snapshot at construction told the engine
+        // backpressure never applies, which is the one wrong answer it cannot
+        // detect as missing.
+        expect("bufferedAmount" in handle).toBe(false);
     });
 
     it("threads shardKey and a real database file path through to the shard host", () => {

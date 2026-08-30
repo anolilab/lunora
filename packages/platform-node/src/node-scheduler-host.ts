@@ -338,6 +338,12 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * budget to exhaust — a tick that throws is dropped and the next tick is
      * armed regardless, which is how a recurring schedule has to behave: a
      * failed 09:00 run must not cancel 10:00.
+     *
+     * Chunked past {@link MAX_TIMEOUT_MS} exactly as `armJob` is, and for a
+     * worse failure: a monthly cron's next tick is up to ~2.68e9 ms out, which
+     * `setTimeout` clamps to 1 ms. The tick would fire, dispatch, and re-arm
+     * onto the same far-future target — an unbounded ~1 ms dispatch loop for a
+     * schedule that should fire once a month.
      */
     const armCron = (row: CronRow): void => {
         const existing = cronTimers.get(row.key);
@@ -358,30 +364,40 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             return;
         }
 
-        const timer = setTimeout(
-            () => {
-                cronTimers.delete(row.key);
+        const delay = Math.max(0, nextAt - Date.now());
 
-                (async (): Promise<void> => {
-                    try {
-                        await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts: 0, id: row.key });
-                    } catch {
-                        // See the docstring: a dropped tick must not stop the schedule.
-                    }
+        if (delay > MAX_TIMEOUT_MS) {
+            cronTimers.set(
+                row.key,
+                setTimeout(() => {
+                    armCron(row);
+                }, MAX_TIMEOUT_MS),
+            );
 
-                    // `closed` checked alongside `isOpen()`: a tick that lands
-                    // during `dispose()` must not arm the next one, since that
-                    // timer would be minted after `cronTimers` was cleared.
-                    if (!closed && isOpen()) {
-                        armCron(row);
-                    }
-                })().catch(() => {
-                    // Unreachable — the body catches its own dispatch failure —
-                    // but an unhandled rejection here would take the process down.
-                });
-            },
-            Math.max(0, nextAt - Date.now()),
-        );
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            cronTimers.delete(row.key);
+
+            (async (): Promise<void> => {
+                try {
+                    await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts: 0, id: row.key });
+                } catch {
+                    // See the docstring: a dropped tick must not stop the schedule.
+                }
+
+                // `closed` checked alongside `isOpen()`: a tick that lands
+                // during `dispose()` must not arm the next one, since that
+                // timer would be minted after `cronTimers` was cleared.
+                if (!closed && isOpen()) {
+                    armCron(row);
+                }
+            })().catch(() => {
+                // Unreachable — the body catches its own dispatch failure —
+                // but an unhandled rejection here would take the process down.
+            });
+        }, delay);
 
         cronTimers.set(row.key, timer);
     };

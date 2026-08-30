@@ -6,14 +6,23 @@
  * # Why this module exists
  *
  * The adapters live in `./cloudflare-host`, because that is where the Durable
- * Object code they wrap lives. But wiring them up was the caller's job,
- * and that job had sharp edges: five separate factories, two different argument
+ * Object code they wrap lives. But wiring them up is the caller's job,
+ * and that job has sharp edges: five separate factories, two different argument
  * shapes (`state` for some, `state.storage` for others), no scheduler at all,
  * and no association between a host and the capability matrix that describes
- * it. Every consumer re-derived the same assembly.
+ * it. Every consumer re-derives the same assembly.
  *
- * This package is that assembly, done once. It presents **two** factories,
- * because a Worker has exactly two lifetimes worth distinguishing:
+ * These two roots are that assembly written down once. **They are not yet what
+ * the shipped Durable Objects call**: `ShardDO` still calls `createShardHost` /
+ * `createSocketHost` directly (`packages/do/src/shard-do.ts`), and `SessionDO`
+ * calls `createShardKvStore` directly (`packages/do/src/session-do.ts`), so
+ * outside this package's own tests the roots are used by new code and by
+ * anyone writing their own DO — not by `@lunora/do`. Moving those two onto
+ * these factories is a `@lunora/do` change, and until it lands the sentence
+ * above describes the intent rather than the call graph.
+ *
+ * There are **two** factories, because a Worker has exactly two lifetimes worth
+ * distinguishing:
  *
  * - {@link createShardPlatform} — everything scoped to one Durable Object
  * instance, built from its `DurableObjectState`.

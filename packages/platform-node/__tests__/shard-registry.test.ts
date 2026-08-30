@@ -117,6 +117,48 @@ describe("createNodeShardRegistry", () => {
         }
     });
 
+    it("keeps two shard keys that differ only in case on separate databases", () => {
+        expect.assertions(4);
+
+        // APFS and NTFS both default to case-INSENSITIVE, so an encoding that
+        // preserved case wrote `Tenant.sqlite3` and `tenant.sqlite3` into ONE
+        // file: two connections, two cached `NodeShard`s, one database, and each
+        // tenant silently reading and writing the other's rows.
+        const first = createNodeShardRegistry({ directory: workdir });
+
+        try {
+            const upper = first.shardFor("Tenant");
+            const lower = first.shardFor("tenant");
+
+            upper.shard.sql.exec("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)");
+            upper.shard.sql.exec("INSERT INTO t (id) VALUES (1)");
+
+            expect(() => lower.shard.sql.exec("SELECT id FROM t").toArray()).toThrow("no such table: t");
+
+            // Both halves matter, and the second is what makes this test mean
+            // anything on a case-SENSITIVE volume (Linux CI): two files must
+            // exist, AND their basenames must still differ once folded. The old
+            // encoding produced one file on APFS/NTFS and two fold-equal names
+            // everywhere else — this catches it on either.
+            const basenames = readdirSync(workdir).filter((entry) => entry.endsWith(".sqlite3"));
+
+            expect(basenames).toHaveLength(2);
+            expect(new Set(basenames.map((entry) => entry.toLowerCase())).size).toBe(2);
+        } finally {
+            first.close();
+        }
+
+        // And both survive the restart seed: `readdirSync` yielding one basename
+        // is how the other key dropped out of the fan-out set entirely.
+        const second = createNodeShardRegistry({ directory: workdir });
+
+        try {
+            expect([...second.listShardKeys()].toSorted((a, b) => (a < b ? -1 : Number(a > b)))).toStrictEqual(["Tenant", "tenant"]);
+        } finally {
+            second.close();
+        }
+    });
+
     it("round-trips a shard key that is not filesystem-safe", () => {
         expect.assertions(2);
 

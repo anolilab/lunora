@@ -48,6 +48,19 @@ interface ConformanceHost {
      * hosts that don't care.
      */
     createSocket?: () => unknown;
+
+    /**
+     * How many times this host has dispatched `functionPath` — the cron legs'
+     * only window into a schedule that has no job row to list.
+     *
+     * Optional, and only a host implementing {@link SchedulerHost.cron} needs
+     * it: without it the suite cannot tell a cron that ticked from one that was
+     * armed and never fired, which is the difference between a working schedule
+     * and a `setTimeout` that overflowed its 2^31-1 ms ceiling and fired
+     * immediately. Counting by function path rather than by id because a cron
+     * has no per-tick identity.
+     */
+    cronTicks?: (functionPath: string) => number;
     /** The shard directory under test. */
     directory: ShardDirectory;
 

@@ -400,6 +400,7 @@ interface R2BucketLike {
         startAfter?: string;
     }) => Promise<{
         cursor?: string;
+        delimitedPrefixes?: string[];
         objects: R2ObjectLike[];
         truncated?: boolean;
     }>;
@@ -784,6 +785,7 @@ interface ConformanceHost {
     awaitJobDispatched?: (id: string) => Promise<boolean>;
     cleanup?: () => void;
     createSocket?: () => unknown;
+    cronTicks?: (functionPath: string) => number;
     directory: ShardDirectory;
     disposeTerminally?: () => void;
     kv?: ShardKvStore;

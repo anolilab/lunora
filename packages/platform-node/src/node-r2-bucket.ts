@@ -732,9 +732,32 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
 
             const all = await walkObjects(directory);
             const prefix = listOptions.prefix ?? "";
-            const filtered = all.filter(
-                (key) => key.startsWith(prefix) && (listOptions.delimiter === undefined || !key.slice(prefix.length).includes(listOptions.delimiter)),
-            );
+            const underPrefix = all.filter((key) => key.startsWith(prefix));
+            const { delimiter } = listOptions;
+            const filtered = delimiter === undefined ? underPrefix : underPrefix.filter((key) => !key.slice(prefix.length).includes(delimiter));
+
+            // Keys the delimiter rolled up. R2 does not drop them — it returns
+            // the common prefix (through the delimiter) in `delimitedPrefixes`,
+            // which is the entire point of asking for a delimiter. Filtering
+            // them out and returning nothing else made a delimited list report
+            // an empty, untruncated page over a full bucket.
+            const delimitedPrefixes =
+                delimiter === undefined
+                    ? undefined
+                    : [
+                          ...new Set(
+                              underPrefix
+                                  .map((key) => {
+                                      const rest = key.slice(prefix.length);
+                                      const at = rest.indexOf(delimiter);
+
+                                      return at === -1 ? undefined : key.slice(0, prefix.length + at + delimiter.length);
+                                  })
+                                  .filter((value): value is string => value !== undefined),
+                          ),
+                          // Codepoint order, the order R2 itself lists in.
+                          // `localeCompare` would interleave case differently.
+                      ].toSorted((a, b) => (a < b ? -1 : Number(a > b)));
 
             // `startAfter` and `cursor` are the same operation on a sorted key
             // list — resume strictly after a key — and R2 honours both when both
@@ -774,7 +797,7 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             // taking it from `objects` then rewinds the next page over keys
             // already served — or, if the whole page dropped out, hands back
             // `undefined` while claiming `truncated`, which strands the caller.
-            return { cursor: truncated ? page.at(-1) : undefined, objects, truncated };
+            return { cursor: truncated ? page.at(-1) : undefined, delimitedPrefixes, objects, truncated };
         },
 
         put: async (

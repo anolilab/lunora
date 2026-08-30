@@ -8,16 +8,21 @@ description: The Cloudflare implementation of the @lunora/platform host contract
 `blockConcurrencyWhile`, the WebSocket hibernation API, alarms, and
 `DurableObjectNamespace`.
 
-You rarely import it directly. `@lunora/do`'s `ShardDO` wires it up, so an app
-gets the Cloudflare host by running on Cloudflare. Reach for it when you are
-writing your own Durable Object against the engine, or reading it as the
-reference for a second host.
+You rarely import it directly. `@lunora/do`'s `ShardDO` and `SessionDO` build on
+these adapters, so an app gets the Cloudflare host by running on Cloudflare.
+Reach for it when you are writing your own Durable Object against the engine, or
+reading it as the reference for a second host.
+
+The two composition roots below (`createShardPlatform` / `createWorkerPlatform`)
+are the one-call form. `ShardDO` and `SessionDO` do not use them yet — they call
+`createShardHost` / `createSocketHost` / `createShardKvStore` themselves — so
+today the roots serve new Durable Objects and this package's tests.
 
 ```ts
 import { createShardPlatform } from "@lunora/platform-cloudflare";
 
 // Inside a Durable Object constructor:
-const platform = createShardPlatform(state, env);
+const platform = createShardPlatform(state);
 ```
 
 ## What it provides

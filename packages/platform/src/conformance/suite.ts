@@ -19,7 +19,8 @@ type VitestApi = {
  * The suite asserts the provider-neutral behaviors that every Lunora host must
  * provide: single-writer serialization, durable transactions, local SQL,
  * durable alarms, socket accept/send/close, attachment round-trip across
- * recycle, deterministic shard placement, and durable scheduling.
+ * recycle, deterministic shard placement, and durable scheduling — including
+ * runtime cron registration on the hosts that offer it.
  *
  * Usage:
  *
@@ -725,6 +726,45 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                     // resurrect, and a host answering `true` tells an operator it
                     // recovered a job it did not.
                     expect(await host.scheduler.deadLetter.requeue("job-does-not-exist")).toBe(false);
+                });
+            });
+
+            // `SchedulerHost.cron` had an implementation and no leg here, which
+            // is how a `setTimeout` overflow lived in it: `setTimeout` clamps
+            // any delay above 2^31-1 ms (~24.8 days) to 1 ms, so a monthly cron
+            // fired at once, dispatched, recomputed the same far-future target
+            // and fired again — an unbounded dispatch loop for a schedule that
+            // should tick once a month. Both halves are asserted in one leg so
+            // the negative one cannot pass vacuously on a host whose cron never
+            // ticks at all.
+            it("ticks a cron on schedule, and not before its next occurrence", async (context) => {
+                await withHost(async (host) => {
+                    if (host.scheduler?.cron === undefined || host.cronTicks === undefined) {
+                        context.skip(`${name} does not implement SchedulerHost.cron, or cannot observe its ticks`);
+
+                        return;
+                    }
+
+                    expect.assertions(2);
+
+                    // Seconds granularity (the optional sixth field) keeps the
+                    // positive half under two seconds. A host whose cron grammar
+                    // is five fields throws here rather than mis-scheduling.
+                    await host.scheduler.cron("* * * * * *", "tasks/tick");
+
+                    // The 1st of the month five to six months out: beyond the
+                    // timer ceiling from every date, unlike a fixed expression
+                    // (`0 0 29 2 *`), whose distance depends on today's calendar.
+                    const farMonth = ((new Date().getMonth() + 6) % 12) + 1;
+
+                    await host.scheduler.cron(`0 0 1 ${String(farMonth)} *`, "tasks/far");
+
+                    await new Promise((resolve) => {
+                        setTimeout(resolve, 1200);
+                    });
+
+                    expect(host.cronTicks("tasks/tick")).toBeGreaterThanOrEqual(1);
+                    expect(host.cronTicks("tasks/far")).toBe(0);
                 });
             });
         });

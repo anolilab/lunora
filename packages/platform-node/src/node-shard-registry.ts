@@ -61,10 +61,29 @@ const SHARD_FILE_SUFFIX = ".sqlite3";
 /**
  * Encode a shard key into a filesystem-safe basename.
  *
- * Percent-encoding everything outside `[A-Za-z0-9._-]` keeps simple keys
- * readable in a directory listing (`tenant-42.sqlite3`) while staying
- * reversible and safe for keys carrying `/`, `:` or spaces — all legal in a
- * shard key, none safe in a path segment.
+ * Percent-encoding everything outside `[a-z0-9._-]` keeps simple keys readable
+ * in a directory listing (`tenant-42.sqlite3`) while staying reversible and
+ * safe for keys carrying `/`, `:` or spaces — all legal in a shard key, none
+ * safe in a path segment.
+ *
+ * **Uppercase is escaped too**, which is the whole reason the class is not
+ * `[^\w.-]`: APFS and NTFS both default to case-INSENSITIVE, so a
+ * case-preserving encoding maps `Tenant` and `tenant` onto one file. Two
+ * tenants would then get two `NodeShard` objects over two connections to the
+ * same database and read each other's rows, with nothing throwing anywhere —
+ * and `readdirSync` would yield one basename, so the fan-out key set would
+ * silently hold one of the two keys. `node-r2-bucket`'s `ESCAPED_IN_SEGMENT`
+ * escapes `A-Z` for exactly this reason.
+ *
+ * The escaped form cannot re-introduce the collision: hex digits are always
+ * emitted uppercase and `%` is itself escaped, so every `%` in the output opens
+ * an escape and two outputs that fold to the same string are identical.
+ *
+ * A database file written by an earlier build under the case-preserving
+ * encoding keeps its old basename and is no longer resolved for its key. That
+ * is a rename away for anyone carrying a dev database across the change; there
+ * is no compatibility path here, because reading the old name back is exactly
+ * the collision this encoding exists to prevent.
  *
  * Each disallowed code point is escaped as its **UTF-8 byte sequence** — one
  * `%XX` per byte, uppercase — because `decodeURIComponent` (which
@@ -74,7 +93,7 @@ const SHARD_FILE_SUFFIX = ".sqlite3";
  * restart.
  */
 const encodeShardKey = (key: string): string =>
-    key.replaceAll(/[^\w.-]/gu, (character) =>
+    key.replaceAll(/[^\da-z._-]/gu, (character) =>
         [...Buffer.from(character, "utf8")].map((byte) => `%${byte.toString(16).padStart(2, "0").toUpperCase()}`).join(""),
     );
 
