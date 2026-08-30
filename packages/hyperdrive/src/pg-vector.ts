@@ -52,6 +52,27 @@ import type { SqlClient } from "./types";
 /** Bare SQL identifier: the only shape allowed for a caller-supplied table name. */
 const BARE_IDENTIFIER = /^[A-Z_]\w*$/i;
 
+/** Leaves room under Postgres' 63-byte identifier cap for the `__vec_` prefix and the longest derived suffix. */
+const MAX_NAME_LENGTH = 40;
+
+/** pgvector's HNSW index tops out here; the `vector` type itself allows far more. */
+const MAX_HNSW_DIMENSIONS = 2000;
+
+/** pgvector's own default `hnsw.ef_search`; the floor we widen from, never below. */
+const DEFAULT_EF_SEARCH = 40;
+
+/**
+ * Postgres SQLSTATEs for "the object already exists": duplicate_object,
+ * duplicate_table, duplicate_schema-ish, unique_violation on a system catalog.
+ * All four are how a lost `CREATE … IF NOT EXISTS` race reports itself, and all
+ * four mean the object is there — which is what the caller wanted.
+ */
+const DUPLICATE_OBJECT_CODES = new Set(["42P06", "42P07", "23505", "42710"]);
+
+/** True when `error` is Postgres reporting that a concurrent session already created the object. */
+const isDuplicateObjectError = (error: unknown): boolean =>
+    typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" && DUPLICATE_OBJECT_CODES.has(error.code);
+
 /** Default page size for `query` when the caller names no `topK`, matching Vectorize's own default. */
 const DEFAULT_TOP_K = 5;
 
@@ -64,8 +85,12 @@ const DEFAULT_TOP_K = 5;
  * one query shape serve every metric.
  *
  * `score` converts that distance back into the number Vectorize reports:
- * cosine similarity (1 = identical), raw L2 distance (0 = identical), and the
- * plain inner product.
+ * cosine similarity (1 = identical), raw L2 distance (0 = identical), and — for
+ * dot-product — the NEGATIVE inner product, passed straight through. Cloudflare
+ * documents that last one as "larger negative values or smaller positive values
+ * denote more similar vectors", which is exactly what `<#>` already returns, so
+ * negating it here would inverted every score against a real binding while
+ * leaving the ordering identical: silent, and invisible to an ordering test.
  */
 interface MetricWiring {
     /** Distance operator used for both ORDER BY and the score projection. */
@@ -79,7 +104,7 @@ interface MetricWiring {
 const METRICS = new Map<VectorMetric, MetricWiring>(
     Object.entries({
         cosine: { operator: "<=>", operatorClass: "vector_cosine_ops", score: (distance) => 1 - distance },
-        "dot-product": { operator: "<#>", operatorClass: "vector_ip_ops", score: (distance) => -distance },
+        "dot-product": { operator: "<#>", operatorClass: "vector_ip_ops", score: (distance) => distance },
         euclidean: { operator: "<->", operatorClass: "vector_l2_ops", score: (distance) => distance },
     }) as [VectorMetric, MetricWiring][],
 );
@@ -99,11 +124,12 @@ interface PgVectorIndexOptions {
     /** Distance metric. Defaults to `"cosine"`, matching the common embedding case. */
     metric?: VectorMetric;
 
-    /** Logical index name — the same key used in the shard's `vectors` map. */
+    /**
+     * Logical index name — the same key used in the shard's `vectors` map. The
+     * backing table name is derived from it rather than configurable, because a
+     * second name for one index is a way to lose data, not a feature.
+     */
     name: string;
-
-    /** Table override. Defaults to `__vec_<name>`; must be a bare SQL identifier. */
-    table?: string;
 }
 
 /** Render a vector as the `[1,2,3]` text literal pgvector parses on the `::vector` cast. */
@@ -112,27 +138,83 @@ const vectorLiteral = (values: ReadonlyArray<number>): string => `[${values.join
 /**
  * Reject a metadata filter this store cannot honour.
  *
- * Vectorize accepts comparison operators (`{ views: { $gt: 10 } }`); JSONB
- * containment expresses equality only. Dropping the rest would return neighbours
- * that look plausible and ignore the constraint the caller asked for, so an
- * unsupported filter is an error with the offending key named.
+ * Vectorize accepts comparison operators (`{ views: { $gt: 10 } }`) and
+ * dot-addressed nested keys (`{ "author.role": "admin" }`). JSONB containment
+ * expresses neither: `@>` would look for a literal key spelled `$gt` or
+ * `author.role`, match nothing, and hand back an empty page that reads exactly
+ * like "no similar vectors". A filter this store cannot honour is therefore an
+ * ERROR, never a silent drop — that asymmetry is the whole point of the guard.
+ *
+ * The walk is recursive and descends into arrays because both are reachable:
+ * `{ author: { profile: { $gt: 3 } } }` hides the operator one level down, and
+ * `{ tags: [{ $in: [...] }] }` hides it inside an array.
  */
-const assertEqualityFilter = (filter: Record<string, unknown>, name: string): void => {
-    for (const [key, value] of Object.entries(filter)) {
-        if (typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).some((operator) => operator.startsWith("$"))) {
-            throw new TypeError(
-                `@lunora/hyperdrive: pgvector index "${name}" supports equality metadata filters only, but "${key}" uses a comparison operator. ` +
-                    `Pre-compute the comparison into an equality-shaped metadata field, or keep this index on Vectorize.`,
-            );
+const assertContainmentFilter = (filter: Record<string, unknown>, name: string): void => {
+    const reject = (reason: string, key: string): never => {
+        throw new TypeError(
+            `@lunora/hyperdrive: pgvector index "${name}" supports equality metadata filters only, but "${key}" ${reason}. ` +
+                `Pre-compute it into an equality-shaped metadata field, or keep this index on Vectorize.`,
+        );
+    };
+
+    const walk = (value: unknown, path: string): void => {
+        if (Array.isArray(value)) {
+            for (const entry of value) {
+                walk(entry, path);
+            }
+
+            return;
         }
+
+        if (typeof value !== "object" || value === null) {
+            return;
+        }
+
+        for (const [key, nested] of Object.entries(value)) {
+            if (key.startsWith("$")) {
+                reject("uses a comparison operator", path);
+            }
+
+            walk(nested, path);
+        }
+    };
+
+    for (const [key, value] of Object.entries(filter)) {
+        if (key.includes(".")) {
+            reject("uses Vectorize's dot-addressed nested syntax, which JSONB containment cannot express", key);
+        }
+
+        // `JSON.stringify` would drop an undefined value, turning the filter into
+        // `{}` — which matches every row that HAS metadata and silently excludes
+        // the rows that do not. Neither is what the caller asked for.
+        if (value === undefined) {
+            reject("is undefined", key);
+        }
+
+        walk(value, key);
     }
 };
 
-/** Validate a caller-supplied identifier; table names cannot be parameterised, so this is the allowlist. */
-const safeIdentifier = (value: string, label: string): string => {
+/**
+ * Validate a caller-supplied identifier. Table names cannot be parameterised, so
+ * this allowlist is the only thing standing between `name` and raw DDL.
+ *
+ * The length cap is not cosmetic: Postgres truncates identifiers at 63 bytes, and
+ * this module derives `<table>__ann_<opclass>` and `<table>__ns` from the same
+ * root. Past the cap those suffixes truncate away, two different indexes collapse
+ * onto one name, and `CREATE INDEX IF NOT EXISTS` silently no-ops the second.
+ */
+const safeIdentifier = (value: string): string => {
     if (!BARE_IDENTIFIER.test(value)) {
         throw new TypeError(
-            `@lunora/hyperdrive: ${label} must be a bare SQL identifier (letters, digits, underscore; not starting with a digit) — got "${value}"`,
+            `@lunora/hyperdrive: pgvector \`name\` must be a bare SQL identifier (letters, digits, underscore; not starting with a digit) — got "${value}"`,
+        );
+    }
+
+    if (value.length > MAX_NAME_LENGTH) {
+        throw new TypeError(
+            `@lunora/hyperdrive: pgvector \`name\` must be at most ${String(MAX_NAME_LENGTH)} characters — got "${value}" (${String(value.length)}). ` +
+                `Postgres truncates identifiers at 63 bytes and this index derives longer names from it.`,
         );
     }
 
@@ -151,9 +233,9 @@ const safeIdentifier = (value: string, label: string): string => {
  */
 const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike => {
     const { client, dimensions, metric = "cosine", name } = options;
-    const table = safeIdentifier(options.table ?? `__vec_${name}`, "pgvector `table`");
-    // Annotated rather than inferred: `metric` is a closed union at the type
-    // level, so this guard exists for a JS caller passing a bad string.
+    const table = `__vec_${safeIdentifier(name)}`;
+    // `metric` is a closed union at the type level, so this guard is for a JS
+    // caller (or a widened config) passing a string the map has no wiring for.
     const wiring = METRICS.get(metric);
 
     if (wiring === undefined) {
@@ -166,6 +248,16 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
         throw new TypeError(`@lunora/hyperdrive: pgvector index "${name}" needs a positive integer \`dimensions\` — got ${String(dimensions)}`);
     }
 
+    // Caught here rather than at `CREATE INDEX`: past this width pgvector fails
+    // the ANN index with an opaque error AFTER the table exists, which reads as a
+    // provisioning bug rather than a config one.
+    if (dimensions > MAX_HNSW_DIMENSIONS) {
+        throw new TypeError(
+            `@lunora/hyperdrive: pgvector index "${name}" declares ${String(dimensions)} dimensions, over the HNSW limit of ${String(MAX_HNSW_DIMENSIONS)}. ` +
+                `Reduce the embedding width (Vectorize itself tops out at 1536), or keep this index on Vectorize.`,
+        );
+    }
+
     let mutations = 0;
     const nextMutationId = (): string => {
         mutations += 1;
@@ -173,26 +265,97 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
         return `${table}:${String(mutations)}`;
     };
 
-    // Cache the resolving promise, not a boolean: concurrent first callers then
-    // share one provisioning round trip instead of racing duplicate DDL.
+    /**
+     * Provision once per instance, lazily.
+     *
+     * The cache holds the resolving promise so concurrent first callers in THIS
+     * isolate share one round trip — but a rejection must not stick. A Durable
+     * Object is long-lived and the write-through vector sync runs inline inside
+     * the mutation, so caching one transient DDL failure would fail every
+     * mutation on a vectorized table until the isolate is evicted. This mirrors
+     * the global-table migration memo in `@lunora/sql-store`, whose `.catch`
+     * clearing the slot is the load-bearing half of that pattern.
+     *
+     * `IF NOT EXISTS` dedupes within a session but is NOT atomic across them:
+     * several isolates hitting a cold database race on the system catalogs and
+     * one loses with a duplicate-object error. That is a success for our purpose
+     * — the object exists — so those codes are swallowed rather than cached as a
+     * failure. PGlite is a single session and can never reproduce it.
+     */
     let provisioned: Promise<void> | undefined;
     const ensure = async (): Promise<void> => {
         provisioned ??= (async (): Promise<void> => {
-            await client.query("CREATE EXTENSION IF NOT EXISTS vector");
-            await client.query(
+            for (const statement of [
+                "CREATE EXTENSION IF NOT EXISTS vector",
                 `CREATE TABLE IF NOT EXISTS "${table}" (id text PRIMARY KEY, namespace text, embedding vector(${String(dimensions)}) NOT NULL, metadata jsonb)`,
-            );
-            // The ANN index is metric-specific: an index built for one operator
-            // class cannot answer a query ordered by another operator, so the
-            // scan would silently fall back to sequential.
-            await client.query(`CREATE INDEX IF NOT EXISTS "${table}__ann" ON "${table}" USING hnsw (embedding ${operatorClass})`);
-            await client.query(`CREATE INDEX IF NOT EXISTS "${table}__ns" ON "${table}" (namespace)`);
-        })();
+                // The operator class is part of the NAME, not just the body: an
+                // index built for one metric cannot answer another metric's
+                // operator, so a bare `__ann` would let `IF NOT EXISTS` no-op
+                // against a stale index and quietly demote every query to a
+                // sequential scan — the exact failure this index prevents.
+                `CREATE INDEX IF NOT EXISTS "${table}__ann_${operatorClass}" ON "${table}" USING hnsw (embedding ${operatorClass})`,
+                `CREATE INDEX IF NOT EXISTS "${table}__ns" ON "${table}" (namespace)`,
+            ]) {
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- DDL is ordered: the table must exist before its indexes.
+                    await client.query(statement);
+                } catch (error: unknown) {
+                    if (!isDuplicateObjectError(error)) {
+                        throw error;
+                    }
+                }
+            }
+        })().catch((error: unknown) => {
+            provisioned = undefined;
+
+            throw error;
+        });
 
         return provisioned;
     };
 
-    /** Shared INSERT body for `upsert` (overwrite) and `insert` (skip existing). */
+    /**
+     * Widen the ANN search before a filtered query.
+     *
+     * pgvector applies `WHERE` AFTER scanning the HNSW index, so a selective
+     * filter starves the result set: at the default `ef_search` of 40, a
+     * namespace matching 0.5% of rows yields well under one match and the caller
+     * gets an empty page with no error. Every `.shardBy()` table hits this —
+     * `ctx.vectors` requires a namespace there.
+     *
+     * `iterative_scan` (pgvector 0.8+) is the real fix: it keeps scanning until
+     * enough rows survive the filter. `ef_search` is raised alongside it so an
+     * unfiltered `topK` above 40 is not truncated either. Both are best-effort —
+     * an older pgvector rejects the GUC, and exact search without the index is
+     * still correct, only slower.
+     */
+    const widenSearch = async (topK: number, filtered: boolean): Promise<void> => {
+        const efSearch = String(Math.max(DEFAULT_EF_SEARCH, topK * 2));
+
+        try {
+            await client.query("SELECT set_config('hnsw.iterative_scan', $1, false), set_config('hnsw.ef_search', $2, false)", [
+                filtered ? "relaxed_order" : "off",
+                efSearch,
+            ]);
+        } catch {
+            try {
+                await client.query("SELECT set_config('hnsw.ef_search', $1, false)", [efSearch]);
+            } catch {
+                // Pre-0.8 pgvector, or a role that cannot set GUCs. Recall may be
+                // lower than Vectorize's on a filtered query; correctness of the
+                // rows returned is unaffected.
+            }
+        }
+    };
+
+    /**
+     * Shared INSERT body for `upsert` (overwrite) and `insert` (skip existing).
+     *
+     * Postgres caps a statement at 65535 bind parameters; at four per row this
+     * tops out near 16k vectors. `createVectors` admits at most 1000 per call, so
+     * the ceiling is unreachable through `ctx.vectors` — it matters only to a
+     * caller holding this object directly.
+     */
     const write = async (vectors: ReadonlyArray<VectorizeVector>, onConflict: string): Promise<VectorizeUpsertMutation> => {
         if (vectors.length === 0) {
             return { mutationId: nextMutationId() };
@@ -201,19 +364,16 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
         await ensure();
 
         const parameters: unknown[] = [];
-        const rows = vectors.map((vector) => {
-            parameters.push(
-                vector.id,
-                // eslint-disable-next-line unicorn/no-null -- a SQL bind parameter needs a real NULL; `undefined` is sent as a missing bind
-                vector.namespace ?? null,
-                vectorLiteral(vector.values),
+        // See `query` — `push` returns the 1-based bind index, so placeholder and
+        // value cannot drift, and a new column is one edit rather than three.
+        const bind = (value: unknown): string => `$${String(parameters.push(value))}`;
+        const rows = vectors.map(
+            (vector) =>
+                // eslint-disable-next-line unicorn/no-null -- a SQL bind needs a real NULL; `undefined` is sent as a missing bind
+                `(${bind(vector.id)}, ${bind(vector.namespace ?? null)}, ${bind(vectorLiteral(vector.values))}::vector, ` +
                 // eslint-disable-next-line unicorn/no-null -- same: absent metadata must bind SQL NULL
-                vector.metadata === undefined ? null : JSON.stringify(vector.metadata),
-            );
-            const base = parameters.length - 4;
-
-            return `($${String(base + 1)}, $${String(base + 2)}, $${String(base + 3)}::vector, $${String(base + 4)}::jsonb)`;
-        });
+                `${bind(vector.metadata === undefined ? null : JSON.stringify(vector.metadata))}::jsonb)`,
+        );
 
         await client.query(`INSERT INTO "${table}" (id, namespace, embedding, metadata) VALUES ${rows.join(", ")} ${onConflict}`, parameters);
 
@@ -274,26 +434,35 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
             await ensure();
 
             const topK = queryOptions?.topK ?? DEFAULT_TOP_K;
+
+            if (!Number.isInteger(topK) || topK <= 0) {
+                throw new TypeError(`@lunora/hyperdrive: pgvector index "${name}" needs a positive integer \`topK\` — got ${String(topK)}`);
+            }
+
             const wantValues = queryOptions?.returnValues === true;
             const wantMetadata = (queryOptions?.returnMetadata ?? "none") !== "none";
 
-            const parameters: unknown[] = [vectorLiteral(vector)];
+            const parameters: unknown[] = [];
+            // `push` returns the new length, which IS the 1-based bind index — so
+            // the placeholder and its value can never drift apart, and adding a
+            // column stays a one-place edit.
+            const bind = (value: unknown): string => `$${String(parameters.push(value))}`;
+
+            const distance = `embedding ${operator} ${bind(vectorLiteral(vector))}::vector`;
             const where: string[] = [];
 
             if (queryOptions?.namespace !== undefined) {
-                parameters.push(queryOptions.namespace);
-                where.push(`namespace = $${String(parameters.length)}`);
+                where.push(`namespace = ${bind(queryOptions.namespace)}`);
             }
 
             if (queryOptions?.filter !== undefined && Object.keys(queryOptions.filter).length > 0) {
-                assertEqualityFilter(queryOptions.filter, name);
-                parameters.push(JSON.stringify(queryOptions.filter));
-                where.push(`metadata @> $${String(parameters.length)}::jsonb`);
+                assertContainmentFilter(queryOptions.filter, name);
+                where.push(`metadata @> ${bind(JSON.stringify(queryOptions.filter))}::jsonb`);
             }
 
-            parameters.push(topK);
+            await widenSearch(topK, where.length > 0);
 
-            const projection = ["id", "namespace", `embedding ${operator} $1::vector AS distance`];
+            const projection = ["id", "namespace", `${distance} AS distance`];
 
             if (wantMetadata) {
                 projection.push("metadata");
@@ -310,7 +479,7 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
                 metadata?: Record<string, unknown> | null;
                 namespace: null | string;
             }>(
-                `SELECT ${projection.join(", ")} FROM "${table}" ${where.length > 0 ? `WHERE ${where.join(" AND ")} ` : ""}ORDER BY embedding ${operator} $1::vector LIMIT $${String(parameters.length)}`,
+                `SELECT ${projection.join(", ")} FROM "${table}" ${where.length > 0 ? `WHERE ${where.join(" AND ")} ` : ""}ORDER BY ${distance} LIMIT ${bind(topK)}`,
                 parameters,
             );
 

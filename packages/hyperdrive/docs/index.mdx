@@ -399,12 +399,16 @@ interface rather than the provider, so a `pgvector` index drops in where the
 binding went:
 
 ```ts title="src/server/index.ts"
+import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import { createPgVectorIndex } from "@lunora/hyperdrive/global";
+import postgres from "postgres";
 
 createShardDO({
-    vectors: () => ({
-        posts_search: createPgVectorIndex({ client, dimensions: 768, name: "posts_search" }),
-    }),
+    vectors: (env) => {
+        const client = fromPostgresJs(postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString));
+
+        return { posts_search: createPgVectorIndex({ client, dimensions: 768, metric: "cosine", name: "posts_search" }) };
+    },
 });
 ```
 
@@ -425,8 +429,24 @@ a no-op.
     confidently wrong neighbours. **`returnMetadata: "indexed"` behaves as
     `"all"`**, since Postgres indexes the whole JSONB document. And **`mutationId`
     is a local counter**: Vectorize's is a handle for an async mutation queue,
-    while a Postgres write is already durable when its promise resolves.
+    while a Postgres write is already durable when its promise resolves. A filter
+    this store cannot express — a comparison operator, or Vectorize's dot-addressed
+    `"author.role"` syntax — throws rather than being dropped, because a silently
+    ignored filter returns confidently wrong neighbours.
+
 </Callout>
+
+<Callout type="info">
+    Two ceilings worth knowing. `dimensions` is capped at 2000, pgvector's HNSW limit — it is rejected at construction rather than failing opaquely at `CREATE
+    INDEX` (Vectorize itself tops out at 1536, so most ports are unaffected). And because pgvector applies `WHERE` **after** scanning the ANN index, a filtered
+    query widens the search first (`hnsw.iterative_scan`, pgvector 0.8+); on an older server that GUC is refused and a heavily-filtered query may return fewer
+    matches than Vectorize would.
+</Callout>
+
+Pass the **same `metric` the schema's `.vectorize(...)` declares**. Nothing
+cross-checks the two: mismatch them and the index is built for one operator and
+queried with another, so the ordering is wrong for the declared metric and every
+score is on a different scale — with no error at any layer.
 
 `metric` picks the distance operator and the matching index operator class —
 `cosine` (default), `euclidean`, or `dot-product`. `score` is reported the way

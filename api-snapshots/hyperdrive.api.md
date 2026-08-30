@@ -170,7 +170,6 @@ interface PgVectorIndexOptions {
     dimensions: number;
     metric?: VectorMetric;
     name: string;
-    table?: string;
 }
 ```
 

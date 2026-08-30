@@ -220,10 +220,16 @@ so a Vectorize binding is one implementation, not the only one. An app already o
 and skip the binding entirely:
 
 ```ts
+import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import { createPgVectorIndex } from "@lunora/hyperdrive/global";
+import postgres from "postgres";
 
 export const ShardDO = createShardDO({
-    vectors: () => ({ "docs-body": createPgVectorIndex({ client, dimensions: 768, name: "docs_body" }) }),
+    vectors: (env) => {
+        const client = fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE).connectionString));
+
+        return { "docs-body": createPgVectorIndex({ client, dimensions: 768, metric: "cosine", name: "docs_body" }) };
+    },
 });
 ```
 
