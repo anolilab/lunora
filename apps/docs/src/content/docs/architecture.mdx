@@ -198,8 +198,11 @@ DO with its own SQLite, CPU budget, and hibernation timer.
 - **Account-unlimited**: millions of `ShardDO`s per account, zero admin.
 
 The ceiling is **10 GB SQLite and ~1 000 req/s per DO**. The runtime warns at
-1 GB (10% of the ceiling) so a `.shardBy()` migration has runway. See
-[Sharding](/docs/concepts/sharding) and [Limits](/docs/limits).
+1 GB (10% of the ceiling) so a `.shardBy()` migration has runway — on a
+populated table that migration is an
+[export/import round trip](/docs/concepts/sharding#migrating-a-populated-table),
+not a schema edit. See [Sharding](/docs/concepts/sharding) and
+[Limits](/docs/limits).
 
 ### Tier 2: Global (D1)
 
@@ -352,7 +355,9 @@ The theme is **fail closed and re-derive**, never silently diverge.
   leave storage half-written; the DO transaction is still the only writer.
 - **Hot shard (approaching the ceiling).** Not a crash but a capacity wall: the
   runtime warns at 1 GB / sustained >700 req/s well before the hard limit, so a
-  `.shardBy()` migration has runway. See [Limits](/docs/limits).
+  `.shardBy()` migration has runway. Moving the rows already in `__root__` needs
+  a [write window](/docs/concepts/sharding#migrating-a-populated-table), which is
+  the part to plan for. See [Limits](/docs/limits).
 
 ---
 

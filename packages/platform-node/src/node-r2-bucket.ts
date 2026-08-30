@@ -162,6 +162,17 @@ const decodeKey = (relativePath: string): string | undefined => {
     return segments.join("/");
 };
 
+/** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
+const R2_KEY_ENCODER = new TextEncoder();
+
+/**
+ * UTF-8 byte length of a key. R2's ceiling is documented in **bytes**, and this
+ * emulator states that it applies "the same ceiling and control-character rule
+ * `@lunora/storage` applies, so a key accepted on one target is accepted on the
+ * other" — which only holds if both measure the same way.
+ */
+const r2ByteLength = (value: string): number => R2_KEY_ENCODER.encode(value).length;
+
 /**
  * Reject keys that would leave the bucket directory or collide inside it. Every
  * segment must be a plain name: `a/./b` and `a//b` would otherwise resolve to
@@ -178,7 +189,7 @@ const validateKey = (key: string): void => {
     // key accepted on one target is accepted on the other. Divergent key grammar
     // per host is the thing the platform-parity convention exists to prevent —
     // and without the ceiling an over-long key surfaces as a raw `ENAMETOOLONG`.
-    if (key.length > MAX_KEY_LENGTH) {
+    if (r2ByteLength(key) > MAX_KEY_LENGTH) {
         throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 

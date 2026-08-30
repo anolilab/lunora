@@ -2,7 +2,6 @@ import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import { LunoraError, toErrorBody } from "@lunora/errors";
 import type {
     AppendRequestLogEntry,
-    AuthMetrics,
     ContextFetch,
     ContextLogLevel,
     ContextMetrics,
@@ -14,13 +13,11 @@ import type {
     FunctionMetricIndexHit,
     HostTracingLike,
     IndexHit,
-    IssuesResult,
     IssueState,
     IssueStatePatch,
     LogEventInput,
     MetricHistoryOptions,
     QueryStatEntry,
-    RequestLogResult,
     RequestLogWriteOptions,
     SpanCollection,
     SpanCollector,
@@ -37,9 +34,7 @@ import {
     dispatchRootSpan,
     emitLogEvent,
     emitRequestLogEvent,
-    ensureRequestLogTable,
     explainIssue,
-    findDanglingReferences,
     foldTraces,
     formatTally,
     instrumentDatabase,
@@ -48,7 +43,6 @@ import {
     mergeScanAttribution,
     MetricBuffer,
     parseLogArgs,
-    readAuthMetrics,
     readErrorIssues,
     readFunctionMetricBuckets,
     readFunctionMetricIndexHits,
@@ -56,7 +50,6 @@ import {
     readFunctionMetricsTotals,
     readMetricHistory,
     readQueryMetrics,
-    readRequestLog,
     recordAuthEvent,
     recordFunctionMetric,
     recordMetricHistory,
@@ -72,7 +65,6 @@ import { createShardHost, createSocketHost } from "@lunora/platform-cloudflare";
 import type {
     AdvisorProcedure,
     AdvisoryFinding,
-    AuditLogResult,
     CdcChange,
     CdcChangeKey,
     ColumnMeta,
@@ -167,10 +159,7 @@ import {
     deleteShapePokeCursorsForConnection,
     diffGlobalMembership,
     DurableStreamRunner,
-    ensureAuditTable,
     envOptionalPositiveInt,
-    facetColumn,
-    findStorageReferences,
     FLAGS_FUNCTION_PREFIX,
     gateReplicaDispatch,
     GlobalPollTick,
@@ -180,7 +169,6 @@ import {
     isLossyBody,
     listReactorStates,
     listTables,
-    MAIL_TABLE,
     MAX_PAGE_SIZE,
     mergeChangedKeys,
     migrateClientWatermark,
@@ -190,13 +178,10 @@ import {
     parseExportShardArgs,
     parseImportShardArgs,
     projectColumns,
-    QUEUE_TABLE,
     ReactiveCache,
     reactiveCacheKey,
     reactorNeedsRun,
-    readAuditLog,
     readBookmark,
-    readCapturedMail,
     readCdcChangeKeys,
     readCdcChanges,
     readCdcCursor,
@@ -207,7 +192,6 @@ import {
     readIdempotent,
     readMigrationStatus,
     readQueueMessageById,
-    readQueueMessages,
     readReactorState,
     readShapePokeCursor,
     readTablePage,
@@ -218,7 +202,6 @@ import {
     recordQueueMessages,
     recordShapeProbePass,
     RELATION_FUNCTION_PREFIX,
-    runReadonlySql,
     runSocketPool,
     SCAN_DEP,
     selectExpiredIds,
@@ -258,6 +241,17 @@ import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import {
+    batchedTableLookup,
+    readAdminAuditLog,
+    readAdminDurableSignal,
+    readAdminFacetColumn,
+    readAdminIssues,
+    readAdminRequestLog,
+    readAdminRunSql,
+    readAdminStorageOrphans,
+    readAdminStorageReferences,
+} from "./admin-readers";
 import type {
     QueueBindingHandle,
     RunShardApplyCdcArgs,
@@ -281,7 +275,6 @@ import {
     decodeIndexHitKey,
     dispatchSpanKey,
     extractBearerToken,
-    isIssueStatus,
     parseApplyCdcArgs,
     parseAssigneeArgument,
     parseBulkDeleteArgs,
@@ -7978,18 +7971,18 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getAuditLog) {
-            return this.readAdminAuditLog(sql, args);
+            return readAdminAuditLog(sql, args);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getRequestLog) {
-            return this.readAdminRequestLog(sql, args);
+            return readAdminRequestLog(sql, args);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getIssues) {
-            return this.readAdminIssues(sql, args);
+            return readAdminIssues(sql, args);
         }
 
-        const durable = this.readAdminDurableSignal(functionPath, sql, args);
+        const durable = readAdminDurableSignal(functionPath, sql, args);
 
         if (durable) {
             return durable;
@@ -8000,11 +7993,11 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.facetColumn) {
-            return this.readAdminFacetColumn(sql, args);
+            return readAdminFacetColumn(sql, args);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.runSql) {
-            return this.readAdminRunSql(sql, args);
+            return readAdminRunSql(sql, args);
         }
 
         // The SQL linter + schema-version ledger reads live in their own module
@@ -8033,22 +8026,6 @@ abstract class ShardDO {
     }
 
     /**
-     * Shared shape behind `describeTables` and `listTablesIndexes`: read the
-     * `tables` arg, run `lookup` (a cheap, synchronous, schema-sourced `this.*()`
-     * hook) over each, and report the requested set as the read's table
-     * dependency (or the {@link ADMIN_WILDCARD} sentinel when none were named).
-     * Factored out so `readAdminTableSignal` states each batched RPC as one line
-     * rather than duplicating the array-filter/fan-out shape per sibling.
-     */
-    // eslint-disable-next-line class-methods-use-this -- kept as an instance method alongside `readAdminTableSignal` (its only caller) even though `lookup` is injected rather than read off `this`; a bare module function would read as unrelated to the admin-signal resolvers it exists for
-    private batchedTableLookup<T>(args: Record<string, unknown>, lookup: (table: string) => T): { byTable: Record<string, T>; tables: Set<string> } {
-        const requested = Array.isArray(args["tables"]) ? args["tables"].filter((table): table is string => typeof table === "string") : [];
-        const byTable: Record<string, T> = Object.fromEntries(requested.map((table) => [table, lookup(table)]));
-
-        return { byTable, tables: new Set(requested.length === 0 ? [ADMIN_WILDCARD] : requested) };
-    }
-
-    /**
      * Resolve the table-scoped introspection reads whose payload is a single
      * `this.*()` lookup keyed by an optional `table` arg — `listTableIndexes`
      * (declared indexes), `describeTable` (declared columns) and `migrationStatus`
@@ -8070,7 +8047,7 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.describeTables) {
-            const { byTable: columnsByTable, tables } = this.batchedTableLookup(args, (table) => this.tableColumns(table));
+            const { byTable: columnsByTable, tables } = batchedTableLookup(args, (table) => this.tableColumns(table));
 
             return { result: { columnsByTable }, tables };
         }
@@ -8079,7 +8056,7 @@ abstract class ShardDO {
         // instead of N, following `describeTables`'s exact shape: the fan-out
         // this collapses used to cost a full admin RPC PER table.
         if (functionPath === ADMIN_FUNCTIONS.listTablesIndexes) {
-            const { byTable: indexesByTable, tables } = this.batchedTableLookup(args, (table) => this.tableIndexes(table));
+            const { byTable: indexesByTable, tables } = batchedTableLookup(args, (table) => this.tableIndexes(table));
 
             return { result: { indexesByTable }, tables };
         }
@@ -8105,53 +8082,14 @@ abstract class ShardDO {
      */
     private readAdminStorageSignal(functionPath: string, sql: SqlExec, args: Record<string, unknown>): undefined | { result: unknown; tables: Set<string> } {
         if (functionPath === ADMIN_FUNCTIONS.storageReferences) {
-            return this.readAdminStorageReferences(sql, args);
+            return readAdminStorageReferences(sql, args, this.storageColumns());
         }
 
         if (functionPath === ADMIN_FUNCTIONS.storageOrphans) {
-            return this.readAdminStorageOrphans(sql, args);
+            return readAdminStorageOrphans(sql, args, this.storageColumns());
         }
 
         return undefined;
-    }
-
-    /**
-     * Resolve a `storageReferences` admin read — the file browser's records↔files
-     * join: given the object keys on the page, return the rows that reference each
-     * (via a `v.storage()` column) plus the schema's declared storage columns.
-     * Scans only those columns through {@link findStorageReferences}. Carries the
-     * {@link ADMIN_WILDCARD} (it spans every storage table) so a live subscription
-     * re-runs on any write.
-     */
-    private readAdminStorageReferences(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const keys = Array.isArray(args["keys"]) ? args["keys"].filter((key): key is string => typeof key === "string") : [];
-
-        return { result: findStorageReferences(sql, this.storageColumns(), keys), tables: new Set([ADMIN_WILDCARD]) };
-    }
-
-    /**
-     * Resolve a `storageOrphans` admin read — the inverse of the records↔files
-     * join: given the set of object keys that actually exist in the bucket
-     * (`liveKeys`, the studio's enumerated listing), return every record
-     * `v.storage()` field whose value points at a key the bucket DOES NOT have — a
-     * **dangling reference**. CF's R2 browser can never make this join. Scans only
-     * the schema's declared storage columns through {@link findDanglingReferences},
-     * bounded with a `truncated` flag (logged once when set). Carries the
-     * {@link ADMIN_WILDCARD} (it spans every storage table) so a live subscription
-     * re-runs on any write.
-     */
-    private readAdminStorageOrphans(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const liveKeys = Array.isArray(args["liveKeys"]) ? args["liveKeys"].filter((key): key is string => typeof key === "string") : [];
-        const result = findDanglingReferences(sql, this.storageColumns(), liveKeys);
-
-        if (result.truncated) {
-            // eslint-disable-next-line no-console -- intentional operational notice: the dangling-reference scan was clipped by its bound, so the studio's view is partial
-            console.warn(
-                `[@lunora/do] storageOrphans scan truncated after checking ${String(result.scanned)} storage references; reporting the first ${String(result.references.length)} dangling reference(s).`,
-            );
-        }
-
-        return { result, tables: new Set([ADMIN_WILDCARD]) };
     }
 
     /**
@@ -8334,178 +8272,6 @@ abstract class ShardDO {
         };
     }
 
-    /** Resolve a `getAuditLog` admin read, parsing the optional `limit`/`sinceSeq` cursor args and ensuring the reserved table first. */
-    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers and future per-instance state
-    private readAdminAuditLog(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        // Defensive: the table may not exist yet on a shard that has never
-        // recorded an admin op, so ensure it before the read.
-        ensureAuditTable(sql);
-
-        const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
-        const sinceSeq = typeof args["sinceSeq"] === "number" ? args["sinceSeq"] : undefined;
-        const result: AuditLogResult = { entries: readAuditLog(sql, { limit, sinceSeq }) };
-
-        return { result, tables: new Set([ADMIN_WILDCARD]) };
-    }
-
-    /**
-     * Resolve a `getRequestLog` admin read, parsing the optional correlation
-     * filters (function-path prefix, exact userId/shardKey/outcome, table-touched)
-     * plus the `limit`/`sinceSeq` cursor, and ensuring the reserved table first.
-     * Carries the {@link ADMIN_WILDCARD} like the other log reads so a live Logs
-     * subscription re-runs on every write-flush (the per-socket JSON memo still
-     * suppresses byte-identical pushes).
-     */
-    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers and future per-instance state
-    private readAdminRequestLog(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        // Defensive: the table may not exist yet on a shard that has never
-        // served a logged dispatch, so ensure it before the read.
-        ensureRequestLogTable(sql);
-
-        const outcome = args["outcome"] === "ok" || args["outcome"] === "error" ? args["outcome"] : undefined;
-        const result: RequestLogResult = {
-            entries: readRequestLog(sql, {
-                functionPathPrefix: typeof args["functionPathPrefix"] === "string" ? args["functionPathPrefix"] : undefined,
-                limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
-                outcome,
-                shardKey: typeof args["shardKey"] === "string" ? args["shardKey"] : undefined,
-                sinceSeq: typeof args["sinceSeq"] === "number" ? args["sinceSeq"] : undefined,
-                tableTouched: typeof args["tableTouched"] === "string" ? args["tableTouched"] : undefined,
-                userId: typeof args["userId"] === "string" ? args["userId"] : undefined,
-            }),
-        };
-
-        return { result, tables: new Set([ADMIN_WILDCARD]) };
-    }
-
-    /**
-     * Resolve a `getIssues` admin read: fold the recent `error`-outcome
-     * request-log rows into grouped {@link readErrorIssues Issues} by fingerprint,
-     * accepting the same optional correlation filters as `getRequestLog`
-     * (function-path prefix, exact shardKey/userId) plus a `limit` on rows
-     * scanned. This is a read over the bounded reqlog readout — no new store —
-     * so a self-hosted worker gets grouped error triage for free. Carries the
-     * {@link ADMIN_WILDCARD} like the other log reads so a live Issues
-     * subscription re-runs on every write-flush (the per-socket JSON memo still
-     * suppresses byte-identical pushes).
-     */
-    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminIssues(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        // Defensive: the reqlog table may not exist yet on a shard that has never
-        // served a logged dispatch, so ensure it before the read.
-        ensureRequestLogTable(sql);
-
-        const result: IssuesResult = {
-            issues: readErrorIssues(sql, {
-                functionPathPrefix: typeof args["functionPathPrefix"] === "string" ? args["functionPathPrefix"] : undefined,
-                limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
-                shardKey: typeof args["shardKey"] === "string" ? args["shardKey"] : undefined,
-                status: isIssueStatus(args["status"]) ? args["status"] : undefined,
-                userId: typeof args["userId"] === "string" ? args["userId"] : undefined,
-            }),
-        };
-
-        return { result, tables: new Set([ADMIN_WILDCARD]) };
-    }
-
-    /**
-     * Resolve a `getAuthMetrics` admin read: the durable app-level auth
-     * attempt/failure counters + minute-bucketed history the studio SLO panel
-     * charts (PLAN3 §2.3). Auth runs as a top-level `/api/auth/*` worker route,
-     * NOT through lunora functions, so the worker records each attempt against
-     * the root shard via `recordAuthEvent` and this read surfaces the rollup.
-     *
-     * Best-effort: a SQL failure (e.g. a test double without a real `sql`
-     * handle) returns an empty all-zero {@link AuthMetrics} rather than throwing,
-     * so the SLO signal is simply absent instead of breaking the studio.
-     * Carries the {@link ADMIN_WILDCARD} like the other counter reads so a live
-     * subscription re-runs on every write-flush (the per-socket JSON memo still
-     * suppresses byte-identical pushes).
-     */
-
-    /**
-     * Resolve the durable app-signal reads that aren't bound to a user table —
-     * the auth-metrics rollup and the dev mail-catcher inbox. Returns the read's
-     * `{ result, tables }`, or `undefined` for any path it doesn't own (so
-     * `readAdminOp` falls through). Keeps `readAdminOp` under its complexity
-     * budget by holding these two in one branch.
-     * @returns the read result and its table-dependency set, or `undefined` when the path is not owned by this resolver
-     */
-    private readAdminDurableSignal(functionPath: string, sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } | undefined {
-        if (functionPath === ADMIN_FUNCTIONS.getAuthMetrics) {
-            return this.readAdminAuthMetrics(sql);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.getCapturedMail) {
-            return this.readAdminCapturedMail(sql, args);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.getQueueMessages) {
-            return this.readAdminQueueMessages(sql, args);
-        }
-
-        return undefined;
-    }
-
-    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminAuthMetrics(sql: SqlExec): { result: unknown; tables: Set<string> } {
-        let result: AuthMetrics;
-
-        try {
-            result = readAuthMetrics(sql);
-        } catch {
-            result = { attempts: 0, failureRate: 0, failures: 0, history: [], sinceMs: 0 };
-        }
-
-        return { result, tables: new Set([ADMIN_WILDCARD]) };
-    }
-
-    /**
-     * Resolve a `getCapturedMail` admin read — the dev mail catcher's inbox
-     * (`mail-catcher.ts`), newest-first. Best-effort: a SQL failure returns an
-     * empty inbox rather than throwing. Bound to the {@link MAIL_TABLE} so a live
-     * studio subscription re-runs when a new message is recorded (the per-socket
-     * JSON memo still suppresses byte-identical pushes).
-     */
-    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminCapturedMail(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
-        let result: { entries: unknown[] };
-
-        try {
-            result = readCapturedMail(sql, { limit });
-        } catch {
-            result = { entries: [] };
-        }
-
-        return { result, tables: new Set([MAIL_TABLE]) };
-    }
-
-    /**
-     * Resolve a `getQueueMessages` admin read — the dev queue catcher's consumed
-     * message log (`queue-catcher.ts`), newest-first, optionally filtered to one
-     * queue. Best-effort: a SQL failure returns an empty log rather than throwing.
-     * Reported against the {@link QUEUE_TABLE} so this read participates in
-     * table-scoped subscription invalidation, but new captures arrive via the
-     * worker→root-shard `recordQueueMessage` write, which (like the mail catcher)
-     * inserts directly without a `flushChangedTables` — so the panel refreshes on
-     * its poll (`useAutoRefresh`) rather than a live push.
-     */
-    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminQueueMessages(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
-        const queue = typeof args["queue"] === "string" ? args["queue"] : undefined;
-        let result: { entries: unknown[] };
-
-        try {
-            result = readQueueMessages(sql, { limit, queue });
-        } catch {
-            result = { entries: [] };
-        }
-
-        return { result, tables: new Set([QUEUE_TABLE]) };
-    }
-
     /** Resolve a `readTablePage` admin read, parsing the loosely-typed args into the reader's options. */
     private readAdminTablePage(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
         const table = typeof args["table"] === "string" ? args["table"] : "";
@@ -8523,40 +8289,6 @@ abstract class ShardDO {
         // An empty table name can't bind to a real dependency, so fall back
         // to the wildcard rather than a set that never intersects a write.
         return { result: page, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
-    }
-
-    /**
-     * Resolve a `facetColumn` admin read — Datasette-style per-column value/count
-     * summary over the active view. Reuses {@link readTablePage}'s predicate args
-     * (`filters` + `search`) so the facet reflects exactly the previewed rows; the
-     * `column` is validated + bound inside {@link facetColumn} (never interpolated).
-     * Read-only `SELECT … GROUP BY`. Depends on its table like {@link readAdminTablePage}.
-     */
-    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminFacetColumn(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const table = typeof args["table"] === "string" ? args["table"] : "";
-        const result = facetColumn(sql, {
-            column: typeof args["column"] === "string" ? args["column"] : "",
-            filters: parseTablePageFilters(args["filters"]),
-            limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
-            search: typeof args["search"] === "string" ? args["search"] : undefined,
-            table,
-        });
-
-        return { result, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
-    }
-
-    /**
-     * Resolve a `runSql` admin read: execute a read-only SQL query against the
-     * shard's SQLite via {@link runReadonlySql} (which rejects every mutating
-     * statement). Carries the {@link ADMIN_WILDCARD} since an arbitrary query can
-     * touch any table; it is a one-shot read, never a live subscription.
-     */
-    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminRunSql(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const query = typeof args["sql"] === "string" ? args["sql"] : "";
-
-        return { result: runReadonlySql(sql, query), tables: new Set([ADMIN_WILDCARD]) };
     }
 
     /**
@@ -10865,9 +10597,14 @@ abstract class ShardDO {
     /**
      * Gate the upgrade request against two complementary controls:
      *
-     * 1. Origin allowlist via `env.LUNORA_ALLOWED_ORIGINS` (comma-separated).
-     * When unset, any origin is accepted — convenient for local dev,
-     * not suitable for production.
+     * 1. Origin allowlist via `env.LUNORA_ALLOWED_ORIGINS` (comma-separated,
+     * a single `*` permitting any origin). When unset, any origin is
+     * accepted — convenient for local dev, not suitable for production.
+     * The wildcard must be honoured here because the worker's CORS layer
+     * honours it (`@lunora/runtime`'s `parseEnvCors`): reading the same
+     * variable more strictly took every WebSocket upgrade down with a bare
+     * 403 on a configuration the CORS side documents as supported, and a
+     * browser sends its real `Origin`, never `*`, so nothing else matched.
      * 2. Bearer token via `env.LUNORA_WS_BEARER`. When set, the upgrade
      * must present a matching token. We accept either an
      * `Authorization: Bearer <token>` header (preferred) or a
@@ -10898,12 +10635,14 @@ abstract class ShardDO {
                 return false;
             }
 
-            const list = allowedOrigins
-                .split(",")
-                .map((entry) => entry.trim())
-                .filter((entry) => entry.length > 0);
+            const list = new Set(
+                allowedOrigins
+                    .split(",")
+                    .map((entry) => entry.trim())
+                    .filter((entry) => entry.length > 0),
+            );
 
-            if (!list.includes(origin)) {
+            if (!list.has("*") && !list.has(origin)) {
                 return false;
             }
         }

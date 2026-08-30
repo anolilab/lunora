@@ -139,11 +139,14 @@ describe("lunora prepare", () => {
     it("returns code 1 and surfaces problems when wrangler.jsonc has a stale compatibility_date", async () => {
         expect.assertions(3);
 
+        // A real database_id, so the D1 placeholder guard does not abort before
+        // validation runs — this test is about the stale date, not that guard.
         writeFileSync(
             join(workdir, "wrangler.jsonc"),
             `{
     "name": "x",
-    "compatibility_date": "2020-01-01"
+    "compatibility_date": "2020-01-01",
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }]
 }`,
             "utf8",
         );
@@ -167,14 +170,14 @@ describe("lunora prepare", () => {
         expect(errors.length).toBeGreaterThan(0);
     });
 
-    it("auto-provisions DO bindings and warns about D1 placeholder, but does not abort", async () => {
+    it("blocks on a D1 placeholder id, exactly as deploy does", async () => {
         expect.assertions(4);
 
-        // Wrangler with a D1 placeholder (simulate a first-run after reconcile
-        // wrote the DB binding). prepare does NOT hard-block on the placeholder
-        // — that is a deploy-time guard only. prepare is intentionally softer:
-        // it surfaces the warning from reconcileWranglerBindings so the user
-        // can act before deploying.
+        // This asserted the opposite until `prepare` and `deploy` were made one
+        // pipeline: prepare reported "project is ready to deploy" for a project
+        // `lunora deploy` refuses outright, because a placeholder database_id
+        // means the D1 database does not exist yet. A pre-deploy check that
+        // passes where the deploy fails is worse than no check.
         mkdirSync(join(workdir, "src", "server"), { recursive: true });
         writeFileSync(join(workdir, "src", "server", "index.ts"), "export const ShardDO = class {};\nexport default { fetch() {} };", "utf8");
         writeFileSync(
@@ -193,20 +196,18 @@ describe("lunora prepare", () => {
             "utf8",
         );
 
-        const { logger, warns } = silentLogger();
+        const { logger } = silentLogger();
         const result = await runPrepareCommand({ cwd: workdir, logger });
 
-        // Validation passes (wrangler schema is valid; the placeholder id is not
-        // a wrangler-validator concern — it only verifies the binding exists)
-        expect(result.code).toBe(0);
-        expect(result.error).toBeUndefined();
-
-        // The D1 placeholder warning from reconcileWranglerBindings is surfaced
-        // (only when the binding was freshly written; here it already exists so
-        // reconcile is a no-op). Assert the warns array was captured at least.
-        expect(Array.isArray(warns)).toBe(true);
-        // No hard error on placeholder (that guard lives in deploy, not prepare)
-        expect(result.validation.problems).toEqual([]);
+        expect(result.code).toBe(1);
+        expect(result.error).toContain("placeholder database_id");
+        // And it names the fix, rather than leaving the user to discover it at
+        // deploy time.
+        expect(result.error).toContain("wrangler d1 create");
+        // Worded for the command the operator actually ran. These checks are
+        // shared with `deploy`, and a blocked `prepare` naming a command nobody
+        // typed reads as a bug in the tool rather than a problem in the project.
+        expect(result.error?.startsWith("prepare blocked:")).toBe(true);
     });
 
     it("syncs code-first cron schedules into wrangler.jsonc triggers.crons", async () => {

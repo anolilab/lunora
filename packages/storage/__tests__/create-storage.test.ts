@@ -228,6 +228,24 @@ describe("createStorage", () => {
         expect(bucket.puts).toHaveLength(0);
     });
 
+    it("measures the key ceiling in BYTES, not UTF-16 code units", async () => {
+        expect.assertions(3);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        // 600 CJK characters: 600 code units, 1800 UTF-8 bytes. `String.length`
+        // waved this through for R2 to reject remotely with an opaque error —
+        // exactly the fail-fast this validation exists to provide, and exactly
+        // the failure `@lunora/bindings/kv`'s twin documents and already fixed.
+        // The error string here said "byte limit" while counting code units.
+        await expect(storage.upload("字".repeat(600), new ArrayBuffer(4))).rejects.toThrow(/1024-byte limit/u);
+        expect(bucket.puts).toHaveLength(0);
+
+        // Well under in both measures, so it still uploads.
+        await expect(storage.upload("字".repeat(100), new ArrayBuffer(4))).resolves.toBeDefined();
+    });
+
     it("download() returns the R2 object body or null", async () => {
         expect.assertions(3);
 

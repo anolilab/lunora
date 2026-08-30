@@ -89,7 +89,7 @@ const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 
 /**
  * The specifiers the batteries-included `browserTool` sandbox detector treats
- * as `@lunora/agent` — mirrors `discover-sandbox.ts`'s identical constant
+ * as `@lunora/agent` — mirrors `discover/sandbox.ts`'s identical constant
  * exactly (both the main entry and the `/sandbox` subpath re-export the tool).
  */
 const SANDBOX_MODULE_SPECIFIERS = new Set(["@lunora/agent", "@lunora/agent/sandbox"]);
@@ -116,7 +116,7 @@ const extractImportSpecifierList = (statementText: string): string => {
 /**
  * A specifier-level `{ type browserTool }` inside an otherwise-value import —
  * compiles away even though the import declaration itself is a value import
- * (e.g. alongside `containerTool`). Mirrors `discover-sandbox.ts`'s
+ * (e.g. alongside `containerTool`). Mirrors `discover/sandbox.ts`'s
  * `named.isTypeOnly()` guard. Tested against the extracted specifier list, not
  * the whole statement.
  */
@@ -138,7 +138,7 @@ const SANDBOX_BROWSER_TOOL_FALLBACK_PATTERN = /import\s+\{[^}]*\bbrowserTool\b[^
 /**
  * True when the sliced text of a SINGLE import declaration is a VALUE
  * (non-type-only) named import of `browserTool` — mirrors
- * `discover-sandbox.ts`'s `declaration.isTypeOnly()` (whole import) and
+ * `discover/sandbox.ts`'s `declaration.isTypeOnly()` (whole import) and
  * `named.isTypeOnly()` (single specifier) guards exactly.
  */
 const isValueBrowserToolImport = (statementText: string): boolean => {
@@ -159,7 +159,7 @@ const isValueBrowserToolImport = (statementText: string): boolean => {
  * browserTool } from "@lunora/agent";`) is never parsed as a declaration at
  * all, so it can never match, and a `type`-prefixed specifier is rejected by
  * {@link isValueBrowserToolImport}. This is what makes the detector agree with
- * `discover-sandbox.ts`'s AST-based one on the same fixture matrix.
+ * `discover/sandbox.ts`'s AST-based one on the same fixture matrix.
  */
 const hasSandboxBrowserToolImport = (code: string): boolean => {
     try {
@@ -421,7 +421,7 @@ const capabilitiesFromSource = (code: string): Capabilities => {
     // NOTE: `usesBrowser`'s sandbox-`browserTool` half is intentionally NOT
     // folded in here — see `scanSandboxBrowserToolUsage` below. Unlike every
     // other probe, it must be scoped to EXACTLY the `lunora/` file set
-    // `discover-sandbox.ts` scans (never `src/`), so it runs as a separate,
+    // `discover/sandbox.ts` scans (never `src/`), so it runs as a separate,
     // lunora-only pass in `inferLunoraBindings` instead.
     return mergeCapabilities(capabilities, {
         ...NO_CAPABILITIES,
@@ -683,7 +683,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 
 /**
  * Scan ONLY the `lunora/` tree (never `src/`) for a value `browserTool`
- * import — mirrors `discover-sandbox.ts`'s `listLunoraSourceFiles` file set
+ * import — mirrors `discover/sandbox.ts`'s `listLunoraSourceFiles` file set
  * exactly. Kept as a separate pass from {@link scanCapabilities} (which also
  * walks `src/`) so config never auto-writes a `BROWSER` binding codegen will
  * never wire — a `src/`-only `browserTool` import never registers the
@@ -812,7 +812,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     // A sandbox `browserTool` import provisions BROWSER even without a direct
     // `@lunora/browser` import (the browser op runs on the dispatcher's ctx) —
     // but ONLY when the import lives in `lunora/`, the exact file set
-    // `discover-sandbox.ts` scans; a `src/`-only import never registers the
+    // `discover/sandbox.ts` scans; a `src/`-only import never registers the
     // sandbox dispatcher, so it must not provision the binding either. Folded
     // into `capabilities` here (not `scanCapabilities`) so both the returned
     // `usesBrowser` flag AND the provenance signal line agree.

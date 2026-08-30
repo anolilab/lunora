@@ -162,6 +162,17 @@ type Mysql2Execute = Mysql2Like & {
 };
 ```
 
+### `PgVectorIndexOptions` (interface)
+
+```ts
+interface PgVectorIndexOptions {
+    client: SqlClient;
+    dimensions: number;
+    metric?: VectorMetric;
+    name: string;
+}
+```
+
 ### `RowClient` (type)
 
 ```ts
@@ -190,6 +201,12 @@ const createHyperdriveGlobalCtxDb: ({ engine, exec, ...rest }: CreateHyperdriveG
 
 ```ts
 const createMysqlGlobalCtxDb: (connection: Mysql2Execute, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">) => DatabaseWriterLike;
+```
+
+### `createPgVectorIndex` (const)
+
+```ts
+const createPgVectorIndex: (options: PgVectorIndexOptions) => VectorizeIndexLike;
 ```
 
 ### `createPostgresGlobalCtxDb` (const)

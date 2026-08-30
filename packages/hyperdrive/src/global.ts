@@ -61,3 +61,5 @@ export const createMysqlGlobalCtxDb = (connection: Mysql2Execute, options: Omit<
 export { mysqlDialect, postgresDialect } from "./global-dialect";
 export type { Mysql2Execute, RowClient } from "./global-exec";
 export { buildMysqlExec, buildPgExec } from "./global-exec";
+export type { PgVectorIndexOptions } from "./pg-vector";
+export { createPgVectorIndex } from "./pg-vector";

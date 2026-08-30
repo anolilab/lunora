@@ -22,6 +22,29 @@ test("optimistic message appears instantly, then clears the pending indicator on
     await signedInPage.getByRole("button", { name: "+ New channel" }).click();
     await signedInPage.getByRole("button", { name: "optimistic-channel" }).click();
 
+    // Hold the send RPC briefly so the pending state is observable. The ack is
+    // still the REAL one — this only delays it, it does not fake it.
+    //
+    // Without the delay the assertion below is a race against the backend, and
+    // it is the backend that wins on a fast machine: Miniflare acked in well
+    // under the 200ms window, React folded the optimistic override away in the
+    // same paint, and the `(pending)` row never existed for Playwright to see.
+    // The failure then reads as "element(s) not found" — indistinguishable from
+    // the optimistic path being broken, which is the bug this test exists to
+    // catch. The rollback test below already delays its route for exactly this
+    // reason ("would batch the optimistic insert and its rollback into one
+    // paint"); the ack path was left racing.
+    await signedInPage.route("**/_lunora/rpc", async (route: Route, request: Request) => {
+        if ((request.postData() ?? "").includes('"messages:send"')) {
+            // Comfortably wider than the 200ms assertion below, so the window is
+            // not itself a race: the row has to render locally within 200ms, and
+            // the ack cannot arrive to close that window until 400ms.
+            await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+
+        await route.continue();
+    });
+
     const draftText = `optimistic-${Date.now()}`;
 
     await signedInPage.getByPlaceholder("Type a message…").fill(draftText);
@@ -36,8 +59,9 @@ test("optimistic message appears instantly, then clears the pending indicator on
 
     await Promise.all([
         sendButton.click(),
-        // Race window: < 200ms is essentially "instant" — the server can't have
-        // acked yet in any realistic deployment.
+        // Still a tight window — the optimistic row must render locally, without
+        // waiting on the network. The held ack only guarantees it is observable;
+        // it does not give the client extra time to produce it.
         expect(pendingRow).toBeVisible({ timeout: 200 }),
     ]);
 

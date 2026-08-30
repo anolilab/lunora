@@ -13,9 +13,11 @@ import {
     detectAgentRules,
     detectAiAgent,
     detectFramework,
+    DEV_BINDINGS_FILE,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE_ENV,
+    DEV_STATE_FILE,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
     discoverContainerInfo,
@@ -38,11 +40,13 @@ import { findWranglerFile, materializeRemoteWranglerConfig, readWranglerJsonc, r
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
+import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
+import type { ReadinessProbe } from "../../util/dev-probe";
 import { findAvailablePort } from "../../util/free-port";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
@@ -52,6 +56,7 @@ import { spawnShellCompat } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
 import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
+import markWorkerReadyWhenServing from "../../util/worker-ready";
 import type { DevOptions } from "./index";
 import type { DevFlavor } from "./lifecycle";
 import {
@@ -100,6 +105,13 @@ interface DevCommandOptions {
     /** Disable the codegen watch loop. */
     codegen?: boolean;
     cwd?: string;
+
+    /**
+     * Override where the binding manifest is written. One is always produced at
+     * {@link DEV_BINDINGS_FILE}; naming a path also makes a derivation failure
+     * fatal, since a named path means something is waiting on it.
+     */
+    emitBindings?: string;
     /** Injection seam for tests — defaults to the real `.dev.vars` scaffolder. */
     ensureEnv?: typeof ensureDevVariables;
     /** Injection seam for tests — defaults to the real `.dev.vars.example` package-aware scaffolder. */
@@ -112,11 +124,21 @@ interface DevCommandOptions {
     flavor?: DevFlavor;
     /** Injection seam for tests — defaults to the real IPv6-loopback probe ({@link hasIpv6Loopback}). */
     hasIpv6Loopback?: () => boolean;
+
+    /**
+     * Logs are NDJSON on stdout (`--json`, or a detected AI agent). Forwarded to
+     * the codegen watcher so a `postcodegen` script's own stdout is routed to
+     * stderr instead of corrupting the stream.
+     */
+    jsonLogs?: boolean;
+
     logger: Logger;
     /** Injection seam for tests — defaults to the real remote-config materializer. */
     materializeRemote?: typeof materializeRemoteWranglerConfig;
     /** Studio server port. */
     port?: number;
+    /** Injection seam for tests — defaults to the real HTTP readiness probe. Without it the suite issues live GETs to the dev port. */
+    probeReady?: ReadinessProbe;
     /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`LUNORA_REMOTE=1` / `--remote`); DO shards stay local. */
     remote?: boolean;
     /** Injection seam for tests — defaults to the real codegen watcher. */
@@ -125,10 +147,21 @@ interface DevCommandOptions {
     startStudio?: typeof startStudioServer;
     /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
     startWorker?: WorkerSpawner;
+
     /** Disable the embedded studio server. */
     studio?: boolean;
     /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
     target?: string;
+
+    /**
+     * Injection seam for tests — defaults to parking until SIGINT.
+     *
+     * Attached mode (`--no-worker`) ends only on a signal, so without this the
+     * whole branch is unreachable from a test. That is how the readiness probe
+     * came to be wired after the early return, reported for a flavor it never
+     * covered, and shipped.
+     */
+    waitForInterrupt?: (logger: Logger) => Promise<number>;
     /** Disable the `wrangler dev` spawn — an external task runner owns the worker. */
     worker?: boolean;
     /** `wrangler dev` port. */
@@ -528,17 +561,31 @@ const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
 };
 
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
-const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined): void => {
+const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined, manifestPath: string | undefined): void => {
     logger.info("");
     logger.success("Lunora dev");
     logger.info(`  ➜  Worker:     ${plan.workerOrigin}`);
 
     if (studioUrl !== undefined) {
-        logger.info(`  ➜  Studio:  ${studioUrl}`);
+        // Five spaces, like every other row: this one had two, so the value
+        // column stepped left for exactly one line.
+        logger.info(`  ➜  Studio:     ${studioUrl}`);
     }
 
     if (plan.runsCodegenWatch) {
         logger.info("  ➜  Codegen:    watching lunora/");
+    }
+
+    // The two files a task runner reads. The manifest is written whether or not
+    // anyone asked, which is the point — but a file nobody knows about helps
+    // nobody, and the flag it replaced had to be discovered before it could help.
+    // One line, once, is the difference between "defaulted on" and "adopted".
+    //
+    // Only when one was actually written: a project with no wrangler config skips
+    // the manifest, and pointing at a path that does not exist is worse than
+    // saying nothing.
+    if (manifestPath !== undefined) {
+        logger.info(`  ➜  Supervisor: ${manifestPath} (needs) · ${DEV_STATE_FILE} (status)`);
     }
 
     if (plan.remote.enabled) {
@@ -570,6 +617,8 @@ interface Teardown {
     codegen?: CodegenWatcherHandle;
     /** Disposer for the dev container log stream (stops polling Docker + detaches). */
     containerLogs?: ContainerLogStreamHandle;
+    /** Cancels the worker readiness probe, so it stops with the server instead of on its own timeout. */
+    readyProbe?: AbortController;
     /** Disposer for the materialized remote wrangler temp config (idempotent, never throws). */
     remoteCleanup?: () => void;
     studio?: StudioServerHandle;
@@ -617,7 +666,20 @@ const startContainerLogStreaming = (cwd: string, logger: Logger): ContainerLogSt
 
 /** Best-effort shutdown of the studio server, codegen watcher, container logs, and remote temp config. */
 const teardown = async (handles: Teardown): Promise<void> => {
-    handles.codegen?.close();
+    // Idempotent second call: `runDevCommand`'s `finally` aborts before clearing
+    // the state record, and this covers the paths that tear down without going
+    // through it. `AbortController.abort()` on an already-aborted controller is a
+    // no-op.
+    handles.readyProbe?.abort();
+
+    // Awaited: `close()` stops the watch loop immediately but resolves only once
+    // a regeneration already in flight is done, and that run may have spawned
+    // the project's `postcodegen`. `defineHandler` calls `process.exit` right
+    // after this, so not awaiting leaves that child running, mid-write, against
+    // a shell that already has its prompt back — the terminal Ctrl-C case is
+    // covered by the signal reaching the whole process group, but a worker crash
+    // or a SIGTERM to the daemon PID is not.
+    await handles.codegen?.close().catch(() => undefined);
     handles.containerLogs?.close();
     await handles.studio?.close().catch(() => undefined);
     // Unlink the generated remote wrangler config last; the disposer is itself
@@ -704,7 +766,13 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
  * earlier, before any sibling starts — see the claim in {@link runDevCommand}.)
  * Returns the container-log disposer for the caller's teardown set.
  */
-const afterWorkerSpawn = (plan: DevCommandPlan, cwd: string, logger: Logger, studioUrl: string | undefined): ContainerLogStreamHandle | undefined => {
+const afterWorkerSpawn = (
+    plan: DevCommandPlan,
+    cwd: string,
+    logger: Logger,
+    studioUrl: string | undefined,
+    manifestPath: string | undefined,
+): ContainerLogStreamHandle | undefined => {
     if (plan.flavor !== "wrangler") {
         return undefined;
     }
@@ -725,7 +793,7 @@ const afterWorkerSpawn = (plan: DevCommandPlan, cwd: string, logger: Logger, stu
         /* never fatal */
     }
 
-    printBanner(logger, plan, studioUrl);
+    printBanner(logger, plan, studioUrl, manifestPath);
 
     return containerLogs;
 };
@@ -757,6 +825,67 @@ const claimStartRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url
     );
 
     return claim.ok ? undefined : claim.existing;
+};
+
+/**
+ * Write the binding manifest describing what this Worker needs and where it
+ * serves.
+ *
+ * Written on EVERY dev start, not only when asked. `.lunora/dev.json` is already
+ * produced unconditionally into the same gitignored directory and the manifest
+ * carries no secrets — `vars` is key names only — so the cost is one small JSON
+ * write against a real gain: the flag it replaces had to be discovered before it
+ * could help, and a supervisor that does not know it exists hand-maintains a
+ * second copy of these bindings until it finds out.
+ *
+ * The failure policy differs by who asked, deliberately. An explicit
+ * `--emit-bindings` means something is WAITING on that file, so a project with no
+ * readable `wrangler.jsonc` fails the run rather than starting a server whose
+ * supervisor is pointed at nothing. The default write is a courtesy, so the same
+ * condition is a debug line — defaulting a hard error would break every project
+ * that has no wrangler config at all.
+ *
+ * Extracted from `runDevCommand` because that function is at the repo's
+ * cognitive-complexity ceiling, and startup orchestration keeps being added.
+ */
+const emitDevBindingManifest = (options: {
+    cwd: string;
+    destination: string | undefined;
+    logger: Logger;
+    plan: DevCommandPlan;
+}): { error?: string; written?: string } => {
+    const { cwd, destination, logger, plan } = options;
+    const requested = destination !== undefined;
+    const target = destination ?? DEV_BINDINGS_FILE;
+    const result = writeBindingManifestFile({
+        destination: target,
+        dev: {
+            // Only where the CLI owns the port. On the Vite flavors
+            // `workerOrigin` is a pre-listen guess — Vite resolves its own,
+            // possibly after this file is written — so publishing it would aim a
+            // supervisor's proxy at a port nothing is listening on. `statusFile`
+            // carries the real URL there, from the record `@lunora/vite` writes
+            // once it is up.
+            ...(plan.flavor === "wrangler" ? { origin: plan.workerOrigin } : {}),
+            statusFile: DEV_STATE_FILE,
+        },
+        // The default write must not announce itself on every `lunora dev`; the
+        // requested one should say where it put the file.
+        logger: requested ? logger : { ...logger, success: () => {}, warn: () => {} },
+        projectRoot: cwd,
+    });
+
+    if (result.error !== undefined) {
+        if (requested) {
+            return result;
+        }
+
+        logger.debug?.(`skipped the default binding manifest: ${result.error}`);
+
+        return {};
+    }
+
+    return { written: target };
 };
 
 /**
@@ -1036,6 +1165,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         if (plan.runsCodegenWatch) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({
                 apiSpec: options.apiSpec,
+                jsonLogs: options.jsonLogs,
                 logger,
                 projectRoot: cwd,
                 target,
@@ -1043,6 +1173,31 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         }
 
         handles.studio = await startStudioBestEffort(options, plan, cwd, logger);
+
+        // Written before the worker starts, and before the readiness probe: a
+        // supervisor needs to know what to provision and where to point BEFORE
+        // the thing it is provisioning for is up. Readiness is deliberately not
+        // in here — the manifest is written once and readiness arrives later, so
+        // it names `.lunora/dev.json` rather than shipping a `ready: false` that
+        // never changes.
+        const emitted = emitDevBindingManifest({ cwd, destination: options.emitBindings, logger, plan });
+
+        // Fatal, unlike most of dev's best-effort startup: the flag exists
+        // because something else is waiting on this file, and starting the server
+        // without it leaves that supervisor pointed at nothing while Lunora looks
+        // healthy.
+        if (emitted.error !== undefined) {
+            logger.error(emitted.error);
+
+            return { code: 1, plan };
+        }
+
+        // After the studio start, so the two overlap, but before the worker below:
+        // the startup `postcodegen` is what FINISHES generated output, and a
+        // wrangler bundle taken while it is still running is the unfinished copy.
+        // `runCodegen` itself already completed inside `startCodegenWatch`.
+        await handles.codegen?.ready;
+
         const studioUrl = handles.studio?.url;
 
         // A Vite/meta-framework was detected: nudge the user to their framework
@@ -1051,14 +1206,45 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             logger.warn(plan.frameworkHint);
         }
 
+        // Stamp `readyAt` on `.lunora/dev.json` once the recorded origin answers,
+        // so a task runner supervising Lunora alongside other workers waits on a
+        // fact instead of a guessed sleep. Not awaited: readiness is metadata FOR
+        // someone else, and blocking the banner on it would delay the very server
+        // it reports.
+        //
+        // Only the wrangler flavor: on the Vite flavors `workerOrigin` is a
+        // pre-listen guess and `@lunora/vite` writes the authoritative record,
+        // stamping `readyAt` itself once Vite resolves its real URL.
+        const startReadyProbe = (): void => {
+            if (plan.flavor !== "wrangler") {
+                return;
+            }
+
+            handles.readyProbe = new AbortController();
+
+            // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction: the probe reports rather than throws, and teardown aborts it
+            markWorkerReadyWhenServing({
+                cwd,
+                logger,
+                origin: plan.workerOrigin,
+                probe: options.probeReady,
+                signal: handles.readyProbe.signal,
+            });
+        };
+
         if (!plan.workerEnabled) {
             // Attached mode: whatever is left after `--no-worker` keeps running
             // and an external runner owns the worker. Park until interrupted so
             // the supervisor sees a normal long-lived process.
             //
+            // The probe still runs: somebody else starting the worker changes who
+            // listens, not who reports, and this process still owns the record.
+            // Skipping it here left `status` saying "starting" forever for a
+            // server that had been serving for an hour.
+            startReadyProbe();
             logger.info(attachedModeNotice(plan));
 
-            return { code: await waitForInterrupt(logger), plan };
+            return { code: await (options.waitForInterrupt ?? waitForInterrupt)(logger), plan };
         }
 
         ensureSidecarGenerated(plan, options, cwd, logger, target);
@@ -1069,7 +1255,17 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // framework-worker flavor — `undefined` for every single-process flavor.
         const sidecar = plan.sidecar === undefined ? undefined : spawn(plan.sidecar, logger);
 
-        handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl);
+        // After the spawn, not before: the probe cannot tell OUR worker from
+        // anything else already listening on that origin. Started early, a
+        // stale server or an unrelated process holding the port would answer
+        // immediately, `readyAt` would be stamped for it, and `status` would
+        // report ready while wrangler was still failing to bind — pointing every
+        // dependent task at the wrong server. (Attached mode is the exception
+        // above: there the worker is someone else's by definition.)
+        startReadyProbe();
+
+        handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl, emitted.written);
+
         printAgentRulesHint(logger, cwd);
 
         const code = await superviseWorkers(worker, sidecar, logger);
@@ -1081,6 +1277,10 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // The state record is only cleared while it still carries THIS process's
         // PID (the guard makes the vite flavor — where Vite's plugin owns the
         // record — and the already-running early return no-ops).
+        // Abort first, THEN clear: the probe patches this record, so stopping it
+        // before the file goes away is what makes the teardown ordering match
+        // what its comment claims.
+        handles.readyProbe?.abort();
         clearDevServerState(cwd, process.pid);
         await teardown(handles);
     }
@@ -1145,6 +1345,8 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         // passed flag arrives as `false`, absent as `true` (the option default).
         codegen: options.codegen === false ? false : undefined,
         cwd,
+        emitBindings: options.emitBindings,
+        jsonLogs,
         logger,
         port: options.port,
         remote,

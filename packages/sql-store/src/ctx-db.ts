@@ -58,6 +58,7 @@ import {
     applyOnDelete,
     applySelect,
     assertFlatPredicate,
+    assertNoExplicitUndefined,
     assertValidClientId,
     buildSeekWhere,
     CDC_LOG_TABLE,
@@ -90,6 +91,7 @@ import {
     readAggregateValue,
     relationHooks,
     resolveRankPartition,
+    resolveRankSeekTuple,
     resolveRelationPredicates,
     resolveWith,
     runRowValidators,
@@ -106,6 +108,7 @@ import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { decodeWire } from "../../../shared/wire-codec";
 import type { SearchStage } from "./ctx-db-search";
 import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
 import { migrateSearchState } from "./ctx-db-search-state";
@@ -2310,7 +2313,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const typed = row as { count: number; key: string; value: null | number };
 
             return {
-                key: JSON.parse(typed.key) as Record<string, unknown>,
+                // `encodeAggregateKey` writes `JSON.stringify(encodeWire(ordered))`,
+                // so a bare `JSON.parse` hands back the wire-tagged ARRAY rather
+                // than the value — a `v.bigint()` group key came out as
+                // `["$lunora.wire$","bigint","42"]`. The shard twin decodes it;
+                // this side did not, so one query returned different key shapes
+                // depending on backend and index materialisation.
+                key: decodeWire(JSON.parse(typed.key)) as Record<string, unknown>,
                 value: readAggregateValue(agg.op, { count: typed.count, value: aggregateScalar(typed.value) }),
             };
         });
@@ -3117,6 +3126,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async patch(id, patch, expectedTable) {
+            // A key present with value `undefined` is a silent-data-loss footgun:
+            // `runRowValidators` skips it (`v.optional(x).parse(undefined)` is
+            // fine) and `serializeColumnValue(merged[field] ?? null)` then wrote
+            // SQL NULL, so `patch(id, { bio: undefined })` cleared the column with
+            // no error. The shard twin has refused this since it was found there;
+            // sharing its guard rather than restating it is what keeps the two
+            // from drifting again.
+            assertNoExplicitUndefined("patch", patch);
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
@@ -3318,7 +3335,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         // `withGeoIndex()` below — this fails closed with a clear
                         // error instead of a confusing "not a function" for now.
                         throw new LunoraError(
-                            "INTERNAL",
+                            // A backend limitation the caller can act on, not a
+                            // fault in Lunora. `INTERNAL` made it a 500 that read
+                            // as a bug and could not be branched on; the
+                            // `*_UNSUPPORTED` codes are how every other
+                            // topology limit in the catalogue is expressed.
+                            "GLOBAL_SEARCH_SCORES_UNSUPPORTED",
                             `collectWithScores() is not supported on \`.global()\` tables (table "${tableName}") — relevance scores are not yet surfaced on this backend; use .collect() instead`,
                         );
                     },
@@ -3572,12 +3594,26 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const whereClauses: SQL[] = [];
 
-            if (partitionFromWhere) {
+            // A pre-encoded `partitionKey` from the cross-shard coordinator pins
+            // the partition directly; shard-local callers omit it and the
+            // partition resolves from `where`. This side read only the `where`
+            // form, so a coordinator-issued page silently scanned every partition.
+            if (typeof rankPageOptions.partitionKey === "string") {
+                whereClauses.push(sql`${sql.identifier("__partition__")} = ${rankPageOptions.partitionKey}`);
+            } else if (partitionFromWhere) {
                 whereClauses.push(sql`${sql.identifier("__partition__")} = ${encodePartitionKey(index.partitionBy ?? [], partitionFromWhere)}`);
             }
 
-            if (rankPageOptions.cursor) {
-                const seek = buildRankCursorSeek(dialect.name, rankColumns, decodeCursor(rankPageOptions.cursor));
+            // `after` wins over `cursor`, sharing the shard twin's resolver: the
+            // cross-shard coordinator forwards a structured `{ partitionKey,
+            // sortValues, rowId }` key, and this side read only `cursor`. A caller
+            // paging with `after` got page one every time — an `after` loop never
+            // terminated — with no error, because both fields sit on the SHARED
+            // `RankPageOptions` and the facade forwards the object verbatim.
+            const seekTuple = resolveRankSeekTuple(rankPageOptions);
+
+            if (seekTuple !== undefined) {
+                const seek = buildRankCursorSeek(dialect.name, rankColumns, seekTuple);
 
                 if (seek !== undefined) {
                     whereClauses.push(seek);
@@ -3615,6 +3651,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async replace(id, document, expectedTable, replaceOptions) {
+            assertNoExplicitUndefined("replace", document);
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {

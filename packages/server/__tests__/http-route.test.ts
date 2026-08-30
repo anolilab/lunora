@@ -214,9 +214,28 @@ describe("httpRoute body", () => {
 });
 
 describe("httpRoute output", () => {
-    it("parses the result through .output(), stripping undeclared keys before serialization", async () => {
+    it("strips undeclared keys before serialization when .strip() says so", async () => {
         expect.assertions(1);
 
+        // The legitimate narrowing case, and why the escape hatch has to exist:
+        // trimming an internal field off a row before it reaches a client.
+        // `.strip()` makes that intent visible at the call site.
+        const route = httpRoute
+            .get("/api/me")
+            .output(v.object({ id: v.string() }).strip())
+            .handler(() => ({ id: "u1", secret: "leaked" }) as { id: string });
+
+        const response = await dispatch(route, "GET", "/api/me", new Request("https://x/api/me"));
+
+        await expect(response.json()).resolves.toEqual({ id: "u1" });
+    });
+
+    it("answers 500 when the result carries keys .output() does not declare", async () => {
+        expect.assertions(2);
+
+        // Without `.strip()` an undeclared key is a contract bug, not noise. The
+        // alternative is what this replaced: the field silently absent from every
+        // response the route serves.
         const route = httpRoute
             .get("/api/me")
             .output(v.object({ id: v.string() }))
@@ -224,7 +243,9 @@ describe("httpRoute output", () => {
 
         const response = await dispatch(route, "GET", "/api/me", new Request("https://x/api/me"));
 
-        await expect(response.json()).resolves.toEqual({ id: "u1" });
+        expect(response.status).toBe(500);
+        // Never the offending value — this path can carry server secrets.
+        await expect(response.text()).resolves.not.toContain("leaked");
     });
 
     it("a result that violates .output() surfaces as a 500, not a 400", async () => {

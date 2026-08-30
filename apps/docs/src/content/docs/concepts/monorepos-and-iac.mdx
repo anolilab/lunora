@@ -42,6 +42,111 @@ worker and Lunora keeps regenerating types and serving Studio:
 `--worker-port` still matters with `--no-worker`: Studio and the printed hints
 need to know where the externally-owned worker is listening.
 
+### Telling the supervisor what to provide
+
+A task runner starting seven Workers needs two things from Lunora before it can
+treat it as one node: what this Worker requires, and where it will serve.
+
+`lunora info --bindings` answers the first without running anything, which is
+what a supervisor wants while it is still planning the graph:
+
+```bash
+lunora info --bindings                  # human-readable
+lunora info --bindings --json           # the manifest a deployer or runner consumes
+lunora info --bindings --out reqs.json
+```
+
+`lunora dev` writes the same document plus a `dev` section, to
+`.lunora/dev-bindings.json`, on every start — no flag required:
+
+```jsonc
+{
+    "version": 1,
+    "name": "app",
+    "bindings": [{ "type": "d1", "binding": "DB", "databaseName": "app" }],
+    "crons": ["0 9 * * *"],
+    "vars": ["PUBLIC_URL"],
+    "dev": {
+        "origin": "http://localhost:8787",
+        "statusFile": ".lunora/dev.json",
+    },
+}
+```
+
+`lunora dev` names both files in its startup banner, so you do not have to know
+they exist. `--emit-bindings <file>` moves the manifest elsewhere. Naming a path also changes the
+failure policy: a project with no readable `wrangler.jsonc` then fails the run,
+because a named path means something is waiting on that file. The default write
+stays a courtesy and simply skips.
+
+It is written once, before the worker starts, so your runner can reserve the
+port and wire its proxy while Lunora is still booting. Readiness is deliberately
+**not** in it — that arrives later, so the manifest names the file carrying it
+rather than shipping a `ready: false` that never changes.
+
+`dev.origin` is present only on the wrangler flavor, where the CLI owns the port.
+On the Vite flavors Vite resolves its own — possibly after this file is written —
+so the manifest omits `origin` rather than publish a guess that would aim your
+proxy at a port nothing is listening on. Read `statusFile` for the real URL
+there; `@lunora/vite` writes it once the server is up.
+
+One derivation feeds all three entry points, so the requirements a deployer
+provisions cannot drift from the ones your dev graph proxies. The manifest never
+carries values — `vars` is key names only — which is what makes it safe to write
+into a working tree unasked.
+
+### Waiting for readiness
+
+A supervisor that starts a dependent step — an integration suite, a second
+worker that calls this one — needs to know when the worker is actually serving,
+not merely that the process exists. Sleeping a guessed interval is the usual
+workaround and it races on a cold cache.
+
+`lunora dev` records its state in `.lunora/dev.json` as soon as it starts, and
+adds a `readyAt` stamp the moment the worker first answers on its origin. The
+two are deliberately separate: `url` and `pid` are written _before_ anything is
+listening, which is enough to find and stop a server and not enough to gate on.
+
+```bash
+# Wait for the worker to serve, then run whatever depends on it.
+# Bounded, and bails if the server died: `running: false` reports no `ready` key
+# at all, so an unbounded `until .ready == true` would spin forever on a dead
+# server rather than failing.
+ready=false
+
+for _ in $(seq 120); do
+    status=$(lunora dev status --json)
+    if [ "$(jq -r .ready <<<"$status")" = "true" ]; then ready=true; break; fi
+    if [ "$(jq -r .running <<<"$status")" = "false" ]; then echo "dev server is not running"; exit 1; fi
+    sleep 1
+done
+
+# Falling out of the loop is a TIMEOUT, not a pass — without this the tests run
+# against a server that never became ready, which is the failure the readiness
+# stamp exists to prevent.
+[ "$ready" = "true" ] || { echo "dev server never became ready"; exit 1; }
+
+pnpm run test:integration
+```
+
+`lunora dev status` shows the same thing for a human, as `ready` or `starting`
+in its detail line. It works under `--no-worker` too: this process still owns the
+record, so it reports on the worker your runner started.
+
+`readyAt` is a claim about the record's own `url` and nothing else. On the Vite
+flavors `@lunora/vite` writes the record once Vite has resolved that URL, so
+`ready` there means the framework dev server is up — on SvelteKit/Nuxt the
+`wrangler dev` sidecar that owns `ShardDO` runs on its own port, which this
+record does not advertise and `readyAt` says nothing about.
+
+Raise `LUNORA_DEV_READY_TIMEOUT_MS` if a cold build is slower than the default
+two minutes; it moves the background wait and this stamp together.
+
+<Callout type="warn">
+    A missing `readyAt` means *not ready yet*, never *never*. A worker that takes longer than the probe waits keeps running with the field absent, so poll for
+    it with your own timeout rather than treating one absent read as failure.
+</Callout>
+
 <Callout type="info">
     Studio is single-app. With several Lunora-touching Workers, run it against one of them rather than expecting a combined view, and mind that `/__lunora` is
     mounted on the worker's own routes.

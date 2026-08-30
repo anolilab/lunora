@@ -1,6 +1,6 @@
 {
     "name": "@lunora/platform-node",
-    "version": "1.0.0-alpha.33",
+    "version": "1.0.0-alpha.38",
     "description": "Node implementation of the Lunora platform contracts: ShardHost, SocketHost, ShardDirectory, ShardKvStore, SchedulerHost over better-sqlite3 and an in-process socket registry (dev/test target)",
     "keywords": [
         "better-sqlite3",
@@ -60,23 +60,23 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/d1": "1.0.0-alpha.94",
-        "@lunora/errors": "1.0.0-alpha.24",
-        "@lunora/platform": "1.0.0-alpha.19",
-        "@lunora/queue": "1.0.0-alpha.36",
-        "@lunora/sql-store": "1.0.0-alpha.96",
-        "@lunora/workflow": "1.0.0-alpha.35",
+        "@lunora/d1": "1.0.0-alpha.98",
+        "@lunora/errors": "1.0.0-alpha.26",
+        "@lunora/platform": "1.0.0-alpha.21",
+        "@lunora/queue": "1.0.0-alpha.38",
+        "@lunora/sql-store": "1.0.0-alpha.100",
+        "@lunora/workflow": "1.0.0-alpha.38",
         "@visulima/workflow": "catalog:workflow",
         "better-sqlite3": "catalog:tooling",
         "cron-parser": "catalog:tooling"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.106",
-        "@lunora/platform-cloudflare": "1.0.0-alpha.24",
-        "@lunora/runtime": "1.0.0-alpha.78",
-        "@lunora/shard-engine": "1.0.0-alpha.44",
-        "@lunora/storage": "1.0.0-alpha.41",
+        "@lunora/do": "1.0.0-alpha.109",
+        "@lunora/platform-cloudflare": "1.0.0-alpha.26",
+        "@lunora/runtime": "1.0.0-alpha.82",
+        "@lunora/shard-engine": "1.0.0-alpha.47",
+        "@lunora/storage": "1.0.0-alpha.43",
         "@types/better-sqlite3": "catalog:tooling",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -85,6 +85,9 @@
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@lunora/shard-engine": ">=1.0.0-alpha.45 <2.0.0-0"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

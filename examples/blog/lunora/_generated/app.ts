@@ -412,6 +412,8 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.listSchemaTables = () => ["users", "posts", "drafts"];
+
         if (this.schedulerDeclaration) {
             options.schedulerDO = this.schedulerDeclaration.namespace(env);
         }

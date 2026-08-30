@@ -220,6 +220,7 @@ interface EmitAppOptions {
     hasX402: boolean;
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
+    tableNames: ReadonlyArray<string>;
     useUmbrella: boolean;
     voiceAgents?: ReadonlyArray<{
         bindingName: string;

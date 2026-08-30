@@ -572,4 +572,4 @@ const decodeDocument = (text: string): Record<string, unknown> | undefined => {
     }
 };
 
-export { decodeDocument, decodeWire, encodeWire, isPlainObject, needsWireEncoding };
+export { decodeDocument, decodeWire, encodeWire, isPlainObject, needsWireEncoding, TAG as WIRE_TAG };

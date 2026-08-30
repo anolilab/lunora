@@ -1,3 +1,87 @@
+## @lunora/runtime [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.81...@lunora/runtime@1.0.0-alpha.82) (2026-08-30)
+
+### Documentation
+
+* **sharding:** .global() adoption path; drop a runtime lint that never fired ([#528](https://github.com/anolilab/lunora/issues/528)) ([e390e3f](https://github.com/anolilab/lunora/commit/e390e3f94a7aa7efc031e95411ade96a059a4528))
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.38
+
+## @lunora/runtime [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.80...@lunora/runtime@1.0.0-alpha.81) (2026-08-29)
+
+### Bug Fixes
+
+* **runtime:** stop export from silently skipping every shard-local row ([#527](https://github.com/anolilab/lunora/issues/527)) ([f2541e3](https://github.com/anolilab/lunora/commit/f2541e3b0f130469cef49edbbbeed184f2e1c28a))
+
+## @lunora/runtime [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.79...@lunora/runtime@1.0.0-alpha.80) (2026-08-29)
+
+### ⚠ BREAKING CHANGES
+
+* eleven packages now declare peerDependencies. Consumers that
+relied on those packages resolving through hoisting must install them; the
+alternative was shipping types that fail to resolve off this repo's node_modules.
+
+`@lunora/workflow` is an optional peer of `@lunora/runtime`, so packem inlines
+its types rather than importing them — the published `@lunora/runtime` carries no
+`@lunora/workflow` dependency, as its source comments already promised.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+* fix: satisfy eslint and the template matrix after the packem gate
+
+Two CI failures from making packem warnings fatal, each a gate that the local
+packem sweep does not cover.
+
+`@lunora/advisor` back to a real dependency on `@lunora/errors`. `ae-metrics.ts`
+imports `LunoraError` as a VALUE, and import/no-extraneous-dependencies requires
+that for anything under `src/` regardless of whether the module reaches the
+bundle. packem cannot see it because that module's value exports are
+quarantined — `src/index.ts` re-exports only its types — so the throwing code is
+tree-shaken out. The two rules disagree by construction; the packem side is now a
+commented `unused` exclusion that says which condition would end it.
+
+`@lunora/workflow` becomes a REQUIRED peer of `@lunora/runtime`. As an optional
+peer it was auto-installed anyway, and every one of the twelve templates then
+resolved `@lunora/workflow` from the npm REGISTRY instead of this checkout — the
+scaffold matrix builds its local-tarball map from required peers only, on the
+assumption that optional ones are never pulled in. Forcing the type to inline
+instead (`resolveExternals.exclude`) does not work: that option governs the JS
+bundle, and the declaration build has its own resolver, so the import survived.
+A required peer matches the other seven packages here and keeps the type
+resolvable for consumers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+### Build System
+
+* ship .mjs everywhere and make packem warnings fatal ([#526](https://github.com/anolilab/lunora/issues/526)) ([b3eaacc](https://github.com/anolilab/lunora/commit/b3eaacc5a31fe4634a5f4a6c59fda6fbbc8315e1))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.42
+* **@lunora/errors:** upgraded to 1.0.0-alpha.26
+* **@lunora/platform:** upgraded to 1.0.0-alpha.21
+* **@lunora/do:** upgraded to 1.0.0-alpha.109
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.47
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.37
+
+## @lunora/runtime [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.78...@lunora/runtime@1.0.0-alpha.79) (2026-08-28)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.41
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/platform:** upgraded to 1.0.0-alpha.20
+* **@lunora/do:** upgraded to 1.0.0-alpha.108
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.46
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.36
+
 ## @lunora/runtime [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.77...@lunora/runtime@1.0.0-alpha.78) (2026-08-27)
 
 ### Features

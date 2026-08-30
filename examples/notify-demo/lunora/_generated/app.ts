@@ -154,6 +154,8 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.listSchemaTables = () => ["announcements"];
+
         options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env as Record<string, unknown>) : undefined;
 
         options.logArchive = resolveLogArchiveFromEnv(env);

@@ -5,7 +5,7 @@ import paymentTables from "../src/schema";
 /**
  * Drift guard for the discriminator columns `@lunora/codegen` hardcodes.
  *
- * `packages/codegen/src/discover-feature-usage.ts` cannot resolve the
+ * `packages/codegen/src/discover/feature-usage.ts` cannot resolve the
  * cross-package `...paymentTables` spread, so it hardcodes the signature columns
  * that identify a real payment store — `providerSubscriptionId` + `state` on
  * `subscriptions`, `providerEventId` + `processedAt` on `events` — to gate the
@@ -22,7 +22,7 @@ describe("payment store signature columns (codegen drift guard)", () => {
 
         const { subscriptions } = paymentTables;
 
-        // Mirror of PAYMENT_SUBSCRIPTION_COLUMNS in discover-feature-usage.ts.
+        // Mirror of PAYMENT_SUBSCRIPTION_COLUMNS in discover/feature-usage.ts.
         expect(subscriptions?.shape).toHaveProperty("providerSubscriptionId");
         expect(subscriptions?.shape).toHaveProperty("state");
     });
@@ -32,7 +32,7 @@ describe("payment store signature columns (codegen drift guard)", () => {
 
         const { events } = paymentTables;
 
-        // Mirror of PAYMENT_EVENTS_COLUMNS in discover-feature-usage.ts.
+        // Mirror of PAYMENT_EVENTS_COLUMNS in discover/feature-usage.ts.
         expect(events?.shape).toHaveProperty("providerEventId");
         expect(events?.shape).toHaveProperty("processedAt");
     });

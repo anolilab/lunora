@@ -831,6 +831,29 @@ describe("shardDO upgrade gating", () => {
         expect(response.status).toBe(403);
     });
 
+    it("passes the gate for any origin when the allowlist is a wildcard", async () => {
+        expect.hasAssertions();
+
+        // `@lunora/runtime`'s CORS layer documents `*` as "permits any origin"
+        // and honours it. Reading the same variable more strictly here meant a
+        // project configured that way had every WebSocket upgrade rejected with
+        // a bare 403 — a browser sends its real `Origin`, never `*`, so the
+        // exact-match list never matched. Live queries, subscriptions and
+        // presence all died with nothing naming the cause.
+        const shard = new TestShard(createFakeState(), { LUNORA_ALLOWED_ORIGINS: "*" });
+
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Origin: "https://anything.example" } }));
+    });
+
+    it("still requires an origin header when the allowlist is a wildcard", async () => {
+        expect.assertions(1);
+
+        const shard = new TestShard(createFakeState(), { LUNORA_ALLOWED_ORIGINS: "*" });
+        const response = await shard.fetch(upgradeRequest("https://shard.internal/"));
+
+        expect(response.status).toBe(403);
+    });
+
     it("passes the gate when origin matches the allowlist", async () => {
         expect.hasAssertions();
 

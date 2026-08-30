@@ -221,6 +221,17 @@ type RowOutcome = { error: ImportError; kind: "error" } | { inserted: string; ki
 const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportGlobalArgs, row: ExportRow, line: number): Promise<RowOutcome> => {
     const { doc, table } = row;
 
+    // A row with no usable `table` is CORRUPT, not "someone else's" — check it
+    // before the global/shard routing below. Without this,
+    // `schema.tables[undefined]` is `undefined`, `?.shardMode?.kind` is
+    // `undefined`, and the row fell into the skip branch: the import reported
+    // success with zero errors and the operator could not tell a malformed line
+    // from a legitimately shard-local one. The shard-engine twin reports
+    // `BAD_ROW` for the identical input.
+    if (typeof table !== "string" || table.length === 0) {
+        return { error: { code: "BAD_ROW", line, message: "row is missing `table`", table }, kind: "error" };
+    }
+
     // Only process globals here; shard-local rows are someone else's
     // responsibility (the DO importers handle those).
     if (schema.tables[table]?.shardMode?.kind !== "global") {

@@ -44,12 +44,14 @@ export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from ".
 export {
     claimDevServerState,
     clearDevServerState,
+    DEV_BINDINGS_FILE,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
     DEV_STATE_DIR,
     DEV_STATE_FILE,
+    isDevServerReady,
     isProcessAlive,
     isRecordedProcessCurrent,
     readDevServerState,
@@ -76,8 +78,12 @@ export { applyLintIgnores, detectLintTools, LUNORA_IGNORED_PATHS } from "./lint-
 export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
 export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
 export { default as LunoraReporter } from "./lunora-reporter";
+export type { PackageManager, PackageManagerProbe } from "./package-manager";
+export { addArgsFor, detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptArgsFor, runScriptCommand } from "./package-manager";
 export type { SecretEntry } from "./package-secrets-registry";
 export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
+export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResult } from "./post-codegen-hook";
+export { runPostCodegenHook } from "./post-codegen-hook";
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
 export {
     interpretRemote,

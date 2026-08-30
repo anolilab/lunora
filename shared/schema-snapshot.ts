@@ -398,8 +398,20 @@ const diffRelations = (tableName: string, baseline: TableSnapshot, current: Tabl
 const diffExistingTable = (tableName: string, baseline: TableSnapshot, current: TableSnapshot, changes: DriftChange[]): void => {
     if (baseline.shardMode !== current.shardMode) {
         changes.push({
+            // `breaking` is load-bearing beyond this gate: because it blocks the
+            // deploy, rows cannot be stranded in `__root__` without someone
+            // passing `--allow-schema-drift` deliberately. The studio leans on
+            // that to justify NOT shipping a stranded-rows detector — see
+            // TODO(stranded-rows) in
+            // `packages/studio/src/features/advisors/derive-insights.ts`. Soften
+            // this severity and that detector becomes owed.
             severity: "breaking",
-            summary: `table ${tableName} changed shard mode: ${baseline.shardMode} → ${current.shardMode} — its physical storage moves; add a data migration / re-shard plan`,
+            // Deliberately NOT "add a data migration": `defineMigration` runs
+            // inside one shard and can only `replace` the row it was handed, so
+            // it cannot move a row between shards. Naming it here sends the
+            // operator to the one tool guaranteed not to work, at the exact
+            // moment the gate has their attention.
+            summary: `table ${tableName} changed shard mode: ${baseline.shardMode} → ${current.shardMode} — its physical storage moves, and existing rows do NOT follow the schema; re-home them with an export/import round trip (https://lunora.sh/docs/concepts/sharding#migrating-a-populated-table)`,
             table: tableName,
             scope: "table",
             type: "changedShardMode",

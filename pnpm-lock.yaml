@@ -534,6 +534,9 @@ catalogs:
     '@electric-sql/pglite':
       specifier: 0.5.4
       version: 0.5.4
+    '@electric-sql/pglite-pgvector':
+      specifier: 0.0.5
+      version: 0.0.5
     '@electric-sql/pglite-socket':
       specifier: 0.2.7
       version: 0.2.7
@@ -3034,9 +3037,6 @@ importers:
       '@visulima/fs':
         specifier: catalog:cli
         version: 6.0.0(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.7.1)
-      '@visulima/package':
-        specifier: catalog:cli
-        version: 5.0.12(@visulima/yaml@1.0.0)(ini@7.0.0)(jsonc-parser@3.3.1)(smol-toml@1.7.1)
       '@visulima/pail':
         specifier: catalog:cli
         version: 4.1.1(@opentelemetry/api@1.9.1)(express@5.2.1(supports-color@10.2.2))(hono@4.13.1)
@@ -3323,6 +3323,9 @@ importers:
       '@visulima/find-ai-runner':
         specifier: catalog:cli
         version: 1.0.1
+      '@visulima/package':
+        specifier: catalog:cli
+        version: 5.0.12(@visulima/yaml@1.0.0)(ini@7.0.0)(jsonc-parser@3.3.1)(smol-toml@1.7.1)
       dockerode:
         specifier: catalog:tooling
         version: 5.0.1(supports-color@10.2.2)
@@ -3536,13 +3539,10 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/observability':
-        specifier: 1.0.0-alpha.45
+        specifier: 1.0.0-alpha.48
         version: link:../observability
-      '@lunora/platform':
-        specifier: workspace:*
-        version: link:../platform
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.24
+        specifier: 1.0.0-alpha.26
         version: link:../platform-cloudflare
       '@lunora/shard-engine':
         specifier: workspace:*
@@ -3563,6 +3563,9 @@ importers:
       '@lunora/bindings':
         specifier: workspace:*
         version: link:../bindings
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@types/node':
         specifier: catalog:types
         version: 26.2.0
@@ -3687,6 +3690,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
@@ -3703,6 +3709,9 @@ importers:
       '@electric-sql/pglite':
         specifier: catalog:sql
         version: 0.5.4
+      '@electric-sql/pglite-pgvector':
+        specifier: catalog:sql
+        version: 0.0.5(@electric-sql/pglite@0.5.4)
       '@electric-sql/pglite-socket':
         specifier: catalog:sql
         version: 0.2.7(@electric-sql/pglite-age@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_hashids@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_ivm@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_textsearch@0.0.6(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_uuidv7@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pgtap@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pgvector@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite@0.5.4)
@@ -3761,7 +3770,7 @@ importers:
         specifier: workspace:*
         version: link:../flags
       '@lunora/observability':
-        specifier: 1.0.0-alpha.45
+        specifier: 1.0.0-alpha.48
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
@@ -4163,7 +4172,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.24
+        specifier: 1.0.0-alpha.26
         version: link:../platform-cloudflare
       '@lunora/runtime':
         specifier: workspace:*
@@ -5098,7 +5107,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/observability':
-        specifier: 1.0.0-alpha.45
+        specifier: 1.0.0-alpha.48
         version: link:../observability
       '@types/node':
         specifier: catalog:types
@@ -5176,9 +5185,6 @@ importers:
       '@visulima/vite-overlay':
         specifier: catalog:vite
         version: 2.0.12(ai@7.0.59(zod@4.4.3))(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-      ts-morph:
-        specifier: catalog:tooling
-        version: 28.0.0
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -5198,6 +5204,9 @@ importers:
       jsonc-parser:
         specifier: catalog:vite
         version: 3.3.1
+      ts-morph:
+        specifier: catalog:tooling
+        version: 28.0.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3

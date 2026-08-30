@@ -107,9 +107,9 @@ interface Validator<T = unknown> extends StandardSchemaV1<T, T> {
      */
     meta: (options: MetaOptions) => Validator<T>;
 
-    parse: (value: unknown) => T;
+    parse: (value: unknown, options?: ParseOptions) => T;
 
-    safeParse: (value: unknown) => { error: ValidationError; ok: false } | { ok: true; value: T };
+    safeParse: (value: unknown, options?: ParseOptions) => { error: ValidationError; ok: false } | { ok: true; value: T };
 }
 
 /** Extract the TS type a validator describes (the **select** type). */
@@ -267,6 +267,21 @@ interface NumberColumnValidator extends ColumnValidator<number, number> {
 }
 
 /**
+ * A {@link ColumnValidator} for `v.object(...)`, carrying the `.strip()` opt-out.
+ */
+interface ObjectColumnValidator<T> extends ColumnValidator<T, T> {
+    /**
+     * Drop keys this shape does not declare, even under `.output()`.
+     *
+     * Only meaningful there — input parsing strips already. Say it when the
+     * narrowing is deliberate (trimming an internal field off a row before it
+     * reaches a client); without it, an undeclared key on the way OUT is an
+     * error, because the alternative is deleting server data silently.
+     */
+    strip: () => ObjectColumnValidator<T>;
+}
+
+/**
  * A {@link ColumnValidator} for `v.array(...)` with ergonomic length-refinement
  * shortcuts — see {@link StringColumnValidator} for the delegation pattern.
  */
@@ -299,6 +314,12 @@ type InsertShape<S extends Record<string, Validator>> = {
     [K in keyof S as undefined extends InferInsert<S[K]> ? never : K]: InferInsert<S[K]>;
 };
 
+/** Options for {@link Validator.parse} / {@link Validator.safeParse}. */
+interface ParseOptions {
+    /** See {@link ParseContext.rejectUnknownKeys}. */
+    rejectUnknownKeys?: boolean;
+}
+
 interface ParseContext {
     /**
      * Mutable path stack walked from the root to the value currently being
@@ -315,6 +336,18 @@ interface ParseContext {
      * real {@link ValidationError} — see that constant for why.
      */
     probe?: boolean;
+
+    /**
+     * Reject keys an object shape does not declare, instead of dropping them.
+     *
+     * Off for input, where stripping is what stops an over-posted field reaching
+     * a handler. On for `.output()`, where the same behaviour deletes a field the
+     * server meant to send: a column present in the row and missing from the
+     * validator vanished from every response with no error anywhere. An object
+     * that opts out with `.strip()` keeps stripping under this flag, so
+     * deliberate narrowing stays possible and — unlike before — visible.
+     */
+    rejectUnknownKeys?: boolean;
 }
 
 interface InternalValidator<T> extends Validator<T> {
@@ -497,13 +530,13 @@ const createValidator = <T>(
             return parser(value, context);
         },
         kind,
-        parse(value: unknown) {
-            return parser(value, { path: [] });
+        parse(value: unknown, options?: ParseOptions) {
+            return parser(value, { path: [], ...options });
         },
         /** @returns `{ ok: true, value }` on success or `{ ok: false, error }` on a validation failure. */
-        safeParse(value: unknown): { error: ValidationError; ok: false } | { ok: true; value: T } {
+        safeParse(value: unknown, options?: ParseOptions): { error: ValidationError; ok: false } | { ok: true; value: T } {
             try {
-                return { ok: true as const, value: parser(value, { path: [] }) };
+                return { ok: true as const, value: parser(value, { path: [], ...options }) };
             } catch (error: unknown) {
                 if (error instanceof ValidationError) {
                     return { error, ok: false as const };
@@ -909,7 +942,7 @@ type OptionalizeShape<M> = {
 type ObjectShape = Record<string, Validator>;
 type ObjectShapeType<S extends ObjectShape> = OptionalizeShape<{ [K in keyof S]: Infer<S[K]> }>;
 
-const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<ObjectShapeType<S>, ObjectShapeType<S>> => {
+const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean): ObjectColumnValidator<ObjectShapeType<S>> => {
     // Precompute the key list, per-key internal validator, and the optional flag
     // once at construction time — the shape is fixed, so the per-parse hot path
     // never re-runs Object.keys (one array alloc) or re-casts each child.
@@ -933,7 +966,7 @@ const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<Objec
         throw new LunoraError("INTERNAL", 'v.object: "__proto__" cannot be a declared field name — it collides with the Object.prototype accessor');
     }
 
-    return asColumn(
+    const validator = asColumn(
         createValidator<ObjectShapeType<S>>(
             "object",
             (value, context) => {
@@ -944,6 +977,27 @@ const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<Objec
                 const input = value as Record<string, unknown>;
                 const out: Record<string, unknown> = {};
                 const { path } = context;
+
+                // Under `.output()` an undeclared key is a mistake, not noise:
+                // silently dropping it is how a column present in the row goes
+                // missing from every response. `.strip()` is the opt-out for a
+                // shape that is narrowing on purpose.
+                if (context.rejectUnknownKeys === true && stripUnknown !== true) {
+                    const declared = new Set(entries.map(({ key }) => key));
+                    const undeclared = Object.keys(input).filter((key) => !declared.has(key));
+
+                    if (undeclared.length > 0) {
+                        throw new ValidationError(
+                            `object has ${String(undeclared.length)} undeclared key(s): ${undeclared.join(", ")}. ` +
+                                `Add them to the validator, or call .strip() on it to drop them on purpose.`,
+                            {
+                                expected: `only the declared keys (${entries.map(({ key }) => key).join(", ")})`,
+                                path: [...path],
+                                received: undeclared.join(", "),
+                            },
+                        );
+                    }
+                }
 
                 for (const { child, isOptional, key } of entries) {
                     // Read via Object.hasOwn so a declared field whose name
@@ -972,7 +1026,15 @@ const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<Objec
             },
             { shape },
         ),
-    );
+    ) as unknown as ObjectColumnValidator<ObjectShapeType<S>>;
+
+    // Rebuilt rather than mutated, so `.strip()` returns a NEW validator: the
+    // shape it is called on may already be a const shared across procedures, and
+    // flipping its behaviour in place would change what every other holder
+    // parses.
+    validator.strip = () => objectValidator(shape, true);
+
+    return validator;
 };
 
 const record = <K extends Validator<string>, V extends Validator>(
@@ -1450,7 +1512,9 @@ export type {
     JsonSchemaFragment,
     MetaOptions,
     NumberColumnValidator,
+    ObjectColumnValidator,
     OptionalizeShape,
+    ParseOptions,
     PartialShape,
     SelectShape,
     ServerDefaultContext,

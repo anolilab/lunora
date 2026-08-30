@@ -1,3 +1,159 @@
+## @lunora/codegen [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.142...@lunora/codegen@1.0.0-alpha.143) (2026-08-30)
+
+### ⚠ BREAKING CHANGES
+
+* **values,server:** `.output()` rejects keys the validator does not declare — add
+them, or call `.strip()` to keep dropping them. `.output()` followed by
+`.stream()` no longer type-checks.
+
+
+Claude-Session: https://claude.ai/code/session_019dhrsvdiJJuDAMjmiKVrae
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **values,server:** reject undeclared keys on the way out, and refuse output on a stream ([#531](https://github.com/anolilab/lunora/issues/531)) ([6532aab](https://github.com/anolilab/lunora/commit/6532aab31e678ab4117c676bc546a8edcd6813d0))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.100
+* **@lunora/agent:** upgraded to 1.0.0-alpha.76
+* **@lunora/values:** upgraded to 1.0.0-alpha.34
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.38
+* **@lunora/server:** upgraded to 1.0.0-alpha.94
+
+## @lunora/codegen [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.141...@lunora/codegen@1.0.0-alpha.142) (2026-08-30)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.75
+
+## @lunora/codegen [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.140...@lunora/codegen@1.0.0-alpha.141) (2026-08-29)
+
+### Bug Fixes
+
+* **runtime:** stop export from silently skipping every shard-local row ([#527](https://github.com/anolilab/lunora/issues/527)) ([f2541e3](https://github.com/anolilab/lunora/commit/f2541e3b0f130469cef49edbbbeed184f2e1c28a))
+
+## @lunora/codegen [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.139...@lunora/codegen@1.0.0-alpha.140) (2026-08-29)
+
+### ⚠ BREAKING CHANGES
+
+* eleven packages now declare peerDependencies. Consumers that
+relied on those packages resolving through hoisting must install them; the
+alternative was shipping types that fail to resolve off this repo's node_modules.
+
+`@lunora/workflow` is an optional peer of `@lunora/runtime`, so packem inlines
+its types rather than importing them — the published `@lunora/runtime` carries no
+`@lunora/workflow` dependency, as its source comments already promised.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+* fix: satisfy eslint and the template matrix after the packem gate
+
+Two CI failures from making packem warnings fatal, each a gate that the local
+packem sweep does not cover.
+
+`@lunora/advisor` back to a real dependency on `@lunora/errors`. `ae-metrics.ts`
+imports `LunoraError` as a VALUE, and import/no-extraneous-dependencies requires
+that for anything under `src/` regardless of whether the module reaches the
+bundle. packem cannot see it because that module's value exports are
+quarantined — `src/index.ts` re-exports only its types — so the throwing code is
+tree-shaken out. The two rules disagree by construction; the packem side is now a
+commented `unused` exclusion that says which condition would end it.
+
+`@lunora/workflow` becomes a REQUIRED peer of `@lunora/runtime`. As an optional
+peer it was auto-installed anyway, and every one of the twelve templates then
+resolved `@lunora/workflow` from the npm REGISTRY instead of this checkout — the
+scaffold matrix builds its local-tarball map from required peers only, on the
+assumption that optional ones are never pulled in. Forcing the type to inline
+instead (`resolveExternals.exclude`) does not work: that option governs the JS
+bundle, and the declaration build has its own resolver, so the import survived.
+A required peer matches the other seven packages here and keeps the type
+resolvable for consumers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+### Build System
+
+* ship .mjs everywhere and make packem warnings fatal ([#526](https://github.com/anolilab/lunora/issues/526)) ([b3eaacc](https://github.com/anolilab/lunora/commit/b3eaacc5a31fe4634a5f4a6c59fda6fbbc8315e1))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.99
+* **@lunora/agent:** upgraded to 1.0.0-alpha.74
+* **@lunora/container:** upgraded to 1.0.0-alpha.37
+* **@lunora/errors:** upgraded to 1.0.0-alpha.26
+* **@lunora/platform:** upgraded to 1.0.0-alpha.21
+* **@lunora/queue:** upgraded to 1.0.0-alpha.38
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.44
+* **@lunora/values:** upgraded to 1.0.0-alpha.33
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.37
+* **@lunora/do:** upgraded to 1.0.0-alpha.109
+* **@lunora/server:** upgraded to 1.0.0-alpha.93
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.47
+
+## @lunora/codegen [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.138...@lunora/codegen@1.0.0-alpha.139) (2026-08-28)
+
+### Bug Fixes
+
+* **client,codegen,sql-store:** address four review findings ([#524](https://github.com/anolilab/lunora/issues/524)) ([0a97170](https://github.com/anolilab/lunora/commit/0a971705b4b5dea84564acd8f44dd77b81b39040))
+
+## @lunora/codegen [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.137...@lunora/codegen@1.0.0-alpha.138) (2026-08-28)
+
+### Bug Fixes
+
+* close nine copied-helper divergences across eight packages ([#522](https://github.com/anolilab/lunora/issues/522)) ([a2455bb](https://github.com/anolilab/lunora/commit/a2455bb0f58b9873633504c3f1e9bfeb44a5870e))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.98
+* **@lunora/agent:** upgraded to 1.0.0-alpha.73
+* **@lunora/container:** upgraded to 1.0.0-alpha.36
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/platform:** upgraded to 1.0.0-alpha.20
+* **@lunora/queue:** upgraded to 1.0.0-alpha.37
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.43
+* **@lunora/values:** upgraded to 1.0.0-alpha.32
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.36
+* **@lunora/do:** upgraded to 1.0.0-alpha.108
+* **@lunora/server:** upgraded to 1.0.0-alpha.92
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.46
+
+## @lunora/codegen [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.136...@lunora/codegen@1.0.0-alpha.137) (2026-08-28)
+
+### Bug Fixes
+
+* **codegen:** close eight silent-drop gaps in procedure discovery ([#513](https://github.com/anolilab/lunora/issues/513)) ([e393e49](https://github.com/anolilab/lunora/commit/e393e494c0145ad78e0f2b1e27798ed96e7039a3))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.97
+* **@lunora/agent:** upgraded to 1.0.0-alpha.72
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.42
+* **@lunora/do:** upgraded to 1.0.0-alpha.107
+* **@lunora/server:** upgraded to 1.0.0-alpha.91
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.45
+
+## @lunora/codegen [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.135...@lunora/codegen@1.0.0-alpha.136) (2026-08-28)
+
+### Bug Fixes
+
+* **codegen:** retarget an emitted qualifier onto a specifier that resolves ([#514](https://github.com/anolilab/lunora/issues/514)) ([420f17c](https://github.com/anolilab/lunora/commit/420f17c3bec4bd3744e0ace2eb79a4ff87eb2f0d))
+
+## @lunora/codegen [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.134...@lunora/codegen@1.0.0-alpha.135) (2026-08-27)
+
+### Bug Fixes
+
+* **codegen:** generated output that resolves, from a cold tree, in one run ([#510](https://github.com/anolilab/lunora/issues/510)) ([1bc114f](https://github.com/anolilab/lunora/commit/1bc114fa93fd75f03b8a7a8bff01ef831f1303c1))
+
 ## @lunora/codegen [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.133...@lunora/codegen@1.0.0-alpha.134) (2026-08-27)
 
 

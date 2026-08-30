@@ -10,7 +10,7 @@ import { isPiiColumn } from "../helpers";
  * A public query is reachable by any client. Returning a table row verbatim ships
  * every column it holds — including PII the caller never needed — and silently
  * widens the exposed surface every time a column is added to the table later. An
- * explicit `.output(v.object({ … }))` projection (or a `.use(mask(...))` policy)
+ * explicit `.output(v.object({ … }).strip())` projection (or a `.use(mask(...))` policy)
  * makes the exposed shape intentional and stops the next-added column from leaking
  * by default. This is an INFO-level nudge, not a defect: the query may be perfectly
  * fine — it flags a place worth a deliberate projection decision.
@@ -33,7 +33,7 @@ const outputProjectionMissingOnPublicRead: Lint = {
     level: "INFO",
     name: "output_projection_missing_on_public_read",
     remediation:
-        "Add an explicit return projection to the public query — `.output(v.object({ … }))` listing only the fields a client needs — or apply a `.use(mask(...))` policy to the PII columns. This makes the exposed shape intentional and stops a newly-added column from leaking through this query by default.",
+        "Add an explicit return projection to the public query — `.output(v.object({ … }).strip())` listing only the fields a client needs — or apply a `.use(mask(...))` policy to the PII columns. This makes the exposed shape intentional and stops a newly-added column from leaking through this query by default.",
     run: (context) => {
         if (context.rawRowReturns === undefined) {
             return [];
@@ -66,7 +66,7 @@ const outputProjectionMissingOnPublicRead: Lint = {
             findings.push(
                 emit(outputProjectionMissingOnPublicRead, {
                     cacheKey: `output_projection_missing_on_public_read:${row.file}:${row.line.toString()}`,
-                    detail: `Public query \`${row.exportName}\` (${row.file}:${row.line.toString()}) returns raw \`${row.table}\` rows with no \`.output(...)\` projection — shipping PII column(s) ${piiColumns.join(", ")} to every caller, and any column added to \`${row.table}\` later leaks by default. Project the return with \`.output(v.object({ … }))\` or mask the PII columns.`,
+                    detail: `Public query \`${row.exportName}\` (${row.file}:${row.line.toString()}) returns raw \`${row.table}\` rows with no \`.output(...)\` projection — shipping PII column(s) ${piiColumns.join(", ")} to every caller, and any column added to \`${row.table}\` later leaks by default. Project the return with \`.output(v.object({ … }).strip())\` or mask the PII columns.`,
                     metadata: {
                         columns: piiColumns,
                         exportName: row.exportName,

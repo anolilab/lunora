@@ -1,3 +1,116 @@
+## @lunora/studio [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.138...@lunora/studio@1.0.0-alpha.139) (2026-08-30)
+
+### Documentation
+
+* **sharding:** .global() adoption path; drop a runtime lint that never fired ([#528](https://github.com/anolilab/lunora/issues/528)) ([e390e3f](https://github.com/anolilab/lunora/commit/e390e3f94a7aa7efc031e95411ade96a059a4528))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.100
+* **@lunora/client:** upgraded to 1.0.0-alpha.65
+* **@lunora/react:** upgraded to 1.0.0-alpha.70
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.82
+
+## @lunora/studio [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.137...@lunora/studio@1.0.0-alpha.138) (2026-08-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.64
+* **@lunora/react:** upgraded to 1.0.0-alpha.69
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.81
+
+## @lunora/studio [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.136...@lunora/studio@1.0.0-alpha.137) (2026-08-29)
+
+### ⚠ BREAKING CHANGES
+
+* eleven packages now declare peerDependencies. Consumers that
+relied on those packages resolving through hoisting must install them; the
+alternative was shipping types that fail to resolve off this repo's node_modules.
+
+`@lunora/workflow` is an optional peer of `@lunora/runtime`, so packem inlines
+its types rather than importing them — the published `@lunora/runtime` carries no
+`@lunora/workflow` dependency, as its source comments already promised.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+* fix: satisfy eslint and the template matrix after the packem gate
+
+Two CI failures from making packem warnings fatal, each a gate that the local
+packem sweep does not cover.
+
+`@lunora/advisor` back to a real dependency on `@lunora/errors`. `ae-metrics.ts`
+imports `LunoraError` as a VALUE, and import/no-extraneous-dependencies requires
+that for anything under `src/` regardless of whether the module reaches the
+bundle. packem cannot see it because that module's value exports are
+quarantined — `src/index.ts` re-exports only its types — so the throwing code is
+tree-shaken out. The two rules disagree by construction; the packem side is now a
+commented `unused` exclusion that says which condition would end it.
+
+`@lunora/workflow` becomes a REQUIRED peer of `@lunora/runtime`. As an optional
+peer it was auto-installed anyway, and every one of the twelve templates then
+resolved `@lunora/workflow` from the npm REGISTRY instead of this checkout — the
+scaffold matrix builds its local-tarball map from required peers only, on the
+assumption that optional ones are never pulled in. Forcing the type to inline
+instead (`resolveExternals.exclude`) does not work: that option governs the JS
+bundle, and the declaration build has its own resolver, so the import survived.
+A required peer matches the other seven packages here and keeps the type
+resolvable for consumers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+### Bug Fixes
+
+* **docs,studio:** repair the .shardBy() migration path and surface storage headroom ([#525](https://github.com/anolilab/lunora/issues/525)) ([4ab9650](https://github.com/anolilab/lunora/commit/4ab96509847eff5e1aaa77f3ef22cfce214fe818))
+
+### Build System
+
+* ship .mjs everywhere and make packem warnings fatal ([#526](https://github.com/anolilab/lunora/issues/526)) ([b3eaacc](https://github.com/anolilab/lunora/commit/b3eaacc5a31fe4634a5f4a6c59fda6fbbc8315e1))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.99
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.42
+* **@lunora/client:** upgraded to 1.0.0-alpha.63
+* **@lunora/errors:** upgraded to 1.0.0-alpha.26
+* **@lunora/react:** upgraded to 1.0.0-alpha.68
+* **@lunora/mail:** upgraded to 1.0.0-alpha.55
+* **@lunora/notify:** upgraded to 1.0.0-alpha.28
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.80
+
+## @lunora/studio [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.135...@lunora/studio@1.0.0-alpha.136) (2026-08-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.62
+* **@lunora/react:** upgraded to 1.0.0-alpha.67
+
+## @lunora/studio [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.134...@lunora/studio@1.0.0-alpha.135) (2026-08-28)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.98
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.41
+* **@lunora/client:** upgraded to 1.0.0-alpha.61
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/react:** upgraded to 1.0.0-alpha.66
+* **@lunora/mail:** upgraded to 1.0.0-alpha.54
+* **@lunora/notify:** upgraded to 1.0.0-alpha.27
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.79
+
+## @lunora/studio [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.133...@lunora/studio@1.0.0-alpha.134) (2026-08-28)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.97
+
 ## @lunora/studio [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.132...@lunora/studio@1.0.0-alpha.133) (2026-08-27)
 
 

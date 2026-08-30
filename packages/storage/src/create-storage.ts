@@ -195,6 +195,19 @@ const enforceStreamMaxSize = (stream: ReadableStream, maxSize: number): Readable
     return stream.pipeThrough(counter);
 };
 
+/** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
+const TEXT_ENCODER = new TextEncoder();
+
+/**
+ * UTF-8 byte length of a key. R2's ceiling is documented in **bytes**, so a key
+ * of multi-byte (CJK/emoji) characters can sit well under 1024 UTF-16 code units
+ * yet exceed 1024 bytes — `String.length` waved it through only for R2 to reject
+ * it remotely, which defeats the point of validating here. `@lunora/bindings/kv`
+ * already measures this way and its comment describes exactly this failure; the
+ * error strings on this side said "byte limit" while counting code units.
+ */
+const byteLength = (value: string): number => TEXT_ENCODER.encode(value).length;
+
 /**
  * Reject keys that escape the bucket, contain a path-traversal segment, or
  * exceed R2's size ceiling. Used by every operation that takes a `key` —
@@ -209,7 +222,7 @@ const validateKey = (key: string): void => {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key must be a non-empty string");
     }
 
-    if (key.length > MAX_KEY_LENGTH) {
+    if (byteLength(key) > MAX_KEY_LENGTH) {
         throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
@@ -275,7 +288,7 @@ export const scopeKey = (prefix: string, key: string): string => {
     const trimmedPrefix = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
     const composed = `${trimmedPrefix}/${key}`;
 
-    if (composed.length > MAX_KEY_LENGTH) {
+    if (byteLength(composed) > MAX_KEY_LENGTH) {
         throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 

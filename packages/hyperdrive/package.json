@@ -1,6 +1,6 @@
 {
     "name": "@lunora/hyperdrive",
-    "version": "1.0.0-alpha.95",
+    "version": "1.0.0-alpha.100",
     "description": "Bring-your-own Postgres/MySQL for Lunora via Cloudflare Hyperdrive: a driver-agnostic, action-only ctx.sql",
     "keywords": [
         "cloudflare",
@@ -64,14 +64,16 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.24",
-        "@lunora/shard-engine": "1.0.0-alpha.44",
-        "@lunora/sql-store": "1.0.0-alpha.96",
+        "@lunora/errors": "1.0.0-alpha.26",
+        "@lunora/platform": "1.0.0-alpha.21",
+        "@lunora/shard-engine": "1.0.0-alpha.47",
+        "@lunora/sql-store": "1.0.0-alpha.100",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@electric-sql/pglite": "catalog:sql",
+        "@electric-sql/pglite-pgvector": "catalog:sql",
         "@electric-sql/pglite-socket": "catalog:sql",
         "@types/node": "catalog:types",
         "@types/pg": "catalog:sql",

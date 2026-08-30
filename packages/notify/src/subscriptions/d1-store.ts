@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { isBareIdentifier } from "../../../../shared/bare-identifier";
 import type { StoredSubscription, SubscriptionFilter, SubscriptionKind, SubscriptionStatus, SubscriptionStore } from "../types";
 import { legacyIdFor } from "./normalize";
 
@@ -81,8 +82,6 @@ interface D1StoreOptions {
     tableName?: string;
 }
 
-const IDENTIFIER_PATTERN = /^[A-Za-z_]\w*$/u;
-
 /**
  * A D1-backed {@link SubscriptionStore}. Edge-safe (D1 is a Worker binding). The
  * backing table is created lazily on first use (`CREATE TABLE IF NOT EXISTS`), so
@@ -107,7 +106,7 @@ const IDENTIFIER_PATTERN = /^[A-Za-z_]\w*$/u;
 const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): SubscriptionStore => {
     const table = options.tableName ?? "lunora_push_subscriptions";
 
-    if (!IDENTIFIER_PATTERN.test(table)) {
+    if (!isBareIdentifier(table)) {
         throw new LunoraError("BAD_REQUEST", `@lunora/notify: d1SubscriptionStore tableName "${table}" is not a bare SQL identifier`);
     }
 

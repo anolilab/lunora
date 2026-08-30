@@ -316,6 +316,8 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.listSchemaTables = () => ["cells", "organizations", "members", "projects", "deployments", "aliasOwnership", "metricPoints", "deployKeys", "overageDebits", "tenantLogs", "observations", "githubInstallations", "builds", "buildLogs", "domains", "auditLog", "invitations", "platformUsage", "issues", "incidents", "alertRules", "alertRuleState", "alerts", "uptimeChecks", "uptimeState", "secrets", "cloudflareBilling", "dashboards", "customers", "events", "paymentSessions", "subscriptions", "usageEvents", "rateLimits"];
+
         if (this.schedulerDeclaration) {
             options.schedulerDO = this.schedulerDeclaration.namespace(env);
         }

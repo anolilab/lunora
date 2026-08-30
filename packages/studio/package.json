@@ -1,6 +1,6 @@
 {
     "name": "@lunora/studio",
-    "version": "1.0.0-alpha.133",
+    "version": "1.0.0-alpha.139",
     "description": "The Lunora Studio: a local admin UI for your schema, data, logs, and advisors",
     "keywords": [
         "admin-ui",
@@ -33,16 +33,16 @@
     ],
     "type": "module",
     "sideEffects": false,
-    "module": "./dist/index.js",
+    "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.js"
+            "import": "./dist/index.mjs"
         },
         "./mount": {
             "types": "./dist/mount.d.ts",
-            "import": "./dist/mount.js"
+            "import": "./dist/mount.mjs"
         },
         "./styles.css": "./dist/styles.css",
         "./standalone/studio.js": "./dist/standalone/studio.js",
@@ -77,11 +77,11 @@
         "@hugeicons/react": "catalog:ui",
         "@lingui/core": "catalog:i18n",
         "@lingui/message-utils": "catalog:i18n",
-        "@lunora/advisor": "1.0.0-alpha.96",
-        "@lunora/bindings": "1.0.0-alpha.40",
-        "@lunora/client": "1.0.0-alpha.60",
-        "@lunora/errors": "1.0.0-alpha.24",
-        "@lunora/react": "1.0.0-alpha.65",
+        "@lunora/advisor": "1.0.0-alpha.100",
+        "@lunora/bindings": "1.0.0-alpha.42",
+        "@lunora/client": "1.0.0-alpha.65",
+        "@lunora/errors": "1.0.0-alpha.26",
+        "@lunora/react": "1.0.0-alpha.70",
         "@tanstack/react-query": "catalog:frontend",
         "@tanstack/react-router": "catalog:frontend",
         "@tanstack/react-table": "catalog:frontend",
@@ -97,9 +97,9 @@
     "devDependencies": {
         "@babel/core": "catalog:build",
         "@babel/preset-react": "catalog:build",
-        "@lunora/mail": "1.0.0-alpha.53",
-        "@lunora/notify": "1.0.0-alpha.26",
-        "@lunora/runtime": "1.0.0-alpha.78",
+        "@lunora/mail": "1.0.0-alpha.55",
+        "@lunora/notify": "1.0.0-alpha.29",
+        "@lunora/runtime": "1.0.0-alpha.82",
         "@tailwindcss/cli": "catalog:vite",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
@@ -121,6 +121,8 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
+        "@lunora/mail": ">=1.0.0-alpha.53 <2.0.0-0",
+        "@lunora/runtime": ">=1.0.0-alpha.78 <2.0.0-0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7"
     },

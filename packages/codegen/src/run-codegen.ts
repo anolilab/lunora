@@ -11,63 +11,70 @@ import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { toAdvisorContext } from "./advisor";
 import { buildDeclarationSurface } from "./declaration-surface";
-import discoverAdminRoutes from "./discover-admin-routes";
-import discoverAiRawRuns from "./discover-ai-raw-runs";
-import discoverAiToolSideEffects from "./discover-ai-tool-side-effects";
-import discoverArgumentDerivedFetches from "./discover-argument-derived-fetches";
-import discoverArgumentValidators from "./discover-argument-validators";
-import discoverAuthConfig from "./discover-auth-config";
-import discoverAuthApiCalls from "./discover-authapi-calls";
-import discoverBrowserUrlAccesses from "./discover-browser-url-accesses";
-import discoverConfigCalls from "./discover-config-calls";
-import discoverContainerKeyAccesses from "./discover-container-key-accesses";
-import discoverContainerOverrides from "./discover-container-overrides";
-import discoverCrons from "./discover-crons";
-import discoverExportSinks from "./discover-export-sinks";
-import discoverFailOpenGuards from "./discover-fail-open-guards";
-import { buildStudioFeatures, hasPaymentStoreTables } from "./discover-feature-usage";
-import discoverFlagReads from "./discover-flag-reads";
-import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
-import { discoverFlagKeys } from "./discover-flags";
-import { discoverFunctions, listLunoraSourceFiles, resolveStandardSchemaType } from "./discover-functions";
-import discoverGeoIndexUsages from "./discover-geo-index-usages";
-import discoverHttpActionGuards from "./discover-http-action-guards";
-import discoverHttpHeaderWrites from "./discover-http-header-writes";
-import discoverHttpRoutes from "./discover-http-routes";
-import discoverIdentityClaimReads from "./discover-identity-claim-reads";
-import discoverImageDeliveryUrlAccesses from "./discover-image-delivery-url-accesses";
-import discoverInserts from "./discover-inserts";
-import discoverKvKeyAccesses from "./discover-kv-key-accesses";
-import discoverMailRecipientAccesses from "./discover-mail-recipient-accesses";
-import discoverMaskProcedures, { discoverMaskHasNonLiteralPolicy, discoverMaskMetadata, discoverMaskStrategies } from "./discover-mask-procedures";
-import discoverMigrations from "./discover-migrations";
-import discoverMutatorWrites from "./discover-mutator-writes";
-import { discoverMutators } from "./discover-mutators";
-import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
-import discoverNormalizeIdAuthorization from "./discover-normalize-id-authorization";
-import { discoverNotifyCalls, discoverNotifyConfig } from "./discover-notify";
-import discoverOwnerFieldWrites from "./discover-owner-field-writes";
-import discoverPaymentWebhooks from "./discover-payment-webhooks";
-import discoverPrivilegedDispatches from "./discover-privileged-dispatches";
-import discoverProcedureMiddleware from "./discover-procedure-middleware";
-import discoverQueries from "./discover-queries";
-import discoverR2sqlCalls from "./discover-r2sql-calls";
-import discoverRatelimitKeySelectors from "./discover-ratelimit-key-selectors";
-import discoverRawRowReturns from "./discover-raw-row-returns";
-import discoverRelationLoads from "./discover-relation-loads";
-import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
-import discoverSchema from "./discover-schema";
-import discoverSecrets from "./discover-secrets";
-import { discoverShapes } from "./discover-shapes";
-import discoverSoftDeleteReads from "./discover-soft-delete-reads";
-import discoverSqlInterpolation from "./discover-sql-interpolation";
-import discoverStaleMigrationImports from "./discover-stale-migration-imports";
-import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
-import discoverStorageUploads from "./discover-storage-uploads";
-import discoverUnregisteredProcedures from "./discover-unregistered-procedures";
-import discoverUnrestrictedWhereBranches from "./discover-unrestricted-where-branches";
-import discoverVectorNamespaceAccesses from "./discover-vector-namespace-accesses";
-import discoverWorkflowCalls from "./discover-workflow-calls";
+import discoverAdminRoutes from "./discover/admin-routes";
+import discoverAiRawRuns from "./discover/ai-raw-runs";
+import discoverAiToolSideEffects from "./discover/ai-tool-side-effects";
+import discoverArgumentDerivedFetches from "./discover/argument-derived-fetches";
+import discoverArgumentValidators from "./discover/argument-validators";
+import { listLunoraSourceFiles } from "./discover/ast";
+import discoverAuthConfig from "./discover/auth-config";
+import discoverAuthApiCalls from "./discover/authapi-calls";
+import discoverBrowserUrlAccesses from "./discover/browser-url-accesses";
+import discoverConfigCalls from "./discover/config-calls";
+import discoverContainerKeyAccesses from "./discover/container-key-accesses";
+import discoverContainerOverrides from "./discover/container-overrides";
+import discoverCrons from "./discover/crons";
+import discoverExportSinks from "./discover/export-sinks";
+import discoverFailOpenGuards from "./discover/fail-open-guards";
+import { discoverFlagKeys } from "./discover/flag-keys";
+import discoverFlagReads from "./discover/flag-reads";
+import discoverFlagSecurityDefaults from "./discover/flag-security-defaults";
+import discoverFunctions from "./discover/functions";
+import resolveStandardSchemaType from "./discover/functions/resolve-standard-schema-type";
+import discoverGeoIndexUsages from "./discover/geo-index-usages";
+import discoverHttpActionGuards from "./discover/http-action-guards";
+import discoverHttpHeaderWrites from "./discover/http-header-writes";
+import discoverHttpRoutes from "./discover/http-routes";
+import discoverIdentityClaimReads from "./discover/identity-claim-reads";
+import discoverImageDeliveryUrlAccesses from "./discover/image-delivery-url-accesses";
+import discoverInserts from "./discover/inserts";
+import discoverKvKeyAccesses from "./discover/kv-key-accesses";
+import discoverMailRecipientAccesses from "./discover/mail-recipient-accesses";
+import discoverMaskProcedures from "./discover/mask-procedures";
+import discoverMaskHasNonLiteralPolicy from "./discover/mask-procedures/has-non-literal-policy";
+import discoverMaskMetadata from "./discover/mask-procedures/metadata";
+import discoverMaskStrategies from "./discover/mask-procedures/strategies";
+import discoverMigrations from "./discover/migrations";
+import discoverMutatorWrites from "./discover/mutator-writes";
+import { discoverMutators } from "./discover/mutators";
+import discoverNondeterministicCalls from "./discover/nondeterministic-calls";
+import discoverNormalizeIdAuthorization from "./discover/normalize-id-authorization";
+import { discoverNotifyCalls, discoverNotifyConfig } from "./discover/notify";
+import discoverOwnerFieldWrites from "./discover/owner-field-writes";
+import hasPaymentStoreTables from "./discover/payment-store-tables";
+import discoverPaymentWebhooks from "./discover/payment-webhooks";
+import discoverPrivilegedDispatches from "./discover/privileged-dispatches";
+import discoverProcedureMiddleware from "./discover/procedure-middleware";
+import discoverQueries from "./discover/queries";
+import discoverR2sqlCalls from "./discover/r2sql-calls";
+import discoverRatelimitKeySelectors from "./discover/ratelimit-key-selectors";
+import discoverRawRowReturns from "./discover/raw-row-returns";
+import discoverRelationLoads from "./discover/relation-loads";
+import discoverRlsProcedures from "./discover/rls-procedures";
+import discoverRlsMetadata from "./discover/rls-procedures/metadata";
+import discoverSchema from "./discover/schema";
+import discoverSecrets from "./discover/secrets";
+import { discoverShapes } from "./discover/shapes";
+import discoverSoftDeleteReads from "./discover/soft-delete-reads";
+import discoverSqlInterpolation from "./discover/sql-interpolation";
+import discoverStaleMigrationImports from "./discover/stale-migration-imports";
+import discoverStorageKeyAccesses from "./discover/storage-key-accesses";
+import discoverStorageUploads from "./discover/storage-uploads";
+import { buildStudioFeatures } from "./discover/studio-features";
+import discoverUnregisteredProcedures from "./discover/unregistered-procedures";
+import discoverUnrestrictedWhereBranches from "./discover/unrestricted-where-branches";
+import discoverVectorNamespaceAccesses from "./discover/vector-namespace-accesses";
+import discoverWorkflowCalls from "./discover/workflow-calls";
 import {
     buildStorageColumns,
     emitAgents,
@@ -568,7 +575,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `discoverFunctions` below are where `v.from(...)` is read, and an
     // unregistered resolver silently yields `unknown` for every one of them.
     // Recovering the type needs the checker plus the generated-file
-    // renderability guards, both of which live in `discover-functions`;
+    // renderability guards, both of which live in `discover/functions`;
     // registered here rather than imported by the parser, which would be a
     // cycle.
     setStandardTypeResolver(resolveStandardSchemaType);
@@ -908,6 +915,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         identity,
         // Schema `.jurisdiction("…")` → pin the generated worker's DOs to the region.
         jurisdiction: schema.jurisdiction,
+        // Drives the emitted `listSchemaTables` — export's seed for "every table".
+        tableNames: schema.tables.map((table) => table.name),
         useUmbrella,
         // Voice-enabled agents (`defineAgent({ voice: … })`) → wire the worker's
         // `/_lunora/voice/<exportName>` route to each agent's `VOICE_*` DO

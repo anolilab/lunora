@@ -1013,7 +1013,22 @@ class LunoraClient {
      */
     private readonly streams = new Map<
         string,
-        { durable: boolean; generation: number | undefined; handle: StreamHandle; lastSeq: number; message: ClientMessage; shardKey: string | undefined }
+        {
+            durable: boolean;
+            generation: number | undefined;
+            handle: StreamHandle;
+            lastSeq: number;
+            message: ClientMessage;
+            shardKey: string | undefined;
+
+            /**
+             * Whether the start frame ever reached the server. Distinguishes "the
+             * run exists server-side and must be told to stop" from "the frame is
+             * still queued locally and can simply be dropped" — which is the whole
+             * question on the cancel path when the socket is down.
+             */
+            started: boolean;
+        }
     >();
 
     /** Live shape subscriptions (partial replication), keyed by their wire id. */
@@ -2103,7 +2118,18 @@ class LunoraClient {
     public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: ActionCallOptions = {}): Promise<ReturnOf<F>> {
         this.assertOpen();
 
-        return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey)) as ReturnOf<F>;
+        // Both flags, because an action is the one entry point that does both
+        // jobs: it reads through `ctx.runQuery` and writes through
+        // `ctx.runMutation`. `query()` attaches and `mutation()` captures; this
+        // passed neither, so an action writing through a `.global()` / D1 table
+        // left `this.bookmark` untouched and the very next `query()` attached a
+        // pre-action bookmark — answerable by a replica that predates the write.
+        // The worker forwards an inbound `x-d1-bookmark` and returns one on this
+        // route, so nothing upstream was compensating.
+        return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, {
+            attachBookmark: true,
+            captureBookmark: true,
+        })) as ReturnOf<F>;
     }
 
     /**
@@ -3353,16 +3379,7 @@ class LunoraClient {
         const { handle, iterable } = createStream<ReturnOf<F>>({
             maxBuffer: options.maxBuffer,
             onCancel: () => {
-                // Send the cancel frame on the matching connection (if any).
-                // If the socket is down we drop the cancel: the DO has already
-                // lost its handle on close, so there's nothing to abort.
-                const conn = this.getConnection(shardKey);
-
-                if (conn) {
-                    sendOn(conn, { id, type: "unsubscribe" });
-                }
-
-                this.streams.delete(id);
+                this.cancelStream(id, shardKey);
             },
         });
 
@@ -3389,7 +3406,17 @@ class LunoraClient {
         // `durable` starts from the caller's intent and is corrected by the first
         // `seq`-bearing chunk; a server that did not declare the procedure durable
         // never sends one, so the stream stays non-resumable.
-        this.streams.set(id, { durable: options.durable === true, generation: undefined, handle: handle as StreamHandle, lastSeq: 0, message, shardKey });
+        const record = {
+            durable: options.durable === true,
+            generation: undefined as number | undefined,
+            handle: handle as StreamHandle,
+            lastSeq: 0,
+            message,
+            shardKey,
+            started: false,
+        };
+
+        this.streams.set(id, record);
 
         // Fast path: socket is open, try to send immediately. `sendOn` can still
         // return `false` if the socket closed between the `wsState` check and the
@@ -3398,7 +3425,37 @@ class LunoraClient {
         // rides the next reconnect instead of leaking a forever-hanging consumer.
         const sentImmediately = conn?.wsState === "open" && sendOn(conn, message);
 
-        if (!sentImmediately && conn) {
+        // Once the frame lands the server owns a run for this id, so a later
+        // cancel has to reach it rather than just dropping the local record.
+        record.started = sentImmediately;
+
+        if (!sentImmediately && conn === undefined) {
+            // No connection at all, so there is nothing to send on AND nothing to
+            // queue against. `ensureSocket` returns before creating one whenever
+            // this tab is not the cross-tab leader — which includes the window
+            // every `crossTabSync` client spends as a follower before it
+            // self-promotes — and cross-tab relays only subscription frames, so a
+            // follower has no stream path.
+            //
+            // Both branches below used to be guarded on `conn`, so this case fell
+            // off the end: the stream was recorded and its iterable returned
+            // having sent nothing and queued nothing, and the consumer's
+            // `for await` hung forever with no error and no completion. Failing
+            // it names the limitation instead.
+            this.streams.delete(id);
+            handle.fail(
+                new LunoraError(
+                    "STREAM_DISCONNECTED",
+                    "stream unavailable: this tab is not the cross-tab WebSocket leader, so it holds no socket to stream over",
+                ),
+            );
+
+            return iterable;
+        }
+
+        // `conn` is provably present here — the branch above returned for its
+        // absence, which is the case that used to fall through both guards.
+        if (!sentImmediately) {
             // Defer the send to the open handler — the existing pending logic
             // is for unsubscribes, so stash the stream-start frame separately.
             conn.pendingStreams = conn.pendingStreams ?? [];
@@ -3696,7 +3753,26 @@ class LunoraClient {
 
                 notifySubscription(state, foldOptimistic(data, state.optimisticLayers));
             },
-            onSubscriptionError: (key, error) => {
+            onLeaderClaimAnswered: () => {
+                // A new tab just announced itself. Re-state our status directly:
+                // `emitConnectionStatus` short-circuits when nothing changed, so
+                // a stable leader never re-broadcasts and a late-joining follower
+                // would otherwise sit on `leaderStatus === undefined` — reporting
+                // `"idle"` while the app is live, and never seeing the
+                // transitioned-to-connected edge that flushes its offline queue.
+                if (this.tabCoordinator?.isLeader()) {
+                    this.tabCoordinator.broadcastConnectionStatus(this.computeStatus(), this.identityFingerprint());
+                }
+            },
+            onSubscriptionError: (key, error, identity) => {
+                // Belt-and-braces identity check — see `onConnectionStatus`'s
+                // comment for the full rationale (identical here). This was the
+                // one of the four callbacks without it, which only went unnoticed
+                // because nothing broadcast to it.
+                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                    return;
+                }
+
                 const state = this.subscriptions.get(key);
 
                 if (state) {
@@ -4864,16 +4940,7 @@ class LunoraClient {
                 // Reconnect-after-close: in-flight streams have already torn down
                 // on the server, so the only entries here are brand-new ones that
                 // raced the connect.
-                if (conn.pendingStreams && conn.pendingStreams.length > 0) {
-                    const pending = conn.pendingStreams;
-
-                    // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
-                    conn.pendingStreams = [];
-
-                    for (const message of pending) {
-                        sendOn(conn, message);
-                    }
-                }
+                this.flushPendingStreams(conn);
 
                 // Rejoin every whisper topic registered for this shard so ephemeral
                 // channels survive a socket bounce.
@@ -4888,6 +4955,66 @@ class LunoraClient {
                 this.flushOfflineQueue(shardKey).catch(() => undefined);
             },
         });
+    }
+
+    /**
+     * Send the stream-start frames queued while the socket was (re)connecting,
+     * marking each one that lands as started on the server.
+     */
+    private flushPendingStreams(conn: ShardConnection): void {
+        if (!conn.pendingStreams || conn.pendingStreams.length === 0) {
+            return;
+        }
+
+        const pending = conn.pendingStreams;
+
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.pendingStreams = [];
+
+        for (const message of pending) {
+            // Reaching the server is what makes a later cancel owe it an
+            // unsubscribe rather than a silent local delete.
+            const stream = sendOn(conn, message) ? this.streams.get(String((message as { id?: string }).id)) : undefined;
+
+            if (stream) {
+                stream.started = true;
+            }
+        }
+    }
+
+    /**
+     * Tear down a stream the consumer cancelled, telling the server when the
+     * server is the one still holding it.
+     */
+    private cancelStream(id: string, shardKey: string | undefined): void {
+        const conn = this.getConnection(shardKey);
+        const stream = this.streams.get(id);
+
+        if (conn) {
+            // Drop a start frame still waiting on the socket. Without this the
+            // cancelled stream was sent anyway on the next open: the server opened
+            // an iterator nobody consumes, its chunks arrived for an id no longer
+            // in `this.streams` (a silent no-op), and no `unsubscribe` ever
+            // followed because the consumer had already gone. `handleDisconnect`
+            // knows to filter `pendingStreams` by id; that knowledge just never
+            // reached the cancel path.
+            conn.pendingStreams = conn.pendingStreams?.filter((pending) => (pending as { id?: string }).id !== id);
+
+            // Dropping the cancel when the socket is down is right only for an
+            // EPHEMERAL run: the DO lost its handle on close, so there is nothing
+            // left to abort. A DURABLE run is the opposite — it outlives the
+            // socket by design, and the line above just removed the resume frame
+            // that would have carried us back to it. Without queueing the
+            // unsubscribe the server keeps producing and persisting a run no one
+            // will ever read, and nothing later says stop. `pendingUnsubscribes`
+            // already flushes ahead of `pendingStreams` on open, so the teardown
+            // lands before any resume that races it.
+            if (!sendOn(conn, { id, type: "unsubscribe" }) && stream?.durable === true && stream.started) {
+                conn.pendingUnsubscribes.push({ id, type: "unsubscribe" });
+            }
+        }
+
+        this.streams.delete(id);
     }
 
     private handleDisconnect(conn: ShardConnection): void {
@@ -5251,7 +5378,35 @@ class LunoraClient {
         const state = id === undefined ? undefined : this.subscriptions.getById(id);
 
         if (state) {
-            fanSubscriptionError(state.errorCallbacks, buildSubscriptionError(message));
+            const subscriptionError = buildSubscriptionError(message);
+
+            // Snapshot the identity and key BEFORE fanning. `fanSubscriptionError`
+            // runs subscriber `onError` callbacks synchronously, and one of them
+            // may call `setAuthToken` — signing out and back in is a natural
+            // reaction to an auth-shaped rejection. Reading the fingerprint
+            // afterwards stamps this frame with the identity that replaced the one
+            // the error was raised under, and the `identity` field is exactly what
+            // followers trust to decide the frame is theirs: tabs on the NEW
+            // identity would accept a rejection belonging to the OLD session.
+            //
+            // Stamping the captured identity is the whole fix — followers still on
+            // that identity accept it (correct) and everyone else drops it
+            // (correct), so there is no need to also suppress the broadcast.
+            const identity = this.identityFingerprint();
+            const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+
+            fanSubscriptionError(state.errorCallbacks, subscriptionError);
+
+            // Fan it to follower tabs too. `broadcastSubscriptionError` existed
+            // with no caller, so the `onSubscriptionError` handler wired to it
+            // was unreachable: a `subscribe(..., { onError })` on a follower
+            // never fired for a server-side rejection (an RLS denial, a failed
+            // admin gate) and the query just sat empty. Guarded on leadership
+            // like its `data` and `settled` siblings — only the leader holds the
+            // socket that produced this frame.
+            if (this.tabCoordinator?.isLeader()) {
+                this.tabCoordinator.broadcastSubscriptionError(key, subscriptionError, identity);
+            }
 
             return;
         }
