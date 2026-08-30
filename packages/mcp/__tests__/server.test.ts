@@ -62,14 +62,24 @@ describe("resolveClient", () => {
         expect(setAuthToken).toHaveBeenCalledWith("admin-token");
     });
 
-    it("does not call setAuthToken when no token is given", () => {
-        expect.assertions(1);
+    // Every tool reaches admin-gated `/_lunora/admin/*` routes — introspection,
+    // the `assertRunnable` allowlist precheck, and the observability reads — so a
+    // tokenless server has no working surface at all. It used to construct fine
+    // and advertise a read-only tool list that 403s on first use, while the five
+    // privileged tools were hidden by a `token.length > 0` proxy for adminness.
+    it("refuses a url with no token instead of advertising tools that can only 403", () => {
+        expect.assertions(2);
 
         const setAuthToken = vi.spyOn(LunoraClient.prototype, "setAuthToken").mockImplementation(() => undefined);
 
-        createLunoraMcpServer({ url: "https://example.workers.dev" });
-
+        expect(() => createLunoraMcpServer({ url: "https://example.workers.dev" })).toThrow(/requires a `token`/);
         expect(setAuthToken).not.toHaveBeenCalled();
+    });
+
+    it("refuses an empty-string token the same way", () => {
+        expect.assertions(1);
+
+        expect(() => createLunoraMcpServer({ token: "", url: "https://example.workers.dev" })).toThrow(/requires a `token`/);
     });
 });
 

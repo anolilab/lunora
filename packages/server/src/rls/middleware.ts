@@ -42,8 +42,9 @@
  * The middleware is signature-compatible with the builder's `Middleware<>`,
  * so `.use(rls(policies))` slots in like any other middleware.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { Middleware } from "../builder/types";
-import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
 import { optionalWriterOverride } from "../optional-writer-override";
@@ -1687,7 +1688,7 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
     // these (see `shape-read-base.ts`). Cast to the erased `Policy<unknown>`
     // the tag stores; the closures are evaluated against a structurally-built
     // PolicyContext, exactly like this middleware does at request time.
-    return tagRlsMiddleware(middleware, { policies: policies as ReadonlyArray<Policy>, roles: options.roles ?? [] });
+    return tagRlsMiddleware(middleware, [{ policies: policies as ReadonlyArray<Policy>, roles: options.roles ?? [] }]);
 };
 
 export { rls };

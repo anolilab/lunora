@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
+import type { ReadOnlyStorage, StorageObjectBody } from "../src/index";
 import { serveStorageObject } from "../src/index";
 
 interface FakeObjectOptions {
@@ -277,5 +278,24 @@ describe("serveStorageObject", () => {
         const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=0-1,4-5" } }));
 
         expect(response.status).toBe(200);
+    });
+});
+
+describe("ctx.storage.download contract", () => {
+    // `download()` resolves the R2 OBJECT (metadata plus a `body` stream), not a
+    // bare stream — `types.ts` declared the opposite, which made
+    // `return new Response(await ctx.storage.download(key))` typecheck and then
+    // serve the literal text `[object Object]` with a 200. These are compile-time
+    // assertions: `lint:types` type-checks `__tests__/`.
+    it("is declared as the object-returning shape a real ctx implements", () => {
+        expect.assertions(1);
+
+        expectTypeOf<Awaited<ReturnType<ReadOnlyStorage["download"]>>>().toEqualTypeOf<StorageObjectBody | null>();
+
+        // And a real read-only ctx satisfies the surface `serveStorageObject`
+        // reads through, so the helper is reachable from a query/mutation ctx.
+        const usable: Parameters<typeof serveStorageObject>[0] = { storage: {} as ReadOnlyStorage };
+
+        expect(usable).toBeDefined();
     });
 });

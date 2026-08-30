@@ -86,9 +86,10 @@
  * `.use(rls(...)).use(mask(...))` yields rows that are both row-filtered and
  * column-masked.
  */
+import { LunoraError } from "@lunora/errors";
+
 import { fnv1aHex } from "../../../../shared/fnv1a";
 import type { Middleware } from "../builder/types";
-import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
 import { optionalWriterOverride } from "../optional-writer-override";

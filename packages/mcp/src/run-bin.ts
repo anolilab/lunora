@@ -7,7 +7,7 @@ import { connectStdio } from "./server";
  * a plain bag so the entry logic is testable without mutating `process.env`.
  *
  * - `LUNORA_URL` (required) — base URL of the deployed Worker.
- * - `LUNORA_ADMIN_TOKEN` (optional, but effectively required to be the admin bearer) — bearer token sent on every RPC. It must be the deployment's admin token: every tool depends on admin-gated introspection (`/_lunora/admin/*`), so a scoped/app token 403s (`ADMIN_FORBIDDEN`) on the first call. The read-only guarantee is enforced in-process via `LUNORA_MCP_ALLOW_WRITES` defaulting off — NOT by the token's scope.
+ * - `LUNORA_ADMIN_TOKEN` (required) — bearer token sent on every RPC. It must be the deployment's admin token: every tool depends on admin-gated introspection (`/_lunora/admin/*`), so a scoped/app token 403s (`ADMIN_FORBIDDEN`) on the first call. The read-only guarantee is enforced in-process via `LUNORA_MCP_ALLOW_WRITES` defaulting off — NOT by the token's scope.
  * - `LUNORA_MCP_ALLOW_WRITES` (optional) — set to `1`/`true`/`yes`/`on` to expose the mutation/action tools. Default: read-only (writes disabled).
  * - `LUNORA_MCP_ALLOW_AGENTS` (optional) — set to `1`/`true`/`yes`/`on` to expose the `agent_<name>` tools. Default: agent tools disabled.
  * - `LUNORA_MCP_AGENTS` (optional) — `;`-separated `name:description` pairs (e.g. `"support:Support questions;billing:Billing help"`) selecting which agents to expose.
@@ -73,6 +73,16 @@ const runBin = async (environment: BinEnvironment, dependencies: RunBinDependenc
         throw new BinError("LUNORA_URL environment variable is required", 1);
     }
 
+    const token = environment.LUNORA_ADMIN_TOKEN;
+
+    // Refused here rather than at the first 403: every tool reaches admin-gated
+    // routes, so a tokenless server has no working surface at all.
+    if (token === undefined || token.length === 0) {
+        writeError("lunora-mcp: LUNORA_ADMIN_TOKEN environment variable is required (every tool reads admin-gated routes)\n");
+
+        throw new BinError("LUNORA_ADMIN_TOKEN environment variable is required", 1);
+    }
+
     // Parse the agent-timeout budget only when it's a positive finite number;
     // a malformed value falls through to the server-side default.
     const rawTimeout = Number(environment.LUNORA_MCP_AGENT_TIMEOUT_MS);
@@ -83,7 +93,7 @@ const runBin = async (environment: BinEnvironment, dependencies: RunBinDependenc
             agents: parseAgentsEnv(environment.LUNORA_MCP_AGENTS),
             allowAgents: isEnvEnabled(environment.LUNORA_MCP_ALLOW_AGENTS),
             allowWrites: isEnvEnabled(environment.LUNORA_MCP_ALLOW_WRITES),
-            token: environment.LUNORA_ADMIN_TOKEN,
+            token,
             url,
             ...(agentMaxWaitMs === undefined ? {} : { agentMaxWaitMs }),
         });

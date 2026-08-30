@@ -47,10 +47,10 @@
  * `presence:listPresent` — the `usePresence` hook in `@lunora/react` does both.
  */
 
+import { LunoraError } from "@lunora/errors";
 import { v } from "@lunora/values";
 
 import { initLunora } from "./builder/index";
-import { LunoraError } from "./error";
 import { onDisconnect } from "./lifecycle";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";

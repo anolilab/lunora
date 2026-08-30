@@ -62,6 +62,7 @@ import { LunoraError } from "@lunora/errors";
 
 import runMiddlewareChain from "./builder/run-middleware";
 import type { Middleware, MiddlewareNext } from "./builder/types";
+import carryPolicyTags from "./carry-policy-tags";
 import { validateIndexFields } from "./schema";
 import type {
     AggregateIndexDefinition,
@@ -508,11 +509,17 @@ export const composePluginMiddleware = <ContextIn = unknown, const Plugins exten
     // behaviourally identical to chaining N `.use()`s — same shallow-merge, same
     // double-`next()` guard. The terminal hands the fully widened context to the
     // surrounding builder's `next`, making the composed unit transparent.
-    return (async ({ ctx, next }) =>
+    const composed = (async ({ ctx, next }) =>
         runMiddlewareChain(middlewares, ctx, (context) => (next as MiddlewareNext<unknown>)({ ctx: context as Record<string, unknown> }))) as Middleware<
         ContextIn,
         ComposedOut<Plugins> & ContextIn
     >;
+
+    // Re-stamp the wrapped middlewares' RLS/mask policy tags onto the composed
+    // function object: the builder hoists them off the direct `.use(...)`
+    // elements, so a plugin shipping `rls(...)` as its middleware would
+    // otherwise register with no `fn.rls` at all.
+    return carryPolicyTags(composed, middlewares);
 };
 
 /* eslint-enable @typescript-eslint/no-explicit-any */

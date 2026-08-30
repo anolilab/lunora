@@ -94,19 +94,23 @@ interface LunoraMcpServerOptions {
     fetch?: typeof fetch;
 
     /**
-     * Bearer token sent on every RPC. This must be the deployment's **admin
-     * bearer**: the introspection/allowlist path every tool depends on
-     * (`lunora_list_functions`, `lunora_list_tables`, and the `assertRunnable`
-     * precheck that runs before every `run` tool) hits admin-gated
-     * `/_lunora/admin/*` routes, so no scoped/app token works today — it would
-     * 403 (`ADMIN_FORBIDDEN`) on the first tool call. The read-only guarantee is
-     * therefore NOT enforced by the token's scope; it is enforced in-process via
-     * `allowWrites: false` (the default), which omits the write tools from the
-     * advertised list and refuses them at dispatch.
+     * Bearer token sent on every RPC. **Required** alongside `url`, and it must
+     * be the deployment's **admin bearer**: the introspection/allowlist path
+     * every tool depends on (`lunora_list_functions`, `lunora_list_tables`, and
+     * the `assertRunnable` precheck that runs before every `run` tool) hits
+     * admin-gated `/_lunora/admin/*` routes, so no scoped/app token works
+     * today — it would 403 (`ADMIN_FORBIDDEN`) on the first tool call. The
+     * read-only guarantee is therefore NOT enforced by the token's scope; it is
+     * enforced in-process via `allowWrites: false` (the default), which omits
+     * the write tools from the advertised list and refuses them at dispatch.
      *
-     * Its presence is also what gates the observability tools (logs, Issues,
-     * advisories, query insights, migration status): without a token they are
-     * omitted from `ListTools` and refused at dispatch.
+     * Because EVERY tool needs it, omitting it is a misconfiguration rather than
+     * a reduced-capability mode, and `createLunoraMcpServer` says so at
+     * construction instead of advertising a surface that 403s on first use. The
+     * one exception is the `client` injection seam (tests / a pre-authenticated
+     * client), where this server cannot know what the client can reach and so
+     * reads "unknown" fail-closed: the privileged observability tools stay
+     * unadvertised and are refused at dispatch.
      */
     token?: string;
     /** Base URL of the deployed Lunora Worker. Required unless `client` is given. */
@@ -123,11 +127,16 @@ const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
         throw new LunoraError("INTERNAL", "createLunoraMcpServer requires either a `client` or a `url`");
     }
 
+    if (options.token === undefined || options.token.length === 0) {
+        throw new LunoraError(
+            "UNAUTHENTICATED",
+            "createLunoraMcpServer requires a `token` (LUNORA_ADMIN_TOKEN) alongside `url`: every tool reaches admin-gated /_lunora/admin/* routes, so an unauthenticated server can only 403. Writes stay off unless `allowWrites` is set.",
+        );
+    }
+
     const client = new LunoraClient({ fetch: options.fetch, url: options.url });
 
-    if (options.token !== undefined) {
-        client.setAuthToken(options.token);
-    }
+    client.setAuthToken(options.token);
 
     return client;
 };
@@ -146,10 +155,11 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     const allowWrites = options.allowWrites ?? false;
     const allowAgents = options.allowAgents ?? false;
     const agents = options.agents ?? [];
-    // The observability tools' gate. Read off `options.token` rather than the
-    // client, because a caller that injects a pre-built `client` has not told
-    // this server what that client can reach — and the fail-closed reading of
-    // "unknown" is "no privileged tools".
+    // The observability tools' gate. Every tool needs the admin bearer, so the
+    // `url` path above already refused a tokenless server and this reads `true`
+    // there. It stays a real gate only for the `client` injection seam, where
+    // this server has not been told what the injected client can reach — and the
+    // fail-closed reading of "unknown" is "no privileged tools".
     const hasAdminToken = typeof options.token === "string" && options.token.length > 0;
     const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 

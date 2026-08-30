@@ -24,8 +24,6 @@ export type { DefineDocumentHistoryOptions, DocumentHistoryComponent, DocumentHi
 export { defineDocumentHistory, DOCUMENT_HISTORY_REDACTED_FIELDS, DOCUMENT_HISTORY_TABLE, documentHistoryExtension } from "./document-history";
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
 export { defineEnv, LunoraEnvError, redactSecrets } from "./env";
-export type { LunoraErrorCode } from "./error";
-export { LunoraError } from "./error";
 export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade";
 export { bindOrm, bindTableFacade } from "./facade";
 export type {
@@ -173,7 +171,9 @@ export type {
     SpanOptions,
     Storage,
     StorageMetadata,
+    StorageObjectBody,
     StorageObjectHead,
+    StorageRange,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,
@@ -221,6 +221,12 @@ export type {
     WorkflowStatusResult,
 } from "./types";
 export { anyApi } from "./types";
+// `LunoraError` is the ONE canonical error class, owned by `@lunora/errors` and
+// re-exported here so handlers can throw it without a second dependency. The
+// third argument is `LunoraErrorOptions` (`{ cause, data, status, … }`) — there
+// is deliberately no server-local subclass reinterpreting it as `data`.
+export type { LunoraErrorCode } from "@lunora/errors";
+export { LunoraError } from "@lunora/errors";
 // Re-export the code-first cron builder so users declare crons from the main
 // package alongside query/mutation/action (it lives in @lunora/scheduler).
 export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule } from "@lunora/scheduler";

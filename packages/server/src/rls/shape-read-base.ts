@@ -7,7 +7,7 @@
  * membership reads would bypass every read policy on the table — leaking rows
  * the caller can't see. This module closes that hole: it collects the project's
  * read policies (hoisted onto each registered function by the procedure builder,
- * keyed by the {@link readRlsTag} the `rls()` middleware stamps) into a
+ * keyed by the {@link readRlsTags} the `rls()` middleware stamps) into a
  * table-indexed registry, then — at `resolveShape` time, under the socket's
  * verified identity — evaluates the table's read policies into a base-where and
  * AND-merges it with the shape's own predicate.
@@ -24,7 +24,7 @@
 
 import { computeReadBaseWhere, indexRolePermissions, resolveCan } from "./middleware";
 import type { RlsTag } from "./policy-tag";
-import { readRlsTag } from "./policy-tag";
+import { readRlsTags } from "./policy-tag";
 import { deny } from "./predicates";
 import type { Policy, WhereInput } from "./types";
 
@@ -80,9 +80,7 @@ const readEntryTags = (entry: unknown): ReadonlyArray<RlsTag> => {
         return hoisted;
     }
 
-    const tag = readRlsTag(entry);
-
-    return tag ? [tag] : [];
+    return readRlsTags(entry);
 };
 
 /**

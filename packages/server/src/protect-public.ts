@@ -1,5 +1,6 @@
 import runMiddlewareChain from "./builder/run-middleware";
 import type { Middleware } from "./builder/types";
+import carryPolicyTags from "./carry-policy-tags";
 
 /**
  * The middlewares `protectPublic` chains, in the order they run. Every field is
@@ -63,7 +64,11 @@ const protectPublic = <Context>(options: ProtectPublicOptions<Context>): Middlew
             next({ ctx: context as Record<string, unknown> }),
         ) as Promise<Context>;
 
-    return composed;
+    // The composed arrow is a NEW function object, so the policy tags `rls()` /
+    // `mask()` stamped on the middlewares in `chain` would not be visible to the
+    // builder's `collectRls` / `collectMask` — silently dropping hoisted policy
+    // for anything passed through `use`.
+    return carryPolicyTags(composed, chain);
 };
 
 export type { ProtectPublicOptions };

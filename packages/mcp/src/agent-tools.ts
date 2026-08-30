@@ -34,8 +34,18 @@ const AGENT_MESSAGES_PATH = "agents:agentMessages";
 /** The generic status/poll tool advertised alongside the per-agent tools. */
 const AGENT_STATUS_TOOL_NAME = "lunora_agent_status";
 
-/** Thread statuses that mean the run has stopped (mirrors `AgentThreadStatus`). */
-const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["cancelled", "error", "idle"]);
+/**
+ * Thread statuses that mean the run has stopped — every member of
+ * `AgentThreadStatus` except `"running"`.
+ *
+ * `"awaiting_input"` belongs here: a run paused on a human-in-the-loop tool
+ * approval is STOPPED, and nothing this server can do resumes it (MCP offers no
+ * way to supply the approval). Treating it as still-running burned the whole
+ * `maxWaitMs` budget on ~100 admin queries per call and then reported
+ * `status: "running"` with a hint to poll a tool that would answer
+ * `awaiting_input` forever.
+ */
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["awaiting_input", "cancelled", "error", "idle"]);
 
 /** Default wall-clock budget a single `tools/call` awaits before returning a pending result. */
 const DEFAULT_MAX_WAIT_MS = 60_000;
@@ -223,6 +233,19 @@ const readTerminal = async (client: LunoraClient, threadKey: string, status: str
         const error = thread !== null && typeof thread === "object" ? (thread as { error?: unknown }).error : undefined;
 
         return ok({ error: typeof error === "string" ? error : "the agent run failed", status, threadKey });
+    }
+
+    if (status === "awaiting_input") {
+        // Not an error — the run is healthy and paused on a human-in-the-loop
+        // tool approval. Say so plainly, including that MCP is not the surface
+        // that can unblock it, so the caller stops polling instead of waiting
+        // out a budget that can never expire into an answer.
+        return ok({
+            hint: "This run is paused on a human-in-the-loop tool approval. Approve or reject it in the app that owns the agent; MCP cannot supply the input. Poll lunora_agent_status with this threadKey afterwards.",
+            status,
+            text: finalAnswer(messages),
+            threadKey,
+        });
     }
 
     return ok({ status, text: finalAnswer(messages), threadKey });

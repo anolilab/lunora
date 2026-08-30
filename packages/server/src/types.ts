@@ -576,12 +576,6 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      */
     readonly lifecycle?: LifecycleEventKind;
 
-    /**
-     * Static per-procedure metadata declared with `.meta(...)`. Present so
-     * middleware (via `ctx.meta`) and tooling can read the same object; absent
-     * when the chain never called `.meta()`.
-     */
-    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 
     /**
@@ -773,9 +767,6 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
-
-    /** Static per-procedure metadata attached via `.meta()`. See {@link RegisteredFunction.meta}. */
-    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 }
 
@@ -1698,8 +1689,13 @@ interface StorageMetadata {
 interface StorageObjectHead {
     /** Custom metadata set at upload time, if any. */
     customMetadata?: Record<string, string>;
-    /** R2's unquoted etag (the MD5 hex for a single-part upload). */
-    etag?: string;
+
+    /**
+     * R2's unquoted etag (the MD5 hex for a single-part upload). Required: R2
+     * reports one on every object, and an HTTP layer built on `head()` (the
+     * `serveStorageObject` helper) needs it to emit a validator.
+     */
+    etag: string;
     /** The already-quoted form of {@link StorageObjectHead.etag}, when the binding reports one. */
     httpEtag?: string;
     /** Recorded HTTP metadata, notably the `Content-Type`. */
@@ -1714,6 +1710,24 @@ interface StorageObjectHead {
     size: number;
     /** When the object was last written. */
     uploaded?: Date;
+}
+
+/**
+ * Byte window forwarded to {@link ReadOnlyStorage.download} so R2 resolves the
+ * slice server-side and streams only those bytes back. Mirrors R2's own `range`
+ * option (`@lunora/platform`'s `R2RangeLike`), restated structurally so
+ * `@lunora/server` takes no dependency on the bindings package.
+ */
+type StorageRange = { length?: number; offset: number } | { length: number; offset?: number } | { suffix: number };
+
+/**
+ * A downloaded object: the same metadata {@link StorageObjectHead} carries, plus
+ * the body stream. This is what `download()` resolves to — R2's object, NOT a
+ * bare stream.
+ */
+interface StorageObjectBody extends StorageObjectHead {
+    /** The object body stream. `null` for a zero-byte object. */
+    body: ReadableStream | null;
 }
 
 /**
@@ -1737,8 +1751,27 @@ interface ReadOnlyStorage<Buckets extends string = string> {
     /** The bucket this accessor's operations target (the default for the bare `ctx.storage`). */
     readonly bucketName: string;
 
-    /** Fetch the body of an existing object. Returns `null` when absent. */
-    download: (key: string) => Promise<ReadableStream | null>;
+    /**
+     * Fetch an existing object. Returns the R2 object — metadata plus a `body`
+     * stream — or `null` when absent.
+     *
+     * NOT a bare stream: `new Response(await ctx.storage.download(key))` would
+     * stringify the object and serve the literal text `[object Object]`. Reach
+     * for the body explicitly:
+     *
+     * ```ts
+     * const object = await ctx.storage.download(key);
+     *
+     * return object ? new Response(object.body) : new Response("Not found", { status: 404 });
+     * ```
+     *
+     * (`serveStorageObject` from `@lunora/server` does this, plus range/ETag
+     * handling, for the common "serve a stored file over HTTP" case.)
+     *
+     * Pass `range` to have R2 resolve the byte window server-side, so the
+     * unwanted bytes never reach the worker.
+     */
+    download: (key: string, options?: { range?: StorageRange }) => Promise<StorageObjectBody | null>;
 
     /**
      * Read a file's metadata (size, content-type, sha256, upload time, custom
@@ -1795,6 +1828,21 @@ interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Bucke
      * Convex's `storage.generateUploadUrl`.
      */
     generateUploadUrl: (key: string, options?: { contentType?: string; expiresInSeconds?: number }) => Promise<string>;
+
+    /**
+     * Mint a native S3 SigV4 URL that hits R2 **directly**, so the bytes never
+     * pass through the Worker — unlike {@link Storage.generateUploadUrl}, whose
+     * signed URL points back at this app so its storage rules still apply.
+     *
+     * Requires `s3` credentials on the `.storage({ s3 })` declaration; without
+     * them the call throws. That is the trade-off: no Worker in the path also
+     * means no rule enforcement in the path.
+     *
+     * Declared structurally rather than imported — `@lunora/server` does not
+     * depend on `@lunora/storage`, and this file mirrors that surface the same
+     * way `head` and `download` do.
+     */
+    getPresignedUrl: (key: string, options?: { expiresInSeconds?: number; method?: "GET" | "PUT" }) => Promise<string>;
 
     /**
      * Upload `body` to `key` from the server, returning the stored object's key
@@ -2241,9 +2289,10 @@ interface QueryCtx {
 
     /**
      * Static metadata declared on this procedure with `.meta(...)`, merged
-     * across calls. Present so middleware can read the policy it is meant to
-     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
-     * `.use()` site; absent when the procedure never called `.meta()`.
+     * across calls and deep-frozen. Present so middleware can read the policy it
+     * is meant to enforce (`ctx.meta.rateLimit`, …) instead of having it
+     * hard-wired at each `.use()` site; absent when the procedure never called
+     * `.meta()`.
      */
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
@@ -2306,9 +2355,10 @@ interface MutationCtx {
 
     /**
      * Static metadata declared on this procedure with `.meta(...)`, merged
-     * across calls. Present so middleware can read the policy it is meant to
-     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
-     * `.use()` site; absent when the procedure never called `.meta()`.
+     * across calls and deep-frozen. Present so middleware can read the policy it
+     * is meant to enforce (`ctx.meta.rateLimit`, …) instead of having it
+     * hard-wired at each `.use()` site; absent when the procedure never called
+     * `.meta()`.
      */
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
@@ -2393,9 +2443,10 @@ interface ActionCtx {
 
     /**
      * Static metadata declared on this procedure with `.meta(...)`, merged
-     * across calls. Present so middleware can read the policy it is meant to
-     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
-     * `.use()` site; absent when the procedure never called `.meta()`.
+     * across calls and deep-frozen. Present so middleware can read the policy it
+     * is meant to enforce (`ctx.meta.rateLimit`, …) instead of having it
+     * hard-wired at each `.use()` site; absent when the procedure never called
+     * `.meta()`.
      */
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
@@ -2509,7 +2560,9 @@ export type {
     SpanOptions,
     Storage,
     StorageMetadata,
+    StorageObjectBody,
     StorageObjectHead,
+    StorageRange,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,

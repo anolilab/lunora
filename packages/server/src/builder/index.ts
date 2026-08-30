@@ -4,7 +4,7 @@ import applyOutput from "../apply-output";
 import { validateArgs } from "../functions";
 import { readMaskTag } from "../mask/policy-tag";
 import type { RlsTag } from "../rls/policy-tag";
-import { readRlsTag } from "../rls/policy-tag";
+import { readRlsTags } from "../rls/policy-tag";
 import type {
     ActionCtx as ActionContext,
     ArgsValidator,
@@ -35,7 +35,7 @@ interface BuilderState {
     args: ArgsValidator;
     /** Public-surface tag set by `.expose({ rest: true })`; stamped onto the registered function as `fn.expose`. */
     expose?: ExposeConfig;
-    /** Accumulated `.meta(...)` payload; merged across calls and stamped onto the registered function as `fn.meta`. */
+    /** Accumulated `.meta(...)` payload; merged across calls and surfaced to middleware as `ctx.meta`. */
     meta?: Record<string, unknown>;
     middlewares: ReadonlyArray<Middleware<unknown, unknown>>;
     /** Validator the handler's result is parsed through when `.output()` was called. */
@@ -172,7 +172,7 @@ const makeStreamHandler =
  * equivalent guarded query would deny.
  */
 const collectRls = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): undefined | { tags: ReadonlyArray<RlsTag> } => {
-    const tags = middlewares.map((middleware) => readRlsTag(middleware)).filter((tag): tag is RlsTag => tag !== undefined);
+    const tags = middlewares.flatMap((middleware) => readRlsTags(middleware));
 
     return tags.length > 0 ? { tags } : undefined;
 };
@@ -213,6 +213,36 @@ const collectMask = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): 
 };
 
 /**
+ * Recursively freeze a `.meta()` declaration.
+ *
+ * The SAME object reaches every invocation's `ctx.meta`, so a middleware writing
+ * `ctx.meta.rateLimit.hits += 1` would edit the procedure's module-level static
+ * declaration and have the accumulated value observed by every later request in
+ * the isolate. A shallow `Object.freeze` stops only the top-level assignment,
+ * which is the half of the promise that never held — `.meta({ rateLimit: { hits:
+ * 0 } })` is exactly the nested shape the surface invites.
+ *
+ * Plain data only: a `Map`/`Set` in `.meta()` is frozen as an object but its
+ * entries stay mutable. `.meta()` is documented as static metadata, so that
+ * corner is not worth a structural walk.
+ */
+const deepFreeze = <T>(value: T, seen: WeakSet<object> = new WeakSet()): T => {
+    if (value === null || typeof value !== "object" || seen.has(value)) {
+        return value;
+    }
+
+    seen.add(value);
+
+    for (const nested of Object.values(value)) {
+        deepFreeze(nested, seen);
+    }
+
+    Object.freeze(value);
+
+    return value;
+};
+
+/**
  * Construct a kind-specific builder. The terminal method is keyed by the kind
  * (`query` / `mutation` / `action`) so codegen reads the kind from the call
  * expression's property name without tracing the builder across files.
@@ -240,7 +270,6 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                 handler: makeHandler(state.args, state.middlewares, userHandler, state.output, state.meta),
                 kind,
                 ...(maskedTables ? { maskedTables } : {}),
-                ...(state.meta ? { meta: state.meta } : {}),
                 ...(rls ? { rls } : {}),
                 ...(visibility ? { visibility } : {}),
                 ...(state.x402 ? { x402: state.x402 } : {}),
@@ -249,12 +278,13 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
         // `.meta(obj)` MERGES so a shared base builder can set defaults a
         // specific procedure then extends, mirroring tRPC.
         //
-        // Frozen because the SAME object reaches both the registered function and
-        // every invocation's `ctx.meta` — a middleware writing `ctx.meta.x = 1`
-        // would otherwise edit the procedure's static declaration and have it
-        // observed by every later request. A later `.meta()` still extends it: the
-        // spread above reads out of the frozen object into a fresh one.
-        meta: (value: Record<string, unknown>) => makeBuilder(kind, { ...state, meta: Object.freeze({ ...state.meta, ...value }) }, visibility),
+        // DEEP-frozen because the SAME object reaches every invocation's
+        // `ctx.meta` — a middleware writing `ctx.meta.x = 1` (or
+        // `ctx.meta.rateLimit.hits += 1`) would otherwise edit the procedure's
+        // static declaration and have it observed by every later request in the
+        // isolate. A later `.meta()` still extends it: the spread below reads out
+        // of the frozen object into a fresh one.
+        meta: (value: Record<string, unknown>) => makeBuilder(kind, { ...state, meta: deepFreeze({ ...state.meta, ...value }) }, visibility),
         output: (validator: Validator) => makeBuilder(kind, { ...state, output: validator }, visibility),
         // `.stream()` is meaningful only on query builders. It's harmless to expose
         // on every builder shape (callers can't hit it from action/mutation builders
@@ -284,7 +314,6 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                           handler: makeStreamHandler(state.args, state.middlewares, userHandler, state.meta),
                           kind: "stream" as const,
                           ...(maskedTables ? { maskedTables } : {}),
-                          ...(state.meta ? { meta: state.meta } : {}),
                           ...(rls ? { rls } : {}),
                           ...(visibility ? { visibility } : {}),
                           ...(state.x402 ? { x402: state.x402 } : {}),
