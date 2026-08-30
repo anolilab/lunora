@@ -5,10 +5,10 @@
  * Both mirror `@lunora/d1`'s `sqliteDialect`, differing only where the engines
  * genuinely diverge: column types, the catalog probe, unique-violation
  * detection, `RETURNING` support, and the MySQL index key-prefix. Every backend
- * stores **SQLite-shaped values** (boolean → 1/0, JSON → text/json, bigint →
- * decimal string), so the value codec is shared (`sqliteEncode`/`sqliteDecode`)
- * — `sqliteDecode` is robust to a driver returning either the stored string or a
- * natively-parsed value (e.g. mysql2 returns JSON pre-parsed, node-postgres
+ * stores **SQLite-shaped values** (boolean → 1/0, composites → JSON text, bigint
+ * → decimal string) through the store core's own `sqliteEncode`/`sqliteDecode`,
+ * which is not a dialect member — `sqliteDecode` is robust to a driver returning
+ * either the stored string or a natively-parsed value (e.g. node-postgres
  * returns bigint as a string).
  *
  * Identifier quoting, placeholder numbering, upserts and NULL-safe equality are
@@ -18,7 +18,6 @@
  * can't infer from a dynamic, column-per-field schema.
  */
 import type { SqlDialect } from "@lunora/sql-store";
-import { sqliteDecode, sqliteEncode } from "@lunora/sql-store";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
@@ -50,11 +49,6 @@ const PG_UNIQUE_VIOLATION_RE = /duplicate key value violates unique constraint/i
 /** MySQL storage type for a validator `kind`. Shared by `columnType` and the index-prefix decision below. */
 const mysqlColumnType = (kind: string | undefined): string => {
     switch (kind) {
-        case "array":
-        case "object":
-        case "record": {
-            return "JSON";
-        }
         case "bigint": {
             // stored as a decimal string (max 20 digits — never truncates).
             return "VARCHAR(64)";
@@ -71,13 +65,18 @@ const mysqlColumnType = (kind: string | undefined): string => {
             return "DOUBLE";
         }
         default: {
-            // string/id/literal/union/any/from → unbounded text so a value never
+            // Everything else — string/id/literal/geoPoint/union/any/from AND the
+            // composites (object/array/record) — is unbounded text so a value never
             // truncates; `indexKeyPrefix` adds a key prefix wherever one is indexed.
             //
-            // `from` belongs here rather than with the JSON group above, for the
-            // same reason `union`/`any` do: the value is stored by its runtime JS
-            // type, so a `v.from(z.string())` column holds a bare `hello` — which
-            // a MySQL `JSON` column would reject outright at insert.
+            // The composites are NOT a MySQL `JSON` column, which matches Postgres's
+            // plain `TEXT` for them. `sqliteEncode` stores a composite holding a
+            // bigint, bytes, `Date`, `Map`, `Set` or `NaN` in the wire-marked form
+            // `$lunora.wire$[…]` — deliberately not valid JSON, so the reader can
+            // tell it from ordinary JSON — and MySQL validates a `JSON` column on
+            // insert, rejecting it outright with ER_3140. A `union`/`any`/`from`
+            // column is stored by its runtime JS type for the same reason: a
+            // `v.from(z.string())` column holds a bare `hello`.
             return "LONGTEXT";
         }
     }
@@ -119,8 +118,6 @@ export const postgresDialect: SqlDialect = {
             }
         }
     },
-    decode: sqliteDecode,
-    encode: sqliteEncode,
     frameworkColumns: () => [
         { name: "id", type: "TEXT PRIMARY KEY" },
         { name: "_creationTime", type: "DOUBLE PRECISION NOT NULL" },
@@ -196,8 +193,6 @@ export const mysqlDialect: SqlDialect = {
         text: "LONGTEXT",
     },
     columnType: mysqlColumnType,
-    decode: sqliteDecode,
-    encode: sqliteEncode,
     frameworkColumns: () => [
         { name: "id", type: "VARCHAR(768) PRIMARY KEY" },
         { name: "_creationTime", type: "DOUBLE NOT NULL" },

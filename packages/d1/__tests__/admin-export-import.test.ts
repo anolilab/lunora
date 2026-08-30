@@ -262,6 +262,79 @@ describe("d1 admin export/import globals", () => {
             expect(reloaded).toMatchObject({ value: "dark" });
         });
 
+        it("roundtrip: a bigint / bytes row survives JSON egress and comes back real", async () => {
+            expect.assertions(4);
+
+            const wireSchema: SchemaLike = {
+                tables: {
+                    ledger: {
+                        indexes: [],
+                        shape: { blob: col("bytes"), cents: col("bigint") },
+                        shardMode: { kind: "global" } as never,
+                    },
+                },
+            };
+
+            const source = createD1Exec();
+
+            source.ddl(
+                `CREATE TABLE "ledger" (
+                "id" TEXT PRIMARY KEY,
+                "_creationTime" INTEGER NOT NULL,
+                "blob" BLOB,
+                "cents" TEXT
+            )`,
+            );
+
+            const sourceWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: source.exec, schema: wireSchema });
+
+            await sourceWriter.insert(
+                "ledger",
+                { _id: "l1", blob: new Uint8Array([7, 8, 9]).buffer, cents: 9_007_199_254_740_993n },
+                { allowExplicitId: true },
+            );
+
+            const exported: { doc: Record<string, unknown>; table: string }[] = [];
+
+            for await (const row of exportGlobalRows(source.exec, wireSchema, {})) {
+                exported.push(row);
+            }
+
+            // What the scheduled R2 backup and the NDJSON stream actually do to
+            // these rows. Undecoded, this THREW on the bigint before writing a
+            // single object, and the bytes serialized to `{}`.
+            const ndjson = exported.map((row) => JSON.stringify(row)).join("\n");
+
+            expect(ndjson).toContain("9007199254740993");
+
+            const fresh = createD1Exec();
+
+            fresh.ddl(
+                `CREATE TABLE "ledger" (
+                "id" TEXT PRIMARY KEY,
+                "_creationTime" INTEGER NOT NULL,
+                "blob" BLOB,
+                "cents" TEXT
+            )`,
+            );
+
+            const freshWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema: wireSchema });
+
+            const result = await importGlobalRows(freshWriter, wireSchema, {
+                rows: ndjson.split("\n").map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string }),
+            });
+
+            expect(result.errors).toEqual([]);
+
+            const reload = await freshWriter.get("l1");
+
+            expect(reload?.["cents"]).toBe(9_007_199_254_740_993n);
+            expect([...new Uint8Array(reload?.["blob"] as ArrayBuffer)]).toStrictEqual([7, 8, 9]);
+
+            source.close();
+            fresh.close();
+        });
+
         it("roundtrip: export then re-import into a fresh D1 produces identical rows", async () => {
             expect.assertions(3);
 

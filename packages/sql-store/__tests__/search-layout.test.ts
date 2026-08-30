@@ -18,7 +18,6 @@ import {
     resolveSearchLayout,
 } from "../src/search-layout";
 import type { SqlCtxExec } from "../src/sql-exec";
-import { sqliteDecode, sqliteEncode } from "../src/value-codec";
 
 /**
  * The storage layouts a `.global()` search index can take, tested directly.
@@ -77,8 +76,6 @@ const sqliteDialect = (overrides: Partial<SqlDialect> = {}): SqlDialect => {
     return {
         columnType: () => "TEXT",
         companionTypes: { autoincrementPrimaryKey: "INTEGER PRIMARY KEY AUTOINCREMENT", integer: "INTEGER", key: "TEXT", real: "REAL", text: "TEXT" },
-        decode: (value, kind) => sqliteDecode(value, kind),
-        encode: (value) => sqliteEncode(value),
         frameworkColumns: () => [
             { name: "id", type: "TEXT PRIMARY KEY" },
             { name: "_creationTime", type: "REAL NOT NULL" },

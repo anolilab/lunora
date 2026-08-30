@@ -1,4 +1,5 @@
 import { LunoraError } from "@lunora/errors";
+import { sqliteEncode } from "@lunora/sql-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { mysqlDialect, postgresDialect } from "../src/global-dialect";
@@ -32,15 +33,29 @@ describe("postgresDialect", () => {
 });
 
 describe("mysqlDialect", () => {
-    it("maps kinds to MySQL types (TINYINT / DOUBLE / JSON / LONGTEXT)", () => {
-        expect.assertions(4);
+    it("maps kinds to MySQL types (TINYINT / DOUBLE / LONGTEXT)", () => {
+        expect.assertions(3);
 
         expect(mysqlDialect.columnType("boolean")).toBe("TINYINT");
         expect(mysqlDialect.columnType("number")).toBe("DOUBLE");
-        expect(mysqlDialect.columnType("object")).toBe("JSON");
         // strings are unbounded LONGTEXT so they never truncate (a bounded VARCHAR
         // would silently cut values >768 chars); index keys get a prefix instead.
         expect(mysqlDialect.columnType("string")).toBe("LONGTEXT");
+    });
+
+    it("stores composites as LONGTEXT, not JSON — the wire-marked form is not valid JSON", () => {
+        expect.assertions(4);
+
+        // `sqliteEncode` writes a composite carrying a bigint/bytes/Date/Map/Set/NaN
+        // leaf as `$lunora.wire$[…]`, which MySQL's `JSON` column validation rejects
+        // on insert (ER_3140). Postgres already stores these as plain TEXT.
+        const encoded = sqliteEncode({ n: 1n });
+
+        expect(String(encoded).startsWith("{")).toBe(false);
+
+        for (const kind of ["array", "object", "record"]) {
+            expect(mysqlDialect.columnType(kind)).toBe("LONGTEXT");
+        }
     });
 
     it("requires a key prefix only for TEXT/BLOB columns (InnoDB key limit)", () => {

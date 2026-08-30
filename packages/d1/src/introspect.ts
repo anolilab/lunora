@@ -21,6 +21,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { SchemaLike } from "@lunora/shard-engine";
 
+import { encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
 // The one canonical SQL identifier quoter (bundler-inlined via `./dialect` from
@@ -324,7 +325,17 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
 
     const total = await countRows(exec, quoted, whereSql, whereParams);
     const raw = await exec.all(`SELECT * FROM ${quoted}${whereSql} LIMIT ? OFFSET ?`, [...whereParams, limit, offset]);
-    const rows = raw.map((row) => decodeRow(schema, table, row));
+    // Wire-encode on the way out. `decodeGlobalRow` reverses the storage form,
+    // so a `v.bigint()` column is a real `bigint` and a `v.bytes()` column an
+    // `ArrayBuffer` — the browser's transport is JSON, where the former throws
+    // and the latter silently becomes `{}`. External (non-schema) tables get the
+    // same treatment for their BLOB columns. `needsWireEncoding` leaves a
+    // pure-JSON row untouched.
+    const rows = raw.map((row) => {
+        const decoded = decodeRow(schema, table, row);
+
+        return needsWireEncoding(decoded) ? (encodeWire(decoded) as Record<string, unknown>) : decoded;
+    });
     const references = await resolveReferences(exec, schema, table);
 
     return references === undefined ? { columns, rows, total } : { columns, refs: references, rows, total };

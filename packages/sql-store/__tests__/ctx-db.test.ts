@@ -7,9 +7,8 @@ import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
-import { createSqlCtxDb } from "../src/ctx-db";
+import { createSqlCtxDb, readSqlCdcChanges } from "../src/ctx-db";
 import type { SqlDialect } from "../src/dialect";
-import { sqliteDecode, sqliteEncode } from "../src/value-codec";
 
 /**
  * In-package end-to-end coverage for the dialect-blind store core. The concrete
@@ -78,8 +77,6 @@ const makeSqliteDialect = (name: SqlDialect["name"] = "sqlite"): SqlDialect => {
             real: "REAL",
             text: "TEXT",
         },
-        decode: (value, kind) => sqliteDecode(value, kind),
-        encode: (value) => sqliteEncode(value),
         maxTableColumns: 100,
         frameworkColumns: () => [
             { name: "id", type: "TEXT PRIMARY KEY" },
@@ -918,6 +915,33 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
 
         expect(next?.tables).toStrictEqual(["notes"]);
         expect(next?.cursor).toBeGreaterThan(head);
+    });
+
+    it("round-trips a bigint / bytes post-image through the changelog", async () => {
+        expect.assertions(3);
+
+        const dialect = makeSqliteDialect();
+        const wireSchema: SchemaLike = {
+            tables: {
+                ledger: {
+                    indexes: [],
+                    shape: { blob: col("bytes"), cents: col("bigint") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+
+        const writer = createSqlCtxDb({ cdc: true, clock: () => 1_700_000_000_000, dialect, exec: harness.exec, schema: wireSchema });
+
+        // A bare `JSON.stringify` of the post-image THROWS on the bigint (after
+        // the row is already committed) and silently records `{}` for the bytes.
+        await writer.insert("ledger", { blob: new Uint8Array([1, 2, 3]).buffer, cents: 9_007_199_254_740_993n });
+
+        const { changes } = await readSqlCdcChanges(harness.exec, {}, dialect);
+
+        expect(changes).toHaveLength(1);
+        expect(changes[0]?.doc?.["cents"]).toBe(9_007_199_254_740_993n);
+        expect([...new Uint8Array(changes[0]?.doc?.["blob"] as ArrayBuffer)]).toStrictEqual([1, 2, 3]);
     });
 
     it("reports no visibility when CDC is disabled, rather than throwing", async () => {

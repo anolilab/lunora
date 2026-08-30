@@ -49,9 +49,17 @@ const queryRun = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<Sq
 
 /**
  * Run several write statements as one round trip when the exec exposes
- * {@link SqlCtxExec.batch}, in the given array ORDER; falls back to the
- * historical sequential `run()`-per-statement loop when it doesn't, so an
- * exec built before `batch` existed keeps working unchanged.
+ * {@link SqlCtxExec.batch}; falls back to the historical sequential
+ * `run()`-per-statement loop when it doesn't, so an exec built before `batch`
+ * existed keeps working unchanged.
+ *
+ * **The statements must be mutually independent.** An implementation MAY
+ * reorder or parallelize across the array — the Hyperdrive Postgres and MySQL
+ * adapters dispatch every element with `Promise.all` — so nothing here may rely
+ * on array order between elements. A purge-then-insert pair belongs in separate
+ * sequential {@link queryRun} calls, not one `queryBatch`. (D1's own
+ * `client.batch` happens to preserve order and run atomically; that is one
+ * engine's guarantee, not this function's contract.)
  *
  * The one place that renders and dispatches a companion write batch — the
  * search-index chunk insert, the aggregate tally backfill, and the rank-tuple

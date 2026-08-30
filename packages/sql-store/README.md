@@ -57,12 +57,12 @@ hand-rolled rewriting.
 
 The small per-engine `SqlDialect` value object carries only what drizzle can't
 infer from a dynamic, column-per-field schema: the framework columns every
-global table carries, column and companion-table types, value encode/decode
-(every engine stores SQLite-shaped values), `RETURNING` availability (with an
-affected-rows fallback for MySQL), unique-violation detection, the MySQL index
-key-prefix, and the system-catalog (`tableExists`) probe. Full-text search is
-not part of the dialect — the core probes FTS5 availability on the `exec` at
-runtime.
+global table carries, column and companion-table types, `RETURNING` availability
+(with an affected-rows fallback for MySQL), unique-violation detection, the MySQL index
+key-prefix, and the system-catalog (`tableExists`) probe. The value codec is
+**not** a dialect member — every engine stores SQLite-shaped values through the
+core's own `sqliteEncode`/`sqliteDecode`. Full-text search is not part of the
+dialect either — the core probes FTS5 availability on the `exec` at runtime.
 
 Reactivity is engine-independent: the writer is injected as `globalDb` into
 `createShardCtxDb`, whose `broadcast` hook drives live queries no matter which
@@ -85,7 +85,7 @@ seam from the root); consumers import everything from the root `@lunora/sql-stor
   `runSqlRankMigrations`, `runSqlSearchMigrations`, `runSqlCdcMigration`.
 - CDC log helpers: `readSqlCdcChanges`, `readSqlCdcChangedTables`,
   `readSqlCdcFloor`, `sweepSqlCdcRetention`.
-- Value codec building blocks a dialect reuses for `encode`/`decode`:
+- Value codec building blocks (the core runs these on every engine):
   `sqliteEncode`, `sqliteDecode`, `decodeBigint`, `tryJsonParse`,
   `effectiveColumnKind`.
 - Types: `SqlCtxDbOptions`, `SqlCtxExec`, `SqlDialect`, `SqlExec`,

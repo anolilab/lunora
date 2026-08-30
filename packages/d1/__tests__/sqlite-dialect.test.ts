@@ -21,14 +21,6 @@ describe("sqliteDialect", () => {
         ]);
     });
 
-    it("round-trips values through encode/decode", () => {
-        expect.assertions(3);
-
-        expect(sqliteDialect.encode(true)).toBe(1);
-        expect(sqliteDialect.decode(1, "boolean")).toBe(true);
-        expect(sqliteDialect.decode(sqliteDialect.encode({ x: 1 }), "object")).toEqual({ x: 1 });
-    });
-
     it("detects UNIQUE-constraint violations", () => {
         expect.assertions(2);
 

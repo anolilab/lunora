@@ -9,7 +9,6 @@ import { backfillSqlSearchIndexes, createSearchSync, runSqlSearch, runSqlSearchM
 import type { SqlDialect } from "../src/dialect";
 import { companionFor } from "../src/search-layout";
 import type { SqlCtxExec } from "../src/sql-exec";
-import { sqliteDecode, sqliteEncode } from "../src/value-codec";
 
 /**
  * Provisioning, backfill and the write-path hook for `.global()` search — the
@@ -53,8 +52,6 @@ const englishSchema = tableWith([{ ...BY_BODY, language: "en" }]);
 const dialect: SqlDialect = {
     columnType: () => "TEXT",
     companionTypes: { autoincrementPrimaryKey: "INTEGER PRIMARY KEY AUTOINCREMENT", integer: "INTEGER", key: "TEXT", real: "REAL", text: "TEXT" },
-    decode: (value, kind) => sqliteDecode(value, kind),
-    encode: (value) => sqliteEncode(value),
     frameworkColumns: () => [
         { name: "id", type: "TEXT PRIMARY KEY" },
         { name: "_creationTime", type: "REAL NOT NULL" },
