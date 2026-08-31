@@ -32,7 +32,6 @@ import {
     readProjectRemotePreference,
     resolveDeployDriver,
     resolveProjectTarget,
-    resolveTargetOrThrow,
     streamContainerLogs,
     updateDevServerState,
 } from "@lunora/config";
@@ -45,6 +44,7 @@ import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { resolveRunnableTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import { findAvailablePort } from "../../util/free-port";
@@ -1103,7 +1103,19 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     // `lunora codegen --target <same typo>` exited 1. Resolving here also puts
     // the failure before the dev-vars prompt and the start-record claim, rather
     // than after them.
-    const target = resolveTargetOrThrow(cwd, options.target);
+    //
+    // `Runnable` rather than a bare resolve: a target whose driver ships no
+    // toolchain has nothing for the sidecar (or the Vite plugin's worker) to
+    // spawn, and `toolchain?.dev(...)` used to fall through to `wrangler dev` —
+    // serving a Node-target app on Cloudflare's runtime, then hard-failing at
+    // deploy.
+    const resolvedTarget = resolveRunnableTargetOrError(cwd, options.target);
+
+    if (resolvedTarget.target === undefined) {
+        throw new Error(resolvedTarget.error ?? "unknown deploy target");
+    }
+
+    const { target } = resolvedTarget;
     // Register the remote temp-config disposer up front so it's torn down on
     // every exit path — including a throw during startup below (the `finally`).
     const handles: Teardown = { remoteCleanup: plan.remote.cleanup };

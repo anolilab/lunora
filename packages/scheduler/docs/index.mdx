@@ -53,10 +53,14 @@ const scheduler = createScheduler({
     originUrl: "https://app.acme.test", // where the DO dispatches back
 });
 
-const { id, scheduledFor } = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
+const id = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
 await scheduler.runAt(new Date("2026-06-01T12:00:00Z"), api.cleanup.run, { older: 30 });
 await scheduler.cancel(id);
 ```
+
+`runAfter`/`runAt` resolve the **job id** — the same string `cancel`, `get` and
+`ctx.scheduler` deal in. Read the instant it will fire at back off
+`scheduler.get(id)`.
 
 Pass `instanceName` to isolate a tenant's jobs into a separate DO instance.
 

@@ -115,7 +115,7 @@ const createSchedulerHost = (options: SchedulerHostOptions): SchedulerHost => {
             return records.map((record) => toStatus(record));
         },
 
-        schedule: async (functionPath, args, scheduleOptions) => {
+        schedule: async (functionPath, args, scheduleOptions): Promise<ScheduledJob> => {
             // `runAt` is generic over its target so it can infer the arg shape
             // from a typed `FunctionReference` / `WorkflowReference`. The neutral
             // contract deals in an opaque path plus a `Record`, which is that
@@ -126,14 +126,20 @@ const createSchedulerHost = (options: SchedulerHostOptions): SchedulerHost => {
                 target: string,
                 args: Record<string, unknown>,
                 options?: { retry?: ScheduleOptions["retry"]; shardKey?: string },
-            ) => Promise<ScheduledJob>;
+            ) => Promise<string>;
 
             // A single absolute instant, which is how the contract reads once
             // `at`/`delayMs` are collapsed — one path, not a branch per shape.
-            return runAt(resolveScheduledFor(scheduleOptions), functionPath, args, {
+            const scheduledFor = resolveScheduledFor(scheduleOptions);
+            // `runAt` resolves the id (the `ctx.scheduler` contract); the
+            // instant it fires at is the one we just handed it, so the
+            // contract's `ScheduledJob` is assembled here rather than read back.
+            const id = await runAt(scheduledFor, functionPath, args, {
                 retry: scheduleOptions?.retry,
                 shardKey: scheduleOptions?.shardKey,
             });
+
+            return { id, scheduledFor };
         },
     };
 };

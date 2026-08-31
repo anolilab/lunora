@@ -32,14 +32,43 @@
  * Every other key here — `commitOrderedTables`, `httpCache`, `identityProxy`,
  * `localSql`, `memoryTables`, `objectStorageBackups`,
  * `objectStorageCdcArchive`, `serverReactors`, `shardAlarms`, `shardedState`,
- * `shardPlacement`, `shardReadReplicas`, `websocketHibernation` — is either
- * engine-internal or has no app-imported module codegen could detect usage
- * from, so rating one `unsupported` omits no surface and warns nobody. It
+ * `shardPlacement`, `shardReadReplicas`, `websocketHibernation` — is
+ * **advisory**: rating one `unsupported` omits no surface and warns nobody. It
  * still records parity honestly, which is its job; it is not a gate.
  *
+ * # Advisory is not one thing — there are two reasons, and only one is final
+ *
+ * Most advisory keys are advisory *by nature*: the feature is engine-internal
+ * (`shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
+ * `websocketHibernation`, `localSql`, `serverReactors`) or degrades honestly on
+ * its own (`httpCache` falls back to headers-only, `identityProxy` to header
+ * verification). There is nothing an app declares for codegen to notice, so
+ * there is nothing to gate. These stay ratings, permanently.
+ *
+ * The rest are advisory only because nobody wired them, and they are the ones
+ * to watch: an app DOES declare the feature, codegen CAN see the declaration,
+ * and the rating is still consulted by nothing. Codegen already has the shape
+ * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
+ * pass that diagnoses app-declared features with no `ctx.*` capability row
+ * (`globalTables`, `durableStreams`, `crossShardFanout`, `queues`, `secrets`).
+ * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
+ * in that module's signal-key list and its human-readable label — and then
+ * setting the signal from the IR.
+ *
+ * **`commitOrderedTables` is the outstanding case.** `TableIR.commitOrdered`
+ * sits in the same IR that already feeds the `globalTables` signal, so the
+ * declaration is right there. Until it is promoted, a host rating it
+ * `unsupported` emits the full `.commitOrdered()` surface with no diagnostic and
+ * silently loses commit ordering — which is the one guarantee the feature is.
+ * `memoryTables`, `objectStorageBackups` and `objectStorageCdcArchive` are
+ * weaker instances of the same shape.
+ *
  * **Adding a feature key is therefore half a change.** The other half is a row
- * in `CAPABILITY_ROWS` and an entry in `CAPABILITY_TO_FEATURE`, or the rating
- * ships as documentation while the surface it describes is emitted anyway.
+ * in `CAPABILITY_ROWS` and an entry in `CAPABILITY_TO_FEATURE` (for an
+ * app-imported `ctx.*` module), or a `PlatformSignals` entry (for something the
+ * app declares in its schema), or a deliberate decision that the key is advisory
+ * by nature — recorded here. Silence means the rating ships as documentation
+ * while the surface it describes is emitted anyway.
  */
 
 /** Support level for a single feature on a target platform. */
@@ -79,6 +108,13 @@ export interface PlatformCapabilities {
          * interleave their allocations. A host that offers neither can still
          * create the counter and hand out increasing numbers — they just would
          * not order commits, which is the whole contract.
+         *
+         * **Advisory today, and it should not be.** Nothing consults this
+         * rating: a host rating it `unsupported` still gets the full
+         * `.commitOrdered()` surface emitted, with no diagnostic. `TableIR`
+         * carries `commitOrdered` in the same IR codegen already reads for the
+         * `globalTables` signal, so this is a `PlatformSignals` entry away from
+         * being gate-bearing — see this module's header.
          */
         commitOrderedTables?: Capability;
 
@@ -431,7 +467,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         scheduler: {
             level: "emulated",
-            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue; the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer",
+            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing dispatches into it: no runtime walks the generated LUNORA_CRONS map into SchedulerHost.cron, so the conformance suite is its only caller and a declared cron does not fire on this host",
         },
         objectStorageBackups: {
             level: "emulated",

@@ -143,9 +143,26 @@ export interface SocketHost {
      * durable tag minted at accept (Cloudflare), a registry key, a `WeakMap`.
      *
      * Must answer consistently for the same socket within a wake AND across a
-     * recycle, since the engine uses it to reassociate a rehydrated socket with
-     * its subscription state. Callers outside the O(subscribers) loops are the
-     * intended consumers; do not reach for this per socket per frame.
+     * recycle. Callers outside the O(subscribers) loops are the intended
+     * consumers; do not reach for this per socket per frame.
+     *
+     * **Who actually calls it, since the previous wording named the wrong
+     * caller.** It said "the engine uses it to reassociate a rehydrated socket
+     * with its subscription state"; the engine does no such thing. Per-socket
+     * state is keyed on the handle object itself (`ShardRunner.socketFor`, over
+     * {@link SocketHost.handleFor}), and durable connection identity is the
+     * engine's own `connectionId` — a UUID minted at upgrade and stamped onto the
+     * socket attachment, which is what survives hibernation. `@lunora/shard-engine`
+     * and `@lunora/do` dispatch to `handleFor`, `getSockets` and `accept`, and to
+     * nothing else on this interface.
+     *
+     * `idFor` is the portable **identity oracle** instead: the conformance suite
+     * compares sockets through it (a host is allowed to hand back a different
+     * wrapper object for the same socket, so object identity is not a legal
+     * assertion), and it is how a host's own recycle plumbing addresses a socket
+     * by id. That is a real job and it is why this stays required — every host
+     * has to answer it for the TCK regardless — but implement it as a test and
+     * tooling contract, not as something on the frame path.
      *
      * **A socket this host never {@link SocketHost.accept}ed** (a foreign socket
      * the runtime hands back — a whisper sender in another pool, a relay peer)

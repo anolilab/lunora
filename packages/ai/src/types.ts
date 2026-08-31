@@ -63,6 +63,10 @@ export interface LunoraAiOptions {
      * id belong to different Workers AI families and are never interchangeable —
      * reusing the language-model default here would defer a wrong-family error to
      * inference time. Has no effect on bring-your-own providers.
+     *
+     * Falls back to `LUNORA_AI_DEFAULT_EMBEDDING_MODEL` in {@link LunoraAiOptions.env}
+     * — which is how an app sets it, since the generated `ctx.ai` is constructed
+     * with a fixed `{ binding, env, metadata }`.
      */
     defaultEmbeddingModel?: string;
 
@@ -70,16 +74,20 @@ export interface LunoraAiOptions {
      * Default Workers AI **language** model id used by `model()` when no explicit
      * model is passed. For embeddings, set `defaultEmbeddingModel` instead.
      * Has no effect on bring-your-own providers.
+     *
+     * Falls back to `LUNORA_AI_DEFAULT_MODEL` in {@link LunoraAiOptions.env} — the
+     * seam a Lunora app actually has (see `defaultEmbeddingModel`).
      */
     defaultModel?: string;
 
     /**
      * The Worker `env`, read for opt-in Cloudflare AI Gateway routing (the
-     * `LUNORA_AI_GATEWAY_*` vars, via `resolveAiGateway`). When it configures a
-     * gateway and no explicit {@link LunoraAiOptions.gateway} is given, the
-     * Workers AI provider is routed through that gateway so token + dollar-cost
-     * telemetry is computed on the app's behalf. Unset, or with no gateway vars,
-     * behavior is unchanged (calls go straight to Workers AI).
+     * `LUNORA_AI_GATEWAY_*` vars, via `resolveAiGateway`) and for the default
+     * model ids (`LUNORA_AI_DEFAULT_MODEL` / `LUNORA_AI_DEFAULT_EMBEDDING_MODEL`).
+     * When it configures a gateway and no explicit {@link LunoraAiOptions.gateway}
+     * is given, the Workers AI provider is routed through that gateway so token +
+     * dollar-cost telemetry is computed on the app's behalf. Unset, or with no
+     * gateway vars, behavior is unchanged (calls go straight to Workers AI).
      */
     env?: Record<string, unknown>;
 

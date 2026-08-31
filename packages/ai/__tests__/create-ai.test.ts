@@ -94,12 +94,39 @@ describe("createAi", () => {
             expect(provider.modelCalls).toStrictEqual(["@cf/meta/llama-3.1-8b-instruct"]);
         });
 
+        // Regression: `defaultModel` sat on `LunoraAiOptions`, and the only
+        // production constructor is codegen's fixed `createAi({ binding, env,
+        // metadata })` — so no Lunora app could set it and `ctx.ai.model()` with
+        // no argument ALWAYS threw. `env` is the seam codegen already threads, so
+        // the default is read from it, exactly as the gateway vars are.
+        it("falls back to LUNORA_AI_DEFAULT_MODEL from env when no model is passed", () => {
+            expect.assertions(1);
+
+            const provider = fakeProvider();
+            const ai = createAi({ env: { LUNORA_AI_DEFAULT_MODEL: "@cf/meta/llama-3.1-8b-instruct" }, provider });
+
+            ai.model();
+
+            expect(provider.modelCalls).toStrictEqual(["@cf/meta/llama-3.1-8b-instruct"]);
+        });
+
+        it("prefers an explicit defaultModel over the env var", () => {
+            expect.assertions(1);
+
+            const provider = fakeProvider();
+            const ai = createAi({ defaultModel: "@cf/explicit", env: { LUNORA_AI_DEFAULT_MODEL: "@cf/from-env" }, provider });
+
+            ai.model();
+
+            expect(provider.modelCalls).toStrictEqual(["@cf/explicit"]);
+        });
+
         it("throws when no model and no defaultModel are available", () => {
             expect.assertions(1);
 
             const ai = createAi({ provider: fakeProvider() });
 
-            expect(() => ai.model()).toThrow(/no model supplied and no `defaultModel`/);
+            expect(() => ai.model()).toThrow(/no model supplied and no default configured/);
         });
     });
 
@@ -159,6 +186,26 @@ describe("createAi", () => {
             expect(provider.embedCalls).toStrictEqual(["@cf/baai/bge-base-en-v1.5"]);
         });
 
+        // Same seam as the language model above — and the one `defineRag` needs:
+        // `RagConfig.embeddingModel` is documented as optional and resolves through
+        // `ai.embeddingModel(undefined)`, so without a reachable default every
+        // doc example that omits it threw on first index/retrieve.
+        it("falls back to LUNORA_AI_DEFAULT_EMBEDDING_MODEL from env", () => {
+            expect.assertions(2);
+
+            const provider = fakeProvider();
+            const ai = createAi({
+                env: { LUNORA_AI_DEFAULT_EMBEDDING_MODEL: "@cf/baai/bge-base-en-v1.5", LUNORA_AI_DEFAULT_MODEL: "@cf/meta/llama-3.1-8b-instruct" },
+                provider,
+            });
+
+            ai.embeddingModel();
+
+            expect(provider.embedCalls).toStrictEqual(["@cf/baai/bge-base-en-v1.5"]);
+            // The language-model env default must not leak across families either.
+            expect(provider.modelCalls).toStrictEqual([]);
+        });
+
         it("does not reuse the language-model defaultModel as an embedding fallback", () => {
             expect.assertions(2);
 
@@ -168,7 +215,7 @@ describe("createAi", () => {
             const provider = fakeProvider();
             const ai = createAi({ defaultModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", provider });
 
-            expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no `defaultEmbeddingModel`/);
+            expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no default configured/);
             expect(provider.embedCalls).toStrictEqual([]);
         });
 
@@ -177,7 +224,7 @@ describe("createAi", () => {
 
             const ai = createAi({ provider: fakeProvider() });
 
-            expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no `defaultEmbeddingModel`/);
+            expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no default configured/);
         });
     });
 

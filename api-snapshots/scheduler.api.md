@@ -363,14 +363,8 @@ interface Scheduler {
     deadRetry: (id: string) => Promise<boolean>;
     get: (id: string) => Promise<ScheduleRecord | null>;
     list: () => Promise<ScheduleRecord[]>;
-    runAfter: <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<{
-        id: string;
-        scheduledFor: number;
-    }>;
-    runAt: <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<{
-        id: string;
-        scheduledFor: number;
-    }>;
+    runAfter: <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<string>;
+    runAt: <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<string>;
 }
 ```
 
