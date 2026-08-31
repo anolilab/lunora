@@ -226,7 +226,12 @@ const handleTestSign = async (request: Request, env: Env): Promise<Response> => 
         return Response.json({ error: "STORAGE_SECRET and PUBLIC_STORAGE_BASE_URL must both be configured", url: null }, { status: 500 });
     }
 
-    const body = (await request.json().catch(() => null)) as { expiresInSeconds?: number; key?: string; method?: "GET" | "PUT" } | null;
+    const body = (await request.json().catch(() => null)) as {
+        contentType?: string;
+        expiresInSeconds?: number;
+        key?: string;
+        method?: "GET" | "PUT";
+    } | null;
 
     if (!body?.key) {
         return Response.json({ error: "`key` is required", url: null }, { status: 400 });
@@ -234,6 +239,11 @@ const handleTestSign = async (request: Request, env: Env): Promise<Response> => 
 
     const signed = await buildSignedUrl({
         baseUrl: env.PUBLIC_STORAGE_BASE_URL,
+        // PUT-only pin, forwarded so a harness upload can send a real
+        // `content-type`: the PUT handler compares the header against the
+        // signed value unconditionally, so an unpinned URL only accepts a body
+        // with no content type.
+        contentType: body.contentType,
         // The playground declares one bucket, which `createStorage` signs under
         // the canonical `"default"` tag — mint the e2e URLs the same way or they
         // verify against a different canonical.
@@ -263,9 +273,11 @@ const handleTestSchedule = async (request: Request, env: Env): Promise<Response>
     const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl });
     const scheduledFor = body.scheduledFor ?? Date.now() + (body.delayMs ?? 0);
 
-    const result = await scheduler.runAt(scheduledFor, { __lunoraRef: body.functionPath }, body.args ?? {});
+    // `runAt` resolves the bare job id; `scheduledFor` is the instant we just
+    // computed and passed in, so the response shape is unchanged.
+    const jobId = await scheduler.runAt(scheduledFor, { __lunoraRef: body.functionPath }, body.args ?? {});
 
-    return Response.json({ jobId: result.id, scheduledFor: result.scheduledFor });
+    return Response.json({ jobId, scheduledFor });
 };
 
 /**
@@ -365,9 +377,16 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
         // uploader can't swap it. Storing the request's header verbatim would let
         // a URL pinned to `image/png` land a `text/html` body that the GET branch
         // below then serves back as HTML from this origin — stored XSS.
+        //
+        // The comparison is UNCONDITIONAL. Skipping it when the URL carries no
+        // pin (`verdict.contentType === undefined`) hands the choice straight
+        // back to the uploader — exactly the hole the pin exists to close — so
+        // an unpinned URL accepts only a body with no `content-type` at all,
+        // which stores (and later serves) as `application/octet-stream`. Mint a
+        // pinned URL (`buildSignedUrl({ contentType })`) to upload a typed body.
         const contentType = request.headers.get("content-type") ?? undefined;
 
-        if (verdict.contentType !== undefined && contentType !== verdict.contentType) {
+        if (contentType !== verdict.contentType) {
             return new Response("content-type does not match the signed URL", { status: 415 });
         }
 
