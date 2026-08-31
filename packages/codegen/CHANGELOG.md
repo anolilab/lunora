@@ -1,3 +1,21 @@
+## @lunora/codegen [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.143...@lunora/codegen@1.0.0-alpha.144) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.101
+* **@lunora/agent:** upgraded to 1.0.0-alpha.77
+* **@lunora/platform:** upgraded to 1.0.0-alpha.22
+* **@lunora/queue:** upgraded to 1.0.0-alpha.39
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.45
+* **@lunora/do:** upgraded to 1.0.0-alpha.110
+* **@lunora/server:** upgraded to 1.0.0-alpha.95
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.48
+
 ## @lunora/codegen [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.142...@lunora/codegen@1.0.0-alpha.143) (2026-08-30)
 
 ### ⚠ BREAKING CHANGES
