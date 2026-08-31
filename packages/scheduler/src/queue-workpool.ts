@@ -155,7 +155,15 @@ const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
     const timeoutMs = options.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
 
     return async (job: QueueJob, messageId?: string): Promise<void> => {
-        await run({ __lunoraRef: job.functionPath }, job.args, { messageId, shardKey: job.shardKey, timeoutMs });
+        // `dedupId: messageId` is what makes a Queues REDELIVERY idempotent: it
+        // reaches the shard as the replay-dedup `mutationId`, so a message
+        // redelivered after its mutation already committed is applied once
+        // instead of charging the customer twice. (The DO-backed path gets this
+        // from `SchedulerDO.dispatch` sending `id: record.id`.) Safe to reuse the
+        // message id verbatim here — unlike a queue HANDLER, one message
+        // dispatches exactly one call, so there is no second call to collide
+        // with the first's cached result.
+        await run({ __lunoraRef: job.functionPath }, job.args, { dedupId: messageId, messageId, shardKey: job.shardKey, timeoutMs });
     };
 };
 

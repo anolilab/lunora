@@ -35,8 +35,7 @@ const makeBetterSqlite3 = (): SqliteAdapter => createBetterSqlite3Adapter(new Da
  * REPLICA-01 STOP: this fixture matches the DOCUMENTED real `oo1.DB` wire
  * shape — `exec({ returnValue: "resultRows", rowMode: "object" })` returns
  * rows directly (`Record<string, unknown>[]`, NOT sql.js's
- * `{ columns, values }[]`), and `selectValue()` returns a single scalar — but
- * it is backed by a REAL sql.js engine underneath (every statement is still
+ * `{ columns, values }[]`) — but it is backed by a REAL sql.js engine underneath (every statement is still
  * parsed/executed by real SQLite), with a thin re-shaping layer translating
  * sql.js's native result shape into the oo1 shape. This closes the adapter's
  * API-SHAPE gap the bug was about, but — since the real driver could not be
@@ -77,12 +76,6 @@ const makeSqliteWasm = (): SqliteAdapter => {
             engine.run(sql, options?.bind);
 
             return undefined;
-        },
-        selectValue: (sql, bind) => {
-            const result = engine.exec(sql, bind);
-            const first = result[0];
-
-            return first?.values[0]?.[0];
         },
     });
 };
@@ -168,21 +161,6 @@ describe.each(engines)("sqliteAdapter contract (%s)", (_name, makeAdapter) => {
 
         // The insert before the throw must not survive.
         expect(database.query("SELECT id FROM t")).toStrictEqual([]);
-    });
-
-    it("reports the last inserted rowid", () => {
-        expect.assertions(2);
-
-        const database = makeAdapter();
-
-        database.exec("CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)");
-        database.exec("INSERT INTO t (v) VALUES (?)", ["first"]);
-
-        expect(database.lastInsertRowId()).toBe(1);
-
-        database.exec("INSERT INTO t (v) VALUES (?)", ["second"]);
-
-        expect(database.lastInsertRowId()).toBe(2);
     });
 });
 
@@ -741,32 +719,6 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
 
             expect(m2.query<{ id: string; points: number }>("SELECT id, points FROM scores")).toStrictEqual([{ id: "1", points: 9 }]);
         });
-    });
-});
-
-describe(createSqliteWasmAdapter, () => {
-    it("falls back to -1 when the engine returns no rowid result", () => {
-        expect.assertions(1);
-
-        const adapter = createSqliteWasmAdapter({
-            close: () => undefined,
-            exec: () => undefined,
-            selectValue: () => undefined,
-        });
-
-        expect(adapter.lastInsertRowId()).toBe(-1);
-    });
-
-    it("returns a bigint rowid as a number", () => {
-        expect.assertions(1);
-
-        const adapter = createSqliteWasmAdapter({
-            close: () => undefined,
-            exec: () => undefined,
-            selectValue: () => 42n,
-        });
-
-        expect(adapter.lastInsertRowId()).toBe(42);
     });
 });
 

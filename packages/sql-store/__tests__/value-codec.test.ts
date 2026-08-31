@@ -113,6 +113,18 @@ describe("sqliteDecode — round-trips with sqliteEncode by kind", () => {
         expect(sqliteDecode(sqliteEncode([1, 2]), "array")).toEqual([1, 2]);
     });
 
+    it("geoPoint: JSON string → the { lat, lng } object", () => {
+        expect.assertions(2);
+
+        // `sqliteEncode` stores the point as JSON in a TEXT column. Without a
+        // `geoPoint` case the decode fell through to `default:` and every client
+        // read the raw JSON text back — `doc.at.lat` was `undefined`.
+        const at = { lat: 52.52, lng: 13.405 };
+
+        expect(sqliteEncode(at)).toBe('{"lat":52.52,"lng":13.405}');
+        expect(sqliteDecode(sqliteEncode(at), "geoPoint")).toEqual(at);
+    });
+
     it("union/any: parses JSON non-scalars, leaves plain strings", () => {
         expect.assertions(2);
 

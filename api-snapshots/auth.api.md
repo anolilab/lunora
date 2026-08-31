@@ -600,7 +600,6 @@ interface EmailGateConfig {
     allowDomains?: ReadonlyArray<string>;
     blockDisposable?: boolean;
     denyDomains?: ReadonlyArray<string>;
-    flagFreeEmail?: boolean;
     mx?: boolean;
     requireValidSyntax?: boolean;
 }

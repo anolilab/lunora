@@ -134,8 +134,40 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
         expect(response.status).toBe(200);
         // The binding is `create()`d with the scheduled args as its `params`.
         expect(created).toStrictEqual([{ params: { prompt: "digest" } }]);
-        // A workflow target never holds a workpool slot → no /complete callback.
+        // This job carries no `pool`, so there is no slot to release.
         expect(sched.calls.some((call) => call.path === "/complete")).toBe(false);
+    });
+
+    it("releases the workpool slot of a POOLED workflow job", async () => {
+        expect.assertions(3);
+
+        // `Scheduler.runAt` accepts a `WorkflowReference` together with
+        // `RunOptions.pool`, and the SchedulerDO's `reservePoolSlot` reserves for
+        // any record carrying `pool` — so a workflow target DOES hold a slot. The
+        // workflow branch used to return before the release, and with the default
+        // `maxConcurrency: 1` that wedged the pool permanently: nothing
+        // reconciles a missing `/complete`.
+        const env = {
+            AGENT_SUPPORT: {
+                create: async () => {
+                    return { id: "wf-1" };
+                },
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
+
+        const response = await dispatchWithEnv(
+            worker,
+            { args: { prompt: "digest" }, id: "job-pooled", instanceName: "tenant-a", pool: "digests", workflow: "AGENT_SUPPORT" },
+            env,
+        );
+
+        const complete = sched.calls.find((call) => call.path === "/complete");
+
+        expect(response.status).toBe(200);
+        expect(complete?.body).toStrictEqual({ id: "job-pooled", pool: "digests" });
+        expect(complete?.instance).toBe("tenant-a");
     });
 
     it("fails with a 500 when the workflow binding is missing from env", async () => {

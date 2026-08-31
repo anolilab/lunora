@@ -3,9 +3,43 @@
  * Lunora features a target platform supports natively, emulates, or cannot
  * support at all.
  *
- * Codegen consumes this matrix to omit unsupported `ctx.*` surfaces from
- * emitted types and to emit diagnostics for features that need emulation.
- * Docs and Studio also read it to show parity per target.
+ * # Who reads it
+ *
+ * **`@lunora/codegen` is the only consumer.** `gateAgainstMatrix`
+ * (`packages/codegen/src/platform-target.ts`) intersects an app's detected
+ * feature usage with the target's matrix and diagnoses exactly two states:
+ * `unsupported` (`platform_unsupported_feature`) and a key missing from the
+ * matrix altogether (`platform_undeclared_feature`, the fail-closed arm).
+ * `native` and `emulated` are emitted identically, with no diagnostic between
+ * them — that distinction exists for honest parity reporting, not for codegen.
+ *
+ * Nothing in `@lunora/studio` imports this package, and the per-feature table
+ * in `packages/platform-node/docs/index.mdx` is a hand-written copy held
+ * verbatim by `pnpm run lint:node-capabilities-docs`: change a rating or a note
+ * here first, then that table, or the check fails.
+ *
+ * # Gate-bearing keys
+ *
+ * A rating only gates something if `@lunora/codegen` maps a usage key onto that
+ * feature (`CAPABILITY_ROWS` + `CAPABILITY_TO_FEATURE`). The gate-bearing keys
+ * are:
+ *
+ * `ai`, `analytics`, `browser`, `containers`, `crossShardFanout`,
+ * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
+ * `mail`, `objectStorage`, `pipelines`, `queues`, `scheduler`, `secrets`,
+ * `vectorStore`, `workflows`.
+ *
+ * Every other key here — `commitOrderedTables`, `httpCache`, `identityProxy`,
+ * `localSql`, `memoryTables`, `objectStorageBackups`,
+ * `objectStorageCdcArchive`, `serverReactors`, `shardAlarms`, `shardedState`,
+ * `shardPlacement`, `shardReadReplicas`, `websocketHibernation` — is either
+ * engine-internal or has no app-imported module codegen could detect usage
+ * from, so rating one `unsupported` omits no surface and warns nobody. It
+ * still records parity honestly, which is its job; it is not a gate.
+ *
+ * **Adding a feature key is therefore half a change.** The other half is a row
+ * in `CAPABILITY_ROWS` and an entry in `CAPABILITY_TO_FEATURE`, or the rating
+ * ships as documentation while the surface it describes is emitted anyway.
  */
 
 /** Support level for a single feature on a target platform. */
@@ -345,7 +379,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
     id: "node",
     name: "Node",
     features: {
-        shardedState: { level: "emulated", note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover" },
+        shardedState: {
+            level: "emulated",
+            note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover. Shard keys are percent-encoded into basenames with A-Z escaped, so `Tenant` and `tenant` stay two databases on a case-insensitive volume (APFS, NTFS) rather than folding into one",
+        },
         globalTables: {
             level: "emulated",
             note: "The @lunora/sql-store core on its own SQLite file via the reference sqliteDialect — full store semantics, but one node with no replication",
@@ -356,7 +393,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         durableStreams: {
             level: "unsupported",
-            note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it — a durable stream declared here would silently behave as an ephemeral one",
+            note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it. Gate-bearing: codegen refuses an app that declares a durable stream on this target, rather than emitting one that silently behaves as an ephemeral stream",
         },
         commitOrderedTables: {
             level: "emulated",
@@ -419,8 +456,14 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
         pipelines: { level: "unsupported", note: "No Pipelines-equivalent binding implemented" },
-        mail: { level: "unsupported", note: "@lunora/mail's queue-backed sends need a queues binding, which this target does not provide" },
-        secrets: { level: "unsupported", note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars)" },
+        mail: {
+            level: "unsupported",
+            note: "The queue tier this host lacked when the rating was written now exists (createNodeQueueHost), but nothing here composes a @lunora/mail transport or the queued-send consumer, so a send would be accepted and never delivered",
+        },
+        secrets: {
+            level: "unsupported",
+            note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars). Gate-bearing, and it has to be: ctx.secrets is a core built-in spliced into every context, so codegen refuses an app that reads it on this target instead of emitting a surface that throws on first use",
+        },
         hyperdrive: { level: "unsupported", note: "No connection-pooling binding implemented" },
         httpCache: {
             level: "unsupported",

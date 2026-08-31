@@ -104,6 +104,43 @@ describe("log-archive admin route", () => {
         expect(query.mock.calls[0]?.[0]).toEqual({ cursor: { ts: 1_699_999_999_000 } });
     });
 
+    it("forwards `cursor.seen` so the reader can drop the boundary rows it already emitted", async () => {
+        expect.assertions(1);
+
+        // The reader resumes INCLUSIVELY (`ts <= cursorTs`) and needs the hash set
+        // to drop already-returned boundary rows. This route rebuilt the cursor as
+        // `{ ts }` and dropped `seen`, so a page whose rows share one `ts` —
+        // routine at the 500-row default — re-emitted the same page forever.
+        const query = stubQuery();
+        const createReader: ReaderFactory = () => {
+            return { query };
+        };
+        const readJsonBody = async (): Promise<Record<string, unknown>> => {
+            return { cursor: { seen: ["hash-a", "hash-b"], ts: 1_699_999_999_000 } };
+        };
+        const route = buildLogArchiveAdminRoutes(deps({ createReader, readJsonBody }))[LOG_ARCHIVE_PATH]!;
+
+        await route(post(), CREDS);
+
+        expect(query.mock.calls[0]?.[0]).toEqual({ cursor: { seen: ["hash-a", "hash-b"], ts: 1_699_999_999_000 } });
+    });
+
+    it("rejects a non-string-array `cursor.seen` with BAD_REQUEST before touching the reader", async () => {
+        expect.assertions(2);
+
+        const query = stubQuery();
+        const createReader: ReaderFactory = () => {
+            return { query };
+        };
+        const readJsonBody = async (): Promise<Record<string, unknown>> => {
+            return { cursor: { seen: ["ok", 7], ts: 1 } };
+        };
+        const route = buildLogArchiveAdminRoutes(deps({ createReader, readJsonBody }))[LOG_ARCHIVE_PATH]!;
+
+        await expect(route(post(), CREDS)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(query).not.toHaveBeenCalled();
+    });
+
     it("rejects an invalid level with BAD_REQUEST before touching the reader", async () => {
         expect.assertions(2);
 

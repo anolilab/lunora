@@ -40,7 +40,7 @@ describe("accessRoles", () => {
     it("uses each group verbatim as a role when no map is given", async () => {
         expect.assertions(1);
 
-        const { roles } = await run({ groups: ["admins", "billing"] });
+        const { roles } = await run({ access: {}, groups: ["admins", "billing"] });
 
         expect(roles).toStrictEqual(["admins", "billing"]);
     });
@@ -48,7 +48,10 @@ describe("accessRoles", () => {
     it("maps groups to roles through a lookup table (single and array values)", async () => {
         expect.assertions(1);
 
-        const { roles } = await run({ groups: ["idp-admins", "idp-billing"] }, { map: { "idp-admins": "admin", "idp-billing": ["billing", "viewer"] } });
+        const { roles } = await run(
+            { access: {}, groups: ["idp-admins", "idp-billing"] },
+            { map: { "idp-admins": "admin", "idp-billing": ["billing", "viewer"] } },
+        );
 
         expect(roles).toStrictEqual(["admin", "billing", "viewer"]);
     });
@@ -56,7 +59,7 @@ describe("accessRoles", () => {
     it("drops a group the table does not map", async () => {
         expect.assertions(1);
 
-        const { roles } = await run({ groups: ["idp-admins", "unmapped"] }, { map: { "idp-admins": "admin" } });
+        const { roles } = await run({ access: {}, groups: ["idp-admins", "unmapped"] }, { map: { "idp-admins": "admin" } });
 
         expect(roles).toStrictEqual(["admin"]);
     });
@@ -64,7 +67,7 @@ describe("accessRoles", () => {
     it("supports a function map", async () => {
         expect.assertions(1);
 
-        const { roles } = await run({ groups: ["admins", "skip", "eng"] }, { map: (group) => (group === "skip" ? undefined : `role:${group}`) });
+        const { roles } = await run({ access: {}, groups: ["admins", "skip", "eng"] }, { map: (group) => (group === "skip" ? undefined : `role:${group}`) });
 
         expect(roles).toStrictEqual(["role:admins", "role:eng"]);
     });
@@ -72,7 +75,7 @@ describe("accessRoles", () => {
     it("unions group-derived roles with roles already on ctx.auth, deduped", async () => {
         expect.assertions(1);
 
-        const { roles } = await run({ groups: ["editor", "admin"] }, {}, ["admin", "viewer"]);
+        const { roles } = await run({ access: {}, groups: ["editor", "admin"] }, {}, ["admin", "viewer"]);
 
         expect(roles).toStrictEqual(["admin", "viewer", "editor"]);
     });
@@ -89,7 +92,7 @@ describe("accessRoles", () => {
     it("forwards the context unchanged when the identity carries no groups", async () => {
         expect.assertions(1);
 
-        const result = await run({ email: "a@b.c" });
+        const result = await run({ access: {}, email: "a@b.c" });
 
         expect(result.passedThrough).toBe(true);
     });
@@ -97,7 +100,7 @@ describe("accessRoles", () => {
     it("forwards unchanged when the groups list is empty", async () => {
         expect.assertions(1);
 
-        const result = await run({ groups: [] });
+        const result = await run({ access: {}, groups: [] });
 
         expect(result.passedThrough).toBe(true);
     });
@@ -113,7 +116,7 @@ describe("accessRoles", () => {
     it("ignores non-string entries in the default groups claim", async () => {
         expect.assertions(1);
 
-        const { roles } = await run({ groups: ["ok", 42, null, "fine"] });
+        const { roles } = await run({ access: {}, groups: ["ok", 42, null, "fine"] });
 
         expect(roles).toStrictEqual(["ok", "fine"]);
     });
@@ -135,5 +138,27 @@ describe("accessRoles", () => {
         const { roles } = await run({ access: { groups: ["nested"] }, groups: ["promoted"] });
 
         expect(roles).toStrictEqual(["promoted"]);
+    });
+
+    it("ignores groups on a non-Access identity envelope", async () => {
+        expect.assertions(2);
+
+        // Under `composeResolvers(accessResolver, appResolver)` the identity may be
+        // the app adapter's (better-auth and friends), whose top-level `groups`
+        // could be a user-editable profile field. Without the Access claim set
+        // under `access` it is not a verified Access identity, so nothing on it may
+        // become an RLS role.
+        const result = await run({ groups: ["admin"], userId: "u1" });
+
+        expect(result.passedThrough).toBe(true);
+        expect(result.roles).toBeUndefined();
+    });
+
+    it("ignores a custom readGroups on a non-Access identity envelope", async () => {
+        expect.assertions(1);
+
+        const result = await run({ orgRoles: ["owner"] }, { readGroups: (identity) => identity["orgRoles"] as string[] });
+
+        expect(result.passedThrough).toBe(true);
     });
 });

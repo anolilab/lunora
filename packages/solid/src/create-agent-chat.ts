@@ -8,6 +8,7 @@ import { NO_MUTATION_REF, resolveMaybe } from "./create-agent";
 import { createMutation } from "./create-mutation";
 import { createStream } from "./create-stream";
 import { createSubscription } from "./create-subscription";
+import { trackedEffect } from "./solid-compat";
 
 /**
  * One persisted (or optimistic) thread message, as `agents:agentMessages`
@@ -219,6 +220,20 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
     const [optimistic, setOptimistic] = createSignal<ReadonlyArray<OptimisticMessage>>([]);
     // A monotonic id source for optimistic rows — primitive-instance local.
     let nextId = 0;
+
+    // Optimistic rows belong to the thread they were sent in. `reconcileOptimistic`
+    // retires them by comparing `maxDurableSeqAtSend` against durable `seq`s, and
+    // `seq` is monotonic PER THREAD — so a row carried into another thread can never
+    // be claimed there and renders as a ghost user bubble. Drop them whenever the
+    // resolved thread key changes, alongside the re-subscribed history/thread/stream.
+    trackedEffect(
+        () => resolveMaybe(threadKey),
+        () => {
+            if (optimistic().length > 0) {
+                setOptimistic([]);
+            }
+        },
+    );
 
     const thread = createMemo(() => threadData() as unknown as AgentThreadRecord | undefined);
     const status = createMemo(() => thread()?.status);

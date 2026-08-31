@@ -563,8 +563,9 @@ Per-request dollar cost used to reach a span only when a Cloudflare AI Gateway
 put it in `providerMetadata`. Call the same model through `@ai-sdk/openai`
 directly, or run on a non-Cloudflare host, and spend visibility disappeared.
 
-`estimateModelCost` derives it from token usage and a price table instead, and
-`defineRag`'s embed span falls back to it automatically:
+`estimateModelCost` derives it from token usage and a price table instead.
+`defineRag`'s embed span and `@lunora/agent`'s generation spans both fall back
+to it automatically, so a chat turn carries a cost with or without a gateway:
 
 ```ts
 import { estimateModelCost } from "@lunora/ai";

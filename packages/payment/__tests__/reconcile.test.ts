@@ -54,10 +54,13 @@ describe("reconcile", () => {
         expect(result).toEqual({
             checkedPayments: 0,
             checkedSubscriptions: 1,
+            checkedUsage: 0,
             failedPayments: 0,
             failedSubscriptions: 0,
+            failedUsage: 0,
             updatedPayments: 0,
             updatedSubscriptions: 1,
+            updatedUsage: 0,
         });
 
         const repaired = await store.getSubscription("stripe", "sub_1");
@@ -89,10 +92,13 @@ describe("reconcile", () => {
         expect(result).toEqual({
             checkedPayments: 1,
             checkedSubscriptions: 0,
+            checkedUsage: 0,
             failedPayments: 0,
             failedSubscriptions: 0,
+            failedUsage: 0,
             updatedPayments: 1,
             updatedSubscriptions: 0,
+            updatedUsage: 0,
         });
 
         const session = await store.getPaymentSession("stripe", "pi_1");
@@ -204,10 +210,13 @@ describe("reconcile", () => {
         expect(result).toEqual({
             checkedPayments: 0,
             checkedSubscriptions: 2,
+            checkedUsage: 0,
             failedPayments: 0,
             failedSubscriptions: 1,
+            failedUsage: 0,
             updatedPayments: 0,
             updatedSubscriptions: 1,
+            updatedUsage: 0,
         });
 
         // The healthy id was still repaired despite the sibling failure.
@@ -217,5 +226,86 @@ describe("reconcile", () => {
         // The failure is surfaced and `reconcile.completed` always fires.
         expect(events.map((event) => event.type)).toContain("reconcile.error");
         expect(events.at(-1)?.type).toBe("reconcile.completed");
+    });
+
+    it("re-forwards a usage event whose upstream report failed, and marks it reported", async () => {
+        expect.assertions(4);
+
+        // Regression: `reportedToProvider` was written by every `track` and read by
+        // nothing, so one transient 5xx lost that metered unit upstream for good —
+        // under-billing and over-entitling the customer on a provider that owns
+        // entitlements.
+        const store = new MemoryPaymentStore();
+        const reported: { idempotencyKey: string; quantity: number }[] = [];
+        const adapter = {
+            capabilities: { usageMetering: true },
+            getPaymentStatus: async () => {
+                throw new Error("not used");
+            },
+            getSubscriptionStatus: async () => subscription("active"),
+            identifier: "stripe",
+            reportUsage: async (input: { idempotencyKey: string; quantity: number }) => {
+                reported.push({ idempotencyKey: input.idempotencyKey, quantity: input.quantity });
+            },
+        } as unknown as PaymentAdapter;
+
+        await store.recordUsage({
+            createdAt: 1,
+            featureId: "tokens",
+            idempotencyKey: "evt_1",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+        // A "set" marker: its upstream delta was relative to the total at the time,
+        // so it is NOT a retry candidate and must never be re-sent.
+        await store.recordUsage({
+            createdAt: 2,
+            featureId: "tokens",
+            idempotencyKey: "evt_2",
+            mode: "set",
+            provider: "stripe",
+            quantity: 9,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+
+        const result = await reconcile({ adapter, store });
+
+        expect(reported).toStrictEqual([{ idempotencyKey: "evt_1", quantity: 5 }]);
+        expect(result.updatedUsage).toBe(1);
+        expect(result.checkedUsage).toBe(1);
+
+        // Marked reported, so the next sweep does not send it again.
+        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toStrictEqual([]);
+    });
+
+    it("leaves a usage event pending when the retried forward fails again", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "stripe",
+            reportUsage: async () => {
+                throw new Error("provider 503");
+            },
+        } as unknown as PaymentAdapter;
+
+        await store.recordUsage({
+            createdAt: 1,
+            featureId: "tokens",
+            idempotencyKey: "evt_1",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+
+        const result = await reconcile({ adapter, store });
+
+        expect(result.failedUsage).toBe(1);
+        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toHaveLength(1);
     });
 });

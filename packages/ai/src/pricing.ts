@@ -45,9 +45,14 @@ const DATED_MODEL_ID = /^(.*)-\d{4}-\d{2}-\d{2}$/u;
  * An indicative price table, keyed by model id.
  *
  * Deliberately small: a table that tries to cover every model is a table that
- * is wrong about most of them. It holds the Workers AI models Lunora's own
- * defaults reference plus the common OpenAI embedding models, and everything
- * else returns `undefined` rather than a guess.
+ * is wrong about most of them. It holds the models Lunora's own defaults and
+ * documented examples reference — text generation and embeddings, on Workers AI
+ * and OpenAI — and everything else returns `undefined` rather than a guess.
+ *
+ * Generation models carry an `output` price; embedding models do not (they have
+ * no completion). A generation model missing from here is why a chat span would
+ * carry no cost at all off an AI Gateway, so the ids the docs teach are the ones
+ * that have to be in the table.
  */
 const DEFAULT_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
     // Workers AI embedding models. Priced per model, not per family — the four
@@ -58,9 +63,21 @@ const DEFAULT_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
     "@cf/baai/bge-m3": { input: 0.012 },
     "@cf/baai/bge-small-en-v1.5": { input: 0.02 },
 
+    // Workers AI text-generation models — the ids every `defineAgent` /
+    // `ctx.ai.model()` example in the docs uses. Input and output are priced
+    // separately and differ by ~8x on the 70b, so an input-only estimate would
+    // understate a generation badly.
+    "@cf/meta/llama-3.1-8b-instruct": { input: 0.28, output: 0.83 },
+    "@cf/meta/llama-3.3-70b-instruct-fp8-fast": { input: 0.29, output: 2.25 },
+
     // OpenAI embedding models.
     "text-embedding-3-large": { input: 0.13 },
     "text-embedding-3-small": { input: 0.02 },
+
+    // OpenAI chat models — the non-Cloudflare half of the same examples.
+    "gpt-4o": { input: 2.5, output: 10 },
+    "gpt-4o-mini": { input: 0.15, output: 0.6 },
+    "gpt-5": { input: 1.25, output: 10 },
 };
 
 /**

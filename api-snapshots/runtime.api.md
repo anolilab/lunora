@@ -643,7 +643,7 @@ interface ExportCursorStore {
 ```ts
 interface ExportFanOutRequest {
     args?: Record<string, unknown>;
-    defaultShardKey?: string;
+    defaultShardKey: DefaultShardKey;
     headers?: Record<string, string>;
     tables: ReadonlyArray<string>;
 }
@@ -1278,7 +1278,7 @@ type MetricKind = "counter" | "gauge" | "histogram";
 ```ts
 interface MigrationFanOutRequest {
     args?: Record<string, unknown>;
-    defaultShardKey?: string;
+    defaultShardKey: DefaultShardKey;
     functionPath: string;
     headers?: Record<string, string>;
     table: string;
@@ -1734,6 +1734,7 @@ interface RpcEnvelope {
 interface RunExportTapOptions {
     coordinator: QueryCoordinator;
     cursorStore: ExportCursorStore;
+    defaultShardKey: string | null;
     headers?: Record<string, string>;
     initialBackoffMs?: number;
     limit?: number;
@@ -2194,7 +2195,6 @@ interface WorkerOptions {
     backupTables?: ReadonlyArray<string>;
     cronJobs?: Record<string, ReadonlyArray<CronJobDispatch>>;
     crons?: Record<string, CronHandler>;
-    d1?: unknown;
     defaultShardKey?: string;
     exportCursorStore?: ExportCursorStore;
     exportGlobals?: GlobalExportFunction;
@@ -2476,22 +2476,6 @@ const memoizeIdentity: (resolver: IdentityResolver, options?: MemoizeIdentityOpt
 
 ```ts
 const memoizeIdentityPerRequest: (resolver: IdentityResolver) => IdentityResolver;
-```
-
-### `mergeStrategyForAggregate` (const)
-
-```ts
-const mergeStrategyForAggregate: (input: {
-    agg?: {
-        op?: "avg" | "count" | "max" | "min" | "sum";
-    };
-    kind: "groupBy";
-} | {
-    kind: "count";
-} | {
-    kind: "scalar";
-    op: "avg" | "count" | "max" | "min" | "sum";
-}) => MergeStrategy;
 ```
 
 ### `normalizeBackupPrefix` (const)

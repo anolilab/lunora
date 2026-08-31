@@ -44,6 +44,7 @@ import type { FeatureUsage } from "./discover/feature-usage";
 import { discoverFeatureUsage } from "./discover/feature-usage";
 import { discoverIdentity } from "./discover/identity";
 import readPackageDependencies from "./discover/package-dependencies";
+import { discoverPlatformSignals } from "./discover/platform-signals";
 import { discoverQueues } from "./discover/queues";
 import { discoverSandboxUsage } from "./discover/sandbox";
 import discoverStorageRulesMetadata from "./discover/storage-rules";
@@ -223,7 +224,21 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // The target is resolved here rather than demanded of every caller: a call
     // site that omits it would emit the DEFAULT surface with no diagnostic, so the
     // mismatch would stay invisible until the deployed app failed.
-    const platformGate = gatePlatformFeatures(discoverFeatureUsage(project, lunoraDirectory), resolveCodegenTarget(projectRoot, options.target));
+    //
+    // Beyond the `ctx.*` capability keys, the gate also takes the app-declarable
+    // features that have no capability row — a `.global()` table, a
+    // `defineQueue`, a `.shardBy(...)` schema, a durable `.stream()`, a
+    // `ctx.secrets` read. Those are rated in every capability matrix and were
+    // consulted by nothing, so e.g. a durable stream on `target: "node"` emitted
+    // its full surface and silently behaved as ephemeral.
+    const codeSignals = discoverPlatformSignals(project, lunoraDirectory);
+    const platformGate = gatePlatformFeatures(discoverFeatureUsage(project, lunoraDirectory), resolveCodegenTarget(projectRoot, options.target), {
+        crossShardFanout: schema.tables.some((table) => typeof table.shardMode === "object"),
+        durableStreams: codeSignals.durableStreams,
+        globalTables: schema.tables.some((table) => table.shardMode === "global"),
+        queues: queues.length > 0,
+        secrets: codeSignals.secrets,
+    });
     const featureUsage = platformGate.usage;
 
     const sandboxUsage = discoverSandboxUsage(project, lunoraDirectory);

@@ -262,6 +262,29 @@ describe("materializeRemoteWranglerConfig", () => {
         }).not.toThrow();
     });
 
+    it("gives each materialization its own path, so an older disposer cannot delete the newer config", () => {
+        expect.assertions(3);
+
+        // Regression: the temp path was constant within a dev process, and Vite's
+        // `restartServer` resolves the NEW config (materializing a fresh file)
+        // BEFORE closing the old server — so the old generation's disposer ran
+        // last and deleted the file the new generation had just written, leaving
+        // the worker on empty local D1/KV/R2.
+        writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
+
+        const first = materializeRemoteWranglerConfig({ enabled: true, projectRoot: root });
+        const second = materializeRemoteWranglerConfig({ enabled: true, projectRoot: root });
+
+        generated = second.configPath;
+
+        expect(first.configPath).not.toBe(second.configPath);
+
+        first.cleanup();
+
+        expect(existsSync(first.configPath as string)).toBe(false);
+        expect(existsSync(second.configPath as string)).toBe(true);
+    });
+
     it("reports a reason and no config path when no wrangler file exists", () => {
         expect.assertions(2);
 

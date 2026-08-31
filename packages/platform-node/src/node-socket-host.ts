@@ -43,7 +43,6 @@ import { toArrayBuffer } from "./to-array-buffer";
 /** Internal record for one accepted (or restored) socket. */
 interface NodeSocket {
     attachment: unknown;
-    bufferedAmount: number;
     closed: boolean;
     handle: SocketHandle;
     id: string;
@@ -143,7 +142,12 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
         // `createGeoBuilder`.
         const state = socketState;
         const handle: SocketHandle = {
-            bufferedAmount: state.bufferedAmount,
+            // `bufferedAmount` is deliberately ABSENT rather than reported as
+            // `0`. The contract reads an absent value as "assume drained" but a
+            // present `0` as a positive claim of an empty queue, and this host
+            // has no outbound queue to measure — `send` appends to an in-process
+            // array. A frozen `0` would tell the engine backpressure never
+            // applies, which is the one answer it cannot detect as missing.
             close: (_code, _reason) => {
                 state.closed = true;
                 runtimeSockets.delete(state.id);
@@ -196,7 +200,6 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
             const state: NodeSocket = {
                 attachment,
-                bufferedAmount: 0,
                 closed: false,
                 handle: undefined as unknown as SocketHandle,
                 id,
@@ -281,7 +284,6 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
             const persisted = row?.attachment === null ? undefined : row?.attachment;
             const state: NodeSocket = {
                 attachment: persisted === undefined ? attachment : deserialize(persisted),
-                bufferedAmount: 0,
                 closed: false,
                 handle: undefined as unknown as SocketHandle,
                 id,

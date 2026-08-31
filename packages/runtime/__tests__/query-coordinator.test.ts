@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { FanOutRequest, MigrationFanOutRequest, RankFanOutRequest, ShardRegistry } from "../src/query-coordinator";
+import type { ExportFanOutRequest, FanOutRequest, MigrationFanOutRequest, RankFanOutRequest, ShardRegistry } from "../src/query-coordinator";
 import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -409,6 +409,9 @@ describe("orchestrateMigration", () => {
     const migrationRequest = (overrides: Partial<MigrationFanOutRequest> = {}): MigrationFanOutRequest => {
         return {
             args: { id: "backfill" },
+            // These cases all register real shard keys, so the fallback is
+            // deliberately not wanted — which is now something you must say.
+            defaultShardKey: null,
             functionPath: "__lunora_admin__:runMigration",
             headers: { authorization: "Bearer admin" },
             table: "messages",
@@ -727,13 +730,13 @@ describe("orchestrateExport shard discovery", () => {
         expect(spy.calls.map((call) => call.shardKey).toSorted((a, b) => a.localeCompare(b))).toEqual(["chan-1", "chan-2"]);
     });
 
-    it("contacts nothing when no default shard is supplied", async () => {
+    it("contacts nothing when the caller passes a null default shard", async () => {
         expect.assertions(1);
 
         const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({}) });
         const spy = createShardSpy(() => json({ ok: true, rows: [] }));
 
-        await coordinator.orchestrateExport(spy.namespace, { args: {}, headers: {}, tables: ["messages"] });
+        await coordinator.orchestrateExport(spy.namespace, { args: {}, defaultShardKey: null, headers: {}, tables: ["messages"] });
 
         expect(spy.calls).toEqual([]);
     });
@@ -793,6 +796,24 @@ describe("empty shard discovery", () => {
         });
 
         expect(spy.calls.map((call) => call.shardKey).toSorted((left, right) => left.localeCompare(right))).toEqual(["a", "b"]);
+    });
+
+    /**
+     * Regression: `defaultShardKey` was optional on the export / CDC / migration
+     * requests, so a fan-out that never mentioned it fell back to nothing and
+     * reported success over zero shards — which is how two of the six fan-outs
+     * were missed. Omission is no longer expressible; `null` is how a caller
+     * says it means it (as `orchestrateRank`'s callers do below).
+     */
+    it("does not let a fan-out request omit its shard fallback", () => {
+        expect.assertions(1);
+
+        // @ts-expect-error - `defaultShardKey` is required
+        const omitted: ExportFanOutRequest = { args: {}, headers: {}, tables: ["messages"] };
+        // @ts-expect-error - `defaultShardKey` is required
+        const omittedMigration: MigrationFanOutRequest = { functionPath: "__lunora_admin__:runMigration", table: "messages" };
+
+        expect([omitted.tables.length, omittedMigration.table]).toEqual([1, "messages"]);
     });
 
     it("keeps an empty fan-out for a caller that supplies no default", async () => {

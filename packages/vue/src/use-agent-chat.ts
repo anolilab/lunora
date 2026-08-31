@@ -1,7 +1,7 @@
 import type { FunctionReference, OptimisticMessage } from "@lunora/client";
 import { maxSeq, reconcileOptimistic } from "@lunora/client";
 import type { ComputedRef, MaybeRefOrGetter } from "vue";
-import { computed, ref, toValue } from "vue";
+import { computed, ref, toValue, watch } from "vue";
 
 import type { AgentThreadRecord, AgentThreadStatus } from "./use-agent";
 import { NO_MUTATION_REF } from "./use-agent";
@@ -219,6 +219,18 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     const optimistic = ref<ReadonlyArray<OptimisticMessage>>([]);
     // A monotonic id source for optimistic rows — composable-instance local.
     let nextId = 0;
+
+    // Optimistic rows belong to the thread they were sent in. `reconcileOptimistic`
+    // retires them by comparing `maxDurableSeqAtSend` against durable `seq`s, and
+    // `seq` is monotonic PER THREAD — so a row carried into another thread can never
+    // be claimed there and renders as a ghost user bubble. Drop them whenever the
+    // resolved thread key changes, alongside the re-subscribed history/thread/stream.
+    watch(
+        () => toValue(threadKey),
+        () => {
+            optimistic.value = [];
+        },
+    );
 
     const thread = computed(() => threadData.value as unknown as AgentThreadRecord | undefined);
     const status = computed(() => thread.value?.status);

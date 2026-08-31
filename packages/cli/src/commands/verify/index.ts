@@ -25,6 +25,10 @@ const verifyCommand: Command = {
             name: "health-url",
             type: String,
         },
+        // Both halves declared explicitly: a `no-*`-only declaration makes cerebro
+        // synthesize `--typecheck` by cloning this description verbatim, so
+        // `--help` advertised the positive flag as "Skip the TypeScript type-check step".
+        { description: "Run the TypeScript type-check step (default)", name: "typecheck", type: Boolean },
         { description: "Skip the TypeScript type-check step", name: "no-typecheck", type: Boolean },
         TARGET_OPTION,
     ],
@@ -32,8 +36,10 @@ const verifyCommand: Command = {
 
 export { verifyCommand };
 
-// `--no-typecheck` is declared as a `no-*` option but cerebro exposes it at
-// runtime under the negated `typecheck` key (false when passed, true when absent).
+// `typecheck` is declared TWICE in `options` (the positive form and `no-typecheck`,
+// each with its own description); cerebro exposes both under this one positive key.
+// Neither carries a `defaultValue`, so it is `undefined` until the user picks a
+// side and the handler's `!== false` read treats that as "run it".
 export type VerifyOptions = CreateOptions<{
     "allow-schema-drift": boolean | undefined;
     "api-spec": string | undefined;

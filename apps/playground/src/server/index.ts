@@ -234,6 +234,10 @@ const handleTestSign = async (request: Request, env: Env): Promise<Response> => 
 
     const signed = await buildSignedUrl({
         baseUrl: env.PUBLIC_STORAGE_BASE_URL,
+        // The playground declares one bucket, which `createStorage` signs under
+        // the canonical `"default"` tag — mint the e2e URLs the same way or they
+        // verify against a different canonical.
+        bucketName: "default",
         expiresInSeconds: body.expiresInSeconds,
         key: body.key,
         method: body.method ?? "GET",
@@ -347,10 +351,27 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
         return new Response("forbidden", { status: 403 });
     }
 
+    // The bucket is HMAC-bound, so this is the URL's own claim about which
+    // binding to serve — never a caller-supplied parameter. One bucket is
+    // declared here, so anything else is a URL minted for an app we are not.
+    if (verdict.bucketName !== "default") {
+        return new Response("forbidden", { status: 403 });
+    }
+
     const key = decodeURIComponent(url.pathname.slice(1));
 
     if (request.method === "PUT") {
-        await env.FILES.put(key, request.body, { httpMetadata: { contentType: request.headers.get("content-type") ?? undefined } });
+        // The signed `Content-Type` pin is bound into the HMAC precisely so the
+        // uploader can't swap it. Storing the request's header verbatim would let
+        // a URL pinned to `image/png` land a `text/html` body that the GET branch
+        // below then serves back as HTML from this origin — stored XSS.
+        const contentType = request.headers.get("content-type") ?? undefined;
+
+        if (verdict.contentType !== undefined && contentType !== verdict.contentType) {
+            return new Response("content-type does not match the signed URL", { status: 415 });
+        }
+
+        await env.FILES.put(key, request.body, { httpMetadata: { contentType } });
 
         return new Response(null, { status: 200 });
     }

@@ -36,10 +36,13 @@ export default defineApp<Env>()
 ```
 
 `ctx.storage` is a narrower projection of the API below: `query` and `mutation`
-handlers get a read-only surface (`download`, `getMetadata`, `getSignedUrl`,
-`getUrl`, `list`), and only `action` handlers get the full read/write surface
-(`store`, `delete`, `generateUploadUrl`, multipart, presigned). On `ctx.storage`,
-`download(key)` resolves to the `ReadableStream` directly.
+handlers get a read-only surface (`download`, `head`, `getMetadata`,
+`getSignedUrl`, `getUrl`), and only `action` handlers get the full read/write
+surface (`store`, `delete`, `generateUploadUrl`, multipart, presigned). `list` is
+NOT on the read-only surface — it is dropped along with the other ungated methods
+so it cannot sidestep `storageRules`; call it on the `Storage` instance itself.
+`download(key)` resolves to the R2 object (its metadata plus a `body` stream), not
+to a bare `ReadableStream`.
 
 ## Deleting an object with the row that owns it
 
@@ -78,8 +81,11 @@ still queues, and those deletes are flushed when the action finishes.
 
 Build the full `Storage` outside a handler (or to use the object-level reads,
 ranged downloads, and multipart shown below) with
-`createStorage({ bucket, publicBaseUrl?, signingSecret?, s3? })`. The examples
-that follow use such an instance, named `storage`.
+`createStorage({ bucket, bucketName, publicBaseUrl?, signingSecret?, s3? })`.
+`bucketName` is required and has no default — it is bound into every signed
+URL's HMAC, so a bucket signing under the wrong name mints URLs that verify
+against somebody else's bucket. The examples that follow use such an instance,
+named `storage`.
 
 ## Direct upload from an action
 
@@ -135,6 +141,11 @@ the body (an R2 HEAD), returning `null` when the object is absent.
 the next page while `truncated` is true. The cursor is opaque: treat it as a
 string, don't parse it.
 
+With a `delimiter`, the keys that share a segment are rolled up into
+`delimitedPrefixes` (the "folders") and are NOT in `objects` — a folder browser
+must render both, or a listing of `photos/` full of `photos/2026/*.png` looks
+like an empty directory.
+
 ```ts
 let cursor: string | undefined;
 do {
@@ -149,7 +160,7 @@ do {
 A worker-signed URL resolves back through your Worker, so the request still
 passes your auth/policy/rate-limit gates before the body is served. `baseUrl`
 (and `.storage()`'s `publicBaseUrl`) must be a bare origin: `getSignedUrl`
-rejects a URL that carries a path, since the signature binds only host + key
+rejects a URL that carries a path, since the signature binds host + bucket + key
 and verification reconstructs the key from the full URL pathname. The Worker
 route handling the signed download/upload (mounted at that origin, e.g.
 `GET /:key`) calls `verifySignedUrl` to check the signature and expiry:
@@ -164,8 +175,16 @@ if (!result.valid) {
     // is a signing oracle. It is for server logs only.
     return new Response("Forbidden", { status: 403 });
 }
-// result.key / result.method / result.contentType are now trusted.
+// result.key / result.method / result.contentType / result.bucketName are now trusted.
 ```
+
+Every bucket of one `.storage({ bucket, buckets })` declaration shares the same
+`publicBaseUrl` and `signingSecret`, so the bucket name is bound into the HMAC
+(and mirrored on the URL as `&bucket=`) — a URL minted for `avatars` does not
+verify against `invoices`. Resolve the R2 binding your route serves from
+`result.bucketName`, never from a caller-supplied parameter. On a PUT, compare
+the request's `Content-Type` against `result.contentType` and answer `415` when
+they differ: the pin is only worth what the serving route enforces.
 
 `getSignedUrl(key, { method, expiresInSeconds, contentType })` mints the URL.
 `expiresInSeconds` must be positive and at most 7 days. For a `PUT` URL,
@@ -183,6 +202,7 @@ credentials, passed as `s3` to `createStorage`:
 ```ts
 const storage = createStorage({
     bucket: env.FILES,
+    bucketName: "files",
     s3: {
         accountId: env.R2_ACCOUNT_ID,
         accessKeyId: env.R2_ACCESS_KEY_ID,
@@ -193,6 +213,11 @@ const storage = createStorage({
 
 const url = await storage.getPresignedUrl("exports/report.csv", { method: "GET", expiresInSeconds: 900 });
 ```
+
+`s3` has to reach the `createStorage` call that built the instance you are
+calling — a `Storage` without it throws `INTERNAL: 's3' credentials are
+required` on every `getPresignedUrl`. Build the instance yourself (as above)
+when the app's `.storage()` declaration does not carry `s3`.
 
 ## Large objects (multipart)
 

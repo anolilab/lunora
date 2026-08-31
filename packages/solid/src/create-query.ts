@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionErrorCallback } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
@@ -7,6 +7,13 @@ import { useLunora } from "./context";
 import { trackedEffect } from "./solid-compat";
 
 export interface CreateQueryOptions {
+    /**
+     * Called when the server pushes a subscription-scoped error (an RLS denial, a
+     * query that starts failing server-side). Without a handler such an error has
+     * nowhere to go and the accessor simply freezes at its last good value.
+     */
+    onError?: SubscriptionErrorCallback;
+
     /** Route to a specific shard when the target function is `.shardBy(...)`-partitioned. */
     shardKey?: string;
 }
@@ -28,6 +35,10 @@ export interface CreateQueryOptions {
  * const messages = createQuery(api.messages.list, () => ({ channelId: channelId() }));
  * return <For each={messages()?.messages}>{(m) => <li>{m.text}</li>}</For>;
  * ```
+ *
+ * Pass `onError` to surface a subscription-scoped error the server pushes (an RLS
+ * denial, a query that starts failing server-side). Without it such an error is
+ * dropped and the accessor just freezes at its last good value.
  */
 export const createQuery = <F extends FunctionReference>(
     function_: F,
@@ -35,7 +46,7 @@ export const createQuery = <F extends FunctionReference>(
     options: CreateQueryOptions = {},
 ): Accessor<ReturnOf<F> | undefined> => {
     const client = useLunora();
-    const { shardKey } = options;
+    const { onError, shardKey } = options;
 
     const [value, setValue] = createSignal<ReturnOf<F> | undefined>(undefined);
 
@@ -57,6 +68,7 @@ export const createQuery = <F extends FunctionReference>(
                 onData: (next) => {
                     setValue(() => next);
                 },
+                onError,
                 onReset: () => {
                     setValue(() => undefined as ReturnOf<F> | undefined);
                 },

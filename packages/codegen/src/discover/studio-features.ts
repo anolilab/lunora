@@ -51,6 +51,12 @@ interface StudioFeatureSignals {
  * package in, even when the usage scan (scoped to `lunora/`) can't see the
  * wiring — the failure the studio must never make is hiding a working page.
  *
+ * The dependency names tested here are PACKAGE names, which is what
+ * `readPackageDependencies` collects — never a subpath. `analytics`, `kv` and
+ * `vectors` all ship inside `@lunora/bindings`, so all three test that one name;
+ * testing `"@lunora/bindings/kv"` (as they did) matched nothing, and the arm
+ * that exists to fail open could never fire.
+ *
  * `payments` is the lone exception: it has no dependency arm. Its panel reads the
  * `subscriptions`/`events` tables directly, which the app must hand-declare in its
  * schema (codegen can't resolve `@lunora/payment`'s cross-package table spread), so
@@ -61,18 +67,18 @@ interface StudioFeatureSignals {
  */
 const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals): StudioFeaturesResult => {
     return {
-        analytics: usage.analytics || signals.dependencies.has("@lunora/bindings/analytics"),
+        analytics: usage.analytics || signals.dependencies.has("@lunora/bindings"),
         auth: signals.dependencies.has("@lunora/auth"),
         containers: usage.container || signals.containerCount > 0 || signals.dependencies.has("@lunora/container"),
         flags: usage.flags || signals.dependencies.has("@lunora/flags"),
-        kv: usage.kv || signals.dependencies.has("@lunora/bindings/kv"),
+        kv: usage.kv || signals.dependencies.has("@lunora/bindings"),
         mail: usage.mail || signals.dependencies.has("@lunora/mail"),
         notifications: usage.notify || signals.dependencies.has("@lunora/notify"),
         payments: usage.payments || signals.hasPaymentTables,
         queues: signals.queueCount > 0 || signals.dependencies.has("@lunora/queue"),
         scheduler: usage.scheduler || signals.cronCount > 0 || signals.dependencies.has("@lunora/scheduler"),
         storage: usage.storage || signals.storageRuleCount > 0 || signals.storageColumnCount > 0 || signals.dependencies.has("@lunora/storage"),
-        vectors: usage.vectors || signals.vectorIndexCount > 0 || signals.dependencies.has("@lunora/bindings/vectors"),
+        vectors: usage.vectors || signals.vectorIndexCount > 0 || signals.dependencies.has("@lunora/bindings"),
         workflows: usage.workflows || signals.workflowCount > 0 || signals.dependencies.has("@lunora/workflow"),
     };
 };

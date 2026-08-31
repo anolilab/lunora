@@ -481,7 +481,7 @@ describe("createNodeR2Bucket", () => {
         expect.hasAssertions();
 
         const bucket = freshBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         await storage.upload("reports/q1.json", new Blob(['{"ok":true}']), { contentType: "application/json", customMetadata: { env: "test" } });
 

@@ -83,4 +83,13 @@ export { LunoraProvider } from "./lunora-provider";
 export type { SolidChildren } from "./solid-compat";
 // Re-export the core type surface so consumers can stay on a single import for
 // function references, args/return inference, and the SSR `Preloaded` token.
-export type { ArgsOf, FunctionReference, OptimisticUpdate, Preloaded, ReturnOf, Unsubscribe } from "@lunora/client";
+export type {
+    ArgsOf,
+    FunctionReference,
+    OptimisticUpdate,
+    Preloaded,
+    ReturnOf,
+    SubscriptionError,
+    SubscriptionErrorCallback,
+    Unsubscribe,
+} from "@lunora/client";

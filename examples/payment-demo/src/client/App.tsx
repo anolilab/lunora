@@ -1,4 +1,5 @@
-import { CheckoutButton, CustomerPortalButton, useLunora, useQuery } from "@lunora/react";
+import { useLunora, useQuery } from "@lunora/react";
+import { CheckoutButton, CustomerPortalButton } from "@lunora/react/payment";
 import type { ReactElement } from "react";
 import { useState } from "react";
 

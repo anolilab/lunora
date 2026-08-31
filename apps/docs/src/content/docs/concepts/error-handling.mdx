@@ -8,10 +8,11 @@ transport response, and the client surfaces it as a rejected promise (or as
 `error` on a hook). The one decision you make is which kind of error to throw,
 because that decides what the caller sees.
 
-| Throw                              | Caller sees                                   | Use for                                          |
-| ---------------------------------- | --------------------------------------------- | ------------------------------------------------ |
-| `LunoraError(code, message)`       | the `code` + `message`, with the right status | expected/application failures the client handles |
-| any other `Error` (or a raw value) | a generic `500` `INTERNAL`, message stripped  | unexpected bugs never meant to reach the user    |
+| Throw                                 | Caller sees                                   | Use for                                          |
+| ------------------------------------- | --------------------------------------------- | ------------------------------------------------ |
+| `LunoraError(code, message)`          | the `code` + `message`, with the right status | expected/application failures the client handles |
+| `LunoraError` with an internal `code` | the `code` + status, message stripped         | failures the caller should see no detail of      |
+| any other `Error` (or a raw value)    | a generic `500` `INTERNAL`, message stripped  | unexpected bugs never meant to reach the user    |
 
 ## Throwing from a handler
 
@@ -48,15 +49,28 @@ The codes are a fixed set, each with a status attached:
 | `NOT_FOUND`             | 404    | `NOT_IMPLEMENTED`       | 501    |
 | `INTERNAL_SERVER_ERROR` | 500    | `COUNT_RLS_UNSUPPORTED` | 422    |
 
+`INTERNAL_SERVER_ERROR` is an **internal** code: the client sees the code and
+the `500`, but its message is replaced with `Internal error`. Throw it only when
+the caller should see no detail.
+
 ## Expected vs. unexpected
 
 This split is deliberate and security-relevant. The runtime only echoes a
-thrown value's `code` and `message` to the client when it's `LunoraError`-shaped
-(`name === "LunoraError"` plus a string `code`). Everything else (a plain
+thrown value's `code` and `message` to the client when it passes
+`isLunoraError` — an `Error` instance carrying the `type: "VisulimaError"`
+brand, a string `code`, **and** a numeric `status`. `LunoraError` sets all
+three, and so does the copy an error decodes back into on the far side of the
+wire; a hand-rolled class that merely sets `name = "LunoraError"` and a `code`
+does not, and is redacted like any other throw. Everything else (a plain
 `throw new Error(...)`, a `TypeError` from a bug, a rejected `fetch`) is logged
 server-side and replaced with a generic `{ code: "INTERNAL", message: "Internal error" }`
 at status `500`. Arbitrary `Error.message` strings can carry stack traces, file
 paths, or internal identifiers, so they never reach the wire.
+
+Codes the catalog marks **internal** are redacted too, even when thrown as a
+`LunoraError`: the `code` and status reach the client, but the message is
+replaced with `Internal error`. See the
+[errors reference](/docs/errors#internal-errors) for the list.
 
 The practical rule: throw `LunoraError` for anything the client should be able
 to react to (not-found, forbidden, validation, rate-limited). Let unexpected

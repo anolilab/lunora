@@ -37,14 +37,18 @@ mint signed URLs, since signing is an HMAC computation with no R2 round-trip.
 | `store`                             |   —   |    —     |   ✓    |
 | `delete`                            |   —   |    —     |   ✓    |
 
-In short: serve and inspect files from anywhere; mint a **direct-upload** URL or
+In short: serve and inspect files from anywhere; mint an **upload** URL or
 write and delete bytes only from an action.
 
 ## Uploading
 
 The browser-friendly pattern is a **signed upload URL**: an action mints a
-short-lived `PUT` URL, the browser uploads straight to R2 (your Worker never
-proxies the bytes), and a follow-up mutation records the key in your database.
+short-lived `PUT` URL, the browser uploads to it without holding any bucket
+credential, and a follow-up mutation records the key in your database. The URL
+points back at your own Worker, not at R2 — that is the point of it, since the
+request still passes your app's gates (auth, storage rules, rate limits) before
+the Worker verifies the signature and streams the bytes into the bucket. The
+trade-off is that the bytes flow through the Worker.
 
 ```ts
 import { action, v } from "@/lunora/_generated/server";
@@ -66,6 +70,19 @@ or transformed), upload them directly with `store`, which also enforces optional
 ```ts
 await ctx.storage.store(key, body, { allowedContentTypes: ["image/png", "image/jpeg"], maxSize: 5_000_000 });
 ```
+
+### Uploading straight to R2
+
+When you want the bytes off the Worker's CPU and bandwidth budget entirely —
+large objects, no per-request app logic — use a **native S3 presigned URL**
+instead: `@lunora/storage`'s `getPresignedUrl(key, { method: "PUT" })` signs a
+SigV4 URL that the client sends directly to R2's S3 endpoint. It needs R2 S3 API
+credentials (`s3: { accountId, accessKeyId, secretAccessKey, bucket }`) on the
+storage instance; without them the call throws. Because such a URL is a
+self-contained bearer credential that never touches your Worker, it cannot be
+gated by your app's storage rules and is deliberately absent from the
+rule-enforced `ctx.storage` surface. For very large uploads,
+`createMultipartUpload` wraps R2's native multipart API.
 
 ## Serving files
 

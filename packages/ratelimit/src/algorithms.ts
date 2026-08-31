@@ -24,6 +24,16 @@ interface EvaluateResult {
 const capacityOf = (config: RateLimitConfig): number => config.capacity ?? config.rate;
 
 /**
+ * The ceiling a limit will actually enforce on a single `count`, per algorithm:
+ * token buckets and fixed windows admit up to `capacity` (defaulting to `rate`),
+ * while a sliding window ignores `capacity` entirely and caps at `rate`. Anything
+ * above the ceiling is rejected by {@link throwCountExceedsCapacity}, so a caller
+ * that clamps a charge must clamp to THIS number — clamping to `capacity` on a
+ * sliding window produces a count the limiter then throws on.
+ */
+const enforcedCapacity = (config: RateLimitConfig): number => (config.kind === "sliding window" ? config.rate : capacityOf(config));
+
+/**
  * A single request larger than the limiter can ever hold can never be admitted,
  * so a finite `retryAfter` would be a lie the caller would chase forever — every
  * algorithm surfaces this caller misuse with the same error.
@@ -251,4 +261,4 @@ const evaluate = (config: RateLimitConfig, prior: RateLimitValue | undefined, op
 };
 
 export type { EvaluateOptions, EvaluateResult };
-export { availableAt, evaluate };
+export { availableAt, enforcedCapacity, evaluate };

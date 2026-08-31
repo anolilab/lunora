@@ -1,8 +1,8 @@
+import { LunoraError } from "@lunora/errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ActionCacheContext } from "../src/action-cache";
 import { ACTION_CACHE_TABLE, cacheKeyFor, defineActionCache } from "../src/action-cache";
-import { LunoraError } from "../src/error";
 
 /**
  * Minimal in-memory `db` matching the slice the action cache uses:

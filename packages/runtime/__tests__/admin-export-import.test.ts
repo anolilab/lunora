@@ -1173,3 +1173,112 @@ describe("admin apply (CDC replay)", () => {
         expect(response.status).toBe(413);
     });
 });
+
+describe("admin import — a shard the fan-out never reached", () => {
+    /** Coordinator whose import fan-out loses shard B: it contributes nothing to `inserted`/`errors`, only to `failed`/`shards[].error`. */
+    const partialImport = vi.fn<(namespace: unknown, request: { batches: { rows: { table: string }[]; shardKey: string }[] }) => Promise<unknown>>(async () => {
+        return {
+            conflicts: 0,
+            errors: [],
+            failed: 1,
+            inserted: { users: 2 },
+            ok: 1,
+            shards: [
+                { result: { conflicts: 0, errors: [], inserted: { users: 2 } }, shardKey: "shard-a" },
+                { error: { message: "shard RPC timed out", timedOut: true }, shardKey: "shard-b" },
+            ],
+        };
+    });
+
+    const postImport = (worker: { fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response> }): Promise<Response> =>
+        worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: [
+                    JSON.stringify({ doc: { _id: "u1" }, table: "users" }),
+                    JSON.stringify({ doc: { _id: "u2" }, table: "users" }),
+                    JSON.stringify({ doc: { _id: "u3" }, table: "users" }),
+                ].join("\n"),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+    it("surfaces the dead shard and answers 207 instead of reporting a clean 200", async () => {
+        expect.assertions(4);
+
+        // `mergeImportResult` folded only `{ inserted, errors, conflicts }`, and
+        // `rollUpImport` records a dead shard ONLY in `failed`/`shards[].error` —
+        // so a partial write returned `200 { errors: [], conflicts: 0 }` with a
+        // slice of the dataset silently missing.
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: partialImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await postImport(worker);
+
+        expect(response.status).toBe(207);
+
+        const body: { failed: { message: string; shardKey: string; timedOut: boolean }[]; inserted: Record<string, number>; received: number } =
+            await response.json();
+
+        expect(body.failed).toStrictEqual([{ message: "shard RPC timed out", shardKey: "shard-b", timedOut: true }]);
+        // `inserted` is a floor, not a result — `received` is the honest denominator.
+        expect(body.inserted).toEqual({ users: 2 });
+        expect(body.received).toBe(3);
+    });
+
+    it("stays 200 with an empty `failed` when every shard answered", async () => {
+        expect.assertions(2);
+
+        const cleanImport = vi.fn<() => Promise<unknown>>(async () => {
+            return {
+                conflicts: 0,
+                errors: [],
+                failed: 0,
+                inserted: { users: 3 },
+                ok: 1,
+                shards: [{ result: { conflicts: 0, errors: [], inserted: { users: 3 } }, shardKey: "shard-a" }],
+            };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: cleanImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await postImport(worker);
+
+        expect(response.status).toBe(200);
+
+        const body: { failed: unknown[] } = await response.json();
+
+        expect(body.failed).toStrictEqual([]);
+    });
+});

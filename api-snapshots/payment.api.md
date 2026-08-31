@@ -147,6 +147,14 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `PaymentPage` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `PaymentPageArgs` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `PaymentRow` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

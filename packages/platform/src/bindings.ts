@@ -337,6 +337,12 @@ export interface R2BucketLike {
     // indexed seek into a walk over every key ever written.
     list: (options?: { cursor?: string; delimiter?: string; limit?: number; prefix?: string; startAfter?: string }) => Promise<{
         cursor?: string;
+        // The common-prefix roll-up R2 returns when `delimiter` is set. Without
+        // it a delimited list is lossy in the one case it exists for: every key
+        // under the delimiter lands here rather than in `objects`, so a caller
+        // that only reads `objects` sees an empty, untruncated page and renders
+        // an empty folder over a full bucket.
+        delimitedPrefixes?: string[];
         objects: R2ObjectLike[];
         truncated?: boolean;
     }>;

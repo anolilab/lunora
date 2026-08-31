@@ -349,6 +349,24 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.signals.join(" ")).toContain("not exported by the worker entry");
     });
 
+    it("treats a class-A composed worker entry as exporting the declared classes", async () => {
+        expect.assertions(3);
+
+        // Regression: every class-A template sets `main: "virtual:lunora/worker"`
+        // and ships NO entry file, so the `existsSync(main)` probe used to fall
+        // through to "no worker entry" — every declaration was stamped
+        // `exported: false`, reconcile filtered them out, and the app deployed
+        // green then failed at runtime on a missing binding.
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/workflows.ts", WORKFLOWS_TS);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.workflows[0]).toMatchObject({ className: "OrderPipelineWorkflow", exported: true });
+        expect(result.durableObjects).toEqual([{ binding: "SHARD", className: "ShardDO" }]);
+        expect(result.signals.join(" ")).not.toContain("not exported by the worker entry");
+    });
+
     it("reports no workflows for a project without lunora/workflows.ts", async () => {
         expect.assertions(1);
 

@@ -54,6 +54,22 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 
 Re-exported from `@lunora/config` — signature tracked at its source.
 
+### `GENERATED_CLASS_MODULES` (const)
+
+```ts
+const GENERATED_CLASS_MODULES: readonly [
+    "agents",
+    "containers",
+    "workflows"
+];
+```
+
+### `GeneratedClassModule` (type)
+
+```ts
+type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
+```
+
 ### `LUNORA_API_UPDATED_EVENT` (const)
 
 ```ts
@@ -73,10 +89,10 @@ interface LunoraPluginOptions {
     allowUnauthenticatedShardAccess?: boolean;
     apiSpec?: CodegenOptions["apiSpec"];
     cloudflare?: boolean | CloudflarePluginOptions;
-    generatedDir?: string;
     overlay?: boolean | OverlayPluginOptions;
     projectRoot?: string;
     schemaDir?: string;
+    shard?: LunoraShardConfig;
     studio?: boolean;
     target?: string;
     validateWrangler?: boolean;
@@ -87,6 +103,20 @@ interface LunoraPluginOptions {
 
 ```ts
 type LunoraPlugins = Plugin[];
+```
+
+### `LunoraShardConfig` (interface)
+
+```ts
+interface LunoraShardConfig {
+    cdc?: boolean;
+    maxRelationKeys?: number;
+    reactiveCache?: boolean | {
+        maxBytes?: number;
+        maxEntries?: number;
+    };
+    relationExistsPushDown?: "always" | "auto" | "never";
+}
 ```
 
 ### `OverlayPluginOptions` (type)
@@ -121,6 +151,7 @@ interface ResolvedLunoraPluginOptions {
     overlay: false | OverlayPluginOptions;
     projectRoot: string;
     schemaDir: string;
+    shard: LunoraShardConfig;
     studio: boolean;
     target: string;
     validateWrangler: boolean;
@@ -187,7 +218,7 @@ const buildStudioUrl: (input: {
 ### `buildWorkerEntrySource` (const)
 
 ```ts
-const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, hasContainers?: boolean, useUmbrella?: boolean, allowUnauthenticatedShardAccess?: boolean) => string;
+const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, classModules?: ReadonlyArray<GeneratedClassModule>, useUmbrella?: boolean, allowUnauthenticatedShardAccess?: boolean, shard?: LunoraShardConfig) => string;
 ```
 
 ### `checkLunoraProxy` (const)

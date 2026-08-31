@@ -95,6 +95,12 @@ import { createStorage } from "@lunora/storage";
 
 const storage = createStorage({
     bucket: env.FILES,
+    // Required. The name this bucket is registered under, bound into every signed
+    // URL's HMAC (and mirrored as `&bucket=`), so a URL minted for one bucket
+    // cannot be replayed against another sharing the signing secret. `"default"`
+    // for a single-bucket app; the registered name for anything reached through
+    // `createBucketStorage`.
+    bucketName: "default",
     publicBaseUrl: "https://cdn.acme.test",
     signingSecret: env.STORAGE_SECRET,
 });

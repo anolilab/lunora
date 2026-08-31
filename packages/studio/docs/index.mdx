@@ -112,8 +112,13 @@ Everything that reads or shapes stored state.
       server. Codegen emits the `(table, column, strategy)` map it reads.
     - **Row generation**: generate realistic seed rows with `@faker-js/faker`,
       inferred from each column's type, before inserting.
-    - **Cascade preview**: before deleting a row, see which related rows a
-      cascading relation would take with it.
+    - **Cascade preview**: deleting a row opens an impact preview first — the
+      tables whose rows reference it, how many there are, and whether the
+      relation cascades, blocks the delete (`restrict`), or declares no action
+      at all (those rows survive, pointing at a row that no longer exists).
+      Edges are read from the schema metadata the browser already loads, so a
+      relation whose `onDelete` the studio cannot see is labelled as undeclared
+      rather than guessed at.
 - **SQL editor**: _Run read-only SQL against a shard._ A full-height query
   console for ad-hoc `SELECT`s against a shard's SQLite.
 - **Schema**: _Inspect each table and its columns._ Every table with its row
@@ -240,7 +245,7 @@ createWorker({
     adminToken: env.LUNORA_ADMIN_TOKEN,
     schedulerDO: env.SCHEDULER, // enables the scheduled-jobs page
     functions: LUNORA_FUNCTIONS, // enables function discovery
-    storageList: createStorage({ bucket: env.FILES }).list, // enables the file browser
+    storageList: createStorage({ bucket: env.FILES, bucketName: "default" }).list, // enables the file browser
 });
 ```
 

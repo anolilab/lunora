@@ -43,6 +43,7 @@
 import type { CrossShardReadArgs, DatabaseWriterLike, QueryPage } from "@lunora/shard-engine";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
+import { decodeWire } from "../../../shared/wire-codec";
 import { LunoraError } from "./errors";
 
 /**
@@ -137,7 +138,14 @@ const fanOutRelation = async (options: CrossShardRelationOptions, body: Record<s
         );
     }
 
-    return result.data;
+    // The producing shard encodes its result to wire form (`shard-do.ts`'s
+    // relation-fanout path runs `encodeWire`), so bigints / byte arrays arrive as
+    // `["$lunora.wire$", …]` tags. Decode symmetrically here or every child row's
+    // 64-bit id and every `bytes` column reaches the parent as a tag array.
+    // CONTRACT: producer `encodeWire` ⇄ consumer `decodeWire`; changing one side
+    // without the other silently corrupts the relation payload rather than
+    // failing.
+    return decodeWire(result.data);
 };
 
 /**

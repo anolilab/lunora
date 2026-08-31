@@ -10,7 +10,7 @@
  * Edge-safety: Web Push (VAPID + RFC 8291) and FCM (HTTP v1) run on `fetch` + Web
  * Crypto under workerd. APNs (`node:http2`) and SMS / Node-only queue adapters are
  * deliberately **not** on the edge facade — route heavy fan-out through
- * `@lunora/queue` (`enqueuePushBroadcast` / `runPushBroadcastJob`).
+ * `@lunora/queue` (`enqueuePushBroadcast` / `runPushBroadcastPage`).
  *
  * - `@lunora/notify` — `defineNotify`, `createNotify`, config resolvers, subscription stores and types.
  * - `@lunora/notify/web` — the browser `subscribeToPush` service-worker helper.
@@ -23,8 +23,8 @@ export type { CreateNotifyOptions } from "./notify";
 export { createNotify } from "./notify";
 export type { ResolvedProviders, RoutingPushOptions } from "./providers";
 export { buildEngine, routingPushProvider } from "./providers";
-export type { PushBroadcastJob, QueueProducerLike } from "./queue";
-export { enqueuePushBroadcast, runPushBroadcastJob } from "./queue";
+export type { PushBroadcastJob, PushBroadcastPageOutcome, QueueProducerLike } from "./queue";
+export { enqueuePushBroadcast, runPushBroadcastPage } from "./queue";
 export type { D1Like, D1PreparedLike, D1StoreOptions } from "./subscriptions/d1-store";
 export { d1SubscriptionStore } from "./subscriptions/d1-store";
 export { memorySubscriptionStore } from "./subscriptions/memory-store";

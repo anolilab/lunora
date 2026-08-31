@@ -735,6 +735,52 @@ interface RequestScope {
 }
 
 /**
+ * The read-set / cache-hit attribution for ONE `/rpc` dispatch, filled in by
+ * {@link ShardDO.runCachedQuery} and read back by {@link ShardDO.recordRequestLog}.
+ *
+ * A mutable object THREADED BY VALUE rather than a `currentRequest*` field on
+ * the instance, for the same reason `dispatchHeadroom` and `dispatchTrace`
+ * already are: a Durable Object serves concurrent `/rpc` dispatches, and every
+ * one of these values is written after the handler's awaits. Off a shared field
+ * they were whatever the LAST dispatch to resolve wrote — so the request log
+ * filed one request's cache hit and read tables under another's, and a sibling's
+ * prologue/epilogue could blank them out entirely. Both fields stay `undefined`
+ * when the dispatch never reached the cache (a write/action, a cache-less shard,
+ * or a query that fell through the re-entry guard) — the request log renders
+ * that as "unknown" rather than asserting a read set.
+ */
+interface QueryAttribution {
+    cacheHit?: boolean;
+    readTables?: Set<string>;
+}
+
+/**
+ * The reactive-cache read capture for ONE query dispatch: the dependency
+ * tracker the cache indexes the entry by, plus the range footprint its
+ * range-precise invalidation reads.
+ *
+ * Minted by {@link ShardDO.runCachedQuery} and threaded BY VALUE — handed to
+ * its `run` callback, on through `handleRpc`'s fourth parameter, and into the
+ * generated `buildCtx`, which binds it into the ctx-db read hooks via
+ * {@link ShardDO.getCtxDbReadHook} / {@link ShardDO.getCtxDbReadRangeHook}. It
+ * is NOT an instance field: a Durable Object serves concurrent `/rpc`
+ * dispatches, and a shared field holds one capture for all of them — the second
+ * query's reads would land in the first one's dep set and the second would be
+ * skipped by the re-entry guard entirely (never read from the cache, never
+ * stored).
+ *
+ * `AsyncLocalStorage` would carry it implicitly, but workerd only enables ALS
+ * under `nodejs_compat` and shard DOs run the slimmer `sqlite_compat` profile —
+ * see the header of `@lunora/shard-engine`'s `dependency-tracker.ts`.
+ */
+interface QueryReadScope {
+    /** Range footprint for this dispatch — the `onReadRange` channel. */
+    footprint: ReadFootprint;
+    /** Dependency tracker for this dispatch — the `onRead` channel. */
+    tracker: DependencyTracker;
+}
+
+/**
  * How an RPC dispatch resolved: the handler ran (`"ran"`), or the mutation-replay
  * cache already held this `(identity, mutationId)`'s result (`"cached"`).
  * Tagged rather than inferred from which half is `undefined`, so a `"cached"`
@@ -744,24 +790,54 @@ interface RequestScope {
 type DispatchOutcome = { cached: { value: unknown }; kind: "cached" } | { kind: "ran"; result: unknown };
 
 /**
- * Optional shard-level configuration passed through `super(state, env, …)`.
- * Reserved as a bag rather than positional args so subclasses don't break
- * when new knobs land. Today the only knob is the reactive cache; future
- * additions should keep the same shape (per-feature options object).
+ * Shard-level configuration passed through `super(state, env, …)` by the
+ * generated subclass, which sources every key from the app's
+ * `createShardDO(config)` argument. A bag rather than positional args so
+ * subclasses don't break when a knob lands.
  */
 interface ShardDOOptions {
     /**
-     * Enable the per-shard reactive query cache. When provided, the dispatch
-     * path uses {@link ShardDO.runCachedQuery} to memoize query results by
-     * `(functionPath, stable-stringified args)`. Omit to keep the legacy
-     * behavior (every dispatch re-runs the handler).
+     * Whether every writer this shard builds spreads {@link ShardDO.ctxDbTuning}.
+     * The emitter sets it, because it is the only thing that can see inside the
+     * generated `buildCtx` and the admin/maintenance writers to know.
      *
-     * The cache is invisible to the WS subscription bridge: invalidations
-     * land via the ctx-db write hooks (`@lunora/do`'s `createShardCtxDb`
-     * `cache` option) BEFORE the broadcast goes out, so subscribers that
-     * re-run their queries in response always observe the post-write state.
+     * Left unset (a hand-written subclass), {@link ShardDO.recordChangedTable}
+     * keeps its coarse per-table invalidation backstop, so a writer that never
+     * received the cache cannot serve a pre-write read. Set wrongly, it would
+     * disable that backstop — which is why it is declared rather than inferred
+     * from a call to the accessor.
+     */
+    ctxDbCacheWired?: boolean;
+
+    /**
+     * Ceiling on the join keys one relation-crossing `where` predicate may pull
+     * back via semijoin pre-resolution before failing closed. Reaches
+     * `createShardCtxDb` through {@link ShardDO.ctxDbTuning}; `undefined` keeps
+     * the engine default (`DEFAULT_MAX_RELATION_KEYS`).
+     */
+    maxRelationKeys?: number;
+
+    /**
+     * Enable the per-shard reactive query cache. When provided, the dispatch
+     * path routes every registered `query` through {@link ShardDO.runCachedQuery},
+     * memoizing results by `(identity, functionPath, stable-stringified args)`.
+     * Omit for the zero-overhead default (every dispatch re-runs the handler).
+     *
+     * The cache is invisible to the WS subscription bridge: invalidations land
+     * via the ctx-db write hooks (the `cache` option {@link ShardDO.ctxDbTuning}
+     * supplies) BEFORE the broadcast goes out, so subscribers that re-run their
+     * queries in response always observe the post-write state.
      */
     reactiveCache?: ReactiveCacheOptions;
+
+    /**
+     * Resolution policy for relation-crossing `where` predicates whose child is
+     * co-located in this shard — `"auto"` (cost-based, the engine default),
+     * `"always"` (inline correlated EXISTS) or `"never"` (universal semijoin).
+     * All three return identical rows. Reaches `createShardCtxDb` through
+     * {@link ShardDO.ctxDbTuning}.
+     */
+    relationExistsPushDown?: "always" | "auto" | "never";
 }
 
 /**
@@ -1116,15 +1192,14 @@ abstract class ShardDO {
     protected env: unknown;
 
     /**
-     * Opt-in per-shard reactive query cache. When the subclass passes
-     * `ReactiveCacheOptions` to `super(state, env, { reactiveCache: { … } })`
-     * the cache is instantiated here and exposed to subclasses via
-     * `runCachedQuery`; when omitted (today's default) it stays
-     * undefined and the dispatch path runs with zero cache overhead.
+     * Opt-in per-shard reactive query cache. Instantiated when the generated
+     * subclass passes `reactiveCache` through
+     * `super(state, env, { reactiveCache: { … } })`; otherwise undefined and the
+     * dispatch path runs with zero cache overhead.
      *
-     * The cache is per-shard and in-memory only — it is lost on DO restart
-     * and on workerd hibernation. That's fine: a cold shard simply re-runs
-     * the query on the first call, just like it does today.
+     * The cache is per-shard and in-memory only — it is lost on DO restart and
+     * on workerd hibernation. That's fine: a cold shard simply re-runs the query
+     * on the first call.
      */
     protected readonly reactiveCache: ReactiveCache | undefined;
 
@@ -1151,6 +1226,23 @@ abstract class ShardDO {
      * changelog proved their table had not moved.
      */
     protected globalPoll: GlobalPollCounters = createGlobalPollCounters();
+
+    /** ctx-db relation knobs from {@link ShardDOOptions}, handed on by {@link ShardDO.ctxDbTuning}. */
+    private readonly ctxDbRelationOptions: Pick<ShardDOOptions, "maxRelationKeys" | "relationExistsPushDown">;
+
+    /**
+     * Whether {@link ShardDO.ctxDbTuning} has been consulted, i.e. whether the
+     * subclass's `createShardCtxDb` call is wired to the precise, per-row
+     * invalidation half of the cache contract.
+     *
+     * It gates a coarse fallback in {@link ShardDO.recordChangedTable}: a shard
+     * whose writer never received the cache would otherwise keep serving
+     * memoized results across writes — stale reads, silently. The fallback drops
+     * every entry on a written table, which is strictly more invalidation than
+     * the wired path does, so the two never disagree about correctness; only
+     * about hit rate.
+     */
+    private readonly ctxDbCacheWired: boolean;
 
     /**
      * The host-neutral engine runner. `fetch` and `alarm` delegate through it, so
@@ -1655,33 +1747,14 @@ abstract class ShardDO {
     private readonly metricSeries = new MetricBuffer();
 
     /**
-     * In-flight dependency tracker for the currently-executing query. Set by
-     * `runCachedQuery` so the ctx-db hooks (wired via `onRead`) can
-     * stamp deps without threading the tracker explicitly through every
-     * generated handler signature. Cleared in the `finally` of the same
-     * call so a leaked tracker can never bleed into a sibling RPC.
-     */
-    private currentTracker: DependencyTracker | undefined;
-
-    /**
-     * In-flight range footprint (the `onReadRange` channel) for the
-     * currently-executing cached query. Set by `runCachedQuery` alongside
-     * `currentTracker` so `getCtxDbReadRangeHook` — and the range-marking half
-     * of `getCtxDbReadHook` — can stamp it without threading it explicitly
-     * through every generated handler signature. `ReactiveCache.run`'s ranges
-     * thunk reads it lazily, AFTER the handler resolves, so it always sees the
-     * footprint's final state. Cleared in the same `finally` as `currentTracker`.
-     */
-    private currentReadFootprint: ReadFootprint | undefined;
-
-    /**
      * Tables the in-flight dispatch full-scanned (read via `SCAN_DEP`, no index
      * / point lookup). Allocated at the top of each `/rpc` dispatch and drained
      * into `recordFunctionCall` once the handler returns, so the durable
      * `__lunora_metrics_scans` attribution can pin a slow function to the
-     * table(s) it scanned. Independent of `currentTracker` (which only exists
-     * when the reactive cache is enabled), so the causal signal is collected
-     * even on a cache-less shard. Stamped by `getCtxDbReadHook`.
+     * table(s) it scanned. Independent of the per-dispatch
+     * {@link QueryReadScope} (which only exists when the reactive cache is
+     * enabled), so the causal signal is collected even on a cache-less shard.
+     * Stamped by `getCtxDbReadHook`.
      */
     private currentScannedTables: Set<string> | undefined;
 
@@ -1703,19 +1776,6 @@ abstract class ShardDO {
      * down with it.
      */
     private currentTransactionHeadroom: TransactionHeadroomTracker | undefined;
-
-    /**
-     * Read-tables + cache-hit captured for the current `/rpc` dispatch, so the
-     * dispatch site can fold them into the durable request log
-     * (`request-log.ts`). Populated by `runCachedQuery` — the one place that
-     * both holds the per-query dependency tracker AND learns whether the
-     * reactive cache served the result — and reset per request in `fetch`.
-     * `undefined`/empty when the reactive cache is disabled or the path is a
-     * write/action (which doesn't run through the cache), which is exactly why
-     * the request log treats those fields as "unknown" rather than asserting a
-     * read set on the hot path.
-     */
-    private currentRequestReadTables: Set<string> | undefined;
 
     /**
      * Per-DISTINCT-statement SQL samples collected during the current `/rpc`
@@ -1765,9 +1825,6 @@ abstract class ShardDO {
      */
     private currentStmtSamplesTruncated: boolean | undefined;
 
-    /** Whether the current dispatch's cached query was served from cache; `undefined` until `runCachedQuery` resolves one. */
-    private currentRequestCacheHit: boolean | undefined;
-
     public constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
         this.state = state;
         this.env = env;
@@ -1789,6 +1846,12 @@ abstract class ShardDO {
         if (options.reactiveCache) {
             this.reactiveCache = new ReactiveCache(options.reactiveCache);
         }
+
+        this.ctxDbCacheWired = options.ctxDbCacheWired ?? false;
+        this.ctxDbRelationOptions = {
+            ...(options.maxRelationKeys === undefined ? {} : { maxRelationKeys: options.maxRelationKeys }),
+            ...(options.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: options.relationExistsPushDown }),
+        };
 
         // What every internal tier needs from this DO: its own name (the role
         // signal), the env, the namespace binding, and SQLite. Built once and
@@ -2052,8 +2115,22 @@ abstract class ShardDO {
      * their own tracker (`dispatchLifecycle`, `handleRunAs`) omit it and the
      * codegen subclass falls back to `this.transactionHeadroom()`, unchanged from
      * before this parameter existed.
+     *
+     * `scope` is the same shape of BY-VALUE thread for the reactive cache: the
+     * `/rpc` query path routes through {@link ShardDO.runCachedQuery}, which
+     * mints a {@link QueryReadScope} per dispatch and passes it here so the ctx
+     * this dispatch builds stamps reads into ITS OWN tracker and footprint.
+     * Implementations must hand it to `getCtxDbReadHook(scope)` /
+     * `getCtxDbReadRangeHook(scope)` on the `createShardCtxDb(...)` call that
+     * builds the ctx; both factories return unbound (tracker-less) hooks when it
+     * is omitted, which is what every non-cached dispatch passes.
      */
-    public abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown>;
+    public abstract handleRpc(
+        functionPath: string,
+        args: Record<string, unknown>,
+        headroom?: TransactionHeadroomTracker,
+        scope?: QueryReadScope,
+    ): Promise<unknown>;
 
     /**
      * The registered function paths to dispatch on a lifecycle moment —
@@ -4261,30 +4338,36 @@ abstract class ShardDO {
     /* eslint-enable no-secrets/no-secrets */
 
     /**
-     * Wrap a query handler in the reactive cache. The subclass passes the
-     * function path, parsed args, and a `run` callback that resolves to the
-     * handler's return value. When the cache is configured we key by
-     * `(functionPath, stable-stringified args)`, allocate a fresh dep
-     * tracker, store it on `this.currentTracker` so `getCtxDbReadHook` reads
-     * stamp into it, and restore the prior tracker in `finally`. When the
-     * cache is absent we just call `run()` — same shape, zero overhead.
+     * Wrap a query handler in the reactive cache. The `/rpc` dispatch path calls
+     * this for every path {@link ShardDO.isQueryFunction} recognises, so a
+     * subclass does NOT wrap its own `handleRpc` — see the re-entry guard below
+     * for why doing both would be worse than doing neither. When the cache is
+     * configured we key by `(identity, functionPath, stable-stringified args)`,
+     * mint a fresh {@link QueryReadScope} (dep tracker + read footprint) and
+     * hand it to `run` — which threads it through `handleRpc` into the ctx the
+     * handler reads through, so this dispatch's reads stamp THIS dispatch's
+     * tracker even while a sibling dispatch is parked on an await. When the
+     * cache is absent we just call `run()` with no scope — same shape, zero
+     * overhead.
      *
-     * Subclasses should ALSO pass `getCtxDbReadHook()` as the `onRead`
+     * Subclasses must ALSO pass `getCtxDbReadHook(scope)` as the `onRead`
      * option on their `createShardCtxDb(...)` call so the tracker actually
-     * collects deps. Without that wiring the cache will memoize results
-     * with empty dep sets, so writes never invalidate them and stale
-     * results stick around — the {@link ReactiveCache} class is contract-
-     * neutral about who fills `deps`.
+     * collects deps. Without that wiring the cache memoizes results with empty
+     * dep sets, so the write hooks never invalidate them — the
+     * {@link ReactiveCache} class is contract-neutral about who fills `deps`,
+     * and dep-less entries survive `invalidate` AND `invalidateTable` alike, so
+     * neither the ctx-db hooks nor the {@link ShardDO.recordChangedTable}
+     * backstop can rescue that omission.
      *
-     * Also allocates a fresh {@link ReadFootprint} alongside the tracker,
-     * stored on `this.currentReadFootprint` so `getCtxDbReadRangeHook()` —
-     * and the range-marking half of `getCtxDbReadHook()` — can stamp it. Its
+     * The scope's {@link ReadFootprint} is the ranges channel:
+     * `getCtxDbReadRangeHook(scope)` — and the range-marking half of
+     * `getCtxDbReadHook(scope)` — stamp it. Its
      * `ranges()` is handed to `reactiveCache.run` as a LAZY 4th argument (a
      * thunk, evaluated only after `run()` resolves), the same deferral
      * `deps` already relies on: the footprint is only complete once the
      * handler has actually run. Subclasses that also want range-precise
-     * invalidation should pass `getCtxDbReadRangeHook()` as `onReadRange` on
-     * the same `createShardCtxDb(...)` call — mirroring `onRead` above. A
+     * invalidation should pass `getCtxDbReadRangeHook(scope)` as `onReadRange`
+     * on the same `createShardCtxDb(...)` call — mirroring `onRead` above. A
      * subclass that only wires `onRead` still works: `ranges()` degrades to
      * `undefined` and every read is treated as a whole-table dependency, per
      * `ReactiveCache.run`'s own default. When `onReadRange` IS wired, a table
@@ -4294,29 +4377,37 @@ abstract class ShardDO {
      * method's body. Only a table read EXCLUSIVELY through provable ranges
      * gets range-precise invalidation instead.
      */
-    protected async runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R> {
+    protected async runCachedQuery<R>(
+        functionPath: string,
+        args: Record<string, unknown>,
+        run: (scope?: QueryReadScope) => Promise<R>,
+        attribution?: QueryAttribution,
+        outer?: QueryReadScope,
+    ): Promise<R> {
         if (!this.reactiveCache) {
             return run();
         }
 
-        // Snapshot the in-flight tracker BEFORE allocating a fresh one, so
-        // the `finally` restores it correctly. The previous implementation
-        // allocated inside `reactiveCache.run(...)` before capturing
-        // `previous` in a separate `withTracker` helper, so `previous`
-        // captured the just-allocated tracker and the leftover never got
-        // cleared — a stray read between requests would land in the wrong
-        // dep set and corrupt the next cache miss.
-        const previous = this.currentTracker;
+        // Already inside a cached query — a nested `ctx.runQuery`, or a subclass
+        // that wraps its own dispatch under the base one. Such a caller threads
+        // the scope it was handed as `outer`, and we pass straight through ON
+        // THAT SCOPE. Memoizing here would be actively wrong, not merely
+        // redundant: the inner call would build its own ctx off its own scope, so
+        // every read the handler makes from that point lands in the INNER dep set
+        // and the outer entry is stored with no deps at all — permanently
+        // un-invalidatable stale data. Passing `outer` back keeps the reads
+        // landing where they belong.
+        //
+        // Note this is a per-CALL signal, not instance state: two independent
+        // concurrent dispatches each mint their own scope below and neither sees
+        // the other, which is the whole point of threading it.
+        if (outer) {
+            return run(outer);
+        }
+
         const tracker = createDependencyTracker();
-
-        this.currentTracker = tracker;
-
-        // Same snapshot/restore discipline as `currentTracker` above, for the
-        // ranges channel.
-        const previousFootprint = this.currentReadFootprint;
         const footprint = createReadFootprint();
-
-        this.currentReadFootprint = footprint;
+        const scope: QueryReadScope = { footprint, tracker };
 
         // Detect a cache hit cheaply by diffing the cache's lifetime hit
         // counter across the `run` call — a hit means the callback (and thus
@@ -4369,7 +4460,7 @@ abstract class ShardDO {
         // a live `Set` reference, so stamping it here — after the real
         // handler resolved but before either later step — lands in time.
         const runWithRangeFallback = async (): Promise<R> => {
-            const result = await run();
+            const result = await run(scope);
             const narrowed = footprint.ranges();
 
             for (const table of footprint.tables) {
@@ -4381,36 +4472,36 @@ abstract class ShardDO {
             return result;
         };
 
-        try {
-            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), runWithRangeFallback, () =>
-                flattenReadRanges(footprint.ranges()),
-            );
+        const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), runWithRangeFallback, () =>
+            flattenReadRanges(footprint.ranges()),
+        );
 
-            this.currentRequestCacheHit = this.reactiveCache.stats().hits > hitsBefore;
-            this.currentRequestReadTables = tablesFromDeps(tracker.collect());
-
-            return result;
-        } finally {
-            this.currentTracker = previous;
-            this.currentReadFootprint = previousFootprint;
+        if (attribution) {
+            // `attribution` is an out-parameter by design — the per-dispatch
+            // sink `beginDispatch` minted and the dispatch tail reads back.
+            Object.assign(attribution, { cacheHit: this.reactiveCache.stats().hits > hitsBefore, readTables: tablesFromDeps(tracker.collect()) });
         }
+
+        return result;
     }
 
     /**
      * Returns an `onRead` callback suitable to hand to `createShardCtxDb`'s
-     * `onRead` option. The returned function stamps the in-flight tracker (set
-     * by `runCachedQuery`) when one exists and is a no-op otherwise — so
+     * `onRead` option, BOUND to the dispatch whose {@link QueryReadScope} is
+     * passed in. `runCachedQuery` mints that scope and threads it through
+     * `handleRpc`; a dispatch with no cache scope (a mutation, an action, a
+     * cache-less shard) passes nothing and gets a hook that stamps no deps — so
      * subclasses can wire this hook unconditionally without checking whether
      * the cache is enabled.
      *
      * It ALSO records the table into {@link currentScannedTables} whenever the
-     * read was a full-table scan (the `SCAN_DEP` sentinel). That set is drained
-     * into `recordFunctionCall` after dispatch to build the durable per-function
-     * full-scan attribution — and unlike the tracker, it's collected even when
-     * the reactive cache is off, since the causal signal is independent of
-     * caching.
+     * read was a full-table scan (the `SCAN_DEP` sentinel), scope or no scope.
+     * That set is drained into `recordFunctionCall` after dispatch to build the
+     * durable per-function full-scan attribution — unlike the tracker, it's
+     * collected even when the reactive cache is off, since the causal signal is
+     * independent of caching.
      *
-     * It ALSO marks the table unnarrowable on {@link currentReadFootprint},
+     * It ALSO marks the table unnarrowable on the scope's `footprint`,
      * mirroring `executeSubscription`'s wiring (which hands a single
      * `ReadFootprint`'s `onRead`/`onReadRange` pair straight to `buildCtx`).
      * `ctx-db.ts`'s reader calls this `onRead` and `onReadRange` mutually
@@ -4420,10 +4511,10 @@ abstract class ShardDO {
      * "read this table outside a range" signal {@link ReadFootprint.ranges}
      * needs to drop that table from the narrowed set.
      */
-    protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void {
+    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string) => void {
         return (table, idOrScan) => {
-            this.currentTracker?.recordRead(table, idOrScan ?? SCAN_DEP);
-            this.currentReadFootprint?.onRead(table, idOrScan ?? SCAN_DEP);
+            scope?.tracker.recordRead(table, idOrScan ?? SCAN_DEP);
+            scope?.footprint.onRead(table, idOrScan ?? SCAN_DEP);
 
             // Attribute a scan ONLY on the explicit `SCAN_DEP` sentinel. A
             // predicated (indexed) `findMany` calls `onRead(table)` with no id
@@ -4441,18 +4532,20 @@ abstract class ShardDO {
 
     /**
      * Returns an `onReadRange` callback suitable to hand to
-     * `createShardCtxDb`'s `onReadRange` option, alongside `getCtxDbReadHook()`
-     * as `onRead` on the same call — the pairing `executeSubscription` already
-     * uses via `ReadFootprint`. Stamps the in-flight footprint (set by
-     * `runCachedQuery`) when one exists and is a no-op otherwise, so subclasses
-     * can wire this hook unconditionally regardless of whether the cache is
-     * enabled. Without this wiring `runCachedQuery`'s ranges thunk always
-     * observes an empty footprint and every cached query degrades to the prior
-     * whole-table dependency — safe, just not range-precise.
+     * `createShardCtxDb`'s `onReadRange` option, alongside
+     * `getCtxDbReadHook(scope)` as `onRead` on the same call — the pairing
+     * `executeSubscription` already uses via `ReadFootprint`. Stamps the
+     * footprint of the {@link QueryReadScope} passed in and is a no-op when
+     * none is, so subclasses can wire this hook unconditionally regardless of
+     * whether the cache is enabled. Without this wiring `runCachedQuery`'s
+     * ranges thunk always observes an empty footprint and every cached query
+     * degrades to the prior whole-table dependency — safe, just not
+     * range-precise.
      */
-    protected getCtxDbReadRangeHook(): (range: KeyRange) => void {
+    // eslint-disable-next-line class-methods-use-this -- symmetry with `getCtxDbReadHook`: both are the scope-binding factories a generated `buildCtx` calls
+    protected getCtxDbReadRangeHook(scope?: QueryReadScope): (range: KeyRange) => void {
         return (range) => {
-            this.currentReadFootprint?.onReadRange(range);
+            scope?.footprint.onReadRange(range);
         };
     }
 
@@ -4476,6 +4569,58 @@ abstract class ShardDO {
             // recordFunctionCall, matching the durable __lunora_metrics_index key.
             this.currentIndexHits?.add(JSON.stringify([table, indexName]));
         };
+    }
+
+    /**
+     * The `createShardCtxDb` options this DO's configuration decides, as one
+     * spreadable slice: the reactive cache (invalidation half of the contract)
+     * plus the two relation-resolution knobs from {@link ShardDOOptions}.
+     *
+     * The generated `buildCtx` spreads this FIRST into its `createShardCtxDb`
+     * call, so a per-request option it sets afterwards still wins:
+     *
+     * ```ts
+     * createShardCtxDb({ ...this.ctxDbTuning(), auth: …, schema, sql, … })
+     * ```
+     *
+     * One accessor rather than three, because it is one decision — "how this
+     * deployment configured its ctx-db" — and the emitter should not have to
+     * grow a line per knob. Only keys the app actually set are present, so
+     * spreading never overwrites an engine default with `undefined`.
+     *
+     * Handing over `cache` is what makes writes invalidate at row + index-range
+     * precision (`ctx-db.ts` calls `cache.invalidate(table, id, indexKeys)` on
+     * every `insert`/`patch`/`replace`/`delete`). EVERY writer the emitter builds
+     * spreads this — the user-facing ctx and all three admin/maintenance writers —
+     * because a writer that skips it leaves post-write reads answering from the
+     * pre-write snapshot.
+     *
+     * Pure: it reports the slice and records nothing. Whether the emitter actually
+     * wired it is a fact the emitter knows statically and declares through
+     * {@link ShardDOOptions.ctxDbCacheWired}; inferring it from a call to this
+     * accessor made reading the slice — in a test, or to log it — silently disarm
+     * the invalidation backstop in {@link ShardDO.recordChangedTable}.
+     */
+    protected ctxDbTuning(): { cache?: ReactiveCache; maxRelationKeys?: number; relationExistsPushDown?: "always" | "auto" | "never" } {
+        return {
+            ...this.ctxDbRelationOptions,
+            ...(this.reactiveCache === undefined ? {} : { cache: this.reactiveCache }),
+        };
+    }
+
+    /**
+     * Whether `functionPath` names a registered `query` — the only kind whose
+     * result may be memoized by the reactive cache.
+     *
+     * The base class has no function registry, so the default is `false`: the
+     * conservative answer, since caching an `action` would skip its outbound
+     * side effects on a hit and caching a `mutation` is meaningless. The
+     * codegen-generated subclass overrides it with the real `LUNORA_FUNCTIONS`
+     * lookup, which is what production dispatch uses.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected isQueryFunction(_functionPath: string): boolean {
+        return false;
     }
 
     /**
@@ -4543,6 +4688,17 @@ abstract class ShardDO {
         this.pendingChangedTables ??= new Set<string>();
         this.pendingChangedTables.add(table);
         this.pendingChangedKeys = recordChangedKeys(this.pendingChangedKeys, table, indexKeys);
+
+        // Backstop for a subclass whose `createShardCtxDb` call never took
+        // `ctxDbTuning()`'s `cache`: without it nothing would invalidate, and the
+        // reactive cache would answer post-write reads from the pre-write
+        // snapshot. This signal has no row id, so it can only be table-wide —
+        // coarser than the wired path, never wronger. Runs before the delta
+        // broadcast (this IS the broadcast hook), so a subscriber re-running its
+        // query already sees the post-write state.
+        if (!this.ctxDbCacheWired) {
+            this.reactiveCache?.invalidateTable(table);
+        }
     }
 
     /**
@@ -4789,6 +4945,11 @@ abstract class ShardDO {
         return createTracedFetch(
             {
                 anchor,
+                // Raw fetch error messages in dev only. A failed `ctx.fetch` throws
+                // a message that embeds the request URL, query string included, and
+                // spans fan out to third-party collectors — so production takes the
+                // same redacted posture as `makeTracer` (see `context-telemetry.ts`).
+                captureRaw: isDevEnvironment(this.env),
                 functionPath,
                 ...(typeof sink.traceFetch === "object" && sink.traceFetch.propagate !== undefined ? { propagate: sink.traceFetch.propagate } : {}),
                 record: (span) => {
@@ -5347,7 +5508,7 @@ abstract class ShardDO {
         // Stash the inbound D1 bookmark and identity headers for the
         // duration of the handler call so getters return the right
         // values. Cleared on exit so the next request starts fresh.
-        const { dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request);
+        const { dispatchAttribution, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request);
 
         // Outcome of the dispatch, for the synthetic root span recorded in the
         // `finally` below. A sentinel rather than a boolean so the `catch` can
@@ -5362,10 +5523,22 @@ abstract class ShardDO {
             // values. Runs under the forwarded identity stashed above; the
             // worker refuses this prefix on a single-shard envelope, so it's
             // only reachable through the authorizeFanOut-gated fan-out path.
+            //
+            // BARE but still WIRE-ENCODED, for the reason {@link adminResponse}
+            // spells out: these rows come straight out of the row store, where
+            // `decodeDocJson` has already restored a real `bigint` for a
+            // `v.int64()` column and a real `ArrayBuffer` for `v.bytes()`.
+            // Uncoded, the first makes `Response.json` throw
+            // `TypeError: Do not know how to serialize a BigInt` (the whole
+            // fan-out 500s) and the second flattens to `{}` — a silently emptied
+            // column in the parent's `with:` result. The consumer half is
+            // `decodeWire` in `@lunora/runtime`'s `cross-shard-relations`; both
+            // codecs are the identity on pure-JSON payloads, so a relation with
+            // no exotic columns is byte-identical to before.
             if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
                 const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
 
-                return jsonResponse(value, 200, bookmarkHeaders(this.currentResponseBookmark));
+                return jsonResponse(encodeWire(value), 200, bookmarkHeaders(this.currentResponseBookmark));
             }
 
             // Custom-mutator ordering: a watermarked push (`clientId` +
@@ -5444,7 +5617,26 @@ abstract class ShardDO {
             let outboundBookmark: string | undefined;
 
             const runHandler = async (): Promise<unknown> => {
-                const handlerResult = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom);
+                const handlerArgs = decodeWire(payload.args ?? {}) as Record<string, unknown>;
+
+                // A registered `query` goes through the reactive cache when one
+                // is configured; every other kind dispatches straight through. The
+                // decoded args are what get keyed (`stableWireKey` handles the
+                // `bigint`/bytes leaves), so two calls that differ only in wire
+                // encoding still share an entry. `runCachedQuery` is a pass-through
+                // when `reactiveCache` is undefined, but the kind lookup is skipped
+                // in that case so a cache-less shard pays nothing.
+                const handlerResult = await (this.reactiveCache !== undefined && this.isQueryFunction(payload.functionPath)
+                    ? this.runCachedQuery(
+                          payload.functionPath,
+                          handlerArgs,
+                          // The scope is threaded BY VALUE into the handler's ctx
+                          // (see `handleRpc`), so this dispatch's reads stamp its
+                          // own tracker even while a sibling is mid-await.
+                          (scope) => this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, scope),
+                          dispatchAttribution,
+                      )
+                    : this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom));
 
                 outboundBookmark = this.currentResponseBookmark;
 
@@ -5531,7 +5723,7 @@ abstract class ShardDO {
             // so the request log would record an empty write set.
             const tablesWritten = [...(this.pendingChangedTables ?? [])];
 
-            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten, dispatchTrace);
+            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten, dispatchTrace, dispatchAttribution);
 
             // Inspect the post-write size before responding. SQLite-in-DO
             // exposes `databaseSize` as a real getter; reading it is a
@@ -5597,6 +5789,7 @@ abstract class ShardDO {
                 "error",
                 [...(this.pendingChangedTables ?? [])],
                 dispatchTrace,
+                dispatchAttribution,
                 message,
             );
             this.logs.push({
@@ -7705,10 +7898,15 @@ abstract class ShardDO {
      * The correlated fields all come from data the dispatch already holds, with
      * no extra hot-path bookkeeping. `tablesWritten` is snapshotted from
      * `pendingChangedTables` by the caller before `flushChangedTables` drains it.
-     * `tablesRead` and `cacheHit` are captured by `runCachedQuery`, so they are
-     * present only for cached query paths — a write/action doesn't run through
-     * the cache, and an instance with the reactive cache disabled never captures
-     * them — and are left empty/`undefined` rather than recomputed here.
+     * `tablesRead` and `cacheHit` arrive in `attribution`, the per-dispatch
+     * object `beginDispatch` minted and `runCachedQuery` filled in — passed BY
+     * VALUE for the same reason `trace` is, since both are read here, after the
+     * handler's awaits, where a shared field belongs to whichever concurrent
+     * dispatch resolved last. They are present only for cached query paths — a
+     * write/action doesn't run through the cache, an instance with the reactive
+     * cache disabled never captures them, and a query that hit the re-entry
+     * guard passed through uncached — and are left empty/`undefined` rather
+     * than recomputed here.
      * `subscriptionsReRun` is left `0`: the write-driven subscription refresh
      * runs off the response path via `waitUntil` (see `flushChangedTables`), so a
      * per-request count isn't available synchronously at this site, and threading
@@ -7722,6 +7920,7 @@ abstract class ShardDO {
         outcome: "error" | "ok",
         tablesWritten: string[],
         trace: TraceAnchor,
+        attribution: QueryAttribution,
         errorMessage?: string,
     ): void {
         const config = this.requestLogConfig();
@@ -7740,7 +7939,7 @@ abstract class ShardDO {
         // SIEMs (PLAN3 §3.3). Both redact args/identity from this same raw entry
         // (unless `captureRaw` in dev), so the two stay byte-consistent.
         const entry: AppendRequestLogEntry = {
-            cacheHit: this.currentRequestCacheHit,
+            cacheHit: attribution.cacheHit,
             durationMs,
             errorMessage,
             functionPath,
@@ -7748,7 +7947,7 @@ abstract class ShardDO {
             outcome,
             redactedArgs: Object.keys(args).length === 0 ? undefined : args,
             shardKey: this.runner.shardKey,
-            tablesRead: this.currentRequestReadTables === undefined ? [] : [...this.currentRequestReadTables],
+            tablesRead: attribution.readTables === undefined ? [] : [...attribution.readTables],
             tablesWritten,
             // Passed BY VALUE, never read off `currentRequestTrace` here: this
             // method runs after the handler's awaits, by which point an
@@ -8301,7 +8500,7 @@ abstract class ShardDO {
      * per identity), and a flag read ({@link FLAGS_FUNCTION_PREFIX}) evaluates
      * the provider with the subscriber's identity (per-user targeting). Sharing
      * one socket's result with another would leak one identity's rows/flags to a
-     * different identity, so this predicate gates {@link resolveReactiveOutcomeDeduped}
+     * different identity, so this predicate gates {@link ShardDO.resolveReactiveOutcomeDeduped}
      * shut for them.
      */
     // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- pure predicate over the function path; a protected method so the security boundary lives in one named place (and tests can probe it), co-located with the reactive dedup it gates rather than hoisted away from its only caller
@@ -8763,15 +8962,20 @@ abstract class ShardDO {
      * run would have to fan one failure to every sharing socket while preserving
      * the "leave memo untouched ⇒ re-run next flush" contract.
      *
-     * The framework's INTENDED answer to this fan-out already exists: the opt-in
-     * {@link ReactiveCache} (`ShardDOOptions.reactiveCache`). Refreshes run with
-     * an explicit anonymous {@link SubscriptionIdentity}, so the cache key
-     * `reactiveCacheKey(functionPath, args, null)` is identical across all
-     * sockets — N identical subscriptions collapse to ONE handler run plus N
-     * cache hits, with every per-run side effect honored exactly once by design.
-     * Recommended remediation is to document/enable ReactiveCache for
-     * high-fanout shards rather than bolt a second, semantically-divergent dedup
-     * into this loop.
+     * The opt-in {@link ReactiveCache} (`ShardDOOptions.reactiveCache`) does NOT
+     * cover this, despite the shared key shape: it wraps `/rpc` query dispatch
+     * (see {@link ShardDO.runCachedQuery}), while a refresh runs through
+     * `executeSubscription`, which never consults it. It cannot, either — a
+     * subscription's re-run is only half about the value. The other half is the
+     * `tables`/`ranges` footprint it reports, which is what decides whether the
+     * NEXT write re-runs it; a cache hit produces a value with no footprint, so
+     * routing refreshes through the cache would quietly empty every memo's
+     * dependency set and stop the subscription updating at all.
+     *
+     * So this fan-out stands as characterized. Collapsing it needs a dedup that
+     * shares the footprint alongside the value — {@link ShardDO.resolveReactiveOutcomeDeduped}
+     * is that, per flush, for the identity-independent subset — not a second
+     * memo bolted into this loop.
      */
 
     /**
@@ -9899,6 +10103,7 @@ abstract class ShardDO {
     }
 
     private beginDispatch(request: Request): {
+        dispatchAttribution: QueryAttribution;
         dispatchHeadroom: TransactionHeadroomTracker;
         dispatchStartedAt: number;
         dispatchTrace: { rootSpanId: string; traceId: string };
@@ -9949,12 +10154,6 @@ abstract class ShardDO {
             keepErrors: request.headers.get("x-lunora-sample-errors") !== "0",
             sampled: parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true,
         });
-        // Reset the per-request read/cache capture (filled by `runCachedQuery`
-        // for cached query paths) so a previous dispatch can't leak into this
-        // entry's logged read set / cache-hit flag.
-        this.currentRequestReadTables = undefined;
-        this.currentRequestCacheHit = undefined;
-
         this.metrics.requests += 1;
         const dispatchStartedAt = Date.now();
 
@@ -9989,7 +10188,12 @@ abstract class ShardDO {
         this.currentStmtSamples = new Map<string, StmtSample>();
         this.currentStmtSamplesTruncated = undefined;
 
-        return { dispatchHeadroom, dispatchStartedAt, dispatchTrace };
+        // The per-request read/cache capture `runCachedQuery` fills in for a
+        // cached query path. Handed BACK to the caller, never parked on `this`:
+        // it is written and read on both sides of the handler's awaits, so a
+        // shared field would attribute it to whichever concurrent dispatch
+        // happened to resolve last. See {@link QueryAttribution}.
+        return { dispatchAttribution: {}, dispatchHeadroom, dispatchStartedAt, dispatchTrace };
     }
 
     /**
@@ -10026,8 +10230,6 @@ abstract class ShardDO {
             this.currentTransactionHeadroom = undefined;
         }
         this.currentIndexHits = undefined;
-        this.currentRequestReadTables = undefined;
-        this.currentRequestCacheHit = undefined;
         this.currentStmtSamples = undefined;
         this.currentStmtSamplesTruncated = undefined;
         // Drop the cached proxy with the samples map it folds into, so the
@@ -10984,12 +11186,6 @@ abstract class ShardDO {
     }
 }
 
-/**
- * @deprecated Renamed to {@link TelemetrySink} — it carries spans and metrics as
- * well as logs. Kept as an alias so existing import sites keep working.
- */
-type LogSink = TelemetrySink;
-
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
 export type {
     RunShardApplyCdcArgs,
@@ -11009,4 +11205,4 @@ export type {
 // canonical home is `./subscription-delivery`.
 export { subscriptionListDeltas } from "@lunora/shard-engine";
 
-export type { HibernatableWebSocket, LogSink, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink, TraceRefLike };
+export type { HibernatableWebSocket, QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink, TraceRefLike };

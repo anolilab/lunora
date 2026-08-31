@@ -55,23 +55,31 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AuthImpersonation` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AuthLoading` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `AuthPage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `AuthSession` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `AuthState` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `AuthUser` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `Authenticated` (const)
-
-Re-exported from `@lunora/react` — signature tracked at its source.
-
-### `CheckoutButton` (const)
-
-Re-exported from `@lunora/react` — signature tracked at its source.
-
-### `CheckoutButtonProps` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
@@ -82,14 +90,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `CreateLunoraClientOptions` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
-
-### `CustomerPortalButton` (const)
-
-Re-exported from `@lunora/react` — signature tracked at its source.
-
-### `CustomerPortalButtonProps` (interface)
-
-Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `FlagContext` (type)
 
@@ -187,14 +187,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `RedirectTarget` (interface)
-
-Re-exported from `@lunora/react` — signature tracked at its source.
-
-### `RedirectTrigger` (type)
-
-Re-exported from `@lunora/react` — signature tracked at its source.
-
 ### `RestrictionError` (class)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -203,9 +195,13 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `Subscription` (interface)
+### `SubscriptionError` (interface)
 
-Re-exported from `@lunora/react` — signature tracked at its source.
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `SubscriptionErrorCallback` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `Unauthenticated` (const)
 
@@ -288,10 +284,6 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `UseAuthUsersOptions` (interface)
-
-Re-exported from `@lunora/react` — signature tracked at its source.
-
-### `UseCheckoutResult` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
@@ -512,10 +504,6 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useAuthUsers` (const)
-
-Re-exported from `@lunora/react` — signature tracked at its source.
-
-### `useCheckout` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 

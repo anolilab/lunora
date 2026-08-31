@@ -4,11 +4,21 @@ description: Use Lunora in a React Native / Expo app — the same live hooks, pl
 ---
 
 `@lunora/react-native` is the React Native / Expo entry to Lunora. It
-**re-exports the entire [`@lunora/react`](/docs/frameworks/react) surface**. The
-hooks are `react-dom`-free and touch no browser-only global, so `useQuery`,
-`useMutation`, `useSubscription`, `useAuth`, `usePresence`, `useConnectionStatus`
-and the rest run unchanged on a phone. On top of that it adds the two things a
-native app needs that a browser gives you for free:
+**re-exports [`@lunora/react`](/docs/frameworks/react)'s data and auth surface**:
+`useQuery`, `useMutation`, `useSubscription`, `useAuth`, `usePresence`,
+`useConnectionStatus`, `<LunoraProvider>` and the auth gates are `react-dom`-free
+and touch no browser-only global, so they run unchanged on a phone.
+
+The payment kit is not part of that surface. `CheckoutButton`,
+`CustomerPortalButton` and `useCheckout` render a DOM `<button>` and navigate
+with `globalThis.location`, neither of which exists in React Native, so they
+live at `@lunora/react/payment` rather than on the root barrel — a native app
+never imports them by accident. Drive a checkout from a native screen instead:
+call the action that returns the provider's `{ url }` (with `useMutation`) and
+open it with Expo's `Linking` or `WebBrowser`.
+
+On top of that it adds the two things a native app needs that a browser gives
+you for free:
 
 - a **durable offline queue** backed by `AsyncStorage` (React Native has no
   IndexedDB, which the browser client auto-probes), and

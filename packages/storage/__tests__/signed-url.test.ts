@@ -12,6 +12,7 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
+            bucketName: "default",
             expiresInSeconds: 120,
             key: "uploads/x.png",
             secret: "shh",
@@ -32,6 +33,7 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
+            bucketName: "default",
             expiresInSeconds: 60,
             key: "uploads/x.png",
             secret: "shh",
@@ -51,6 +53,7 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
+            bucketName: "default",
             expiresInSeconds: 60,
             key: "x",
             secret: "right",
@@ -67,6 +70,7 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
+            bucketName: "default",
             expiresInSeconds: 60,
             key: "uploads/a.png",
             secret: "shh",
@@ -93,6 +97,7 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
+            bucketName: "default",
             expiresInSeconds: 60,
             key: "uploads/x.png",
             method: "PUT",
@@ -110,6 +115,7 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
+            bucketName: "default",
             contentType: "image/png",
             expiresInSeconds: 60,
             key: "uploads/x.png",
@@ -137,6 +143,7 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
+            bucketName: "default",
             contentType: "image/png",
             expiresInSeconds: 60,
             key: "x.png",
@@ -153,6 +160,7 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
+            bucketName: "default",
             expiresInSeconds: 60,
             key: "uploads/x.png",
             method: "GET",
@@ -173,6 +181,7 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test/",
+            bucketName: "default",
             expiresInSeconds: 60,
             key: "a/b/c.txt",
             secret: "shh",
@@ -190,6 +199,7 @@ describe("signedUrl", () => {
         await expect(
             buildSignedUrl({
                 baseUrl: "https://cdn.test",
+                bucketName: "default",
                 expiresInSeconds,
                 key: "x",
                 secret: "shh",
@@ -203,6 +213,7 @@ describe("signedUrl", () => {
         await expect(
             buildSignedUrl({
                 baseUrl: "https://cdn.test",
+                bucketName: "default",
                 expiresInSeconds: 8 * 24 * 60 * 60,
                 key: "x",
                 secret: "shh",
@@ -215,12 +226,16 @@ describe("signedUrl", () => {
 
         // A caller passing a bad TTL is a client error → VALIDATION_ERROR / 400,
         // not an INTERNAL / 500 that redacts the message to a generic string.
-        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", expiresInSeconds: 0, key: "x", secret: "shh" })).rejects.toMatchObject({
+        await expect(
+            buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "default", expiresInSeconds: 0, key: "x", secret: "shh" }),
+        ).rejects.toMatchObject({
             code: "VALIDATION_ERROR",
             status: 400,
         });
 
-        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", expiresInSeconds: 8 * 24 * 60 * 60, key: "x", secret: "shh" })).rejects.toMatchObject({
+        await expect(
+            buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "default", expiresInSeconds: 8 * 24 * 60 * 60, key: "x", secret: "shh" }),
+        ).rejects.toMatchObject({
             code: "VALIDATION_ERROR",
             status: 400,
         });
@@ -235,28 +250,35 @@ describe("signedUrl", () => {
         // signature only binds host + key, so every URL minted from a subpath
         // base fails verification as `bad_signature`. Reject it loudly at
         // build time instead of silently minting a dead URL.
-        await expect(buildSignedUrl({ baseUrl: "https://app.test/storage", key: "x.png", secret: "shh" })).rejects.toMatchObject({
+        await expect(buildSignedUrl({ baseUrl: "https://app.test/storage", bucketName: "default", key: "x.png", secret: "shh" })).rejects.toMatchObject({
             code: "VALIDATION_ERROR",
             status: 400,
         });
 
-        await expect(buildSignedUrl({ baseUrl: "https://app.test/storage", key: "x.png", secret: "shh" })).rejects.toThrow(/\/storage/);
+        await expect(buildSignedUrl({ baseUrl: "https://app.test/storage", bucketName: "default", key: "x.png", secret: "shh" })).rejects.toThrow(/\/storage/);
     });
 
     it("applies the baseUrl-path guard identically to a PUT (upload) URL with a pinned contentType", async () => {
         expect.assertions(1);
 
         await expect(
-            buildSignedUrl({ baseUrl: "https://app.test/storage", contentType: "image/png", key: "x.png", method: "PUT", secret: "shh" }),
+            buildSignedUrl({
+                baseUrl: "https://app.test/storage",
+                bucketName: "default",
+                contentType: "image/png",
+                key: "x.png",
+                method: "PUT",
+                secret: "shh",
+            }),
         ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
     });
 
     it("accepts a root-mounted baseUrl (trailing slash) and a multi-trailing-slash baseUrl identically to a bare origin", async () => {
         expect.assertions(3);
 
-        const bare = await buildSignedUrl({ baseUrl: "https://cdn.test", key: "x.png", secret: "shh" });
-        const rootSlash = await buildSignedUrl({ baseUrl: "https://cdn.test/", key: "x.png", secret: "shh" });
-        const doubleSlash = await buildSignedUrl({ baseUrl: "https://cdn.test//", key: "x.png", secret: "shh" });
+        const bare = await buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "default", key: "x.png", secret: "shh" });
+        const rootSlash = await buildSignedUrl({ baseUrl: "https://cdn.test/", bucketName: "default", key: "x.png", secret: "shh" });
+        const doubleSlash = await buildSignedUrl({ baseUrl: "https://cdn.test//", bucketName: "default", key: "x.png", secret: "shh" });
 
         expect(new URL(rootSlash).pathname).toBe(new URL(bare).pathname);
         expect(new URL(doubleSlash).pathname).toBe(new URL(bare).pathname);
@@ -269,7 +291,7 @@ describe("signedUrl", () => {
         // Regression: getUrl trims all trailing slashes, but the signed-URL
         // builder previously trimmed only one — a `https://cdn.test//` base then
         // yielded a double-slash signed URL. Both must agree now.
-        const url = await buildSignedUrl({ baseUrl: "https://cdn.test//", expiresInSeconds: 60, key: "uploads/x.png", secret: "shh" });
+        const url = await buildSignedUrl({ baseUrl: "https://cdn.test//", bucketName: "default", expiresInSeconds: 60, key: "uploads/x.png", secret: "shh" });
 
         expect(new URL(url).pathname).toBe("/uploads/x.png");
     });
@@ -279,6 +301,7 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
+            bucketName: "default",
             expiresInSeconds: 60,
             key: "x",
             secret: "shh",
@@ -301,6 +324,7 @@ describe("signedUrl", () => {
         // explicit expectedHost to canonicalize against the same host.
         const url = await buildSignedUrl({
             baseUrl: "cdn.test/uploads",
+            bucketName: "default",
             expiresInSeconds: 60,
             key: "x.png",
             secret: "shh",
@@ -319,6 +343,7 @@ describe("signedUrl", () => {
         // expectedHost this would fail as bad_signature.
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.example.com",
+            bucketName: "default",
             expiresInSeconds: 60,
             key: "uploads/x.png",
             secret: "shh",
@@ -337,22 +362,71 @@ describe("signedUrl", () => {
 
         // The canonical is `method\nhost\nkey\nexp[\nct]` — `key` is not its
         // last field, so a raw \n could shift where `exp` re-splits on verify.
-        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", key: "uploads/x\n9999999999\nGET", secret: "shh" })).rejects.toThrow(/control character/);
+        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "default", key: "uploads/x\n9999999999\nGET", secret: "shh" })).rejects.toThrow(
+            /control character/,
+        );
     });
 
     it("rejects a key containing a carriage return at sign time", async () => {
         expect.assertions(1);
 
-        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", key: "uploads/x\ry", secret: "shh" })).rejects.toThrow(/control character/);
+        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "default", key: "uploads/x\ry", secret: "shh" })).rejects.toThrow(
+            /control character/,
+        );
     });
 
     it("still signs and verifies a normal key unaffected by the control-char guard", async () => {
         expect.assertions(2);
 
-        const url = await buildSignedUrl({ baseUrl: "https://cdn.test", key: "uploads/x.png", secret: "shh" });
+        const url = await buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "default", key: "uploads/x.png", secret: "shh" });
         const result = await verifySignedUrl(url, "shh");
 
         expect(result.valid).toBe(true);
         expect(result.key).toBe("uploads/x.png");
+    });
+
+    it("binds the bucket into the signature so a URL for one bucket is not a URL for another", async () => {
+        expect.assertions(4);
+
+        // Every bucket of one `.storage({ bucket, buckets })` declaration shares
+        // the same publicBaseUrl + signing secret, so without the bucket in the
+        // canonical a caller allowed on `avatars` could mint a byte-identical URL
+        // for the private `invoices` bucket.
+        const avatars = await buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "avatars", expiresInSeconds: 60, key: "q3.pdf", secret: "shh" });
+        const verdict = await verifySignedUrl(avatars, "shh");
+
+        expect(verdict.valid).toBe(true);
+        expect(verdict.bucketName).toBe("avatars");
+
+        const repointed = new URL(avatars);
+
+        repointed.searchParams.set("bucket", "invoices");
+
+        await expect(verifySignedUrl(repointed.toString(), "shh")).resolves.toMatchObject({ reason: "bad_signature", valid: false });
+
+        const invoices = await buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "invoices", expiresInSeconds: 60, key: "q3.pdf", secret: "shh" });
+
+        expect(new URL(invoices).searchParams.get("sig")).not.toBe(new URL(avatars).searchParams.get("sig"));
+    });
+
+    it("returns malformed for a URL carrying no bucket", async () => {
+        expect.assertions(1);
+
+        const url = await buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "default", expiresInSeconds: 60, key: "x.png", secret: "shh" });
+        const stripped = new URL(url);
+
+        stripped.searchParams.delete("bucket");
+
+        // Never treated as the default bucket — that silent fallback is the
+        // cross-bucket confusion the parameter exists to close.
+        await expect(verifySignedUrl(stripped.toString(), "shh")).resolves.toMatchObject({ reason: "malformed", valid: false });
+    });
+
+    it("rejects a bucket name carrying a control character", async () => {
+        expect.assertions(1);
+
+        // `bucketName` is not the canonical's last field, so a raw newline could
+        // shift `key`/`exp` on re-split.
+        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "a\nb", key: "x.png", secret: "shh" })).rejects.toThrow(/control character/);
     });
 });

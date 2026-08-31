@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { HttpActionCtx as HttpActionContext, LunoraRouteHandler } from "../src/index";
 import { httpRoute, httpRouter, LunoraError, v } from "../src/index";
@@ -158,5 +158,49 @@ describe("httpRoute stream() terminal", () => {
         expect(response.headers.get("cache-control")).toBe("no-cache, no-transform");
         expect(response.headers.get("cache-tag")).toBeNull();
         expect(response.headers.get("vary")).toBeNull();
+    });
+});
+
+describe("httpRoute stream() mid-stream cancel", () => {
+    // On a consumer cancel the pump breaks, but the terminal `event: complete`
+    // frame was enqueued unconditionally onto a controller that is already
+    // closed. That throws a `TypeError`, which the catch below logged as a bogus
+    // "unhandled stream handler error", then threw AGAIN out of the error frame
+    // and out of `finally`'s `close()` — so `start()` rejected unhandled on every
+    // mid-stream disconnect, and a real handler error in the same turn was
+    // masked by the transport error.
+    it("does not enqueue a terminal frame after the consumer cancels", async () => {
+        expect.assertions(1);
+
+        const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        let release = (): void => undefined;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        const route = httpRoute.get("/api/ticks").stream(async function* ticksGen() {
+            yield { tick: 1 };
+            await gate;
+            yield { tick: 2 };
+        });
+
+        const response = await dispatch(route, "GET", "/api/ticks", new Request("https://x/api/ticks"));
+        const reader = response.body!.getReader();
+
+        await reader.read();
+        // The consumer drops the stream: `cancel()` aborts the controller and
+        // closes it under the still-running pump.
+        await reader.cancel();
+
+        release();
+        // Let the resumed generator drive the pump past its break.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        errors.mockRestore();
+
+        expect(errors).not.toHaveBeenCalled();
     });
 });

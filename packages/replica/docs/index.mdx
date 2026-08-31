@@ -130,34 +130,76 @@ emitter.once("error", (payload) => console.error(payload.message));
 
 ## defineEvents
 
-Declare a family of typed events and their payloads:
+Declare a family of typed events and their payloads. The definition is
+**nested**: the outer keys are namespaces, the inner keys are event names, and
+each event's value is its payload schema (a `@lunora/values` validator, or a
+plain descriptor). Every event's `type` is the namespace-qualified
+`"<namespace>.<name>"`.
 
 ```ts
 import { defineEvents } from "@lunora/replica";
+import { v } from "@lunora/server";
 
-const todoEvents = defineEvents({
-    "todo:created": (id: string, title: string) => ({ id, title, done: false }),
-    "todo:toggled": (id: string) => ({ id }),
-    "todo:deleted": (id: string) => ({ id }),
+const events = defineEvents({
+    todo: {
+        created: v.object({ id: v.string(), title: v.string() }),
+        deleted: v.object({ id: v.string() }),
+        toggled: v.object({ id: v.string() }),
+    },
 });
 
-const entry = source.applyEvent("todo:created", todoEvents["todo:created"]("1", "Write docs"));
+// Each leaf is a factory returning an InputEvent.
+const entry = events.todo.created({ id: "1", title: "Write docs" });
+//    ^ { type: "todo.created", payload: { id, title }, timestamp: number }
+
+// Type-only introspection — a map of qualified type → payload shape.
+type TodoEvents = typeof events._types;
+//   ^ { "todo.created": { id: string; title: string }; "todo.deleted": …; … }
 ```
 
 ## EventLogDO (Durable Object)
 
-A Durable Object that persists events to DO SQLite storage:
+A Durable Object that persists events to DO SQLite storage.
+
+Re-export the class from your **worker entry** so Wrangler can find it:
 
 ```ts
-// In wrangler.jsonc, export this class:
+// src/worker.ts
 export { EventLogDO } from "@lunora/replica";
+```
 
-// From a mutation or action:
-const client = new EventLogDOClient({ namespace: "my-app" });
-const entry = await client.append({ type: "order-placed", payload: { orderId: "123" } });
+Then declare the binding in `wrangler.jsonc`. The DO uses `state.storage.sql`,
+so its migration **must** use `new_sqlite_classes` — with `new_classes` the
+instance gets a key-value store with no `.sql` and every request fails at the
+first statement:
 
-// Query historical events:
-const events = await client.query({ type: "order-placed", limit: 50 });
+```jsonc
+{
+    "durable_objects": {
+        "bindings": [{ "name": "EVENT_LOG_DO", "class_name": "EventLogDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EventLogDO"] }],
+}
+```
+
+`EventLogDOClient` wraps the DO's `fetch()` RPC surface. Its only option is
+`fetch` — the function that dispatches a request to the instance you want, which
+is where the namespace and instance id are chosen:
+
+```ts
+const client = new EventLogDOClient({
+    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+});
+
+// `append` takes an ARRAY and returns the entries with their assigned `seq`s.
+// Pass `{ batchId }` to make a retry idempotent.
+const [entry] = await client.append([{ type: "order.placed", payload: { orderId: "123" } }], { batchId: "order-123" });
+
+// The log is append-only and ordered, so reads are by sequence number — there
+// is no filter-by-type query. `getSince(0)` returns the whole log.
+const since = await client.getSince(entry.seq);
+const { entries, hasMore } = await client.getRange(0, 50);
+const size = await client.getSize();
 ```
 
 ## SubscriptionManager

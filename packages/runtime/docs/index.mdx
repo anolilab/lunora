@@ -319,10 +319,23 @@ NDJSON object and feed it to `lunora backup restore <file>` (optionally with
 
 ## `LunoraError` / `toErrorResponse` / `LunoraErrorBody`
 
-The runtime's typed error class. Throwing a `LunoraError(code, message)`
-inside a handler causes a `{ error: { code, message, ... } }` body to come
-back over RPC instead of an HTTP 500. `toErrorResponse(err)` is the same
-mapping exposed for add-ons.
+The runtime's typed error class. Throwing a
+`LunoraError(message, { code, status })` inside a handler causes a
+`{ error: { code, message, ... } }` body to come back over RPC instead of an
+HTTP 500. `toErrorResponse(err)` is the same mapping exposed for add-ons.
+
+The message comes **first**; `code` and `status` are options:
+
+```ts
+import { LunoraError } from "@lunora/runtime";
+
+throw new LunoraError("no such post", { code: "NOT_FOUND", status: 404 });
+```
+
+Reversing them (`new LunoraError("NOT_FOUND", "no such post")`) does not
+compile, and from untyped code it mints an error whose _message_ is
+`"NOT_FOUND"` and whose code defaults to `INTERNAL` — a redacted 500, exactly
+what this class exists to avoid.
 
 ## Health / readiness probe
 

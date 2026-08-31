@@ -22,12 +22,15 @@
  *   `owner` from a verified signal (a DKIM-checked address mapped to an account),
  *   never blindly from the spoofable sender, and treat every mapped field as
  *   attacker-controlled input.
- * - A throw while parsing or dispatching routes through `@lunora/mail/inbound`'s
- *   default `onError`, which rejects the message with a fixed generic reason
- *   (never reflecting internal error detail to the sender's bounce).
+ * - Every failure — parse, verify, or dispatch — rejects the message with a
+ *   fixed generic reason, so the sender's bounce never reflects internal error
+ *   detail. Cloudflare gives an inbound worker no way to signal "try later": an
+ *   uncaught throw is also permanent, just opaque, so there is nothing to gain
+ *   by rethrowing. This handler wires no `retain` sink, so a transient dispatch
+ *   failure bounces too; the two permanent failures below reject themselves so
+ *   their real reason reaches the server log.
  */
 /* eslint-enable jsdoc/check-indentation, jsdoc/no-multi-asterisks */
-import { LunoraError } from "@lunora/errors";
 import type { ForwardableEmailMessageLike } from "@lunora/mail/inbound";
 import { createInboundEmailHandler, parseInboundEmail } from "@lunora/mail/inbound";
 
@@ -57,12 +60,42 @@ interface AgentEmailTarget {
 type InboundAgentEmailHandler = (message: unknown, env: unknown, context: unknown) => Promise<void>;
 
 /**
+ * Fixed reject reason handed to the sender's MTA. SECURITY: never embed internal
+ * error detail here — the reason is reflected to the (untrusted) sender in the
+ * bounce, so the detail is logged server-side instead.
+ */
+const GENERIC_REJECT_REASON = "message could not be processed";
+
+/**
+ * Bounce the message permanently, logging the real reason server-side.
+ *
+ * A `dispatch` that THROWS is treated as possibly-transient by
+ * `@lunora/mail`'s handler: a transport error there (a shard 502, a
+ * briefly-absent admin token) clears on its own, so the handler hands the
+ * message to a durable `retain` sink when one is configured rather than losing a
+ * legitimate email. The two failures below are not that: a missing Workflow
+ * binding is a misconfigured deployment and a reserved branch-marker key is
+ * malformed untrusted input, and both fail identically however often they are
+ * retried. Only the dispatch implementation knows which of its own errors are
+ * permanent, so it rejects those itself and returns — never throwing — so they
+ * bounce instead of being queued for a retry that can never succeed.
+ */
+const rejectPermanently = (context: { message: { setReject: (reason: string) => void } }, detail: string): void => {
+    // eslint-disable-next-line no-console -- server-side log of the real reason before bouncing with a generic, non-reflecting one
+    console.error("@lunora/agent/inbound: bouncing message —", detail);
+
+    context.message.setReject(GENERIC_REJECT_REASON);
+};
+
+/**
  * Build the inbound `email()` handler for one or more `onEmail` agents. The
  * returned callback parses the message, then walks `targets` in order and starts
- * a durable run for the first agent whose `onEmail` mapper returns a run. If the
- * matched agent's Workflow binding is missing from `env` (run codegen/dev so
- * `wrangler.jsonc` declares it) the dispatch throws, and the inbound handler's
- * `onError` rejects (bounces) the message.
+ * a durable run for the first agent whose `onEmail` mapper returns a run.
+ *
+ * Two dispatch failures bounce the message permanently rather than retrying: a
+ * missing Workflow binding (run codegen/dev so `wrangler.jsonc` declares it) and
+ * a run carrying the reserved workflow branch-marker key. See
+ * {@link rejectPermanently}.
  * @experimental
  */
 const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAgentEmailHandler => {
@@ -90,10 +123,12 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
                 const binding = context.env[target.binding] as AgentWorkflowBindingLike | undefined;
 
                 if (!binding || typeof binding.create !== "function") {
-                    throw new LunoraError(
-                        "INTERNAL",
+                    rejectPermanently(
+                        context,
                         `@lunora/agent: no Workflow binding "${target.binding}" on env for an inbound agent — run codegen/dev so wrangler.jsonc declares it`,
                     );
+
+                    return;
                 }
 
                 // `run` is built by an app-authored `onEmail` mapper from a fully
@@ -101,7 +136,9 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
                 // branch-marker key at this trust boundary before it ever reaches
                 // `create()`.
                 if (hasBranchMarker(run)) {
-                    throw new LunoraError("BAD_REQUEST", `@lunora/agent: inbound run params ${BRANCH_MARKER_REJECTION}`);
+                    rejectPermanently(context, `@lunora/agent: inbound run params ${BRANCH_MARKER_REJECTION}`);
+
+                    return;
                 }
 
                 // `AgentEmailRun` is the run-input shape (input/owner/threadKey/title).

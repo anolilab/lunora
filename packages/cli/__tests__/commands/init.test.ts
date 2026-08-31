@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isTemplate, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
+import { isTemplate, resolveTemplateFlag, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
 import type { Logger } from "../../src/util/logger";
 import { resolveDistTag } from "../../src/util/source-ref";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -42,6 +42,34 @@ describe("lunora init", () => {
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
         vi.unstubAllGlobals();
+    });
+
+    describe("--template resolution", () => {
+        it("routes the four overlay framework names to the overlay path", () => {
+            expect.assertions(4);
+
+            // These are the values the docs table documents for `-t`; they used to
+            // be dropped as "unknown template" and silently scaffold React.
+            for (const framework of ["react", "solid", "svelte", "vue"]) {
+                expect(resolveTemplateFlag(framework)).toStrictEqual({ vite: framework });
+            }
+        });
+
+        it("errors on an unrecognised --template instead of silently scaffolding React", () => {
+            expect.assertions(2);
+
+            const resolved = resolveTemplateFlag("nextjs");
+
+            expect(resolved).toHaveProperty("error");
+            expect((resolved as { error: string }).error).toContain('unknown --template "nextjs"');
+        });
+
+        it("passes a bespoke template id straight through", () => {
+            expect.assertions(2);
+
+            expect(resolveTemplateFlag("react-router")).toStrictEqual({ templateType: "react-router" });
+            expect(resolveTemplateFlag(undefined)).toStrictEqual({});
+        });
     });
 
     /** Stub the registry so `resolveTagVersion` resolves every dist-tag to `version` (deterministic, offline). */

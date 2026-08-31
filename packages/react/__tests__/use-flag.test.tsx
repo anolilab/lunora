@@ -213,6 +213,38 @@ describe("useFlag", () => {
 
         expect(screen.getByTestId("flag").textContent).toBe("false");
     });
+
+    it("fails open on a server-pushed evaluation error — reverts to the default", async () => {
+        expect.hasAssertions();
+
+        // Regression: the docblock promises "a provider error resolves the default",
+        // but only an ATTACH throw honoured it. A provider that started failing
+        // mid-session left the hook serving the last resolved value — e.g. an
+        // experiment arm that should have been rolled back.
+        const mock = createMockClient();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <StringFlagView />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emit(FLAGS_REF, "variant-b");
+        });
+
+        expect(screen.getByTestId("flag").textContent).toBe("variant-b");
+
+        await act(async () => {
+            mock.emitError(FLAGS_REF, { message: "provider unavailable" });
+        });
+
+        expect(screen.getByTestId("flag").textContent).toBe("control");
+    });
 });
 
 describe("useFlags", () => {

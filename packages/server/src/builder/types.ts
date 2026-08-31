@@ -72,14 +72,17 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
     input: <A extends ArgsValidator>(validators: A) => QueryBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => QueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => QueryBuilder<Context, Args, Infer<V>>;
@@ -137,14 +140,17 @@ export interface MutationBuilder<Context, Args extends ArgsValidator, Output = u
     input: <A extends ArgsValidator>(validators: A) => MutationBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => MutationBuilder<Context, Args, Output>;
     mutation: [Output] extends [undefined]
@@ -178,14 +184,17 @@ export interface ActionBuilder<Context, Args extends ArgsValidator, Output = und
     input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => ActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
@@ -212,14 +221,17 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
     input: <A extends ArgsValidator>(validators: A) => InternalQueryBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => InternalQueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalQueryBuilder<Context, Args, Infer<V>>;
@@ -240,14 +252,17 @@ export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Ou
     input: <A extends ArgsValidator>(validators: A) => InternalMutationBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => InternalMutationBuilder<Context, Args, Output>;
     mutation: [Output] extends [undefined]
@@ -266,14 +281,17 @@ export interface InternalActionBuilder<Context, Args extends ArgsValidator, Outp
     input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;

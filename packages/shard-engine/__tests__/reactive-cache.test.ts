@@ -530,4 +530,144 @@ describe("reactiveCache", () => {
 
         expect(calls).toBe(2);
     });
+
+    // Regression: two callers race the same key (the documented in-flight
+    // duplicate run). The late finisher used to `entries.set` straight over the
+    // early one — leaking its byte charge forever (`totalBytes` only ever drops
+    // through `dropEntry`), stranding its dep buckets pointing at a key whose
+    // entry no longer lists them, and discarding its subscriber pins.
+    it("a concurrent second miss on the same key retires the first entry instead of leaking its charge", async () => {
+        expect.assertions(4);
+
+        const cache = new ReactiveCache();
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        // `slow` enters first but finishes LAST, so it is the one that writes
+        // over an entry `quick` already landed.
+        const slow = cache.run("k", new Set([depKey("users", "a")]), async () => {
+            await gate;
+
+            return { v: 1 };
+        });
+        const quick = cache.run("k", new Set([depKey("users", "b")]), async () => {
+            return { v: 2 };
+        });
+
+        await quick;
+        release();
+        await slow;
+
+        const solo = new ReactiveCache();
+
+        await solo.run("k", new Set([depKey("users", "a")]), async () => {
+            return { v: 1 };
+        });
+
+        expect(cache.size().entries).toBe(1);
+        expect(cache.size().bytes).toBe(solo.size().bytes);
+        // The retired entry's dep must no longer name the live key...
+        expect(cache.invalidate("users", "b")).toStrictEqual([]);
+        // ...while the surviving entry is indexed under its own.
+        expect(cache.invalidate("users", "a")).toStrictEqual(["k"]);
+    });
+
+    /**
+     * Regression: a write that interleaves with a handler's `await` (real I/O —
+     * `ctx.fetch`, a `.global()` D1 read, `ctx.runAction`) invalidates a key that
+     * has NO entry yet, so it drops nothing and leaves no trace. Storing the
+     * handler's pre-write rows afterwards pins them under a key nothing will
+     * invalidate again — stale until LRU eviction or a DO restart.
+     */
+    it("does not memoize a result whose key was invalidated mid-handler, even though there was no entry to drop", async () => {
+        expect.assertions(4);
+
+        const cache = new ReactiveCache();
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        let calls = 0;
+        const deps = () => new Set([depKey("users", "u1")]);
+        const handler = async () => {
+            calls += 1;
+
+            return calls;
+        };
+
+        const inFlight = cache.run("users:get:u1", deps(), async () => {
+            const value = await handler();
+
+            await gate;
+
+            return value;
+        });
+
+        // The mutation lands while the handler is parked: no entry exists for
+        // this key yet, so the invalidation removes nothing.
+        expect(cache.invalidate("users", "u1")).toStrictEqual([]);
+
+        release();
+
+        // This caller still gets the value it computed — only the STORE is unsafe.
+        await expect(inFlight).resolves.toBe(1);
+        expect(cache.size().entries).toBe(0);
+        // ...so the next call re-runs the handler instead of serving pre-write rows.
+        await expect(cache.run("users:get:u1", deps(), handler)).resolves.toBe(2);
+    });
+
+    it("does not memoize across a mid-handler invalidateTable", async () => {
+        expect.assertions(2);
+
+        const cache = new ReactiveCache();
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        const inFlight = cache.run("users:list:{}", new Set([depKey("users", SCAN_DEP)]), async () => {
+            await gate;
+
+            return ["pre-write"];
+        });
+
+        expect(cache.invalidateTable("users")).toStrictEqual([]);
+
+        release();
+        await inFlight;
+
+        expect(cache.size().entries).toBe(0);
+    });
+
+    it("does not memoize across a mid-handler range invalidation", async () => {
+        expect.assertions(2);
+
+        const cache = new ReactiveCache();
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        const inFlight = cache.run(
+            "messages:list:{}",
+            new Set<string>(),
+            async () => {
+                await gate;
+
+                return ["pre-write"];
+            },
+            () => [{ hi: "c1\u0000\uFFFF", index: "by_channel_seq", lo: "c1\u0000", table: "messages" }],
+        );
+
+        // Range-keyed write: it reaches the cache through `dropRangeDeps`, the
+        // one invalidation path that never consults `tableIndex`.
+        expect(cache.invalidate("messages", "m9", [{ index: "by_channel_seq", key: "c1\u0000005" }])).toStrictEqual([]);
+
+        release();
+        await inFlight;
+
+        expect(cache.size().entries).toBe(0);
+    });
 });

@@ -1,14 +1,13 @@
 /**
  * Shared value encode/decode building blocks for SQL dialects.
  *
- * The SQLite forms here are what the store core actually runs on **every**
- * engine: `serializeColumnValue`/`decodeGlobalRow` hard-code {@link sqliteEncode}
+ * The SQLite forms here are what the store core runs on **every** engine:
+ * `serializeColumnValue`/`decodeGlobalRow` hard-code {@link sqliteEncode}
  * /{@link sqliteDecode}, so global-table storage is SQLite-shaped on D1,
  * Postgres, and MySQL alike (booleans as 1/0, JSON as TEXT, `bigint` as a decimal
- * string). The `SqlDialect.encode`/`decode` members are **not** consulted by the
- * core today — a concrete dialect that "overrides" them (PG `jsonb`/`bytea`,
- * MySQL `JSON`/`TINYINT`) would find them silently unused. Do not rely on that
- * seam without first routing the core through it.
+ * string). `SqlDialect` deliberately carries NO codec member: an engine-native
+ * one there would never run, and a dialect author writing one would only learn
+ * that at runtime. Adding one means routing the core through it first.
  */
 import { LunoraError } from "@lunora/errors";
 import type { ValidatorLike } from "@lunora/shard-engine";
@@ -138,7 +137,10 @@ export const effectiveColumnKind = (validator: ValidatorLike): string | undefine
  *   `ArrayBuffer` passes through. Required because `v.bytes()` validates
  *   `value instanceof ArrayBuffer` and different backends return different BLOB
  *   shapes (workerd D1 `ArrayBuffer`, node:sqlite `Uint8Array`, pg/mysql2 `Buffer`).
- * - `object`/`array`/`record`: JSON string → parsed value.
+ * - `object`/`array`/`record`/`geoPoint`: JSON string → parsed value. `geoPoint`
+ *   belongs here because {@link sqliteEncode} keys off the runtime JS type and
+ *   stores the `{ lat, lng }` object as JSON in a TEXT column; without the case
+ *   it fell through to `default:` and every client read back the raw JSON text.
  * - `union`/`any`/`from`: parsed back only when the stored string is a JSON
  *   non-scalar (a scalar member round-trips through SQLite's native column type).
  *   `from` belongs to THIS group, not to `object`/`array`/`record`: an external
@@ -171,6 +173,7 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
                 : raw;
         }
         case "array":
+        case "geoPoint":
         case "object":
         case "record": {
             return typeof raw === "string" ? decodeJsonColumn(raw, tryJsonParse) : raw;

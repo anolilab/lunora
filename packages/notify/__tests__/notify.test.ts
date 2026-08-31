@@ -242,7 +242,7 @@ describe("ctx.push.broadcast pagination (plan 222 / NOTIFY-01)", () => {
 
         expect(firstPage.nextCursor).toBeDefined();
 
-        // Simulate a queue job carrying the cursor forward (see `runPushBroadcastJob`).
+        // Simulate a queue job carrying the cursor forward (see `runPushBroadcastPage`).
         const resumed = await push.broadcastPage({ body: "hi" }, { after: firstPage.nextCursor });
 
         expect(resumed.result.total).toBe(3);

@@ -903,6 +903,7 @@ interface TraceSummary {
 ```ts
 interface TracedFetchDeps {
     anchor: TraceAnchor;
+    captureRaw?: boolean;
     functionPath: string;
     propagate?: ((url: URL) => boolean) | boolean;
     record: (span: SpanEvent) => void;

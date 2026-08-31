@@ -45,12 +45,6 @@ export const createBetterSqlite3Adapter = (database: {
             wrapped();
         },
 
-        lastInsertRowId(): number {
-            const row = database.prepare("SELECT last_insert_rowid() AS id").get() as { id: number | bigint } | undefined;
-
-            return Number(row?.id ?? -1);
-        },
-
         close(): void {
             database.close();
         },

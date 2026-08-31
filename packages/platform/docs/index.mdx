@@ -7,12 +7,14 @@ description: The host contracts every Lunora target implements — ShardHost, So
 runtime dependencies and near-zero runtime code: it exists so a second target
 implements a **contract** rather than forking the engine.
 
-The Cloudflare host (the adapters plus the `createShardPlatform` /
-`createWorkerPlatform` composition root) lives in `@lunora/do`, where the
-Durable Object code it wraps lives. A future second target gets its own
-`@lunora/platform-<target>` package when it exists; hosts are never subpaths
-here, because each carries its own provider dependencies and this package must
-stay installable anywhere.
+Two hosts ship today, each in its own package: **`@lunora/platform-cloudflare`**
+(Durable Objects, hibernatable WebSockets, `DurableObjectNamespace` — the
+adapters plus the `createShardPlatform` / `createWorkerPlatform` composition
+root) and **`@lunora/platform-node`** (`better-sqlite3` and an in-process
+registry, experimental, and a registered codegen target). A third gets its own
+`@lunora/platform-<target>` package the same way; hosts are never subpaths here,
+because each carries its own provider dependencies and this package must stay
+installable anywhere.
 
 ```ts
 import type { ShardHost, SocketHost, PlatformCapabilities } from "@lunora/platform";
@@ -71,8 +73,8 @@ import { createReferenceHost } from "@lunora/platform/conformance"; // adds the 
 
 Host variance is declared through presence-based optional hooks on
 `ConformanceHost` (`createSocket`, `simulateRecycle`, `awaitAlarmFired`,
-`scheduler`) rather than skipped blocks, so a gap shows up in the suite output
-instead of vanishing from it.
+`cronTicks`, `scheduler`) rather than skipped blocks, so a gap shows up in the
+suite output instead of vanishing from it.
 
 The TCK covers host primitives. It does **not** yet cover the engine-level
 guarantees (OCC-409, poke ordering, RLS under a live subscription, scheduler
@@ -86,3 +88,9 @@ Any new `ctx.*` or binding feature states its mapping per target, or its
 explicit non-support, in the same change that adds it. That rule lives in
 [AGENTS.md](https://github.com/anolilab/lunora/blob/alpha/AGENTS.md); the matrix
 is only honest if it is updated by the person who knows the answer.
+
+A rating alone gates nothing. `@lunora/codegen` only acts on a feature it can
+detect usage of — a row in `CAPABILITY_ROWS` mapped to the feature key in
+`CAPABILITY_TO_FEATURE` — and only for the `unsupported` and undeclared states
+(`native` and `emulated` emit identically). The full gate-bearing list, and the
+keys that are parity reporting only, are in `capabilities.ts`'s module header.

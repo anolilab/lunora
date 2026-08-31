@@ -33,6 +33,7 @@ interface ListOptions {
 ```ts
 interface LunoraStorageOptions {
     bucket: R2BucketLike;
+    bucketName: string;
     publicBaseUrl?: string;
     s3?: R2S3Credentials;
     signingSecret?: string;
@@ -142,6 +143,7 @@ interface Storage {
     head: (key: string) => Promise<R2ObjectLike | null>;
     list: (prefix?: string, options?: ListOptions) => Promise<{
         cursor?: string;
+        delimitedPrefixes?: string[];
         objects: R2ObjectLike[];
         truncated?: boolean;
     }>;
@@ -175,6 +177,7 @@ interface UploadOptions {
 
 ```ts
 interface VerifyResult {
+    bucketName?: string;
     contentType?: string;
     key?: string;
     method?: "GET" | "PUT";
@@ -192,11 +195,12 @@ const buildPresignedUrl: (parameters: PresignedUrlParams) => Promise<string>;
 ### `buildSignedUrl` (const)
 
 ```ts
-const buildSignedUrl: (args: SignedUrlOptions & {
+const buildSignedUrl: (args: {
     baseUrl: string;
+    bucketName: string;
     key: string;
     secret: string;
-}) => Promise<string>;
+} & SignedUrlOptions) => Promise<string>;
 ```
 
 ### `createBucketStorage` (const)

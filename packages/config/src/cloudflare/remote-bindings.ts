@@ -229,11 +229,31 @@ const createCleanup = (path: string): (() => void) => {
 };
 
 /**
- * Filename for a Lunora-generated remote-dev config. A dotfile (less likely to
- * be committed / shown), per-process-unique so concurrent `lunora dev` runs on
- * one project don't clobber each other; the cleanup disposer unlinks it on exit.
+ * Per-process counter appended to every materialized temp config's name — the
+ * "generation" half of {@link remoteConfigBasename}.
+ *
+ * A pid alone is NOT unique within one dev process. Vite's `restartServer`
+ * resolves the new config (building new plugin instances, which materialize a
+ * fresh temp file) BEFORE closing the old server, so the old generation's
+ * `buildEnd` disposer fired last — against a constant path — and deleted the
+ * file the NEW generation had just written. With `remote: true` the worker then
+ * booted against empty local D1/KV/R2 after every restart. Giving each
+ * materialization its own filename makes the disposer's ownership structural: it
+ * can only ever unlink the file it wrote.
  */
-const remoteConfigBasename = (): string => `.wrangler.lunora-remote.${String(process.pid)}.jsonc`;
+let remoteConfigGeneration = 0;
+
+/**
+ * Filename for a Lunora-generated remote-dev config. A dotfile (less likely to
+ * be committed / shown), unique per process AND per materialization so
+ * concurrent `lunora dev` runs — and successive dev-server generations within
+ * one run — never share a path; the cleanup disposer unlinks it on exit.
+ */
+const remoteConfigBasename = (): string => {
+    remoteConfigGeneration += 1;
+
+    return `.wrangler.lunora-remote.${String(process.pid)}.${String(remoteConfigGeneration)}.jsonc`;
+};
 
 /**
  * Produce a temporary wrangler config with `"remote": true` on every eligible

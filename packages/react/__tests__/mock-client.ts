@@ -1,4 +1,4 @@
-import type { ConnectionStatus, FunctionReference, LunoraClient, Unsubscribe, User } from "@lunora/client";
+import type { ConnectionStatus, FunctionReference, LunoraClient, SubscriptionError, SubscriptionErrorCallback, Unsubscribe, User } from "@lunora/client";
 import { vi } from "vitest";
 
 interface MockClientHooks {
@@ -15,6 +15,13 @@ interface MockClientHooks {
      * that share one reserved channel ref.
      */
     emit: (ref: string, value: unknown, predicate?: (args: unknown) => boolean) => void;
+
+    /**
+     * Fire the subscribe-time `onError` sink for active subscribers of `ref` — the
+     * server-pushed, subscription-scoped error channel (an RLS denial, a query that
+     * starts failing server-side), as opposed to an attach throw.
+     */
+    emitError: (ref: string, error: SubscriptionError, predicate?: (args: unknown) => boolean) => void;
     getAuthToken: ReturnType<typeof vi.fn>;
     getCurrentUser: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
@@ -33,6 +40,7 @@ interface MockClientHooks {
 interface SubEntry {
     args: unknown;
     callback: (value: unknown) => void;
+    onError: SubscriptionErrorCallback | undefined;
     ref: string;
 }
 
@@ -45,17 +53,17 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
     );
     const mutationFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
     const actionFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
-    const subscribeFunction = vi.fn<(reference: FunctionReference, args: unknown, callback: (value: unknown) => void) => Unsubscribe>(
-        (reference: FunctionReference, args: unknown, callback: (value: unknown) => void): Unsubscribe => {
-            const entry: SubEntry = { args, callback, ref: reference.__lunoraRef };
+    const subscribeFunction = vi.fn<
+        (reference: FunctionReference, args: unknown, callback: (value: unknown) => void, options?: { onError?: SubscriptionErrorCallback }) => Unsubscribe
+    >((reference: FunctionReference, args: unknown, callback: (value: unknown) => void, options?: { onError?: SubscriptionErrorCallback }): Unsubscribe => {
+        const entry: SubEntry = { args, callback, onError: options?.onError, ref: reference.__lunoraRef };
 
-            subs.add(entry);
+        subs.add(entry);
 
-            return () => {
-                subs.delete(entry);
-            };
-        },
-    );
+        return () => {
+            subs.delete(entry);
+        };
+    });
     const authListeners = new Set<(token: string | null) => void>();
     const setAuthTokenFunction = vi.fn<(token: string | null) => void>((token: string | null) => {
         if (authToken === token) {
@@ -122,6 +130,14 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         }
     };
 
+    const emitError = (ref: string, error: SubscriptionError, predicate?: (args: unknown) => boolean): void => {
+        for (const entry of subs) {
+            if (entry.ref === ref && (predicate === undefined || predicate(entry.args))) {
+                entry.onError?.(error);
+            }
+        }
+    };
+
     const asClient = {
         acquireConnectionContext: acquireConnectionContextFunction,
         action: actionFunction,
@@ -148,6 +164,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         close: closeFunction,
         connectionStatus: connectionStatusFunction,
         emit,
+        emitError,
         getAuthToken: getAuthTokenFunction,
         getCurrentUser: getCurrentUserFunction,
         mutation: mutationFunction,

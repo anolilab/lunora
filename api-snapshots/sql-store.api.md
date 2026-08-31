@@ -60,8 +60,6 @@ interface SqlDialect {
         real: string;
         text: string;
     };
-    decode: (value: unknown, kind: string | undefined) => unknown;
-    encode: (value: unknown) => unknown;
     frameworkColumns: () => ReadonlyArray<{
         name: string;
         type: string;

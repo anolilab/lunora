@@ -33,8 +33,9 @@
  * wrapper drops any), so a `list` rule is surfaced in the studio's access-rules
  * view for documentation but governs nothing at the `ctx.storage` layer.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { Middleware } from "../builder/types";
-import { LunoraError } from "../error";
 import type { AuthLike } from "../rls/middleware";
 import { indexRolePermissions, resolvePolicyAuth } from "../rls/middleware";
 import type { StorageOperation, StorageRule, StorageRuleContext, StorageRulesOptions } from "./types";

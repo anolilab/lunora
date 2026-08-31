@@ -75,6 +75,35 @@ describe(createQuery, () => {
         expect(fake.subscriptions[1]?.unsubscribed).toBe(false);
     });
 
+    it("forwards onError so a server-pushed subscription error reaches the caller", () => {
+        // Regression: `createQuerySubscription` accepts an `onError` sink but
+        // `createQuery` never exposed one — an RLS denial or a query that starts
+        // failing server-side left the accessor frozen at its last good value.
+        const fake = createFakeClient();
+        const errors: { code?: string; message: string }[] = [];
+
+        render(
+            () => {
+                const data = createQuery(
+                    listRef,
+                    { channelId: "channel:demo" },
+                    {
+                        onError: (error) => {
+                            errors.push(error);
+                        },
+                    },
+                );
+
+                return <pre>{String(data())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        fake.subscriptions[0]?.error({ code: "FORBIDDEN", message: "row-level security denied the read" });
+
+        expect(errors).toStrictEqual([{ code: "FORBIDDEN", message: "row-level security denied the read" }]);
+    });
+
     it("tears down the subscription on unmount", () => {
         const fake = createFakeClient();
 

@@ -327,6 +327,7 @@ interface RetryPolicy {
 
 ```ts
 interface RunOptions {
+    maxConcurrency?: number;
     pool?: string;
     retry?: RetryPolicy;
     shardKey?: string;

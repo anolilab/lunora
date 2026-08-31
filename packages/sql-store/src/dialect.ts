@@ -68,10 +68,18 @@ export interface SqlDialect {
     affectedRows?: (result: SqlRunResult) => number;
 
     /**
-     * Storage SQL column type for a validator `kind`. SQLite affinity
-     * (`TEXT`/`INTEGER`/`REAL`/`BLOB`); Postgres `TEXT`/`DOUBLE PRECISION`/
-     * `BOOLEAN`/`JSONB`/`BYTEA`; MySQL `VARCHAR(255)`/`TEXT`/`DOUBLE`/
-     * `TINYINT(1)`/`JSON`/`LONGBLOB`.
+     * Storage SQL column type for a validator `kind`. Every engine stores
+     * SQLite-shaped values (see `value-codec.ts`), so the types are the ones
+     * those forms fit, not the engine's richest equivalent:
+     *
+     * - SQLite affinity: `TEXT`/`INTEGER`/`REAL`/`BLOB`.
+     * - Postgres: `DOUBLE PRECISION` (number/date/timestamp), `BYTEA` (bytes),
+     *   `INTEGER` (boolean, stored 1/0), `TEXT` for everything else — including
+     *   the composites, which are JSON text rather than `JSONB`.
+     * - MySQL: `DOUBLE`, `LONGBLOB`, `TINYINT`, `VARCHAR(64)` (bigint as a
+     *   decimal string), and `LONGTEXT` for everything else — strings unbounded
+     *   so they never truncate, composites because their wire-marked form is not
+     *   valid JSON and a `JSON` column would reject it on insert.
      */
     columnType: (kind: string | undefined) => string;
 
@@ -96,21 +104,6 @@ export interface SqlDialect {
         text: string;
     };
 
-    /**
-     * Map a stored value back to its JS form, by effective validator `kind`
-     * (inverse of `encode`). NOTE: currently **unused** by the store core, which
-     * hard-codes `sqliteDecode` in `decodeGlobalRow` on every engine. Kept on the
-     * seam for a future engine-native codec; an override here does not run today.
-     */
-    decode: (value: unknown, kind: string | undefined) => unknown;
-
-    /**
-     * Map a JS value to its bound storage form (boolean→1/0, bigint→string,
-     * object→JSON on SQLite). NOTE: currently **unused** by the store core, which
-     * hard-codes `sqliteEncode` as `serializeColumnValue` on every engine. Kept on
-     * the seam for a future engine-native codec; an override here does not run today.
-     */
-    encode: (value: unknown) => unknown;
     /** The framework columns every global table carries — the `id` primary key and `_creationTime` — as `{ name, type }` so the DDL builder can quote each name through the engine's dialect. */
     frameworkColumns: () => ReadonlyArray<{ name: string; type: string }>;
 

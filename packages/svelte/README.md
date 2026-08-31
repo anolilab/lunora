@@ -113,6 +113,10 @@ All functions that require a component lifecycle (presence, rate-limit) return a
 | `rateLimit`        | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` readables + `teardown`. |
 | `connectionStatus` | `useConnectionStatus` | Reactive connection state store.                                                       |
 | `hydratePreloaded` | `usePreloadedQuery`   | Seed a query store from an SSR `Preloaded` token, then go live.                        |
+| `agentToolEvents`  | `useAgentToolEvents`  | One agent thread's tool lifecycle as a readable store of discriminated events.         |
+| `voiceAgent`       | `useVoiceAgent`       | Full-duplex voice call — stores for status/transcript/level + call controls.           |
+
+`voiceAgent` opens nothing until `startCall()` — that call is what requests the microphone, so it must run from a user gesture. Unlike the other adapters there is **no auto-dispose**: call `onDestroy(call.endCall)` yourself to release the socket, the mic tracks and the Web Audio graph.
 
 ## Related
 

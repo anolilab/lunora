@@ -11,22 +11,6 @@ import type { LocalMirror } from "./local-mirror";
 type LocalQueryResult<T> = { readonly data: T[]; readonly error?: undefined } | { readonly data?: undefined; readonly error: Error };
 
 /**
- * Options for the {@link useLocalQuery} hook.
- * @experimental
- */
-interface UseLocalQueryOptions {
-    /**
-     * Optional shard key (reserved for future use; currently unused).
-     *
-     * Intended for multi-mirror setups where a single app maintains multiple
-     * SQLite databases sharded by a key (e.g. user id, tenant id). Currently
-     * has no effect — the hook always queries the mirror passed as the first
-     * argument.
-     */
-    shardKey?: string;
-}
-
-/**
  * Serialize `params` into a stable, `useMemo`-safe dependency key.
  *
  * Plain `JSON.stringify` throws `TypeError: Do not know how to serialize a
@@ -71,8 +55,6 @@ const stableParamsKey = (params?: ReadonlyArray<unknown>): string =>
  * engine without rewriting).
  * @param params Optional positional bound parameters matching `?`
  * placeholders in `sql`.
- * @param _options Optional configuration (currently unused; reserved for
- * future features like shard key routing).
  * @returns `{ data }` with the result rows typed via the generic parameter
  * `T`, or `{ error }` when the query fails (e.g. malformed SQL, or the
  * target table doesn't exist yet because no matching diff has been applied
@@ -104,12 +86,7 @@ const stableParamsKey = (params?: ReadonlyArray<unknown>): string =>
  * ```
  * @experimental
  */
-const useLocalQuery = <T = Record<string, unknown>>(
-    mirror: LocalMirror,
-    sql: string,
-    params?: ReadonlyArray<unknown>,
-    _options?: UseLocalQueryOptions,
-): LocalQueryResult<T> => {
+const useLocalQuery = <T = Record<string, unknown>>(mirror: LocalMirror, sql: string, params?: ReadonlyArray<unknown>): LocalQueryResult<T> => {
     const subscribe = (onStoreChange: () => void): (() => void) => mirror.onChange(onStoreChange);
 
     // `mirror.version` is a plain number — unconditionally `Object.is`-stable
@@ -132,4 +109,4 @@ const useLocalQuery = <T = Record<string, unknown>>(
 };
 
 export { useLocalQuery };
-export type { LocalQueryResult, UseLocalQueryOptions };
+export type { LocalQueryResult };

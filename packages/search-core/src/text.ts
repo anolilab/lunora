@@ -44,11 +44,14 @@ export const FTS_TOKEN_COLUMN = "__token__";
 export const FTS_COUNT_COLUMN = "__n__";
 
 /**
- * Most distinct tokens one document contributes to a portable inverted index.
- * The write path issues one statement per chunk of tokens, so an unbounded
- * text column would turn a single row write into hundreds of sequential round
- * trips over Hyperdrive. Tokens past the cap are not indexed; a document that
- * large is prose, and its first thousand distinct words carry the search.
+ * Most token OCCURRENCES one document contributes to the index — the cap is
+ * applied to {@link analyzedSearchTokens}'s stream, which keeps repeats, so a
+ * document of one word repeated 1,001 times reaches it just as a 1,001-word
+ * document does. It is not a cap on distinct tokens.
+ *
+ * The write path issues one statement per chunk of tokens, so an unbounded text
+ * column would turn a single row write into hundreds of sequential round trips
+ * over Hyperdrive. Text past the cap is not indexed.
  */
 export const MAX_INDEXED_TOKENS = 1000;
 

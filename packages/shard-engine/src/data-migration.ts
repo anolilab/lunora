@@ -230,8 +230,32 @@ const readState = (sql: SqlExec, id: string): ResumeState | undefined => {
     };
 };
 
-const deleteState = (sql: SqlExec, id: string): void => {
-    runSql(sql, `DELETE FROM "${DATA_MIGRATION_STATE_TABLE}" WHERE id = ?`, id);
+/**
+ * Drop the run-state row, but ONLY when no runner is live behind it.
+ *
+ * The sole caller wipes an opposite-direction row so the new direction starts
+ * from a clean cursor. Unconditional, that deletes a *running* peer's claim:
+ * `direction` is caller-supplied over the admin RPC (and the CLI exposes
+ * `migrate down`), the batch loop awaits per page and per row, so an `up` and a
+ * `down` interleave on the same single-threaded DO — the second one erases the
+ * first's claim, wins a fresh one, and both then rewrite the same table through
+ * `writer.replace`, each overwriting the other's rows.
+ *
+ * The guard is the same liveness test {@link claimMigration} applies, expressed
+ * as one synchronous statement so no peer can observe a half-applied decision:
+ * a `completed`/`failed` row, or an `in_progress` one whose `updated_at` predates
+ * {@link STALE_CLAIM_TIMEOUT_MS}, is dead and removable; a fresh `in_progress`
+ * row is a live runner and survives. When it survives, the claim below fails and
+ * the caller returns the active run's state instead of trampling it.
+ */
+const deleteDeadState = (sql: SqlExec, id: string, staleBefore: number): void => {
+    runSql(
+        sql,
+        `DELETE FROM "${DATA_MIGRATION_STATE_TABLE}"
+         WHERE id = ? AND (status <> 'in_progress' OR updated_at IS NULL OR updated_at <= ?)`,
+        id,
+        staleBefore,
+    );
 };
 
 /** Upsert the run-state row, preserving `started_at` across resumes by omitting it from the conflict update. */
@@ -272,14 +296,20 @@ const persistState = (sql: SqlExec, state: PersistedState): void => {
  * `status` to `in_progress` and bumps `updated_at`; every loser sees
  * `changes() === 0`.
  *
- * Claimable when the row is absent, already this runner's resumable
- * `in_progress`/`failed` progress in the SAME direction, an opposite-direction
- * run, OR a stale `in_progress` claim whose `updated_at` predates
+ * Claimable when the row is absent, holds a non-`in_progress` status (a
+ * `failed` run this runner resumes, or a `completed` one in the opposite
+ * direction), OR carries a stale `in_progress` claim whose `updated_at` predates
  * {@link STALE_CLAIM_TIMEOUT_MS} (a crashed runner must not wedge the migration
- * forever). A `completed` row in the same direction is intentionally NOT
- * claimable — re-running a finished migration stays the idempotent no-op the
- * caller handles before claiming. The `WHERE` therefore rejects only a *fresh*
- * same-direction `in_progress` peer.
+ * forever). A `completed` row in the SAME direction never reaches here —
+ * re-running a finished migration is an idempotent no-op the caller handles
+ * before claiming. The `WHERE` therefore rejects exactly one thing: a *fresh*
+ * `in_progress` peer.
+ *
+ * Direction is deliberately NOT part of that test. It used to be — any
+ * opposite-direction row counted as claimable, fresh or stale — which made a
+ * `down` steal the claim from an `up` that was mid-batch (and vice versa), the
+ * one case {@link CLAIM_HEARTBEAT_INTERVAL_MS} exists to make impossible. A live
+ * claim is a live claim whichever way it is running.
  */
 const claimMigration = (sql: SqlExec, id: string, direction: MigrationDirection, now: number): boolean => {
     runSql(
@@ -291,8 +321,7 @@ const claimMigration = (sql: SqlExec, id: string, direction: MigrationDirection,
             status = 'in_progress',
             updated_at = excluded.updated_at
          WHERE
-            "${DATA_MIGRATION_STATE_TABLE}".direction <> excluded.direction
-            OR "${DATA_MIGRATION_STATE_TABLE}".status <> 'in_progress'
+            "${DATA_MIGRATION_STATE_TABLE}".status <> 'in_progress'
             OR "${DATA_MIGRATION_STATE_TABLE}".updated_at IS NULL
             OR "${DATA_MIGRATION_STATE_TABLE}".updated_at <= excluded.updated_at - ${String(STALE_CLAIM_TIMEOUT_MS)}`,
         id,
@@ -444,7 +473,10 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
             // Opposite direction — discard the prior run's progress so this one
             // starts fresh (and `started_at` resets on the claim INSERT). Done
             // synchronously, immediately before the claim, so no peer slips in.
-            deleteState(sql, migration.id);
+            // Gated on liveness: a peer still heartbeating its claim keeps its
+            // row, the claim below then fails, and we return its state rather
+            // than running a second rewrite of the same table alongside it.
+            deleteDeadState(sql, migration.id, clock() - STALE_CLAIM_TIMEOUT_MS);
         }
 
         // Atomic in-flight guard. Exactly one of two interleaved invocations on
@@ -462,7 +494,10 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
             return {
                 changed: active?.changed ?? 0,
                 cursor: active?.cursor ?? cursor,
-                direction,
+                // The holder's direction, not the requested one: a `down` that
+                // loses to a live `up` must not report itself as the in-progress
+                // run. Identical to `direction` for the same-direction loser.
+                direction: active?.direction ?? direction,
                 dryRun,
                 id: migration.id,
                 processed: active?.processed ?? 0,

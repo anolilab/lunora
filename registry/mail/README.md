@@ -105,7 +105,16 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
     }
     ```
 
-2. Pass the binding into the mailer in `lunora/mail/index.ts` (uncomment the `queue:` line and supply `env.MAIL_QUEUE`).
+2. Give the copied `mailer()` a queue binding. `createMailerFromEnv` takes no `queue`, so swap it for `createMailer` in `lunora/mail/mail.ts`:
+
+    ```ts
+    import { createMailer } from "@lunora/mail";
+
+    const mailer = (): Mailer => createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM as string, queue: env.MAIL_QUEUE as QueueLike });
+    ```
+
+    That trades away the dev capture-into-the-studio-inbox behaviour `createMailerFromEnv` gives you, so keep the env-based mailer for dev and only build the queue-bound one where you call `queueEmail`.
+
 3. In your Worker's `queue()` handler, drain the batch with `consumeQueuedSend` from `@lunora/mail`:
 
     ```ts
@@ -114,8 +123,12 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
     export default {
         queue: async (batch, env) => {
             const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: env.MAIL_FROM });
+
             for (const message of batch.messages) {
                 await consumeQueuedSend(mailer, message.body);
+                // Queues are at-least-once: without a per-message ack a single throw
+                // retries the WHOLE batch, resending every email already delivered in it.
+                message.ack();
             }
         },
     };

@@ -4,6 +4,7 @@ import { createStorage } from "../src/create-storage";
 import type { R2BucketLike, R2MultipartUploadLike, R2ObjectBodyLike, R2ObjectLike } from "../src/types";
 
 const BUCKET_RE = /bucket/;
+const BUCKET_NAME_RE = /bucketName/;
 const PUBLIC_BASE_URL_RE = /publicBaseUrl/;
 const SIGNING_SECRET_RE = /signingSecret/;
 
@@ -71,7 +72,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         const result = await storage.upload("avatars/alice.png", new ArrayBuffer(4), {
             contentType: "image/png",
@@ -89,7 +90,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         await expect(storage.upload("big.bin", new ArrayBuffer(16), { maxSize: 8 })).rejects.toThrow(/exceeds maxSize/);
         expect(bucket.puts).toHaveLength(0);
@@ -99,7 +100,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         await expect(storage.upload("big.txt", new Blob(["0123456789"]), { maxSize: 4 })).rejects.toThrow(/exceeds maxSize/);
         expect(bucket.puts).toHaveLength(0);
@@ -109,7 +110,7 @@ describe("createStorage", () => {
         expect.assertions(3);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         // A ReadableStream's byte count isn't known synchronously, so the upload
         // call itself resolves — R2 reads the body afterwards. We hand R2 a
@@ -130,7 +131,7 @@ describe("createStorage", () => {
         expect.assertions(3);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         // A ReadableStream is untyped, so a stream of string chunks reaches the
         // counter. Its length can't be measured as bytes, so counting it as 0
@@ -155,7 +156,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         // Omitting contentType must NOT bypass the allowlist (stored-XSS guard).
         await expect(storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: ["image/png"] })).rejects.toThrow(/contentType is required/);
@@ -166,7 +167,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         // An empty allowlist still requires a contentType to be supplied …
         await expect(storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: [] })).rejects.toThrow(/contentType is required/);
@@ -181,7 +182,7 @@ describe("createStorage", () => {
         expect.assertions(1);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         // No allowedContentTypes at all — any contentType (or none) is accepted.
         await expect(storage.upload("doc.bin", new ArrayBuffer(4), { contentType: "application/octet-stream" })).resolves.toMatchObject({
@@ -193,7 +194,7 @@ describe("createStorage", () => {
         expect.assertions(1);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         await expect(storage.upload("img.png", new ArrayBuffer(4), { allowedContentTypes: ["image/png"], contentType: "image/png" })).resolves.toMatchObject({
             key: "img.png",
@@ -212,7 +213,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         await expect(storage.upload(key, new ArrayBuffer(4))).rejects.toThrow(pattern);
         expect(bucket.puts).toHaveLength(0);
@@ -222,7 +223,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         await expect(storage.upload("a".repeat(1025), new ArrayBuffer(4))).rejects.toThrow(/1024-byte limit/u);
         expect(bucket.puts).toHaveLength(0);
@@ -232,7 +233,7 @@ describe("createStorage", () => {
         expect.assertions(3);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         // 600 CJK characters: 600 code units, 1800 UTF-8 bytes. `String.length`
         // waved this through for R2 to reject remotely with an opaque error —
@@ -250,7 +251,7 @@ describe("createStorage", () => {
         expect.assertions(3);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         const present = await storage.download("hello.txt");
 
@@ -266,7 +267,7 @@ describe("createStorage", () => {
         expect.assertions(1);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         await storage.delete("k");
 
@@ -293,7 +294,7 @@ describe("createStorage", () => {
             } satisfies R2ObjectLike;
         });
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         const meta = await storage.getMetadata("avatars/alice.png");
 
@@ -335,7 +336,7 @@ describe("createStorage", () => {
             return Object.preventExtensions({ checksums: { sha256: checksum }, etag: "etag-1", httpMetadata: { contentType: "video/mp4" }, key, size: 1024 });
         });
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
         const object = await storage.head("clips/a.mp4");
 
         // The fields a ranged HTTP response is built from: the FULL size, the
@@ -371,7 +372,7 @@ describe("createStorage", () => {
 
         vi.spyOn(bucket, "get").mockImplementation(async (key) => ({ body: null, etag: "e", key, size: 99 }) as never);
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
         const object = await storage.head("k");
 
         expect(object?.size).toBe(99);
@@ -393,7 +394,7 @@ describe("createStorage", () => {
             };
         });
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         const meta = await storage.getMetadata("uploads/x.bin");
 
@@ -422,7 +423,7 @@ describe("createStorage", () => {
             } satisfies R2ObjectBodyLike;
         });
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         const meta = await storage.getMetadata("hello.txt");
 
@@ -438,7 +439,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         const result = await storage.list("uploads/", { limit: 50 });
 
@@ -450,7 +451,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         // R2's binding silently truncates at a NUL on some runtimes, so a NUL
         // prefix could widen the listing beyond what the caller intended.
@@ -462,7 +463,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         await storage.list("p/", { limit: 9999 });
 
@@ -482,18 +483,36 @@ describe("createStorage", () => {
             return { cursor: "c", objects: [], truncated: true };
         });
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
         const result = await storage.list();
 
         expect(result.truncated).toBe(true);
         expect(result.cursor).toBe("c");
     });
 
+    it("list() forwards R2's delimitedPrefixes (the grouped folders)", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        // With a delimiter R2 rolls the matching keys into `delimitedPrefixes`
+        // and leaves `objects` empty — dropping the field made a folder browser
+        // render `photos/` as an empty directory with nothing under it.
+        const page = { delimitedPrefixes: ["photos/2026/"], objects: [], truncated: false };
+
+        vi.spyOn(bucket, "list").mockImplementation(async () => page);
+
+        const storage = createStorage({ bucket, bucketName: "default" });
+        const result = await storage.list("photos/", { delimiter: "/" });
+
+        expect(result.delimitedPrefixes).toStrictEqual(["photos/2026/"]);
+        expect(result.objects).toStrictEqual([]);
+    });
+
     it("getUrl() requires publicBaseUrl", () => {
         expect.assertions(1);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         expect(() => storage.getUrl("x")).toThrow(PUBLIC_BASE_URL_RE);
     });
@@ -502,7 +521,7 @@ describe("createStorage", () => {
         expect.assertions(1);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket, publicBaseUrl: "https://cdn.test/" });
+        const storage = createStorage({ bucket, bucketName: "default", publicBaseUrl: "https://cdn.test/" });
 
         expect(storage.getUrl("uploads/x.png")).toBe("https://cdn.test/uploads/x.png");
     });
@@ -511,11 +530,11 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         await expect(storage.getSignedUrl("x")).rejects.toThrow(PUBLIC_BASE_URL_RE);
 
-        const partial = createStorage({ bucket, publicBaseUrl: "https://cdn.test" });
+        const partial = createStorage({ bucket, bucketName: "default", publicBaseUrl: "https://cdn.test" });
 
         await expect(partial.getSignedUrl("x")).rejects.toThrow(SIGNING_SECRET_RE);
     });
@@ -526,6 +545,7 @@ describe("createStorage", () => {
         const bucket = fakeBucket();
         const storage = createStorage({
             bucket,
+            bucketName: "default",
             publicBaseUrl: "https://cdn.test",
             signingSecret: "shh",
         });
@@ -538,11 +558,38 @@ describe("createStorage", () => {
         expect(Number(url.searchParams.get("exp"))).toBeGreaterThan(Math.floor(Date.now() / 1000));
     });
 
+    it("getSignedUrl() binds the configured bucketName into the URL", async () => {
+        expect.assertions(2);
+
+        const storage = createStorage({ bucket: fakeBucket(), bucketName: "avatars", publicBaseUrl: "https://cdn.test", signingSecret: "shh" });
+        const asDefault = createStorage({ bucket: fakeBucket(), bucketName: "default", publicBaseUrl: "https://cdn.test", signingSecret: "shh" });
+
+        const url = new URL(await storage.getSignedUrl("uploads/x.png", { expiresInSeconds: 60 }));
+
+        expect(url.searchParams.get("bucket")).toBe("avatars");
+        expect(new URL(await asDefault.getSignedUrl("uploads/x.png", { expiresInSeconds: 60 })).searchParams.get("bucket")).toBe("default");
+    });
+
+    // Regression: `bucketName` used to be optional and fall back to `"default"`,
+    // so a hand-written `createStorage({ bucket: env.AVATARS })` signed under the
+    // default bucket's tag and its URLs verified against the default bucket.
+    // Required at the type level (this call needs `as never` to compile at all)
+    // and rejected at construction, not silently defaulted.
+    it('rejects a bucketName-less construction instead of signing as "default"', () => {
+        expect.assertions(2);
+
+        // @ts-expect-error - `bucketName` is required; omitting it must not compile
+        expect(() => createStorage({ bucket: fakeBucket(), publicBaseUrl: "https://cdn.test", signingSecret: "shh" })).toThrow(BUCKET_NAME_RE);
+
+        // An empty name is the same defect wearing a string.
+        expect(() => createStorage({ bucket: fakeBucket(), bucketName: "", publicBaseUrl: "https://cdn.test", signingSecret: "shh" })).toThrow(BUCKET_NAME_RE);
+    });
+
     it("getSignedUrl() rejects a publicBaseUrl carrying a path", async () => {
         expect.assertions(1);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket, publicBaseUrl: "https://cdn.test/files", signingSecret: "shh" });
+        const storage = createStorage({ bucket, bucketName: "default", publicBaseUrl: "https://cdn.test/files", signingSecret: "shh" });
 
         await expect(storage.getSignedUrl("x.png")).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
     });
@@ -551,7 +598,7 @@ describe("createStorage", () => {
         expect.assertions(3);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket, publicBaseUrl: "https://cdn.test", signingSecret: "shh" });
+        const storage = createStorage({ bucket, bucketName: "default", publicBaseUrl: "https://cdn.test", signingSecret: "shh" });
 
         const url = new URL(await storage.generateUploadUrl("uploads/x.png", { contentType: "image/png", expiresInSeconds: 60 }));
 
@@ -564,7 +611,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         const result = await storage.store("docs/readme.txt", new ArrayBuffer(4), { contentType: "text/plain" });
 
@@ -576,7 +623,7 @@ describe("createStorage", () => {
         expect.assertions(3);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         // The Convex-style `store` alias must not silently drop upload()'s guards.
         await expect(storage.store("big.bin", new ArrayBuffer(16), { maxSize: 8 })).rejects.toThrow(/exceeds maxSize/);
@@ -590,7 +637,7 @@ describe("createStorage", () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         await storage.download("clip.mp4", { range: { length: 4, offset: 2 } });
 
@@ -627,7 +674,7 @@ describe("createStorage", () => {
             return { objects: [{ checksums: { sha256: checksum }, etag: "e", key: "a", size: 4 }] };
         });
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         const object = await storage.download("uploads/x.png");
 
@@ -702,7 +749,7 @@ describe("createStorage", () => {
 
         vi.spyOn(bucket, "get").mockImplementation(async () => host);
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
         const object = await storage.download("uploads/frozen.bin");
 
         expect(object?.sha256).toBe("00abff");
@@ -726,7 +773,7 @@ describe("createStorage", () => {
             return { objects: [{ checksums: { sha256: checksum }, etag: "e", key: "a", size: 4 }] };
         });
 
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
         const listed = await storage.list();
         const first = listed.objects[0];
 
@@ -746,7 +793,7 @@ describe("createStorage", () => {
         expect.assertions(5);
 
         const bucket = fakeBucket();
-        const storage = createStorage({ bucket });
+        const storage = createStorage({ bucket, bucketName: "default" });
 
         // A path-traversal key is a client error → VALIDATION_ERROR / 400, not a
         // redacted INTERNAL / 500 (which would strip the helpful message and
@@ -780,7 +827,7 @@ describe("createStorage", () => {
         it("throws when no s3 credentials are configured", async () => {
             expect.assertions(1);
 
-            const storage = createStorage({ bucket: fakeBucket() });
+            const storage = createStorage({ bucket: fakeBucket(), bucketName: "default" });
 
             await expect(storage.getPresignedUrl("a/b.png")).rejects.toThrow(/s3.*credentials/u);
         });
@@ -790,6 +837,7 @@ describe("createStorage", () => {
 
             const storage = createStorage({
                 bucket: fakeBucket(),
+                bucketName: "default",
                 s3: { accessKeyId: "AKIA", accountId: "acc", bucket: "uploads", secretAccessKey: "secret" },
             });
 
@@ -805,6 +853,7 @@ describe("createStorage", () => {
 
             const storage = createStorage({
                 bucket: fakeBucket(),
+                bucketName: "default",
                 s3: { accessKeyId: "AKIA", accountId: "acc", bucket: "uploads", secretAccessKey: "secret" },
             });
 
@@ -837,7 +886,7 @@ describe("createStorage", () => {
         it("creates an upload, uploads parts, and completes", async () => {
             expect.assertions(4);
 
-            const storage = createStorage({ bucket: multipartBucket() });
+            const storage = createStorage({ bucket: multipartBucket(), bucketName: "default" });
             const upload = await storage.createMultipartUpload("big/object.bin", { contentType: "application/octet-stream" });
 
             expect(upload.uploadId).toBe("upload-1");
@@ -856,7 +905,7 @@ describe("createStorage", () => {
         it("resumes an upload by id", async () => {
             expect.assertions(2);
 
-            const storage = createStorage({ bucket: multipartBucket() });
+            const storage = createStorage({ bucket: multipartBucket(), bucketName: "default" });
             const upload = storage.resumeMultipartUpload("big/object.bin", "upload-xyz");
 
             expect(upload.uploadId).toBe("upload-xyz");
@@ -866,7 +915,7 @@ describe("createStorage", () => {
         it("rejects an empty uploadId on resume", () => {
             expect.assertions(1);
 
-            const storage = createStorage({ bucket: multipartBucket() });
+            const storage = createStorage({ bucket: multipartBucket(), bucketName: "default" });
 
             expect(() => storage.resumeMultipartUpload("big/object.bin", "")).toThrow(/uploadId/u);
         });
@@ -875,7 +924,7 @@ describe("createStorage", () => {
             expect.assertions(1);
 
             // The default fakeBucket() has no createMultipartUpload.
-            const storage = createStorage({ bucket: fakeBucket() });
+            const storage = createStorage({ bucket: fakeBucket(), bucketName: "default" });
 
             await expect(storage.createMultipartUpload("big/object.bin")).rejects.toThrow(/multipart/u);
         });
@@ -883,7 +932,7 @@ describe("createStorage", () => {
         it("validates the key before starting an upload", async () => {
             expect.assertions(1);
 
-            const storage = createStorage({ bucket: multipartBucket() });
+            const storage = createStorage({ bucket: multipartBucket(), bucketName: "default" });
 
             await expect(storage.createMultipartUpload("../escape")).rejects.toThrow(/\.\.|path component/u);
         });

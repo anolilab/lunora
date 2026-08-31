@@ -4170,6 +4170,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "KeyRange",
     "MaskPoliciesResult",
     "MigrationRunResult",
+    "QueryReadScope",
     ...(hasQueues ? ["QueuesResult"] : []),
     "RunShardApplyCdcArgs",
     "RunShardExportArgs",
@@ -4768,7 +4769,15 @@ ${vectorNamespaceField}
     // server-trusted columns (owner/tenant ids) stamp from the verified caller,
     // never the client. `userId`/`identity` are resolved above in `buildCtx`.
     const authField = "\n                auth: { identity: identity ?? null, userId: userId ?? null },";
-    const databaseOptions = `{${authField}
+    // `ctxDbTuning()` FIRST, so every per-request option below still wins. It
+    // carries the reactive cache (row + index-range invalidation — without it a
+    // write only invalidates table-wide) and the two relation knobs
+    // (`maxRelationKeys` / `relationExistsPushDown`), which were unreachable in
+    // every deployment while the RLS docs described `maxRelationKeys` as a cap
+    // users could raise. Only keys the app set are present, so the spread never
+    // clobbers an engine default with `undefined`.
+    const databaseOptions = `{
+                ...this.ctxDbTuning(),${authField}
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -4788,8 +4797,16 @@ ${vectorNamespaceField}
                 // each of its writes allocates its own.
                 inTransaction: () => this.isInTransaction(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
-                onRead: options.onRead ?? this.getCtxDbReadHook(),
-                onReadRange: options.onReadRange,${hasVectors ? "\n                onWrite," : ""}
+                // Bound to THIS dispatch's reactive-cache read scope (\`handleRpc\`
+                // threads it in), so two concurrent queries never stamp each
+                // other's dep sets. \`executeSubscription\` overrides both with its
+                // own \`ReadFootprint\` pair instead, and a dispatch with neither
+                // gets an unbound hook that stamps no deps.
+                onRead: options.onRead ?? this.getCtxDbReadHook(options.scope),
+                // Left \`undefined\` when there is no scope so \`createShardCtxDb\`
+                // keeps its own "degrade a provable slice to a whole-table dep"
+                // fallback rather than reporting into a no-op.
+                onReadRange: options.onReadRange ?? (options.scope === undefined ? undefined : this.getCtxDbReadRangeHook(options.scope)),${hasVectors ? "\n                onWrite," : ""}
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -4802,6 +4819,11 @@ ${vectorNamespaceField}
     const adminWriterPrelude = `            const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -5012,6 +5034,11 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
                             // sibling table needs, and a limit hit here must not block
                             // that sibling from getting its own full budget this tick.
                             const writer = createShardCtxDb({
+                                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                                // import, a CDC apply or a data-migration backfill writes without
+                                // invalidating, and the next query answers from the pre-write snapshot.
+                                ...this.ctxDbTuning(),
                                 broadcast: (delta) => {
                                     this.recordChangedTable(delta.table, delta.indexKeys);
                                 },
@@ -5116,14 +5143,44 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
             }
 `
         : "";
-    const sourceConstructorOverride =
-        hasSourcedTables || hasTtlTables
-            ? `
+    // The constructor is UNCONDITIONAL, and that is the fix: without it the
+    // emitted subclass never called `super(state, env, options)`, so
+    // `ShardDOOptions` was always `{}` and the per-shard reactive query cache
+    // (plus the two relation knobs) was unreachable no matter what the app
+    // configured. The alarm bootstraps ride the same constructor rather than
+    // minting a second one.
+    //
+    // `isQueryFunction` rides with it, and is equally load-bearing: the base
+    // class has no function registry, so its answer is a conservative `false`
+    // and `runCachedQuery` returns early on EVERY call — a wired cache that
+    // memoizes nothing. This override is the single point where that goes
+    // silently inert, which is why `emit-shard-reactive-cache.test.ts` pins it.
+    // The generated `handleRpc` deliberately does NOT wrap dispatch in
+    // `runCachedQuery` itself: the base `/rpc` path already routes through it,
+    // and a second wrap would mint a SECOND read scope, so every read would land
+    // in the inner tracker and the outer entry would be stored with zero deps —
+    // permanently stale. `handleRpc` forwards the scope it is handed instead.
+    /* eslint-disable no-secrets/no-secrets -- false positive: emitted generated-code text referencing the function registry, not a credential */
+    const constructorOverride = `
         public constructor(state: ShardDOState, env: unknown) {
-            super(state, env);
+            super(state, env, {
+                // Every writer this file builds spreads the ctxDbTuning() slice —
+                // the user-facing ctx and all three admin/maintenance writers — so
+                // the base class can drop its coarse invalidation backstop. Only the
+                // emitter can know that; a hand-written subclass leaves this unset
+                // and keeps the backstop.
+                ctxDbCacheWired: true,
+                ...(config.maxRelationKeys === undefined ? {} : { maxRelationKeys: config.maxRelationKeys }),
+                ...(config.reactiveCache ? { reactiveCache: config.reactiveCache === true ? {} : config.reactiveCache } : {}),
+                ...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),
+            });
 ${sourceBootstrap}${ttlBootstrap}        }
-`
-            : "";
+
+        protected override isQueryFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.kind === "query";
+        }
+`;
+    /* eslint-enable no-secrets/no-secrets */
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
@@ -5234,6 +5291,12 @@ ${schemaSnapshotConst}${flagsOverrides.constant}${shapeReadRegistryConst}${workf
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
+    /** Ceiling on the join keys one relation-crossing \`where\` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
+    maxRelationKeys?: number;
+    /** Enable the per-shard reactive query cache: \`true\` for the defaults, or an options object to tune the caps. Query results are memoized by \`(functionPath, args, identity)\` and invalidated by the ctx-db write hooks before the subscription broadcast, so subscribers never observe a pre-write value. Omitted (or \`false\`) keeps every dispatch re-running its handler. */
+    reactiveCache?: boolean | { maxBytes?: number; maxEntries?: number };
+    /** Resolution policy for a relation-crossing \`where\` whose child is co-located in this shard: \`"auto"\` (cost-based, the engine default), \`"always"\` (inline correlated EXISTS) or \`"never"\` (universal semijoin). All three return identical rows. */
+    relationExistsPushDown?: "always" | "auto" | "never";
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
@@ -5276,10 +5339,10 @@ const dispatchRun = async (expected: FunctionKind, functionPath: string, args: R
  * from the worker entry so wrangler binds it by name.
  */
 export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
-    class extends ShardDOBase {${sourceConstructorOverride}
+    class extends ShardDOBase {${constructorOverride}
         private migrated = false;
 
-        public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown> {
+        public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope): Promise<unknown> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             // Internal functions are reachable server-side only: via \`ctx.run*\`
@@ -5298,7 +5361,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // The main \`/rpc\` path always supplies one; \`dispatchLifecycle\` /
             // \`handleRunAs\` don't mint their own and omit it, so they keep the
             // prior fallback behavior unchanged.
-            const ctx = this.buildCtx({ functionPath, headroom, trusted: registered.lifecycle === "init" });
+            //
+            // \`scope\` is the reactive cache's per-dispatch read capture, threaded
+            // the same way and for the same reason: the ctx-db read hooks resolve
+            // their tracker at READ time, so binding them to the scope THIS
+            // dispatch was handed is what keeps a concurrent query's reads out of
+            // our dep set — and ours out of theirs. A dispatch with no scope (a
+            // mutation, an action, a cache-less shard) builds unbound hooks that
+            // stamp no deps.
+            const ctx = this.buildCtx({ functionPath, headroom, scope, trusted: registered.lifecycle === "init" });
 
             // A mutation's writes must commit all-or-nothing: wrap its dispatch in
             // the DO's BEGIN/COMMIT span so any throw (a validator, an RLS denial,
@@ -5622,6 +5693,11 @@ ${adminWriterPrelude}
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const writer = createShardCtxDb({
+                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                // import, a CDC apply or a data-migration backfill writes without
+                // invalidating, and the next query answers from the pre-write snapshot.
+                ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -5715,7 +5791,7 @@ ${
 `
         : ""
 }
-        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; trusted?: boolean } = {}): unknown {
+        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
             // refresh — both run in deferred/interleaved contexts), use it by
@@ -5833,12 +5909,14 @@ ${isActionLine}${actionOnlyBlock}
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);
             ctx.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx);
             // \`ctx.runQuery(ref, args, { untracked: true })\` runs the sub-query on
-            // its OWN context, built without the read-footprint hooks — so its
-            // reads never enter this subscription's footprint and a write to the
-            // tables it touched does not re-run us. Everything else is inherited:
-            // \`functionPath\` (log/metric attribution), \`headroom\` (the sub-query
-            // must not escape this dispatch's resource ceiling), and — load-bearing
-            // — the identity BY VALUE. Omitting identity would let \`buildCtx\` fall
+            // its OWN context, built without the subscription's read-footprint
+            // hooks — so its reads never enter this subscription's footprint and a
+            // write to the tables it touched does not re-run us. Everything else is
+            // inherited: \`functionPath\` (log/metric attribution), \`headroom\` (the
+            // sub-query must not escape this dispatch's resource ceiling),
+            // \`scope\` (the reactive-cache capture — an untracked sub-query's reads
+            // must still be deps of the entry the OUTER query is memoized as, or
+            // the memo goes stale), and — load-bearing — the identity BY VALUE. Omitting identity would let \`buildCtx\` fall
             // back to the shared per-request fields, which a concurrent RPC may
             // have re-set, and an RLS-scoped sub-query would then read as the wrong
             // user. A tracked call keeps sharing \`ctx\` exactly as before.
@@ -5848,7 +5926,7 @@ ${isActionLine}${actionOnlyBlock}
                     reference.__lunoraRef,
                     fnArgs,
                     runOptions?.untracked === true
-                        ? this.buildCtx({ functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId } })
+                        ? this.buildCtx({ functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId }, scope: options.scope })
                         : ctx,
                 );
 

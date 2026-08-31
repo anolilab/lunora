@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
 import { keyHash } from "./query-key";
@@ -9,6 +9,13 @@ import { keyHash } from "./query-key";
  * so we close the underlying subscription on the last `detach()`.
  */
 interface RegistryEntry {
+    /**
+     * Per-consumer error sinks. One shared subscription serves every hook on the
+     * key, so a server-pushed subscription error fans out to whichever consumers
+     * asked for one — read live at fire time, so a consumer that attached after
+     * the subscription opened still hears about it.
+     */
+    errorCallbacks: Set<SubscriptionErrorCallback>;
     /** Polling fallback when `client.subscribe` is unavailable (e.g. no WS). */
     pollTimer: ReturnType<typeof setInterval> | undefined;
     refCount: number;
@@ -60,14 +67,16 @@ class LunoraSubscriptionRegistry {
         function_: FunctionReference,
         args: Record<string, unknown>,
         shardKey: string | undefined,
-        options: { pollIntervalMs?: number } = {},
+        options: { onError?: SubscriptionErrorCallback; pollIntervalMs?: number } = {},
     ): () => void {
         const key = keyHash(queryKey);
         let entry = this.entries.get(key);
 
         if (!entry) {
-            entry = { pollTimer: undefined, refCount: 0, unsubscribe: undefined };
+            entry = { errorCallbacks: new Set(), pollTimer: undefined, refCount: 0, unsubscribe: undefined };
             this.entries.set(key, entry);
+
+            const opened = entry;
 
             try {
                 entry.unsubscribe = this.client.subscribe(
@@ -76,7 +85,14 @@ class LunoraSubscriptionRegistry {
                     (value) => {
                         queryClient.setQueryData(queryKey, value);
                     },
-                    { shardKey },
+                    {
+                        onError: (error) => {
+                            for (const callback of opened.errorCallbacks) {
+                                callback(error);
+                            }
+                        },
+                        shardKey,
+                    },
                 );
             } catch {
                 // WS unavailable — fall back to periodic invalidation so
@@ -91,6 +107,12 @@ class LunoraSubscriptionRegistry {
         }
 
         entry.refCount += 1;
+
+        const { onError } = options;
+
+        if (onError) {
+            entry.errorCallbacks.add(onError);
+        }
 
         // Single-shot guard: a second call of THIS detach must be a genuine
         // no-op. Without it, a stale second call re-reads `entries.get(key)` and
@@ -115,6 +137,10 @@ class LunoraSubscriptionRegistry {
             }
 
             current.refCount -= 1;
+
+            if (onError) {
+                current.errorCallbacks.delete(onError);
+            }
 
             if (current.refCount <= 0) {
                 current.unsubscribe?.();

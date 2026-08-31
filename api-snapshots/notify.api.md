@@ -191,7 +191,16 @@ type NotifySkipReason = "channel-not-configured" | "no-subscriptions-matched";
 interface PushBroadcastJob {
     filter?: SubscriptionFilter;
     payload: PushContent;
+    retryIds?: string[];
     type: "lunora.push.broadcast";
+}
+```
+
+### `PushBroadcastPageOutcome` (interface)
+
+```ts
+interface PushBroadcastPageOutcome extends BroadcastPageResult {
+    failedIds: string[];
 }
 ```
 
@@ -423,10 +432,10 @@ const normalizeRegisterInput: (input: RegisterInput, now?: number, options?: Nor
 const routingPushProvider: (options: RoutingPushOptions) => Provider<unknown, PushPayload>;
 ```
 
-### `runPushBroadcastJob` (const)
+### `runPushBroadcastPage` (const)
 
 ```ts
-const runPushBroadcastJob: (push: LunoraPush, job: PushBroadcastJob) => Promise<BroadcastPageResult>;
+const runPushBroadcastPage: (push: LunoraPush, job: PushBroadcastJob) => Promise<PushBroadcastPageOutcome>;
 ```
 
 ### `targetOf` (const)

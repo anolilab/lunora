@@ -1,6 +1,6 @@
 import type { Middleware } from "@lunora/server";
 
-import readIdentityGroups from "./identity-groups";
+import { isAccessIdentity, readIdentityGroups } from "./identity-groups";
 
 /**
  * The slice of context {@link accessRoles} reads and augments: the `auth` facade
@@ -63,6 +63,11 @@ const rolesForGroup = (group: string, map: AccessRoleMap | undefined): ReadonlyA
  * is preserved). When there is no identity or no groups it forwards the context
  * unchanged — anonymous requests stay role-less (fail-closed under RLS).
  *
+ * Only a **verified Access identity** contributes roles: an envelope without the
+ * claim set under `access` (a session resolved by another adapter under
+ * `composeResolvers`, e.g. better-auth) is forwarded unchanged, so a `groups`
+ * field on a foreign identity can never become an RLS role.
+ *
  * ```ts
  * export const listInvoices = query
  *   .use(accessRoles({ map: { "idp-admins": "admin", "idp-billing": ["billing", "viewer"] } }))
@@ -73,12 +78,22 @@ const rolesForGroup = (group: string, map: AccessRoleMap | undefined): ReadonlyA
 const accessRoles = <Context extends AccessRolesContext>(options: AccessRolesOptions = {}): Middleware<Context, Context> => {
     // Default to the shared reader (promoted `groups` ?? nested `access.groups`,
     // string entries only) — the same helper the `ctx.access` facade uses, so RLS
-    // roles never drift from what `ctx.access.groups` reports for one request.
+    // roles never drift from what `ctx.access.groups` reports for one request. The
+    // reader vouches for the shape only; the Access-identity gate below is what
+    // vouches for the provenance.
     const readGroups = options.readGroups ?? readIdentityGroups;
 
     return async ({ ctx, next }) => {
         const identity = (await ctx.auth?.getIdentity?.()) ?? undefined;
-        const groups = identity ? readGroups(identity) : undefined;
+        // Same gate `ctx.access` applies before it trusts anything on the
+        // envelope. Under `composeResolvers` the identity reaching `getIdentity()`
+        // may have been minted by a foreign adapter, whose top-level `groups`
+        // could be a user-editable profile field — promoting those strings into
+        // `ctx.auth.roles` is privilege escalation. Only an envelope carrying the
+        // verified claim set under `access` is an Access identity, and only that
+        // one gets its groups read (custom `readGroups` included: it changes where
+        // the groups live, never whether Access verified them).
+        const groups = identity !== undefined && isAccessIdentity(identity) ? readGroups(identity) : undefined;
 
         if (groups === undefined || groups.length === 0) {
             return next();

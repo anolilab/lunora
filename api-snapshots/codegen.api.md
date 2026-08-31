@@ -151,6 +151,18 @@ interface ContainerIR {
 }
 ```
 
+### `ContextPropertyCallIR` (interface)
+
+```ts
+interface ContextPropertyCallIR {
+    callee: string;
+    exportName: string;
+    file: string;
+    kind: "mutation" | "query";
+    line: number;
+}
+```
+
 ### `CronJobIR` (interface)
 
 ```ts
@@ -209,6 +221,7 @@ interface EmitAppOptions {
     hasHyperdriveGlobal: boolean;
     hasImages: boolean;
     hasKv: boolean;
+    hasKvIntrospector: boolean;
     hasNotify: boolean;
     hasPayments: boolean;
     hasQueue: boolean;
@@ -365,6 +378,7 @@ interface LintSchemaOptions {
     geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<HttpActionGuardIR>;
     httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>;
+    hyperdriveCalls?: ReadonlyArray<ContextPropertyCallIR>;
     identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>;
     imageDeliveryUrlAccesses?: ReadonlyArray<ImageDeliveryUrlAccessIR>;
     inserts?: ReadonlyArray<InsertWriteIR>;
@@ -383,7 +397,7 @@ interface LintSchemaOptions {
     procedureProtections?: ReadonlyArray<ProcedureMiddlewareIR>;
     queries?: ReadonlyArray<QueryReadIR>;
     queues?: ReadonlyArray<QueueIR>;
-    r2sqlCalls?: ReadonlyArray<R2sqlCallIR>;
+    r2sqlCalls?: ReadonlyArray<ContextPropertyCallIR>;
     ratelimitKeySelectors?: ReadonlyArray<RatelimitKeySelectorIR>;
     rawRowReturns?: ReadonlyArray<RawRowReturnIR>;
     relationLoads?: ReadonlyArray<RelationLoadIR>;
@@ -579,18 +593,6 @@ interface QueueIR {
         maxRetries?: number;
         retryDelay?: number;
     };
-}
-```
-
-### `R2sqlCallIR` (interface)
-
-```ts
-interface R2sqlCallIR {
-    callee: string;
-    exportName: string;
-    file: string;
-    kind: "mutation" | "query";
-    line: number;
 }
 ```
 
@@ -1035,6 +1037,12 @@ const discoverFunctions: (project: Project, lunoraDirectory: string) => Function
 const discoverHttpRoutes: (project: Project, lunoraDirectory: string) => HttpRouteIR[];
 ```
 
+### `discoverHyperdriveCalls` (const)
+
+```ts
+const discoverHyperdriveCalls: (project: Project, lunoraDirectory: string) => ContextPropertyCallIR[];
+```
+
 ### `discoverInserts` (const)
 
 ```ts
@@ -1092,7 +1100,7 @@ const discoverQueues: (project: Project, lunoraDirectory: string) => QueueIR[];
 ### `discoverR2sqlCalls` (const)
 
 ```ts
-const discoverR2sqlCalls: (project: Project, lunoraDirectory: string) => R2sqlCallIR[];
+const discoverR2sqlCalls: (project: Project, lunoraDirectory: string) => ContextPropertyCallIR[];
 ```
 
 ### `discoverRlsMetadata` (const)

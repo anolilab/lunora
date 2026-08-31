@@ -473,12 +473,6 @@ const releaseShardCheckpoints: (client: LunoraClient) => void;
 const runOutboxMutation: (mutate: () => Promise<unknown>) => Promise<void>;
 ```
 
-### `shardCheckpointStats` (const)
-
-```ts
-const shardCheckpointStats: (client: LunoraClient) => Record<string, CheckpointRegistryStats>;
-```
-
 ### `toMap` (const)
 
 ```ts

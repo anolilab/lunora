@@ -13,7 +13,7 @@ import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Logger } from "../../util/logger";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
-import type { ImportBatcher, ImportRowError, ImportTotals } from "./import-batcher";
+import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
 import { createRowTransformer } from "./import-rows";
 import type { ImportSource, ImportSourceName } from "./import-source";
@@ -112,6 +112,8 @@ interface ImportCommandOptions {
 interface ImportSummary {
     conflicts: number;
     errors: ImportRowError[];
+    /** Shards the endpoint could not reach (it answered 207). Their rows are MISSING, not rejected — present only when non-empty. */
+    failed?: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
     storage?: {
@@ -208,6 +210,7 @@ const buildImportBody = (totals: ImportTotals, storageIdMap: Map<string, string>
     return {
         conflicts: totals.conflicts,
         errors: totals.errors,
+        ...(totals.failed.length > 0 ? { failed: totals.failed } : {}),
         inserted: totals.inserted,
         received: totals.received,
         ...(storageIdMap === undefined
@@ -647,7 +650,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     const streamFailure = await drainIntoBatcher(stream, toRow, batcher, options.logger);
 
-    const { conflicts, errors, inserted, received, warnings } = batcher.totals;
+    const { conflicts, errors, failed: failedShards, inserted, received, warnings } = batcher.totals;
 
     // Parity over an aborted run only restates the abort, so skip it there and
     // let the failure be the verdict.
@@ -659,7 +662,18 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const insertedTotal = Object.values(inserted).reduce((a, b) => a + b, 0);
     const body = buildImportBody(batcher.totals, storageIdMap, remapReport);
 
-    const failed = streamFailure !== undefined || errors.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
+    // A shard the fan-out never reached leaves an unknown slice of the import
+    // unwritten, and its rows land in neither `inserted` nor `errors`. The
+    // endpoint says so with 207 Multi-Status, whose `Response.ok` is `true` —
+    // so without this the run reported a clean success over missing data.
+    for (const shard of failedShards) {
+        options.logger.error(
+            `import: shard "${shard.shardKey}" was never reached${shard.timedOut ? " (timed out)" : ""} — its rows were NOT written: ${shard.message}`,
+        );
+    }
+
+    const failed =
+        streamFailure !== undefined || errors.length > 0 || failedShards.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
 
     options.logger.info(JSON.stringify(body, undefined, 2));
     reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, failed, insertedTotal, received, warnings });

@@ -513,6 +513,65 @@ describe("runDataMigration", () => {
 
             expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
         });
+
+        it("an in-flight up claim blocks an opposite-direction down runner", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            const versioned: DataMigrationLike = {
+                down: (document) => {
+                    return { ...document, version: Number(document["version"]) - 1 };
+                },
+                id: "versioned",
+                table: "users",
+                up: (document) => {
+                    return { ...document, version: Number(document["version"]) + 1 };
+                },
+            };
+
+            // Park the `up` runner mid-batch so its claim is live and freshly
+            // heartbeated when the `down` arrives.
+            let release: () => void = () => {};
+            const upEnteredBatch = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            let gated = false;
+
+            const original = writer.findMany.bind(writer);
+            const gatedWriter: DatabaseWriterLike = {
+                ...writer,
+                findMany: async (table, options) => {
+                    if (!gated) {
+                        gated = true;
+                        await upEnteredBatch;
+                    }
+
+                    return original(table, options);
+                },
+            };
+
+            // Same wall-clock for both: the down can only lose on liveness, and
+            // `direction` must not be its own way out. It used to be — the claim
+            // treated any opposite-direction row as claimable and the state
+            // delete was unconditional, so the down erased the live up's claim
+            // and both rewrote `users` through `writer.replace`.
+            const at = 1_700_000_000_000;
+            const up = runDataMigration({ clock: () => at, migration: versioned, sql: harness.sql, writer: gatedWriter });
+            const down = await runDataMigration({ clock: () => at, direction: "down", migration: versioned, sql: harness.sql, writer: gatedWriter });
+
+            expect(down.status).toBe("in_progress");
+            expect(down.direction).toBe("up");
+
+            release();
+            await up;
+
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+        });
     });
 
     describe("runDataMigration — down", () => {

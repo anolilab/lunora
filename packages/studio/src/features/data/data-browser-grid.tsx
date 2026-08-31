@@ -4,7 +4,6 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ConfirmButton } from "../../components/confirm-button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta, TablePage } from "../../lib/admin";
@@ -1145,16 +1144,21 @@ const DataBrowserTableView = ({
                             >
                                 Edit
                             </button>
-                            <ConfirmButton
-                                confirmLabel="Delete?"
+                            {/* No inline confirm: `onDelete` opens the cascade-impact
+                                preview, which is where the operator confirms — with
+                                the related rows in front of them rather than a bare
+                                "Delete?". */}
+                            <button
+                                className={ROW_BTN}
+                                data-testid={`db-delete-${key}`}
                                 disabled={id === null}
-                                onConfirm={() => {
+                                onClick={() => {
                                     onDelete(id);
                                 }}
-                                testId={`db-delete-${key}`}
+                                type="button"
                             >
                                 Delete
-                            </ConfirmButton>
+                            </button>
                         </>
                     )}
                 </td>

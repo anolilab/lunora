@@ -111,12 +111,43 @@ await ctx.notify.send({
 ## Queue-backed fan-out
 
 Move a large broadcast off the request path with
-[`@lunora/queue`](/docs/packages/queue):
+[`@lunora/queue`](/docs/packages/queue).
+
+Each queue message delivers exactly **one bounded page** (250 subscriptions by
+default), so the consumer has to re-enqueue while `nextCursor` is set —
+discarding the result silently stops the broadcast after the first page and
+still acks the message as a success:
 
 ```ts
 // producer (mutation/action)
 await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body: "…" } });
 
 // consumer (lunora/queues.ts)
-for (const message of batch.messages) await runPushBroadcastJob(ctx.push, message.body);
+for (const message of batch.messages) {
+    const { failedIds, nextCursor } = await runPushBroadcastPage(ctx.push, message.body);
+
+    if (nextCursor !== undefined) {
+        // More pages remain — enqueue the continuation. Each message still does
+        // only ONE bounded page of work.
+        await enqueuePushBroadcast(ctx.queues.push, {
+            filter: { ...message.body.filter, after: nextCursor },
+            payload: message.body.payload,
+        });
+    }
+
+    // Redeliver ONLY the recipients that failed. Retrying the whole page would
+    // re-POST every device it already reached.
+    if (failedIds.length > 0) {
+        await enqueuePushBroadcast(ctx.queues.push, { payload: message.body.payload, retryIds: failedIds });
+    }
+
+    message.ack();
+}
 ```
+
+A page never throws on a partial failure — it reports `failedIds` alongside
+`nextCursor`, so one permanently-failing device cannot strand the cursor and
+halt the broadcast for everyone behind it. Re-enqueue those ids with
+`retryIds`; that job throws while any of them still fail, so only the failing
+device reaches the dead-letter queue. A page that merely pruned gone
+subscriptions is a success.

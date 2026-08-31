@@ -112,6 +112,33 @@ describe(createFlag, () => {
     });
 });
 
+describe("createFlag fail-open contract", () => {
+    it("resolves back to the default on a server-pushed evaluation error", () => {
+        // Regression: the docblock promises "a provider error resolves the default",
+        // but only an ATTACH throw honoured it. A provider that started failing
+        // mid-session kept serving the last resolved value — e.g. an experiment arm
+        // that should have been rolled back.
+        const fake = createFakeClient();
+
+        const { container } = render(
+            () => {
+                const hero = createFlag("hero", "control");
+
+                return <pre>{hero()}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        fake.subscriptions[0]?.push("variant-b");
+
+        expect(container.textContent).toBe("variant-b");
+
+        fake.subscriptions[0]?.error({ message: "provider unavailable" });
+
+        expect(container.textContent).toBe("control");
+    });
+});
+
 describe(createFlags, () => {
     it("opens one subscription per key and resolves each independently", () => {
         const fake = createFakeClient();
@@ -132,5 +159,30 @@ describe(createFlags, () => {
         fake.subscriptions.find((sub) => sub.args["key"] === "page-size")?.push(50);
 
         expect(container.textContent).toBe(JSON.stringify({ "dark-mode": true, "page-size": 50 }));
+    });
+
+    it("fails open per key on a server-pushed evaluation error", () => {
+        const fake = createFakeClient();
+
+        const { container } = render(
+            () => {
+                const flags = createFlags({ "dark-mode": false, "page-size": 10 });
+
+                return <pre>{JSON.stringify(flags())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        const dark = fake.subscriptions.find((sub) => sub.args["key"] === "dark-mode");
+
+        dark?.push(true);
+        fake.subscriptions.find((sub) => sub.args["key"] === "page-size")?.push(50);
+
+        expect(container.textContent).toBe(JSON.stringify({ "dark-mode": true, "page-size": 50 }));
+
+        // Only the failing flag reverts; the healthy one keeps its resolved value.
+        dark?.error({ message: "provider unavailable" });
+
+        expect(container.textContent).toBe(JSON.stringify({ "dark-mode": false, "page-size": 50 }));
     });
 });

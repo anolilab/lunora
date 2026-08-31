@@ -206,6 +206,14 @@ const encodeSignal = (
 };
 
 /**
+ * The non-callback fields of an {@link ObservabilitySink}: configuration
+ * `@lunora/do` reads straight off the sink object rather than receiving through
+ * a hook. Listed once so {@link combineSinks} cannot silently drop a field the
+ * next one adds — the whole reason `traceFetch` went missing.
+ */
+const SINK_CONFIG_FIELDS = ["fuseCloudflareTraces", "instrumentDatabase", "metricHistory", "traceFetch"] as const;
+
+/**
  * A sink that logs each event via `console`.
  *
  * Useful as a zero-config default during development, or wired behind
@@ -1024,6 +1032,16 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
  *
  * Each child sink is invoked in order; a throw from one does not prevent the
  * others from running (each call is individually guarded).
+ *
+ * A sink is not only its five callbacks: `fuseCloudflareTraces`,
+ * `instrumentDatabase`, `metricHistory` and `traceFetch` are configuration the
+ * shard DO reads directly off this object. They are carried through here,
+ * FIRST-WINS across the children in argument order — returning only the
+ * callbacks meant that
+ * `combineSinks({ ...otlpSink(…), traceFetch: { propagate } }, consoleSink())`
+ * produced a sink with no `traceFetch`, silently reverting to the `true` default
+ * and injecting `traceparent` into every outbound `ctx.fetch` — including the
+ * third-party hosts the predicate existed to exclude.
  * @param sinks The sinks to fan out to.
  */
 export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink => {
@@ -1058,7 +1076,20 @@ export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink =
         }
     };
 
+    // First child that defines a config field wins; an undefined field on an
+    // earlier sink is "unset", not "off", so it must not shadow a later one.
+    const config: Partial<ObservabilitySink> = {};
+
+    for (const sink of sinks) {
+        for (const field of SINK_CONFIG_FIELDS) {
+            if (config[field] === undefined && sink[field] !== undefined) {
+                (config as Record<string, unknown>)[field] = sink[field];
+            }
+        }
+    }
+
     return {
+        ...config,
         flush: (context?: ObservabilitySinkContext) => {
             // A child without a `flush` is skipped by `fanOut`, so combining a
             // batching sink with non-batching ones needs no special casing.

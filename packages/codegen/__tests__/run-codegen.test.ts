@@ -4380,7 +4380,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;");
 
             // It is passed into the ORM writer (so DO triggers get ctx.scheduler) and reused on ctx via shorthand.
-            const databaseOptions = output.slice(output.indexOf("createShardCtxDb({"), output.indexOf("createShardCtxDb({") + 400);
+            // Sliced to the call's own closing `});` rather than a fixed byte window:
+            // a comment added inside the options object pushed `scheduler,` past the
+            // old 400-char cutoff and failed this test for a reason unrelated to what
+            // it checks.
+            const writerStart = output.indexOf("createShardCtxDb({");
+            const databaseOptions = output.slice(writerStart, output.indexOf("});", writerStart));
 
             expect(databaseOptions).toContain("scheduler,");
         });

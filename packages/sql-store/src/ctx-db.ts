@@ -108,7 +108,7 @@ import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
-import { decodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { SearchStage } from "./ctx-db-search";
 import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
 import { migrateSearchState } from "./ctx-db-search-state";
@@ -1128,7 +1128,21 @@ const readSqlCdcFloor = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<n
     return Number.isFinite(floor) ? floor : undefined;
 };
 
-/** Append one committed mutation to the changelog (post-image JSON, or NULL for delete). */
+/** Serialize a changelog post-image, tagging the leaves JSON cannot carry. Identity for a pure-JSON document. */
+const encodeCdcDocJson = (doc: Record<string, unknown>): string => JSON.stringify(needsWireEncoding(doc) ? encodeWire(doc) : doc);
+
+/**
+ * Append one committed mutation to the changelog (post-image JSON, or NULL for
+ * delete).
+ *
+ * The post-image is a decoded document — a `v.bigint()` column is a real
+ * `bigint` and a `v.bytes()` column an `ArrayBuffer` — so it goes through
+ * `encodeWire` before `JSON.stringify`, exactly as the DO twin's
+ * `encodeDocJson` does. A bare `JSON.stringify` throws on the former and
+ * silently records `{}` for the latter, and it throws AFTER the row is already
+ * committed. `needsWireEncoding` keeps the common pure-JSON document on the
+ * allocation-free path and byte-identical to what it was before.
+ */
 const appendSqlCdcChange = async (
     exec: SqlCtxExec,
     ts: number,
@@ -1143,7 +1157,7 @@ const appendSqlCdcChange = async (
         dialect,
         sql`INSERT INTO ${sql.identifier(CDC_LOG_TABLE)} (${sql.identifier("ts")}, ${sql.identifier("table")}, ${sql.identifier("id")}, ${sql.identifier("op")}, ${sql.identifier("doc")}) VALUES (${ts}, ${table}, ${id}, ${op}, ${
             // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct post-image for a delete; the `id` identifies the removed row.
-            doc === undefined ? null : JSON.stringify(doc)
+            doc === undefined ? null : encodeCdcDocJson(doc)
         })`,
     );
 };
@@ -1190,7 +1204,10 @@ const readSqlCdcChanges = async (
         const { doc } = row;
         const base = { id: String(row.id), op: String(row.op) as CdcChange["op"], seq: Number(row.seq), table: String(row.table), ts: Number(row.ts) };
 
-        return typeof doc === "string" ? { ...base, doc: JSON.parse(doc) as Record<string, unknown> } : base;
+        // `decodeWire` mirrors the `encodeWire` on the append side, so a
+        // `v.bigint()` / `v.bytes()` post-image comes back as the real value
+        // rather than its tagged form. Identity for a pure-JSON document.
+        return typeof doc === "string" ? { ...base, doc: decodeWire(JSON.parse(doc)) as Record<string, unknown> } : base;
     });
 
     return { changes, cursor: changes.at(-1)?.seq ?? sinceSeq };

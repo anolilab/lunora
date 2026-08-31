@@ -93,15 +93,21 @@ const emit = (absolutePath, content) => {
 const syncTree = (srcDir, itemDir, subdir) => {
     const files = walk(srcDir);
 
-    // In write mode, drop stale files that no longer exist in src.
+    // Drop files that no longer exist in src. The sweep runs in BOTH modes: an
+    // orphan is drift, and gating it on write mode made `--check` blind to the one
+    // kind of staleness `emit` cannot see (it only compares files that still exist
+    // in src). Check mode records the orphan instead of deleting it.
     const targetDir = join(itemDir, subdir);
 
-    if (!CHECK && existsSync(targetDir)) {
-        for (const existing of walk(targetDir)) {
-            if (!files.includes(existing)) {
-                rmSync(join(targetDir, existing));
-                pending.push(relative(ROOT, join(targetDir, existing)));
-            }
+    for (const existing of existsSync(targetDir) ? walk(targetDir) : []) {
+        if (files.includes(existing)) {
+            continue;
+        }
+
+        pending.push(relative(ROOT, join(targetDir, existing)));
+
+        if (!CHECK) {
+            rmSync(join(targetDir, existing));
         }
     }
 

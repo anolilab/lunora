@@ -27,7 +27,7 @@ interface StreamEntry {
  */
 const buildClient = (): {
     client: LunoraClient;
-    emit: (reference: string, value: unknown) => void;
+    emit: (reference: string, value: unknown, predicate?: (args: unknown) => boolean) => void;
     mutation: ReturnType<typeof vi.fn>;
     openStream: () => StreamEntry;
 } => {
@@ -337,6 +337,61 @@ describe("useAgentChat", () => {
         // flagged optimistic — and the merged list is just the 50-row window.
         expect(reconciled.filter((message) => message.content === "new turn")).toStrictEqual([{ content: "new turn", role: "user", seq: 50 }]);
         expect(reconciled).toHaveLength(50);
+    });
+
+    it("drops un-acked optimistic rows when threadKey changes, so they never ghost into the new thread", async () => {
+        expect.hasAssertions();
+
+        // Regression: `threadKey` re-subscribed history/thread/stream but left the
+        // `optimistic` array alone. `reconcileOptimistic` retires a row by comparing
+        // `maxDurableSeqAtSend` against durable `seq`s, and `seq` is PER THREAD — so
+        // a row sent in a 40-message thread A, still un-acked when the user switched
+        // to an empty thread B, could never be claimed there (B's max seq is -1) and
+        // rendered as a ghost `optimistic: true` user bubble until B reached seq 41.
+        const { client, emit } = buildClient();
+        let latest: UseAgentChatResult | undefined;
+
+        // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback, shared by the render and the rerender below; a stable ref adds no value here.
+        const onReady = (result: UseAgentChatResult): void => {
+            latest = result;
+        };
+
+        const threadA: Record<string, unknown>[] = [];
+
+        for (let index = 0; index < 40; index += 1) {
+            threadA.push({ content: `row-${String(index)}`, role: index % 2 === 0 ? "user" : "assistant", seq: index });
+        }
+
+        const view = render(
+            <LunoraProvider client={client}>
+                <Harness onReady={onReady} options={buildOptions({ threadKey: "thread-a" })} />
+            </LunoraProvider>,
+        );
+
+        await act(async () => {
+            emit(MESSAGES_REF, threadA);
+        });
+
+        // Send in thread A and switch away before the ack lands.
+        await act(async () => {
+            await latest?.send("only meant for A");
+        });
+
+        expect(JSON.parse(screen.getByTestId("messages").textContent ?? "[]")).toHaveLength(41);
+
+        view.rerender(
+            <LunoraProvider client={client}>
+                <Harness onReady={onReady} options={buildOptions({ threadKey: "thread-b" })} />
+            </LunoraProvider>,
+        );
+
+        await act(async () => {
+            emit(MESSAGES_REF, [], (args) => (args as { key: string }).key === "thread-b");
+        });
+
+        const inThreadB = JSON.parse(screen.getByTestId("messages").textContent ?? "[]") as Record<string, unknown>[];
+
+        expect(inThreadB).toStrictEqual([]);
     });
 
     it("rolls the optimistic user turn back when the send mutation fails", async () => {

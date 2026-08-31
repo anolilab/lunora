@@ -58,12 +58,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `LogSink` (type)
-
-```ts
-type LogSink = TelemetrySink;
-```
-
 ### `MaskPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -75,6 +69,15 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `MutationDelta` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `QueryReadScope` (interface)
+
+```ts
+interface QueryReadScope {
+    footprint: ReadFootprint;
+    tracker: DependencyTracker;
+}
+```
 
 ### `QueuesResult` (interface)
 
@@ -292,7 +295,7 @@ abstract class ShardDO {
     webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void>;
     webSocketError(_ws: ShardSocketLike, _error: unknown): void;
     alarm(): Promise<void>;
-    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown>;
+    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope): Promise<unknown>;
     protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor"): ReadonlyArray<string>;
     protected dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void>;
     protected dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void>;
@@ -407,10 +410,16 @@ abstract class ShardDO {
         };
         iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
     };
-    protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R>;
-    protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void;
-    protected getCtxDbReadRangeHook(): (range: KeyRange) => void;
+    protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: (scope?: QueryReadScope) => Promise<R>, attribution?: QueryAttribution, outer?: QueryReadScope): Promise<R>;
+    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string) => void;
+    protected getCtxDbReadRangeHook(scope?: QueryReadScope): (range: KeyRange) => void;
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
+    protected ctxDbTuning(): {
+        cache?: ReactiveCache;
+        maxRelationKeys?: number;
+        relationExistsPushDown?: "always" | "auto" | "never";
+    };
+    protected isQueryFunction(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
     protected transactionHeadroom(): TransactionHeadroomTracker | undefined;
     protected subscriptionHeadroom(): TransactionHeadroomTracker;
@@ -448,7 +457,10 @@ abstract class ShardDO {
 
 ```ts
 interface ShardDOOptions {
+    ctxDbCacheWired?: boolean;
+    maxRelationKeys?: number;
     reactiveCache?: ReactiveCacheOptions;
+    relationExistsPushDown?: "always" | "auto" | "never";
 }
 ```
 

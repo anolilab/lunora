@@ -113,7 +113,7 @@ pnpm add @lunora/mcp
 
 ## Usage
 
-MCP clients spawn the `lunora-mcp` binary over stdio. Configuration comes from `LUNORA_URL` (required) and `LUNORA_ADMIN_TOKEN` (optional bearer token):
+MCP clients spawn the `lunora-mcp` binary over stdio. Configuration comes from `LUNORA_URL` and `LUNORA_ADMIN_TOKEN` — both required (see [Tokens](#tokens)):
 
 ```jsonc
 {
@@ -166,7 +166,13 @@ Enable it with two env vars (or the matching `createLunoraMcpServer` options):
 
 Each exposed agent gets an `agent_<name>` tool taking `prompt` (required), an optional `threadKey` (reuse to continue a conversation; omit to start a new thread), and an optional `title`. The tool starts a durable run and awaits it up to the timeout budget; if the run outlasts the budget it returns a pending result whose `threadKey` you feed to the generic `lunora_agent_status` tool to poll for the final answer.
 
-Runs are **owner-scoped** to the identity the configured token resolves to. Grant a **least-privilege** token mapped to a bot identity so an agent's threads stay isolated per deployment — never the admin token.
+Runs are **owner-scoped** to the identity the configured token resolves to — which is the deployment's **admin** identity, because `LUNORA_ADMIN_TOKEN` is what every tool needs (see [Tokens](#tokens)). Every agent thread this server starts therefore belongs to that one identity; run a separate MCP server per deployment if you need them kept apart.
+
+### Tokens
+
+`LUNORA_ADMIN_TOKEN` must be the deployment's **admin bearer**. It cannot be scoped down: `lunora_list_functions`, `lunora_list_tables`, and the allowlist precheck that runs before _every_ `lunora_run_*` call all hit admin-gated `/_lunora/admin/*` routes, so a least-privilege token returns `ADMIN_FORBIDDEN` on the first tool call. Constructing a server without one fails fast rather than advertising tools that cannot work.
+
+The read-only guarantee therefore does **not** come from the token's scope — it comes from `LUNORA_MCP_ALLOW_WRITES` defaulting off, which omits the write tools from `tools/list` _and_ refuses them at dispatch. Treat the MCP server itself as the trust boundary: give it the admin token, and gate who can reach it (the OAuth-protected `createAuthedMcpFetchHandler` is the supported way to expose it beyond a local stdio process).
 
 ## Resources and annotations
 

@@ -1,6 +1,7 @@
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "../src/introspect";
 import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
@@ -81,6 +82,35 @@ describe("d1 introspect", () => {
             expect(page.columns).toEqual(["_id", "_creationTime", "active", "name"]);
             expect(page.rows[0]).toEqual({ _creationTime: 1, _id: "o1", active: true, name: "Acme" });
             expect(page.rows[1]).toMatchObject({ _id: "o2", active: false });
+        });
+
+        it("wire-encodes bigint / bytes columns so the JSON transport can carry them", async () => {
+            expect.assertions(3);
+
+            const wireSchema: SchemaLike = {
+                tables: {
+                    ledger: {
+                        indexes: [],
+                        shape: { blob: col("bytes"), cents: col("bigint") },
+                        shardMode: { kind: "global" } as never,
+                    },
+                },
+            };
+
+            harness.ddl(`CREATE TABLE "ledger" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "blob" BLOB, "cents" TEXT)`);
+            await harness.exec.run(`INSERT INTO "ledger" VALUES ('l1', 1, X'070809', '9007199254740993')`, []);
+
+            const page = await readGlobalTablePage(harness.exec, wireSchema, { table: "ledger" });
+
+            // `decodeGlobalRow` hands back a real `bigint` and `ArrayBuffer`.
+            // Undecorated, the studio's JSON transport THREW on the former and
+            // turned the latter into `{}`.
+            const wireJson = JSON.stringify(page.rows);
+            const roundTripped = decodeWire(JSON.parse(wireJson)) as Record<string, unknown>[];
+
+            expect(roundTripped).toHaveLength(1);
+            expect(roundTripped[0]?.["cents"]).toBe(9_007_199_254_740_993n);
+            expect([...new Uint8Array(roundTripped[0]?.["blob"] as ArrayBuffer)]).toStrictEqual([7, 8, 9]);
         });
 
         it("reads an external table with its real columns and redacts sensitive values", async () => {

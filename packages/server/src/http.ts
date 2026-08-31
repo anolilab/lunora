@@ -1,4 +1,4 @@
-import { toErrorBody } from "@lunora/errors";
+import { isLunoraError, LunoraError, toErrorBody } from "@lunora/errors";
 import type { Infer, Validator, ValidatorKind } from "@lunora/values";
 import { ValidationError } from "@lunora/values";
 import type { Context } from "hono";
@@ -6,7 +6,6 @@ import { Hono } from "hono";
 
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
-import { LunoraError } from "./error";
 import { parseValidatorMap } from "./functions";
 import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./types";
 
@@ -357,7 +356,14 @@ const errorResponse = (error: unknown): Response => {
         return Response.json({ code: "BAD_REQUEST", error: error.message }, { status: 400 });
     }
 
-    if (error instanceof LunoraError) {
+    // Structural, NOT `instanceof`: the errors that actually reach a route
+    // handler are minted by several classes (the facade's `@lunora/errors`
+    // `LunoraError`, the runtime's own subclass, a twin rebuilt from a shard-RPC
+    // error payload) and by other bundled copies of this package. An
+    // `instanceof` test against any single class misses all of those and falls
+    // through to the rethrow below, which escapes hono as a bare
+    // `500 text/plain` — losing the code, status, hint and `data`.
+    if (isLunoraError(error)) {
         const { body, redacted, status } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "Internal error" });
 
         if (redacted) {
@@ -372,6 +378,29 @@ const errorResponse = (error: unknown): Response => {
 };
 
 /**
+ * Reject a request whose verb is not the one the route was declared with.
+ *
+ * The verb is real routing information, not decoration: mounting
+ * `httpRoute.post("/api/todos")…` as `app.get("/api/todos", create)` is a typo
+ * hono cannot catch, and without this check the GET runs the POST handler and
+ * dies in `parseBody` with `400 "Invalid JSON body"` instead of saying the
+ * method is wrong. `HEAD` is accepted on a `GET` route (RFC 9110: HEAD is GET
+ * without a body); everything else answers 405 with the required `Allow` header.
+ */
+const methodNotAllowed = (state: RouteState, c: Context<LunoraHttpEnv>): Response | undefined => {
+    const { method } = c.req;
+
+    if (method === state.method || (state.method === "GET" && method === "HEAD")) {
+        return undefined;
+    }
+
+    return Response.json(
+        { code: "METHOD_NOT_ALLOWED", error: `${method} is not allowed on this route (declared as ${state.method})` },
+        { headers: { allow: state.method }, status: 405 },
+    );
+};
+
+/**
  * Compile the accumulated route state into a {@link LunoraRouteHandler}. Reads
  * `ctx` from `c.var.lunora` (set by {@link httpRouter}'s middleware). Input
  * decode failures (bad query / body / params) surface as 400; a result that
@@ -380,6 +409,12 @@ const errorResponse = (error: unknown): Response => {
 const buildRouteHandler =
     (state: RouteState, userHandler: LooseHandler): LunoraRouteHandler =>
     async (c) => {
+        const wrongMethod = methodNotAllowed(state, c);
+
+        if (wrongMethod) {
+            return wrongMethod;
+        }
+
         try {
             const context = c.get("lunora");
             const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
@@ -461,6 +496,12 @@ const buildStreamHandler =
     (state: RouteState, userHandler: LooseStreamHandler): LunoraRouteHandler =>
     // eslint-disable-next-line @typescript-eslint/require-await -- LunoraRouteHandler is contractually `(c) => Promise<Response>`; this handler returns synchronously (all awaits live inside the ReadableStream pump), so `async` is required by the type, not the body.
     async (c) => {
+        const wrongMethod = methodNotAllowed(state, c);
+
+        if (wrongMethod) {
+            return wrongMethod;
+        }
+
         let searchParams: Record<string, unknown>;
         let params: Record<string, unknown>;
 
@@ -509,7 +550,16 @@ const buildStreamHandler =
                         controller.enqueue(encoder.encode(sseFrame(chunk)));
                     }
 
-                    controller.enqueue(encoder.encode(sseFrame({}, "complete")));
+                    // Re-check after the loop: a consumer `cancel()` (or a client
+                    // disconnect) aborts `ac` and breaks the pump, and the
+                    // controller is already closed by then — enqueueing the
+                    // terminal frame onto it throws a `TypeError` that would be
+                    // caught below, logged as a bogus handler error, and then
+                    // throw AGAIN out of the error frame and `close()`, rejecting
+                    // `start()` unhandled on every mid-stream disconnect.
+                    if (!ac.signal.aborted) {
+                        controller.enqueue(encoder.encode(sseFrame({}, "complete")));
+                    }
                 } catch (error: unknown) {
                     // Mirror the shared `toErrorBody` redaction policy: only a
                     // non-internal LunoraError-shaped value gets its `code`/`message`
@@ -524,10 +574,24 @@ const buildStreamHandler =
                         console.error("[lunora] unhandled stream handler error:", error);
                     }
 
-                    controller.enqueue(encoder.encode(sseFrame({ code: body.code, message: body.message }, "error")));
+                    // Same guard as the terminal frame above: nobody is left to
+                    // read the error frame once the stream is cancelled, and
+                    // enqueueing onto the closed controller would throw out of
+                    // this catch.
+                    if (!ac.signal.aborted) {
+                        controller.enqueue(encoder.encode(sseFrame({ code: body.code, message: body.message }, "error")));
+                    }
                 } finally {
                     request.signal.removeEventListener("abort", onAbort);
-                    controller.close();
+
+                    // `close()` throws on an already-closed/errored controller
+                    // (a cancelled stream), which would escape `start()` as an
+                    // unhandled rejection. The close is best-effort cleanup.
+                    try {
+                        controller.close();
+                    } catch {
+                        // already closed — nothing to do
+                    }
                 }
             },
         });

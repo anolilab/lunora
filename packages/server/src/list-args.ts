@@ -7,7 +7,9 @@
  * {@link defineListArgs} makes that one declaration:
  *
  * ```ts
- * const listMessages = defineListArgs({
+ * // Curried on the document type — the extra `()` is what binds `Doc`, so
+ * // `filter` keys and `orderBy` entries are checked against the real columns.
+ * const listMessages = defineListArgs<Doc<"messages">>()({
  *     filter: { authorId: v.id("users"), status: v.string() },
  *     orderBy: ["_creationTime", "status"],
  * });

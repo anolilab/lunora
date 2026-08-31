@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CascadePreviewDialog } from "../../../src/features/data/cascade-preview";
 import type { AdvisorSchema } from "../../../src/lib/cascade-schema";
-import { buildCascadeMap, walkCascade } from "../../../src/lib/cascade-schema";
+import { advisorSchemaFromColumns, buildCascadeMap, walkCascade } from "../../../src/lib/cascade-schema";
 
 // ── Fixture schemas ──────────────────────────────────────────────────────────
 
@@ -175,11 +175,57 @@ describe("buildCascadeMap", () => {
         expect(map.get("comments")?.[0]?.table).toBe("replies");
     });
 
+    it("keeps an edge whose onDelete was never declared", () => {
+        expect.assertions(2);
+
+        // The studio's own feeder (`describeTables`) reports FK targets but not the
+        // declared action. Dropping those edges left the preview showing "no
+        // related rows" for a table that has children — the operator's cue that
+        // something is downstream disappears exactly when it matters.
+        const map = buildCascadeMap({
+            tables: [
+                { fields: ["title"], indexes: [], name: "posts", relations: [] },
+                {
+                    fields: ["postId"],
+                    indexes: [],
+                    name: "comments",
+                    relations: [{ field: "postId", kind: "one", name: "postId", references: "posts", table: "comments" }],
+                },
+            ],
+        });
+
+        expect(map.get("posts")?.[0]?.table).toBe("comments");
+        expect(map.get("posts")?.[0]?.onDelete).toBeUndefined();
+    });
+
     it("handles a cycle schema without throwing", () => {
         expect.assertions(1);
 
         // The map build itself is pure — it should not loop.
         expect(() => buildCascadeMap(CYCLE_SCHEMA)).not.toThrow();
+    });
+});
+
+describe("advisorSchemaFromColumns", () => {
+    it("turns v.id ref columns into relations with no declared onDelete", () => {
+        expect.assertions(3);
+
+        const schema = advisorSchemaFromColumns({
+            comments: [
+                { name: "_id", optional: false, pk: true, type: "id" },
+                { name: "postId", optional: false, ref: "posts", type: "id" },
+                { name: "text", optional: false, type: "string" },
+            ],
+            posts: [{ name: "title", optional: false, type: "string" }],
+        });
+
+        const comments = schema.tables.find((table) => table.name === "comments");
+
+        expect(comments?.relations).toHaveLength(1);
+        expect(comments?.relations[0]).toMatchObject({ field: "postId", kind: "one", references: "posts", table: "comments" });
+        // Never invented: the admin wire carries no `onDelete`, and claiming a
+        // cascade the studio cannot see would be a lie in a destructive dialog.
+        expect(comments?.relations[0]?.onDelete).toBeUndefined();
     });
 });
 
@@ -218,19 +264,21 @@ describe("walkCascade", () => {
 
 // ── Render tests for CascadePreviewDialog ────────────────────────────────────
 
-const makeReadPage = (rowCount: number = 0) =>
-    vi.fn<(_table: string, _search: string) => Promise<{ columns: string[]; refs: Record<string, string>; rows: Record<string, string>[]; total: number }>>(
-        async (_table: string, _search: string) => {
-            return {
-                columns: ["_id"],
-                refs: {},
-                rows: Array.from({ length: Math.min(rowCount, 100) }, (_, i) => {
-                    return { __id__: `r${i.toString()}` };
-                }),
-                total: rowCount,
-            };
-        },
-    );
+/** One `readPage` reply carrying `rowCount` rows (capped at the page size). */
+const pageOf = (rowCount: number) => {
+    return {
+        columns: ["_id"],
+        refs: {},
+        rows: Array.from({ length: Math.min(rowCount, 100) }, (_, i) => {
+            return { __id__: `r${i.toString()}` };
+        }),
+        total: rowCount,
+    };
+};
+
+type ReadPage = (_table: string, _column: string, _value: string) => Promise<ReturnType<typeof pageOf>>;
+
+const makeReadPage = (rowCount: number = 0) => vi.fn<ReadPage>(async (_table: string, _column: string, _value: string) => pageOf(rowCount));
 
 /** Wait until the cascade loading spinner disappears (up to 3s). */
 const waitForLoaded = async (): Promise<void> => {
@@ -340,5 +388,88 @@ describe("cascadePreviewDialog", () => {
 
         // If we reached here the walk terminated; confirm the dialog panel rendered.
         expect(screen.getByTestId("cascade-panel").tagName.toLowerCase()).toBe("div");
+    });
+});
+
+// ── Regression: the impact count is scoped to the foreign-key column ─────────
+
+/** users ← posts, via TWO distinct FK columns (author and editor). */
+const TWO_FK_SCHEMA: AdvisorSchema = {
+    tables: [
+        { fields: ["email"], indexes: [], name: "users", relations: [] },
+        {
+            fields: ["authorId", "editorId", "title"],
+            indexes: [],
+            name: "posts",
+            relations: [
+                { field: "authorId", kind: "one", name: "author", onDelete: "cascade", references: "users", table: "users" },
+                { field: "editorId", kind: "one", name: "editor", onDelete: "cascade", references: "users", table: "users" },
+            ],
+        },
+    ],
+};
+
+describe("cascade impact counting", () => {
+    it("counts by the FK column, not by a free-text search over every column", async () => {
+        expect.assertions(2);
+
+        // The shard only ever matches rows whose `postId` IS the parent id — the
+        // behaviour a column-equality filter has. A free-text `search` read would
+        // additionally match a row that merely quotes the id in its body, so the
+        // old call shape both mis-addresses this mock and overstates the count.
+        const readPage = vi.fn<ReadPage>(async (_table: string, column: string, value: string) =>
+            column === "postId" && value === "row1" ? pageOf(2) : pageOf(0),
+        );
+
+        renderDialog({ readPage, rowId: "row1", schema: CASCADE_SCHEMA, table: "posts" });
+
+        await waitForLoaded();
+
+        expect(readPage).toHaveBeenCalledWith("comments", "postId", "row1");
+        expect(screen.getByTestId("cascade-row-comments").textContent).toContain("2 rows");
+    });
+
+    it("counts each FK column of the same child table separately", async () => {
+        expect.assertions(4);
+
+        // Two FKs from posts to users. Scoped per column they are two different
+        // questions with two different answers; the unscoped search gave both the
+        // same number and rendered two indistinguishable rows.
+        const readPage = vi.fn<ReadPage>(async (_table: string, column: string) => (column === "authorId" ? pageOf(3) : pageOf(0)));
+
+        renderDialog({ readPage, rowId: "u1", schema: TWO_FK_SCHEMA, table: "users" });
+
+        await waitForLoaded();
+
+        const rows = screen.getAllByTestId("cascade-row-posts");
+
+        // One node per (table, column) — not two identical ones.
+        expect(rows).toHaveLength(2);
+        expect(screen.getByTestId("cascade-col-posts-authorId").textContent).toContain("authorId");
+        expect(rows[0]?.textContent).toContain("3 rows");
+        expect(rows[1]?.textContent).toContain("0 rows");
+    });
+
+    it("collapses the same (child table, column) edge declared twice into one", () => {
+        expect.assertions(1);
+
+        // A duplicated edge is still one edge; keeping both doubled the rendered
+        // blast radius of the delete.
+        const map = buildCascadeMap({
+            tables: [
+                { fields: ["title"], indexes: [], name: "posts", relations: [] },
+                {
+                    fields: ["postId"],
+                    indexes: [],
+                    name: "comments",
+                    relations: [
+                        { field: "postId", kind: "one", name: "post", onDelete: "cascade", references: "posts", table: "posts" },
+                        { field: "postId", kind: "one", name: "post", onDelete: "cascade", references: "posts", table: "posts" },
+                    ],
+                },
+            ],
+        });
+
+        expect(map.get("posts")).toHaveLength(1);
     });
 });

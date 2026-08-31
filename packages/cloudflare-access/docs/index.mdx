@@ -112,7 +112,7 @@ export default defineApp<Env>()
 
 ## Claims on `ctx.auth`
 
-`userId` is derived from `sub` (SSO) or `common_name` (service tokens), identically on both paths — so a deployment that moves from a hostname-scoped application to a Worker-scoped policy keeps resolving each user to the same id rather than re-keying them and orphaning their rows behind RLS. The verified claims (`email`, `groups`, `commonName`, and the full raw set under `access`) are available via `ctx.auth.getIdentity()`, so RLS policies can branch on them:
+`userId` is the first non-empty of `sub` (the IdP subject, present for SSO users), then `email`, then `common_name` (service tokens, whose `sub` is empty) — the same three-step chain on both authentication paths — so a deployment that moves from a hostname-scoped application to a Worker-scoped policy keeps resolving each user to the same id rather than re-keying them and orphaning their rows behind RLS. The verified claims (`email`, `groups`, `commonName`, and the full raw set under `access`) are available via `ctx.auth.getIdentity()`, so RLS policies can branch on them:
 
 ```ts
 definePolicy({
@@ -137,6 +137,8 @@ export const listInvoices = query
 ```
 
 Omit `map` to use each group name as a role verbatim. A group with no mapping contributes no role (fail-closed). Roles are unioned with any already on `ctx.auth.roles`, then deduped. Pass `readGroups` when your IdP nests groups somewhere other than the `groups` claim.
+
+Only a **verified Access identity** ever contributes roles. Under `composeResolvers` the identity on a request may have been minted by another adapter (better-auth, a custom SSO mapping), and a `groups` field on such an envelope is app data Access never verified — a profile field a user might edit. `accessRoles` recognises an Access identity by the verified claim set under `access` (the same test `ctx.access` applies) and forwards the context unchanged for anything else, so a foreign `groups` can never become an RLS role. That holds for a custom `readGroups` too: it changes where the groups are read from, never whether Access verified them.
 
 ## Reading the identity — `ctx.access`
 

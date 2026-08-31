@@ -1,4 +1,4 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, SubscriptionError } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -16,6 +16,14 @@ const SHARED_ARGS: Record<string, unknown> = { a: 1 };
 
 const Display = ({ args = DEFAULT_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
     const data = useQuery(makeRef("posts:list"), args);
+
+    return <div data-testid="display">{data === undefined ? "loading" : JSON.stringify(data)}</div>;
+};
+
+const ErrorDisplay = ({ onError }: { onError: (error: SubscriptionError) => void }): ReactElement => {
+    // A fresh options object every render — exactly what the ref-backed `onError`
+    // wrapper has to tolerate without re-attaching the subscription.
+    const data = useQuery(makeRef("posts:list"), DEFAULT_ARGS, { onError });
 
     return <div data-testid="display">{data === undefined ? "loading" : JSON.stringify(data)}</div>;
 };
@@ -112,6 +120,36 @@ describe("useQuery", () => {
 
         expect(mock.query).toHaveBeenCalledTimes(1);
         expect(mock.subscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces a server-pushed subscription error through onError", async () => {
+        expect.hasAssertions();
+
+        // Regression: `client.subscribe` accepts `onError`, but `useQuery` never
+        // forwarded one — a subscription-scoped error the server pushes (an RLS
+        // denial, a query that starts failing server-side) had nowhere to go, so
+        // the value silently froze at its last good result.
+        const mock = createMockClient(() => 0);
+        const errors: SubscriptionError[] = [];
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <ErrorDisplay
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness: an inline handler is exactly the identity-churning case the hook must tolerate.
+                    onError={(error) => errors.push(error)}
+                />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe("0");
+        });
+
+        await act(async () => {
+            mock.emitError("posts:list", { code: "FORBIDDEN", message: "row-level security denied the read" });
+        });
+
+        expect(errors).toStrictEqual([{ code: "FORBIDDEN", message: "row-level security denied the read" }]);
     });
 
     it("wS deltas update the displayed value", async () => {

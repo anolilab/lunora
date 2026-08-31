@@ -202,4 +202,66 @@ describe("the import batcher", () => {
         expect(result.inserted).toBe(2);
         expect(logs.error.join("\n")).toContain("import failed part-way through");
     });
+
+    it("fails the run on a 207 partial import instead of reporting success", async () => {
+        expect.assertions(4);
+
+        // Regression: `Response.ok` is TRUE for 207, so a partial import — a shard
+        // the fan-out never reached, its rows in neither `inserted` nor `errors` —
+        // was reported as a clean success with exit 0.
+        const root = writeConvexExport(
+            {},
+            {
+                users: Array.from({ length: 2 }, (_, index) => {
+                    return { _id: `u${String(index)}` };
+                }),
+            },
+        );
+
+        const partialFetch: StreamingFetchLike = async (input) => {
+            if (new URL(input).pathname !== "/_lunora/admin/import") {
+                return {
+                    body: null,
+                    json: async () => {
+                        return {};
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            }
+
+            return {
+                body: null,
+                json: async () => {
+                    return {
+                        conflicts: 0,
+                        errors: [],
+                        failed: [{ message: "shard did not respond", shardKey: "tenant-7", timedOut: true }],
+                        inserted: { users: 1 },
+                        received: 2,
+                    };
+                },
+                ok: true,
+                status: 207,
+                text: async () => "",
+            };
+        };
+
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: partialFetch,
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+        expect(logs.error.join("\n")).toContain("tenant-7");
+        expect(logs.error.join("\n")).toContain("timed out");
+        expect(result.body?.failed).toStrictEqual([{ message: "shard did not respond", shardKey: "tenant-7", timedOut: true }]);
+    });
 });

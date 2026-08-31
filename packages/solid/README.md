@@ -112,6 +112,10 @@ render(
 | `createRateLimit`                                   | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` as signals.       |
 | `createConnectionStatus`                            | `useConnectionStatus` | Reactive connection state signal.                                                |
 | `hydratePreloaded`                                  | `usePreloadedQuery`   | Seed a query synchronously from an SSR `Preloaded` token, then go live.          |
+| `createAgentToolEvents`                             | `useAgentToolEvents`  | One agent thread's tool lifecycle as an `Accessor` of discriminated events.      |
+| `createVoiceAgent`                                  | `useVoiceAgent`       | Full-duplex voice call — accessors for status/transcript/level + call controls.  |
+
+`createVoiceAgent` opens nothing until `startCall()` — that call is what requests the microphone, so it must run from a user gesture. `endCall()` releases the socket, the mic tracks and the Web Audio graph, and `onCleanup` runs it for you when the owning root is disposed.
 
 ## Related
 

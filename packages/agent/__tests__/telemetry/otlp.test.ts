@@ -180,6 +180,45 @@ describe(otlpTelemetry, () => {
         expect(attribute(span, "cf.aig.log_id")).toBe("aig-log-42");
     });
 
+    it("estimates the cost from token usage when no gateway reported one", async () => {
+        const calls = captureFetch();
+
+        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
+            evt({
+                execute: () => Promise.resolve({ usage: { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 } }),
+                modelId: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            }),
+        );
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        // Without this the chat/generation path — the one every agent runs — emitted
+        // no cost at all unless an AI Gateway happened to report one.
+        expect(attribute(span, "gen_ai.usage.cost")).toBeGreaterThan(0);
+        // An estimate is never presented as a measurement.
+        expect(attribute(span, "lunora.usage.cost.source")).toBe("estimated");
+    });
+
+    it("prefers a gateway-reported cost over the estimate and says so", async () => {
+        const calls = captureFetch();
+
+        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
+            evt({
+                execute: () =>
+                    Promise.resolve({
+                        providerMetadata: { gateway: { cost: 0.5 } },
+                        usage: { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 },
+                    }),
+                modelId: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            }),
+        );
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        expect(attribute(span, "gen_ai.usage.cost")).toBe(0.5);
+        expect(attribute(span, "lunora.usage.cost.source")).toBe("provider");
+    });
+
     it("derives cached + log-id from the gateway's cf-aig-* response headers", async () => {
         const calls = captureFetch();
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SpanEvent } from "../../../shared/span-event";
 import type { TracerDeps } from "../src/context-telemetry";
-import { createSpanCollector, createTracer, dispatchRootSpan } from "../src/context-telemetry";
+import { createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "../src/context-telemetry";
 
 /**
  * Span redaction (finding b/b′ of plan 276): the span pipeline is the one
@@ -158,5 +158,88 @@ describe("dispatchRootSpan error-message redaction", () => {
         });
 
         expect(span.error).toBeUndefined();
+    });
+});
+
+describe("createTracedFetch error-message redaction", () => {
+    /** Build `ctx.fetch` over a `base` that always throws, capturing the recorded span. */
+    const setupFetch = (thrown: Error, captureRaw?: boolean) => {
+        const recorded: SpanEvent[] = [];
+
+        const fetch = createTracedFetch(
+            {
+                anchor,
+                ...(captureRaw === undefined ? {} : { captureRaw }),
+                functionPath: "messages:list",
+                record: (span) => {
+                    recorded.push(span);
+                },
+                shardKey: "room-1",
+                userId: () => "user-42",
+            },
+            () => {
+                throw thrown;
+            },
+        );
+
+        return { fetch, recorded };
+    };
+
+    it("redacts the thrown message by default", async () => {
+        expect.assertions(2);
+
+        // A `fetch` TypeError embeds the request URL, so an un-redacted message
+        // ships whatever is in the query string to the collector — on the very
+        // span whose `url.full` is scrubbed by `redactUrl`.
+        const { fetch, recorded } = setupFetch(new TypeError("fetch failed for user 12345"));
+
+        await expect(fetch("https://api.example.com/v1")).rejects.toThrow(TypeError);
+        expect(recorded[0]?.error?.message).toBe("fetch failed for user <DL>");
+    });
+
+    it("keeps the raw message when captureRaw is true", async () => {
+        expect.assertions(2);
+
+        const { fetch, recorded } = setupFetch(new TypeError("fetch failed for user 12345"), true);
+
+        await expect(fetch("https://api.example.com/v1")).rejects.toThrow(TypeError);
+
+        expect(recorded[0]?.error?.message).toBe("fetch failed for user 12345");
+    });
+});
+
+describe("createSpanCollector attribute bound", () => {
+    it("keeps the first 128 attribute keys and drops the rest", () => {
+        expect.assertions(3);
+
+        const { collected, handle } = createSpanCollector({ spanId: "span0000span0000", traceId: anchor.traceId });
+
+        // The `addEvent`/`addLink` failure through the other door: a loop stamping
+        // one attribute per row builds an unbounded bag inside the request and then
+        // tries to ship it to OTLP.
+        for (let index = 0; index < 500; index += 1) {
+            handle.setAttribute(`row.${String(index)}`, "done");
+        }
+
+        expect(Object.keys(collected.attributes)).toHaveLength(128);
+        expect(collected.attributes["row.0"]).toBe("done");
+        expect(collected.attributes["row.499"]).toBeUndefined();
+    });
+
+    it("still updates a key already in the bag once full", () => {
+        expect.assertions(2);
+
+        const { collected, handle } = createSpanCollector({ spanId: "span0000span0000", traceId: anchor.traceId });
+
+        handle.setAttribute("status", "pending");
+
+        for (let index = 0; index < 500; index += 1) {
+            handle.setAttribute(`row.${String(index)}`, "done");
+        }
+
+        handle.setAttributes({ overflow: "dropped", status: "settled" });
+
+        expect(collected.attributes["status"]).toBe("settled");
+        expect(collected.attributes["overflow"]).toBeUndefined();
     });
 });

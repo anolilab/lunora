@@ -8,6 +8,7 @@
 import { toErrorBody } from "@lunora/errors";
 import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
 
+import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
 import { quoteIdentifier } from "./dialect";
@@ -78,6 +79,21 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
     return decodeGlobalRow(definition, row);
 };
 
+/**
+ * Wire-encode a decoded doc on its way out of this plane.
+ *
+ * {@link decodeGlobalRow} reverses the storage form, so a `v.bigint()` column
+ * comes back as a real `bigint` and a `v.bytes()` column as an `ArrayBuffer` —
+ * neither of which survives the `JSON.stringify` every consumer of these rows
+ * performs (`JSON.stringify(1n)` throws; an `ArrayBuffer` silently becomes
+ * `{}`). The shard plane's rows cross the DO RPC boundary already wire-encoded,
+ * so encoding here is what makes the two halves of an NDJSON snapshot the same
+ * shape. `needsWireEncoding` keeps a pure-JSON doc allocation-free and
+ * byte-identical.
+ */
+const encodeExportDocument = (document_: Record<string, unknown>): Record<string, unknown> =>
+    needsWireEncoding(document_) ? (encodeWire(document_) as Record<string, unknown>) : document_;
+
 interface ExportGlobalArgs {
     batchSize?: number;
     tables?: ReadonlyArray<string>;
@@ -123,7 +139,7 @@ const exportGlobalRows = async function* (exec: D1Exec, schema: SchemaLike, args
             /* eslint-enable no-await-in-loop */
 
             for (const row of rows) {
-                yield { doc: decodeRow(schema, table, row), table };
+                yield { doc: encodeExportDocument(decodeRow(schema, table, row)), table };
             }
 
             const last = rows.at(-1);
@@ -245,13 +261,27 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args
         return { error: { code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table }, kind: "error" };
     }
 
-    const failure = validateRow(schema, table, doc);
+    // Mirror `encodeExportDocument` on the way back in: a snapshot line carries a
+    // `v.bigint()` / `v.bytes()` field in its tagged wire form, and both the
+    // validators below and the writer's own encoder want the real value.
+    // `decodeWire` is the identity on a pure-JSON doc. It throws on a malformed
+    // tag (an over-long bigint, nesting past its cap) — that is one bad line in
+    // an untrusted snapshot, not a reason to abort the whole import.
+    let decoded: Record<string, unknown>;
+
+    try {
+        decoded = decodeWire(doc) as Record<string, unknown>;
+    } catch (error: unknown) {
+        return { error: { code: "BAD_ROW", line, message: error instanceof Error ? error.message : String(error), table }, kind: "error" };
+    }
+
+    const failure = validateRow(schema, table, decoded);
 
     if (failure !== undefined) {
         return { error: { code: "VALIDATION_ERROR", line, message: failure, table }, kind: "error" };
     }
 
-    const explicitId = typeof doc["_id"] === "string" ? doc["_id"] : undefined;
+    const explicitId = typeof decoded["_id"] === "string" ? decoded["_id"] : undefined;
 
     if (explicitId !== undefined && (await explicitIdConflicts(writer, args.exec, table, explicitId))) {
         return { kind: "conflict" };
@@ -260,7 +290,7 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args
     try {
         // Trusted admin import path: preserve the pinned `_id` from the
         // snapshot (the default insert path now strips client-chosen ids).
-        await writer.insert(table, doc, { allowExplicitId: true });
+        await writer.insert(table, decoded, { allowExplicitId: true });
 
         return { inserted: table, kind: "inserted" };
     } catch (error: unknown) {

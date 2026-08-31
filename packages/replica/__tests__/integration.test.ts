@@ -148,10 +148,6 @@ const createTestAdapter = (): SqliteAdapter => {
             fn();
         },
 
-        lastInsertRowId(): number {
-            return lastId;
-        },
-
         close(): void {
             // No-op: the Map data persists in memory so the adapter can be
             // reused across LocalMirror restarts, simulating a persisted DB.

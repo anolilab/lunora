@@ -18,7 +18,12 @@ const introspectCommand: Command = {
         { description: "Database connection string (default: $DATABASE_URL)", name: "url", type: String },
         { description: "Postgres schema (default `public`) or MySQL database name", name: "schema", type: String },
         { description: "Comma-separated table allow-list (default: every base table)", name: "tables", type: String },
-        { description: "Also emit list/get procedure modules per table (default true; --no-procedures to skip)", name: "procedures", type: Boolean },
+        // BOTH halves declared. cerebro only resolves `--no-X` for an option
+        // literally named `no-X`, so a plain positive `procedures` left the
+        // documented `--no-procedures` (in this command's own description AND its
+        // examples table) aborting with "unknown option".
+        { description: "Also emit list/get procedure modules per table (the default)", name: "procedures", type: Boolean },
+        { description: "Emit only the schema — skip the per-table list/get procedure modules", name: "no-procedures", type: Boolean },
         { description: "Overwrite files that already exist", name: "force", type: Boolean },
         { description: "Print what would be written without writing it", name: "dry-run", type: Boolean },
     ],
@@ -29,6 +34,8 @@ export { introspectCommand };
 export type IntrospectOptions = CreateOptions<{
     "dry-run": boolean | undefined;
     force: boolean | undefined;
+    // Declared twice in `options` (`--procedures` and `--no-procedures`, each
+    // with its own description); cerebro exposes both under this one positive key.
     procedures: boolean | undefined;
     schema: string | undefined;
     tables: string | undefined;

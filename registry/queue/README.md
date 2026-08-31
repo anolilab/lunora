@@ -69,12 +69,12 @@ Then expose your own HTTP endpoint that calls `ctx.queues.emailQueue.pull()` to 
 
 Each `defineQueue()` call accepts:
 
-| Option         | Type     | Default | Description                                                  |
-| -------------- | -------- | ------- | ------------------------------------------------------------ |
-| `handler`      | Function | —       | Push consumer handler (required for push mode).              |
-| `maxRetries`   | `number` | `3`     | Maximum delivery attempts before a message is dead-lettered. |
-| `maxBatchSize` | `number` | `100`   | Maximum messages per batch delivered to the consumer.        |
-| `mode`         | `"push"  | "pull"` | `"push"`                                                     | Whether the Worker pushes messages or you pull them via HTTP. |
+| Option         | Type               | Default  | Description                                                                                      |
+| -------------- | ------------------ | -------- | ------------------------------------------------------------------------------------------------ |
+| `handler`      | Function           | —        | Push consumer handler (required for push mode).                                                  |
+| `maxRetries`   | `number`           | `3`      | Retries AFTER the first delivery before a message is dead-lettered — `3` means up to 4 attempts. |
+| `maxBatchSize` | `number`           | `10`     | Max messages per batch delivered to the consumer (1–100; `10` is Cloudflare's default).          |
+| `mode`         | `"push" \| "pull"` | `"push"` | Whether the Worker pushes messages or you pull them via HTTP.                                    |
 
 Wrangler-level config (queue name, max concurrency, retry delay) is managed via the generated `wrangler.jsonc` — edit it directly for fine-grained tuning.
 

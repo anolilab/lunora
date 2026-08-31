@@ -1,7 +1,7 @@
 import type { SqlExec } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { MAX_BACK_RELATIONS, readBackRelationCounts } from "../src/back-relations";
+import { MAX_BACK_RELATION_IDS, MAX_BACK_RELATIONS, readBackRelationCounts } from "../src/back-relations";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /** A doc-stored child table, the shape lunora actually writes. */
@@ -76,6 +76,30 @@ describe("readBackRelationCounts", () => {
         });
 
         expect(readBackRelationCounts(sql, { ids: ["u1"], relations: many }).relations.length).toBeLessThanOrEqual(MAX_BACK_RELATIONS);
+    });
+
+    it("keeps a full page's id list inside workerd's 100-bound-parameter cap", () => {
+        expect.assertions(2);
+
+        // The Studio offers a 100-row page size. A literal `IN (?, ?, …)` over
+        // one blows workerd's `SQLITE_LIMIT_VARIABLE_NUMBER` (100) and the
+        // statement fails to PREPARE — which `node:sqlite` cannot reproduce,
+        // because its stock build allows 500,000. So assert on what is bound,
+        // not on whether the local engine happens to accept it.
+        const bound: unknown[][] = [];
+        const probe: SqlExec = {
+            exec: <Row>(text: string, ...params: unknown[]) => {
+                bound.push(params);
+
+                return sql.exec<Row>(text, ...params);
+            },
+        };
+
+        const ids = ["u1", ...Array.from({ length: MAX_BACK_RELATION_IDS - 1 }, (_, index) => `filler-${String(index)}`)];
+        const { relations } = readBackRelationCounts(probe, { ids, relations: [{ column: "authorId", table: "messages" }] });
+
+        expect(relations[0]?.counts.u1).toBe(2);
+        expect(Math.max(...bound.map((params) => params.length))).toBeLessThanOrEqual(100);
     });
 
     it("de-duplicates parent ids", () => {

@@ -15,7 +15,7 @@
  * and the coordinator / connector-format types.
  */
 import { readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
-import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage } from "./connector-cdc";
+import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage, shardCdcPageSize } from "./connector-cdc";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
 import { LunoraError } from "./errors";
 import type { ExportRow } from "./export-stream";
@@ -35,6 +35,9 @@ const EXPORT_TAP_RUN_PATH = "/_lunora/admin/export-tap/run";
 
 /** Per-row import failure surfaced back to the caller. */
 type ImportRowError = { code: string; line: number; message: string; table: string };
+
+/** A shard the import fan-out never reached — no row of it is at fault, and an unknown slice of the batch is unwritten. */
+type ImportShardFailure = { message: string; shardKey: string; timedOut: boolean };
 
 /** NDJSON line encoder for the streaming export response. */
 const NDJSON_ENCODER = new TextEncoder();
@@ -114,6 +117,8 @@ interface DataMovementAdminRouteDeps {
     ) => Promise<{
         conflicts: number;
         errors: ReadonlyArray<ImportRowError>;
+        /** Shards the fan-out could not write to at all — a non-empty array means the import was PARTIAL. */
+        failed: ReadonlyArray<ImportShardFailure>;
         inserted: Record<string, number>;
         received: number;
         warnings?: ReadonlyArray<string>;
@@ -266,6 +271,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const shardResult = await coordinator.orchestrateCdcSync(shardDO, {
             cursors: state.s,
+            defaultShardKey,
             headers: forwardedHeaders,
             limit,
             tables: probeTables,
@@ -277,7 +283,11 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         for (const shard of shardResult.shards) {
             // A full page signals more rows likely remain past this cursor.
-            hasMore = foldCdcPage(changes, shard.changes ?? [], limit) || hasMore;
+            // Against the page size the SHARD applied, not the caller's `limit`:
+            // `limit` is optional here and the shard defaults an absent one to
+            // 1000, so comparing to `undefined` reported "caught up" on every
+            // full page of an unlimited sync.
+            hasMore = foldCdcPage(changes, shard.changes ?? [], shardCdcPageSize(limit)) || hasMore;
             nextShardCursors[shard.shardKey] = shard.cursor;
         }
 
@@ -287,6 +297,9 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         if (syncGlobals) {
             const global = await syncGlobals({ limit, sinceSeq: state.g });
 
+            // The global plane's page cap belongs to the host's `syncGlobals`, so
+            // an absent `limit` leaves it genuinely unknown — unlike a shard's,
+            // it cannot be inferred here.
             hasMore = foldCdcPage(changes, global.changes, limit) || hasMore;
             nextGlobalCursor = global.cursor;
         }
@@ -357,9 +370,14 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const result = await streamingImport(request, forwardedHeaders);
 
+        // A shard the fan-out never reached leaves an unknown slice of the batch
+        // unwritten, and its rows contribute to neither `inserted` nor `errors`.
+        // Answering 200 there makes a partial write indistinguishable from a clean
+        // one to every client that checks the status code and nothing else — 207
+        // Multi-Status says "read the body", which is exactly the situation.
         return Response.json(result, {
             headers: { "content-type": "application/json" },
-            status: 200,
+            status: result.failed.length > 0 ? 207 : 200,
         });
     };
 
@@ -414,6 +432,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const result = await runExportTap({
             coordinator,
             cursorStore: exportCursorStore,
+            defaultShardKey,
             headers: forwardedHeaders,
             limit,
             shardDO,

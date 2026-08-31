@@ -34,6 +34,33 @@ DO named `ROOT_SHARD_NAME`. Storage above `ROOT_DO_SIZE_WARN_BYTES`
 emits a console warning so you remember to call `.shardBy()` before the DO
 hits its single-instance ceiling.
 
+## `ShardDOOptions`
+
+Per-shard configuration. The generated shard passes these through to
+`super(state, env, options)` from the object you hand `createShardDO(...)`, so
+you set them there rather than subclassing:
+
+```ts
+export const ShardDO = createShardDO({
+    // Memoize query results per shard, keyed by caller identity + args.
+    // `true` takes the defaults; an object tunes the caps. Omit to disable.
+    reactiveCache: { maxBytes: 4 * 1024 * 1024, maxEntries: 1000 },
+    // Ceiling on the join keys one relation-crossing `where` may pre-resolve
+    // before failing closed. Raise it for a trusted large fan-in relation.
+    maxRelationKeys: 5000,
+    // How a relation-crossing `where` resolves against a co-located child:
+    // "auto" (cost-based, the default), "always" (inline EXISTS), or
+    // "never" (universal semijoin). All three return identical rows.
+    relationExistsPushDown: "auto",
+});
+```
+
+`reactiveCache` is per-shard and in-memory: it is lost on DO restart and on
+hibernation, so a cold shard simply re-runs the query. Only registered
+`query` functions are memoized — a `mutation` or `action` always runs. Live
+counters (`hits`, `misses`, `evictions`, `entries`, `bytes`) show up on the
+studio's metrics panel.
+
 ## `SessionDO`
 
 A TTL'd session store in a Durable Object: records expire after
@@ -83,10 +110,15 @@ until a message arrives. Exposed via the `HibernatableWebSocket` type for unit t
 (`SessionDO` has no WebSocket surface at all: it is HTTP-only, so hibernation does not
 apply to it.)
 
-## `ShardDOState` / `SocketAttachment` / `MutationDelta` / `RpcRequest` / `SubscriptionEnvelope` / `SubscriptionQuery`
+## `ShardDOState` / `MutationDelta`
 
 Internal serialization shapes. Stable across patch releases so add-ons can
 type their broadcast payloads.
+
+`SocketAttachment`, `RpcRequest`, `SubscriptionEnvelope` and `SubscriptionQuery`
+are **not** exported from here — they belong to the host-neutral engine, so
+import them from
+[`@lunora/shard-engine`](/docs/packages/shard-engine).
 
 ## Constants
 

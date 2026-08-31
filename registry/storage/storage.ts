@@ -90,6 +90,10 @@ const makeStorage = (): Storage => {
 
     return createStorage({
         bucket,
+        // Bound into every signed URL's HMAC, so a URL minted here cannot be
+        // replayed against another bucket sharing the signing secret. Matches the
+        // tag a single-bucket app's bare `ctx.storage` carries.
+        bucketName: "default",
         publicBaseUrl: requireEnv("STORAGE_PUBLIC_BASE_URL"),
         signingSecret: requireEnv("STORAGE_SIGNING_SECRET"),
     });

@@ -1075,7 +1075,7 @@ interface LunoraBuilders {
 ### `LunoraEnvError` (class)
 
 ```ts
-class LunoraEnvError extends LunoraError$1 {
+class LunoraEnvError extends LunoraError {
     readonly failures: ReadonlyArray<EnvKeyFailure>;
     constructor(failures: ReadonlyArray<EnvKeyFailure>);
 }
@@ -1083,11 +1083,7 @@ class LunoraEnvError extends LunoraError$1 {
 
 ### `LunoraError` (class)
 
-```ts
-class LunoraError extends LunoraError$1 {
-    constructor(code: LunoraErrorCode, message?: string, data?: unknown);
-}
-```
+Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `LunoraErrorCode` (type)
 
@@ -1676,7 +1672,9 @@ type ReactorSelect<T> = (context: QueryCtx) => Promise<T> | T;
 interface ReadOnlyStorage<Buckets extends string = string> {
     bucket: (name: Buckets) => ReadOnlyStorage<Buckets>;
     readonly bucketName: string;
-    download: (key: string) => Promise<ReadableStream | null>;
+    download: (key: string, options?: {
+        range?: StorageRange;
+    }) => Promise<StorageObjectBody | null>;
     getMetadata: (key: string) => Promise<StorageMetadata | null>;
     getSignedUrl: (key: string, options?: {
         expiresInSeconds?: number;
@@ -1701,7 +1699,6 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
-    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
     readonly x402?: X402ProcedureConfig;
 }
@@ -1772,7 +1769,6 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
-    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 }
 ```
@@ -2047,6 +2043,10 @@ interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Bucke
         contentType?: string;
         expiresInSeconds?: number;
     }) => Promise<string>;
+    getPresignedUrl: (key: string, options?: {
+        expiresInSeconds?: number;
+        method?: "GET" | "PUT";
+    }) => Promise<string>;
     store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: {
         allowedContentTypes?: ReadonlyArray<string>;
         contentType?: string;
@@ -2072,12 +2072,20 @@ interface StorageMetadata {
 }
 ```
 
+### `StorageObjectBody` (interface)
+
+```ts
+interface StorageObjectBody extends StorageObjectHead {
+    body: ReadableStream | null;
+}
+```
+
 ### `StorageObjectHead` (interface)
 
 ```ts
 interface StorageObjectHead {
     customMetadata?: Record<string, string>;
-    etag?: string;
+    etag: string;
     httpEtag?: string;
     httpMetadata?: {
         contentType?: string;
@@ -2094,6 +2102,20 @@ interface StorageObjectHead {
 
 ```ts
 type StorageOperation = "delete" | "list" | "read" | "write";
+```
+
+### `StorageRange` (type)
+
+```ts
+type StorageRange = {
+    length?: number;
+    offset: number;
+} | {
+    length: number;
+    offset?: number;
+} | {
+    suffix: number;
+};
 ```
 
 ### `StorageRule` (interface)
@@ -4793,7 +4815,15 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `StorageObjectBody` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `StorageObjectHead` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageRange` (type)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 

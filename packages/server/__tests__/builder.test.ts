@@ -36,11 +36,12 @@ describe("builder terminal", () => {
 });
 
 describe(".meta()", () => {
-    // Expressing per-procedure policy only as
-    // `.use(rateLimit("pins/create"))` makes it executable but not
-    // *enumerable* — you cannot generate a rate-limit registry or docs from a
-    // middleware chain. `.meta()` puts the same policy back in data.
-    it("stamps merged metadata onto the registration", () => {
+    // `.meta()` exists so ONE generic middleware can read the policy it is meant
+    // to enforce off `ctx.meta`, instead of the policy being re-parameterised at
+    // every `.use()` site. It is deliberately NOT stamped onto the registration:
+    // nothing ever read `fn.meta` (not codegen, not the runtime, not studio), and
+    // `FunctionRegistryEntry` has no field for it.
+    it("does not stamp metadata onto the registration", () => {
         expect.assertions(3);
 
         const createPin = c.query
@@ -48,20 +49,95 @@ describe(".meta()", () => {
             .input({ id: v.string() })
             .query(() => 1);
 
-        expect(createPin.meta).toStrictEqual({ rateLimit: "pins/create" });
+        const watch = c.query.meta({ rateLimit: "pins/watch" }).stream(async function* watchPins() {
+            yield 1;
+        });
 
-        // Merges, so a shared base builder can set defaults a specific
-        // procedure then extends.
-        const audited = c.query
-            .meta({ audit: true, rateLimit: "base" })
-            .meta({ rateLimit: "pins/create" })
-            .query(() => 1);
+        expect(createPin).not.toHaveProperty("meta");
+        expect(watch).not.toHaveProperty("meta");
+        expect(c.query.query(() => 1)).not.toHaveProperty("meta");
+    });
 
-        expect(audited.meta).toStrictEqual({ audit: true, rateLimit: "pins/create" });
+    // The SAME object reaches every request's `ctx.meta`, so a middleware that
+    // writes through it would edit the procedure's module-level static
+    // declaration for the rest of the isolate's life. A shallow `Object.freeze`
+    // stopped only the top-level assignment; `.meta({ rateLimit: { hits: 0 } })`
+    // plus `ctx.meta.rateLimit.hits += 1` is exactly the nested shape the
+    // surface invites.
+    it("deep-freezes the declaration so a middleware cannot accumulate into it", async () => {
+        expect.assertions(3);
 
-        // Absent — not an empty object — when never declared, so the no-meta
-        // path stays byte-identical.
-        expect(c.query.query(() => 1).meta).toBeUndefined();
+        const guarded = c.query
+            .meta({ rateLimit: { hits: 0 } })
+            .use(async ({ ctx, next }) => {
+                const { meta } = ctx as unknown as { meta: { rateLimit: { hits: number } } };
+
+                expect(Object.isFrozen(meta.rateLimit)).toBe(true);
+
+                // Non-strict-mode assignment to a frozen object is a silent
+                // no-op; the module is strict, so this throws — either way the
+                // shared declaration must not change.
+                expect(() => {
+                    meta.rateLimit.hits += 1;
+                }).toThrow(TypeError);
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .query(({ ctx }) => (ctx as unknown as { meta: { rateLimit: { hits: number } } }).meta.rateLimit.hits);
+
+        await expect(guarded.handler({}, {})).resolves.toBe(0);
+    });
+
+    // The freeze must land on a COPY. `.meta({ rateLimit: shared })` freezing the
+    // caller's `shared` would turn `shared.hits += 1` into a TypeError in
+    // unrelated module scope — a side effect on data the caller still owns.
+    it("freezes a copy, leaving the caller's own object mutable", () => {
+        expect.assertions(4);
+
+        const shared = { hits: 0 };
+        const declaration = { rateLimit: shared };
+
+        c.query.meta(declaration).query(() => 1);
+
+        expect(Object.isFrozen(shared)).toBe(false);
+        expect(Object.isFrozen(declaration)).toBe(false);
+
+        shared.hits += 1;
+
+        expect(shared.hits).toBe(1);
+
+        // …and the copy did not follow the caller's mutation.
+        expect(Object.isFrozen(shared)).toBe(false);
+    });
+
+    // A `Map`/`Set` survives `Object.freeze` untouched — its entries live in
+    // internal slots — so a middleware could accumulate into the shared
+    // declaration through `.set()` / `.add()` for the isolate's life. The clone
+    // shadows the mutators so the promise holds for every value kind.
+    it("locks a Map/Set in the declaration and copies it away from the caller", async () => {
+        expect.assertions(4);
+
+        const seen = new Set<string>(["a"]);
+        const limits = new Map<string, number>([["signup", 5]]);
+
+        const guarded = c.query
+            .meta({ limits, seen })
+            .use(async ({ ctx, next }) => {
+                const { meta } = ctx as unknown as { meta: { limits: Map<string, number>; seen: Set<string> } };
+
+                expect(() => meta.seen.add("b")).toThrow(TypeError);
+                expect(() => meta.limits.set("signup", 999)).toThrow(TypeError);
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .query(({ ctx }) => (ctx as unknown as { meta: { limits: Map<string, number> } }).meta.limits.get("signup"));
+
+        await expect(guarded.handler({}, {})).resolves.toBe(5);
+
+        // The caller's own collections are copies away, still fully usable.
+        seen.add("b");
+
+        expect([...seen]).toStrictEqual(["a", "b"]);
     });
 
     it("exposes the metadata to middleware as ctx.meta", async () => {
@@ -84,26 +160,27 @@ describe(".meta()", () => {
         expect(seen).toStrictEqual({ rateLimit: "pins/create" });
     });
 
-    // `.stream()` builds its own handler shell (makeStreamHandler), separate from
-    // the query/mutation/action one above — meta must reach both the same way.
-    it("stamps merged metadata onto a streaming registration", () => {
-        expect.assertions(3);
+    // `.meta()` MERGES across calls, so a shared base builder can set defaults a
+    // specific procedure then extends. Observable only through `ctx.meta` now
+    // that the registration carries nothing.
+    it("merges across calls, last write winning per key", async () => {
+        expect.assertions(1);
 
-        const gen = async function* watchPins() {
-            yield 1;
-        };
+        let seen: unknown;
 
-        const watch = c.query.meta({ rateLimit: "pins/watch" }).stream(gen);
+        const audited = c.query
+            .meta({ audit: true, rateLimit: "base" })
+            .meta({ rateLimit: "pins/create" })
+            .use(async ({ ctx, next }) => {
+                seen = ctx.meta;
 
-        expect(watch.meta).toStrictEqual({ rateLimit: "pins/watch" });
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .query(() => "ok");
 
-        // Merges on the stream terminal too.
-        const audited = c.query.meta({ audit: true, rateLimit: "base" }).meta({ rateLimit: "pins/watch" }).stream(gen);
+        await audited.handler({}, {});
 
-        expect(audited.meta).toStrictEqual({ audit: true, rateLimit: "pins/watch" });
-
-        // Absent when never declared, same as the non-stream terminal.
-        expect(c.query.stream(gen).meta).toBeUndefined();
+        expect(seen).toStrictEqual({ audit: true, rateLimit: "pins/create" });
     });
 
     it("exposes the metadata to middleware as ctx.meta inside a streaming procedure", async () => {

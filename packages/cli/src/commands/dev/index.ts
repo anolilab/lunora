@@ -48,12 +48,20 @@ const devCommand: Command = {
         },
         { description: "Emit machine-readable JSON log lines (also LUNORA_LOG_JSON=1; auto-enabled for AI agents)", name: "json", type: Boolean },
         { description: "How many trailing lines `lunora dev logs` prints (default 100, 0 = all)", name: "lines", type: Number },
+        // Both halves of each negatable boolean are declared explicitly, the way
+        // `codegen`/`deploy` do it. Declaring ONLY the `no-*` name makes cerebro
+        // synthesize the positive option by CLONING this one verbatim — including
+        // its description — so `--help` listed `--studio` as "Don't start the
+        // embedded studio server", the exact opposite of what it does.
+        { description: "Serve the embedded studio at /__lunora (default)", name: "studio", type: Boolean },
         { description: "Don't start the embedded studio server", name: "no-studio", type: Boolean },
+        { description: "Spawn wrangler dev for the worker (default)", name: "worker", type: Boolean },
         {
             description: "Don't spawn wrangler dev — an external task runner owns the worker; codegen watch + studio still run",
             name: "no-worker",
             type: Boolean,
         },
+        { description: "Run codegen on startup and watch for changes (default)", name: "codegen", type: Boolean },
         { description: "Don't run codegen — no watch, no startup generate (or set LUNORA_CODEGEN=0)", name: "no-codegen", type: Boolean },
         { description: "Proxy D1/KV/R2 bindings to the deployed worker (or set LUNORA_REMOTE=1)", name: "remote", type: Boolean },
     ],
@@ -64,8 +72,11 @@ export { devCommand };
 export type DevOptions = CreateOptions<{
     "api-spec": string | undefined;
     background: boolean | undefined;
-    // The `--no-codegen` / `--no-studio` / `--no-worker` flags are declared as `no-*` options but
-    // cerebro exposes them under the negated positive key at runtime.
+    // Each of `codegen` / `studio` / `worker` is declared TWICE in `options` (the
+    // positive form and its `no-*` counterpart, each with its own description);
+    // cerebro exposes both under this one positive camelCase key. Neither form
+    // carries a `defaultValue`, so the key is `undefined` until the user picks a
+    // side — every reader treats that as "on" via `!== false`.
     codegen: boolean | undefined;
     "emit-bindings": string | undefined;
     json: boolean | undefined;

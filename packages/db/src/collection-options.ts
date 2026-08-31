@@ -505,20 +505,6 @@ export const markCheckpointsAttached = (registry: CheckpointRegistry): void => {
 /** Whether any sync source will advance `registry`'s watermarks. */
 export const hasCheckpointsAttached = (registry: CheckpointRegistry): boolean => attachedRegistries.has(registry);
 
-/** Every live registry for `client`, keyed by shard (`""` = unsharded) — for a debug surface. */
-export const shardCheckpointStats = (client: LunoraClient): Record<string, CheckpointRegistryStats> => {
-    const byShard = registriesByClient.get(client);
-    const out: Record<string, CheckpointRegistryStats> = {};
-
-    if (byShard) {
-        for (const [shardKey, registry] of byShard) {
-            out[shardKey] = registry.stats();
-        }
-    }
-
-    return out;
-};
-
 /**
  * A replication-shape sync source (the local-first partial-replication path).
  * Mutually exclusive with {@link LunoraCollectionConfig.list}: the collection

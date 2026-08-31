@@ -136,7 +136,7 @@ export interface CreateNotifyOptions {
      * Each page is fetched, delivered, and counted independently before the
      * next page's store round trip, so a huge audience is never materialized
      * wholesale in the isolate. Also the per-message bound `push.broadcastPage`
-     * (and so `runPushBroadcastJob`) uses. A test/tuning seam — most apps never
+     * (and so `runPushBroadcastPage`) uses. A test/tuning seam — most apps never
      * need to set this.
      */
     broadcastPageSize?: number;

@@ -92,6 +92,11 @@ const usageEvents = defineTable({
     .index("by_reference_feature", ["referenceId", "featureId"]);
 
 /**
+ * The canonical column reference for the payment tables — a value to READ (in a test, a migration
+ * check, or your editor), not one to spread. `defineSchema({ ...paymentTables })` does NOT work:
+ * codegen discovers tables by parsing your `lunora/schema.ts` AST and cannot resolve a
+ * cross-package spread, so declare the same columns inline there (see the module docstring).
+ *
  * `paymentTables` is part of the experimental `@lunora/payment` API and may change without a major version bump.
  * @experimental
  */

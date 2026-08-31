@@ -399,7 +399,7 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LunoraError` (class)
 
-Re-exported from `@lunora/server` — signature tracked at its source.
+Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `LunoraErrorCode` (type)
 
@@ -773,11 +773,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageObjectBody` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageObjectHead` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageOperation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageRange` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -2225,10 +2233,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `LogSink` (type)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `MaskPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2240,6 +2244,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `MutationDelta` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `QueryReadScope` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `QueuesResult` (interface)
 
@@ -4597,10 +4605,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `mergeStrategyForAggregate` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
 ### `normalizeBackupPrefix` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -5085,7 +5089,7 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LunoraError` (class)
 
-Re-exported from `@lunora/server` — signature tracked at its source.
+Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `LunoraErrorCode` (type)
 
@@ -5459,11 +5463,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageObjectBody` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageObjectHead` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageOperation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageRange` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7245,7 +7257,15 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageObjectBody` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageObjectHead` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageRange` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

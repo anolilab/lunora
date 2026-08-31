@@ -136,11 +136,23 @@ type AgentToolEvent = {
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `AuthImpersonation` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AuthLoading` (const)
 
 ```ts
 const AuthLoading: ({ children }: AuthGateProps) => ReactNode;
 ```
+
+### `AuthPage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `AuthSession` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `AuthState` (interface)
 
@@ -151,43 +163,19 @@ interface AuthState {
 }
 ```
 
+### `AuthUser` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `Authenticated` (const)
 
 ```ts
 const Authenticated: ({ children }: AuthGateProps) => ReactNode;
 ```
 
-### `CheckoutButton` (const)
-
-```ts
-const CheckoutButton: ({ onCheckout, ...rest }: CheckoutButtonProps) => ReactNode;
-```
-
-### `CheckoutButtonProps` (interface)
-
-```ts
-interface CheckoutButtonProps extends RedirectButtonOwnProps {
-    onCheckout: RedirectTrigger;
-}
-```
-
 ### `ClientQueryRef` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `CustomerPortalButton` (const)
-
-```ts
-const CustomerPortalButton: ({ onPortal, ...rest }: CustomerPortalButtonProps) => ReactNode;
-```
-
-### `CustomerPortalButtonProps` (interface)
-
-```ts
-interface CustomerPortalButtonProps extends RedirectButtonOwnProps {
-    onPortal: RedirectTrigger;
-}
-```
 
 ### `FlagContext` (type)
 
@@ -339,20 +327,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `RedirectTarget` (interface)
-
-```ts
-interface RedirectTarget {
-    readonly url: string;
-}
-```
-
-### `RedirectTrigger` (type)
-
-```ts
-type RedirectTrigger = () => Promise<RedirectTarget>;
-```
-
 ### `RestrictionError` (class)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -361,22 +335,13 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `Subscription` (interface)
+### `SubscriptionError` (interface)
 
-```ts
-interface Subscription {
-    readonly cancelAtPeriodEnd: boolean;
-    readonly createdAt: number;
-    readonly currentPeriodEnd?: number;
-    readonly id: string;
-    readonly priceId: string;
-    readonly provider: "polar" | "stripe";
-    readonly quantity: number;
-    readonly referenceId: string;
-    readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";
-    readonly updatedAt: number;
-}
-```
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `SubscriptionErrorCallback` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `Unauthenticated` (const)
 
@@ -570,16 +535,6 @@ interface UseAuthUsersOptions extends AdminAuthQueryOptions {
 }
 ```
 
-### `UseCheckoutResult` (interface)
-
-```ts
-interface UseCheckoutResult {
-    checkout: () => Promise<void>;
-    error: Error | undefined;
-    pending: boolean;
-}
-```
-
 ### `UseChunkedRestUploadOptions` (interface)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -717,6 +672,7 @@ interface UsePresenceResult<L extends ListPresentReference> {
 
 ```ts
 interface UseQueryOptions {
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -949,12 +905,6 @@ const useAuthState: () => AuthState;
 const useAuthUsers: (options?: UseAuthUsersOptions) => AdminAuthListResult<AuthUser>;
 ```
 
-### `useCheckout` (const)
-
-```ts
-const useCheckout: (trigger: RedirectTrigger) => UseCheckoutResult;
-```
-
 ### `useChunkedRestUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -1092,6 +1042,83 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ```ts
 const useVoiceAgent: (options: UseVoiceAgentOptions) => UseVoiceAgentResult;
+```
+
+## `@lunora/react/payment`
+
+### `CheckoutButton` (const)
+
+```ts
+const CheckoutButton: ({ onCheckout, ...rest }: CheckoutButtonProps) => ReactNode;
+```
+
+### `CheckoutButtonProps` (interface)
+
+```ts
+interface CheckoutButtonProps extends RedirectButtonOwnProps {
+    onCheckout: RedirectTrigger;
+}
+```
+
+### `CustomerPortalButton` (const)
+
+```ts
+const CustomerPortalButton: ({ onPortal, ...rest }: CustomerPortalButtonProps) => ReactNode;
+```
+
+### `CustomerPortalButtonProps` (interface)
+
+```ts
+interface CustomerPortalButtonProps extends RedirectButtonOwnProps {
+    onPortal: RedirectTrigger;
+}
+```
+
+### `RedirectTarget` (interface)
+
+```ts
+interface RedirectTarget {
+    readonly url: string;
+}
+```
+
+### `RedirectTrigger` (type)
+
+```ts
+type RedirectTrigger = () => Promise<RedirectTarget>;
+```
+
+### `Subscription` (interface)
+
+```ts
+interface Subscription {
+    readonly cancelAtPeriodEnd: boolean;
+    readonly createdAt: number;
+    readonly currentPeriodEnd?: number;
+    readonly id: string;
+    readonly priceId: string;
+    readonly provider: "polar" | "stripe";
+    readonly quantity: number;
+    readonly referenceId: string;
+    readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";
+    readonly updatedAt: number;
+}
+```
+
+### `UseCheckoutResult` (interface)
+
+```ts
+interface UseCheckoutResult {
+    checkout: () => Promise<void>;
+    error: Error | undefined;
+    pending: boolean;
+}
+```
+
+### `useCheckout` (const)
+
+```ts
+const useCheckout: (trigger: RedirectTrigger) => UseCheckoutResult;
 ```
 
 ## `@lunora/react/server`

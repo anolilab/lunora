@@ -47,14 +47,14 @@ const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     },
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "List global tables" },
-        description: "List the deployment's .global() tables and their column shapes.",
+        description: "List the deployment's .global() tables with their row counts. Names and row counts only — no column shapes.",
         inputSchema: NO_INPUT_SCHEMA,
         name: "lunora_list_tables",
     },
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "Describe a function's arguments" },
         description:
-            "Return a function's argument JSON Schema and kind, so a caller can construct a valid arguments object. Call lunora_list_functions first to discover available function paths.",
+            "Return a function's argument descriptors (name, validator kind, whether it is optional) and its kind, so a caller can construct a valid arguments object. Call lunora_list_functions first to discover available function paths.",
         inputSchema: FUNCTION_PATH_INPUT_SCHEMA,
         name: "lunora_get_function_schema",
     },

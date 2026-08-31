@@ -103,13 +103,22 @@ const subscribeToMirror = (
                 }
             }
 
-            knownIds = nextIds;
-
             if (changes.length === 0) {
+                knownIds = nextIds;
+
                 return;
             }
 
             mirror.applyDiff({ table: tableName, changes, timestamp: Date.now() });
+
+            // Advance ONLY on a successful apply. `applyDiff` throws — an id-less
+            // row fails the `NOT NULL` insert (see above) — and advancing first
+            // meant a single throwing frame dropped the ids this frame should have
+            // deleted from `knownIds` while their rows were still in the mirror.
+            // Nothing ever emits those deletes again, so the rows are orphaned for
+            // the life of the subscription. Leaving `knownIds` on the last APPLIED
+            // frame lets the next frame re-derive them.
+            knownIds = nextIds;
         },
         { shardKey },
     );

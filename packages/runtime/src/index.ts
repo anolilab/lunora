@@ -160,7 +160,7 @@ export type {
     ShardTrafficFanOutRequest,
     ShardTrafficFanOutResult,
 } from "./query-coordinator";
-export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "./query-coordinator";
+export { createQueryCoordinator, createStaticShardRegistry } from "./query-coordinator";
 export type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceInput, ShardNamespaceLike } from "./resolve-shard";
 export { applyJurisdiction, resolveShard } from "./resolve-shard";
 export { applyRestCache, requestCarriesCredentials, restCacheHeaders } from "./rest-cache";

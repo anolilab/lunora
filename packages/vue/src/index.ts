@@ -31,6 +31,8 @@ export type {
     PaginationStatus,
     Preloaded,
     ReturnOf,
+    SubscriptionError,
+    SubscriptionErrorCallback,
     Unsubscribe,
     UseQueryOptions,
     User,

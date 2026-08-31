@@ -34,7 +34,7 @@
 
 ---
 
-The Lunora umbrella package: one install for the base of a Lunora app. `lunora` re-exports the server authoring API, the worker runtime, the Durable Objects, and the browser client through subpaths, and ships the `lunora` CLI binary — so you depend on a single package instead of `@lunora/server` + `@lunora/values` + `@lunora/runtime` + `@lunora/do` + `@lunora/client` + `@lunora/cli`.
+The Lunora umbrella package: one install for the base of a Lunora app. `lunorash` re-exports the server authoring API, the worker runtime, the Durable Objects, and the browser client through subpaths, and ships the `lunora` CLI binary — so you depend on a single package instead of `@lunora/server` + `@lunora/values` + `@lunora/runtime` + `@lunora/do` + `@lunora/client` + `@lunora/cli`.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -85,17 +85,26 @@ pnpm exec lunora deploy
 
 ### Subpaths
 
-| Import                         | Re-exports              | Use                                                |
-| ------------------------------ | ----------------------- | -------------------------------------------------- |
-| `lunorash` / `lunorash/server` | `@lunora/server`        | `query` / `mutation` / `action`, `defineSchema`, … |
-| `lunorash/values`              | `@lunora/values`        | the `v.*` validator suite                          |
-| `lunorash/runtime`             | `@lunora/runtime`       | `createWorker` and the query coordinator           |
-| `lunorash/do`                  | `@lunora/do`            | `ShardDO` / `SessionDO`                            |
-| `lunorash/platform`            | `@lunora/platform`      | Host contracts (`ShardHost`, `SocketHost`, …)      |
-| `lunorash/observability`       | `@lunora/observability` | Telemetry: logs, metrics, traces, issues           |
-| `lunorash/client`              | `@lunora/client`        | the browser SDK (`LunoraClient`, `Preloaded`, …)   |
+| Import                         | Re-exports              | Use                                                      |
+| ------------------------------ | ----------------------- | -------------------------------------------------------- |
+| `lunorash` / `lunorash/server` | `@lunora/server`        | `query` / `mutation` / `action`, `defineSchema`, …       |
+| `lunorash/values`              | `@lunora/values`        | the `v.*` validator suite                                |
+| `lunorash/errors`              | `@lunora/errors`        | `LunoraError`, the error catalog, `toErrorBody`          |
+| `lunorash/runtime`             | `@lunora/runtime`       | `createWorker` and the query coordinator                 |
+| `lunorash/do`                  | `@lunora/do`            | `ShardDO` / `SessionDO`                                  |
+| `lunorash/platform`            | `@lunora/platform`      | Host contracts (`ShardHost`, `SocketHost`, …)            |
+| `lunorash/observability`       | `@lunora/observability` | Telemetry: logs, metrics, traces, issues                 |
+| `lunorash/ratelimit`           | `@lunora/ratelimit`     | `rateLimit()` middleware, `RateLimiter`, `createDbStore` |
+| `lunorash/flags`               | `@lunora/flags`         | feature flags (`defineFlags`, evaluation)                |
+| `lunorash/client`              | `@lunora/client`        | the browser SDK (`LunoraClient`, `Preloaded`, …)         |
 
-Granular subpaths are forwarded too: `lunorash/server/types`, `lunorash/server/data-model`, `lunorash/server/drizzle`, and `lunorash/server/rls/testing` mirror `@lunora/server/*`; `lunorash/client/query`, `lunorash/client/auth`, `lunorash/client/pagination`, and `lunorash/client/ssr` mirror `@lunora/client/*`.
+Granular subpaths are forwarded too:
+
+- `@lunora/server/*` — `lunorash/server/types`, `lunorash/server/data-model`, `lunorash/server/drizzle`, `lunorash/server/rls/testing`, `lunorash/server/otel`
+- `@lunora/client/*` — `lunorash/client/query`, `lunorash/client/auth`, `lunorash/client/pagination`, `lunorash/client/ssr`, `lunorash/client/upload`, `lunorash/client/service`
+- `@lunora/flags/*` — `lunorash/flags/env`, `lunorash/flags/flagship`, `lunorash/flags/memory` (the three providers) and `lunorash/flags/web`
+
+That is the complete map — 26 subpaths in all. `packages/lunora/package.json`'s `exports` is the source of truth, and `__tests__/exports-map.test.ts` holds it, the built `dist/`, and the sources together.
 
 Codegen targets these subpaths automatically: a project with `lunorash` installed gets `_generated/*` files that import from `lunorash/server`, `lunorash/server/data-model`, `lunorash/do`, `lunorash/client`, etc.
 
@@ -135,10 +144,10 @@ The Lunora umbrella package is open-sourced software licensed under the [FSL-1.1
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/lunora?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/lunora
-[npm-downloads-badge]: https://img.shields.io/npm/dm/lunora?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/lunora
+[npm-version-badge]: https://img.shields.io/npm/v/lunorash?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/lunorash
+[npm-downloads-badge]: https://img.shields.io/npm/dm/lunorash?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/lunorash
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
 [prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript

@@ -321,3 +321,48 @@ describe("capability classification", () => {
         expect(gateAgainstMatrix(usage, EMPTY_MATRIX, "empty")).toStrictEqual({ diagnostics: [], usage });
     });
 });
+
+describe("app-declarable signals with no capability row", () => {
+    /** A matrix that rates nothing — the shape a WIP host ships before it fills its features in. */
+    const EMPTY_MATRIX: PlatformCapabilities = { features: {}, id: "empty", name: "Empty Host" };
+
+    it("diagnoses a declared feature the target marks unsupported", async () => {
+        expect.assertions(3);
+
+        // Regression: `CAPABILITY_TO_FEATURE` only covers app-imported `ctx.*`
+        // add-ons, so `durableStreams` (and `globalTables` / `queues` /
+        // `crossShardFanout` / `secrets`) were rated in every matrix and consulted
+        // by nothing — a durable `.stream()` on `target: "node"` emitted its full
+        // surface with no diagnostic and silently behaved as ephemeral.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const matrix: PlatformCapabilities = {
+            features: { durableStreams: { level: "unsupported" }, secrets: { level: "native" } },
+            id: "some-host",
+            name: "Some Host",
+        };
+
+        const result = gateAgainstMatrix(ALL_OFF, matrix, "some-host", { durableStreams: true, secrets: true });
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.name).toBe("platform_unsupported_feature");
+        expect(result.diagnostics[0]?.message).toContain("durable streams");
+    });
+
+    it("fails closed on an unrated app-declarable feature", async () => {
+        expect.assertions(2);
+
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const result = gateAgainstMatrix(ALL_OFF, EMPTY_MATRIX, "empty", { globalTables: true });
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.name).toBe("platform_undeclared_feature");
+    });
+
+    it("says nothing about a feature the app does not declare", async () => {
+        expect.assertions(1);
+
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+
+        expect(gateAgainstMatrix(ALL_OFF, EMPTY_MATRIX, "empty", { durableStreams: false }).diagnostics).toStrictEqual([]);
+    });
+});

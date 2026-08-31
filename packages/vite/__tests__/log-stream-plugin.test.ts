@@ -14,6 +14,21 @@ const runConfigureServer = (server: ViteDevServer): void => {
     fn?.call(plugin as never, server);
 };
 
+/** A fake dev server whose `close()` fires every handler the plugin registered via `httpServer.once`. */
+const makeServer = (): { close: () => void; server: ViteDevServer } => {
+    const handlers: (() => void)[] = [];
+    const server = { httpServer: { once: (_event: string, callback: () => void) => handlers.push(callback) } } as unknown as ViteDevServer;
+
+    return {
+        close: () => {
+            for (const callback of handlers) {
+                callback();
+            }
+        },
+        server,
+    };
+};
+
 /**
  * Patch `process.stdout.write` with a capturing mock, run the plugin so it wraps
  * that mock, write `lines`, then restore via the server `close` handler. Returns
@@ -150,6 +165,51 @@ describe("logStreamPlugin", () => {
         expect(seen).toBe(`${logLine}\n`);
     });
 
+    it("restores the streams when the restart builds a NEW plugin instance", () => {
+        expect.assertions(2);
+
+        // Vite 8's `restartServer` re-runs `resolveConfig`, so the replacement
+        // generation is a DIFFERENT plugin factory closure. A factory-scoped
+        // restore handle is `undefined` there: the new instance wrapped the old
+        // instance's wrapper, and no close could ever unwind the first layer — so
+        // `process.stdout`/`stderr` stayed monkey-patched for the life of the
+        // process, one layer deeper per restart.
+        const received: string[] = [];
+        const realWrite = process.stdout.write.bind(process.stdout);
+        const realIsTTY = process.stdout.isTTY;
+
+        process.stdout.isTTY = false;
+        process.stdout.write = (chunk: unknown): boolean => {
+            received.push(String(chunk));
+
+            return true;
+        };
+
+        try {
+            const gen1 = makeServer();
+            const gen2 = makeServer();
+
+            // Two independent factory calls — one per `resolveConfig`.
+            runConfigureServer(gen1.server);
+            runConfigureServer(gen2.server);
+
+            gen1.close();
+            process.stdout.write(`${logLine}\n`);
+
+            expect(received.join("")).toBe("[lunora] messages:list  hi\n");
+
+            received.length = 0;
+            gen2.close();
+            process.stdout.write(`${logLine}\n`);
+
+            // Fully unpatched: no residual wrapper from the first generation.
+            expect(received.join("")).toBe(`${logLine}\n`);
+        } finally {
+            process.stdout.write = realWrite;
+            process.stdout.isTTY = realIsTTY;
+        }
+    });
+
     it("keeps the newest generation's patch after a restart and fully restores on final close", () => {
         expect.assertions(2);
 
@@ -174,20 +234,6 @@ describe("logStreamPlugin", () => {
             const plugin = logStreamPlugin();
             const hook = plugin.configureServer;
             const configure = typeof hook === "function" ? hook : hook?.handler;
-
-            const makeServer = (): { close: () => void; server: ViteDevServer } => {
-                const handlers: (() => void)[] = [];
-                const server = { httpServer: { once: (_event: string, callback: () => void) => handlers.push(callback) } } as unknown as ViteDevServer;
-
-                return {
-                    close: () => {
-                        for (const callback of handlers) {
-                            callback();
-                        }
-                    },
-                    server,
-                };
-            };
 
             const gen1 = makeServer();
             const gen2 = makeServer();

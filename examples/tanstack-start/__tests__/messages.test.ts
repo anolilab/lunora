@@ -18,8 +18,21 @@ afterEach(() => {
     t.close();
 });
 
+/** Advance past the current millisecond so two sends get distinct `postedAt` values. */
+const nextMillisecond = async (): Promise<void> => {
+    await new Promise((resolve) => {
+        setTimeout(resolve, 2);
+    });
+};
+
 it("returns the newest message first, which is what the SSR loader renders", async () => {
+    // `send` stamps `postedAt: Date.now()` and `by_posted` indexes that alone, so
+    // two sends inside one millisecond tie and the order within the tie is
+    // unspecified — this test failed roughly one run in four without the gap.
+    // The gap is the test being honest about what it asserts: "newest first"
+    // only means anything for messages posted at distinguishable times.
     await t.mutation(send, { author: "ada", body: "first" });
+    await nextMillisecond();
     await t.mutation(send, { author: "grace", body: "second" });
 
     const { messages } = await t.query(board, {});

@@ -38,14 +38,15 @@ describe("createBucketStorage", () => {
         expect(avatars.getUrl("p.png")).toBe("avatars://p.png");
     });
 
-    it("tags the bare accessor 'default' (delegating to the first binding) when no default is designated", () => {
+    it("tags the bare accessor with the binding it delegates to when no default is designated", () => {
         expect.assertions(3);
 
         const storage = createBucketStorage({ first: fakeBucket("first"), second: fakeBucket("second") });
 
-        // Bare accessor is named "default" — the name rules + the union steer to —
-        // even though it delegates to the first binding.
-        expect(storage.bucketName).toBe("default");
+        // Regression: the bare accessor used to be tagged "default" while
+        // delegating to `first`, so a `{ bucket: "first" }` storage rule gated
+        // `bucket("first")` and not the identical bare `ctx.storage` call.
+        expect(storage.bucketName).toBe("first");
         expect(storage.getUrl("a")).toBe("first://a");
         // The named buckets remain individually addressable.
         expect(storage.bucket("second").getUrl("b")).toBe("second://b");

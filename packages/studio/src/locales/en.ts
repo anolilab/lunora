@@ -1064,6 +1064,8 @@ const MESSAGE_IDS = [
     "Err",
     "Avg latency",
     "cache hit",
+    "cache not enabled",
+    "no cache traffic yet",
     "Live connections",
     "sockets",
     "active subscriptions",

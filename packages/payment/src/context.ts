@@ -16,12 +16,21 @@ import type { PaymentObserver } from "./observability";
 
 /**
  * Structural subset of Lunora's `ctx.db` (the `findFirst`/`findMany(tableName, { where })` form).
+ *
+ * `findMany` models the order/limit/cursor knobs too — {@link PaymentDatabase}
+ * pushes them down so a sweep over a large match set reads bounded chunks
+ * instead of materialising the lot. `continueCursor` is REQUIRED here (`ctx.db`
+ * always returns it): a double that omitted it would page exactly once and then
+ * silently report the rest of the table as absent.
  * @experimental
  */
 export interface LunoraDatabaseLike {
     delete: (id: string) => Promise<void>;
     findFirst: (table: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
-    findMany: (table: string, args?: { where?: Record<string, unknown> }) => Promise<{ page: Record<string, unknown>[] }>;
+    findMany: (
+        table: string,
+        args?: { cursor?: string; limit?: number; orderBy?: Record<string, "asc" | "desc">[]; where?: Record<string, unknown> },
+    ) => Promise<{ continueCursor: null | string; page: Record<string, unknown>[] }>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
 }
@@ -57,10 +66,10 @@ export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): P
     return {
         delete: async (id) => database.delete(id),
         findFirst: async (table, where) => (await database.findFirst(table, { where })) as PaymentRow | null,
-        findMany: async (table, where) => {
-            const result = await database.findMany(table, { where });
+        findMany: async (table, where, page) => {
+            const result = await database.findMany(table, { ...page, where });
 
-            return result.page as PaymentRow[];
+            return { cursor: result.continueCursor ?? undefined, rows: result.page as PaymentRow[] };
         },
         insert: async (table, document) => database.insert(table, document),
         patch: async (id, patch) => database.patch(id, patch),

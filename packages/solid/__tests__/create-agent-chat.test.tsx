@@ -1,5 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { describe, expect, it } from "vitest";
 
 import type { AgentLiveEvent, CreateAgentChatApi, CreateAgentChatResult } from "../src/create-agent-chat";
@@ -135,6 +136,47 @@ describe(createAgentChat, () => {
         pushTo(fake.subscriptions, MESSAGES_REF, [{ content: "hello there", role: "user", seq: 0 }]);
 
         expect(latest?.messages()).toStrictEqual([{ content: "hello there", role: "user", seq: 0 }]);
+    });
+
+    it("drops un-acked optimistic rows when threadKey changes, so they never ghost into the new thread", async () => {
+        // Regression: an accessor `threadKey` re-subscribed history/thread/stream but
+        // left the `optimistic` signal alone. `reconcileOptimistic` retires a row by
+        // comparing `maxDurableSeqAtSend` against durable `seq`s, and `seq` is PER
+        // THREAD — so a row sent in a 40-message thread A, still un-acked when the
+        // user switched to an empty thread B, could never be claimed there (B's max
+        // seq is -1) and rendered as a ghost `optimistic: true` bubble in B.
+        const fake = createFakeClient();
+        const [threadKey, setThreadKey] = createSignal("thread-a");
+        let latest: CreateAgentChatResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey });
+
+                return <pre>{JSON.stringify(latest.messages())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        const threadA = Array.from({ length: 40 }, (_unused, index) => {
+            return {
+                content: `row-${String(index)}`,
+                role: index % 2 === 0 ? "user" : "assistant",
+                seq: index,
+            };
+        });
+
+        pushTo(fake.subscriptions, MESSAGES_REF, threadA);
+
+        await latest?.send("only meant for A");
+
+        expect(latest?.messages()).toHaveLength(41);
+
+        // Switch threads before the ack lands; thread B's history lands empty.
+        setThreadKey("thread-b");
+        fake.subscriptions.findLast((sub) => sub.functionPath === MESSAGES_REF)?.push([]);
+
+        expect(latest?.messages()).toStrictEqual([]);
     });
 
     it("shows a fresh optimistic echo for a repeated identical prompt, not reconciled by the earlier durable row", async () => {

@@ -45,7 +45,12 @@ export const ShardDO = createShardDO({
         const shardEnv = env as unknown as ShardEnv;
 
         return shardEnv.FILES
-            ? createStorage({ bucket: shardEnv.FILES, publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL, signingSecret: shardEnv.STORAGE_SECRET })
+            ? createStorage({
+                  bucket: shardEnv.FILES,
+                  bucketName: "default",
+                  publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL,
+                  signingSecret: shardEnv.STORAGE_SECRET,
+              })
             : undefined;
     },
     // Maps the schema's logical index name (`posts_search`) to the Vectorize
@@ -85,7 +90,6 @@ const buildMigrationAuth = (env: Env): LunoraAuth => createAuth({ ...authOptions
 
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
-        d1: env.DB,
         // `openApiSpec` (regenerated on every `lunora/` change) backs the
         // studio's always-current API-reference tab.
         openApiSpec,

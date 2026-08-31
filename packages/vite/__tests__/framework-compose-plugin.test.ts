@@ -36,6 +36,7 @@ const baseOptions = (overrides: Partial<ResolvedLunoraPluginOptions> = {}): Reso
         overlay: false,
         projectRoot: "/workspace/app",
         schemaDir: "lunora",
+        shard: {},
         target: "cloudflare",
         studio: true,
         validateWrangler: true,
@@ -143,14 +144,27 @@ describe("framework-compose-plugin", () => {
             expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID, "my-worker")).toContain("composeWorker(");
         });
 
-        it("honours a custom generatedDir in the emitted imports", () => {
+        it("threads the plugin's `shard` option into the composed worker it loads", () => {
             expect.hasAssertions();
 
-            const plugin = frameworkComposePlugin(baseOptions({ generatedDir: "server/gen" }), context("solid-start", "A"));
+            // End to end through the plugin, because the composed entry is the
+            // artifact that actually boots — constructing the shard class directly
+            // is precisely what hid this gap.
+            const plugin = frameworkComposePlugin(baseOptions({ shard: { reactiveCache: true } }), context("tanstack-start", "A"));
+
+            expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).toContain('createShardDO({"reactiveCache":true})');
+        });
+
+        it("bases the emitted imports on the resolved generated dir", () => {
+            expect.hasAssertions();
+
+            // `generatedDir` is derived from `schemaDir`, never user-set — codegen
+            // hardcodes `<schemaDir>/_generated`, so anything else pointed the
+            // composed entry's imports at a directory nothing writes.
+            const plugin = frameworkComposePlugin(baseOptions({ generatedDir: "server/_generated", schemaDir: "server" }), context("solid-start", "A"));
             const code = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID) as string;
 
-            // Absolute path: projectRoot + custom generatedDir
-            expect(code).toContain('"/workspace/app/server/gen/functions"');
+            expect(code).toContain('"/workspace/app/server/_generated/functions"');
             expect(code).toContain('from "@solidjs/start/server-handler"');
         });
     });
@@ -209,7 +223,7 @@ describe("framework-compose-plugin", () => {
         it("emits allowUnauthenticatedShardAccess into composeWorker when opted in", () => {
             expect.hasAssertions();
 
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", false, false, true);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], false, true);
 
             expect(code).toContain("allowUnauthenticatedShardAccess: true,");
         });
@@ -221,7 +235,7 @@ describe("framework-compose-plugin", () => {
             // string literal `\U` is an invalid unicode escape → SyntaxError, and
             // `\l`/`\a` silently vanish → unresolvable specifier. The emitter must
             // convert to forward slashes so the composed worker boots everywhere.
-            const code = buildWorkerEntrySource("tanstack-start", String.raw`C:\Users\dev\app\lunora\_generated`, true);
+            const code = buildWorkerEntrySource("tanstack-start", String.raw`C:\Users\dev\app\lunora\_generated`, ["containers"]);
 
             expect(code).toContain('"C:/Users/dev/app/lunora/_generated/functions"');
             expect(code).toContain('"C:/Users/dev/app/lunora/_generated/containers"');
@@ -236,10 +250,27 @@ describe("framework-compose-plugin", () => {
             expect(() => buildWorkerEntrySource("sveltekit", "./lunora/_generated")).toThrow(/no class-A worker wiring/);
         });
 
-        it("does not re-export the generated container classes by default", () => {
+        it("does not re-export any generated class module by default", () => {
             expect.hasAssertions();
 
-            expect(buildWorkerEntrySource("tanstack-start", "./lunora/_generated")).not.toContain("/containers");
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated");
+
+            expect(code).not.toContain("/containers");
+            expect(code).not.toContain("/workflows");
+            expect(code).not.toContain("/agents");
+        });
+
+        it("re-exports the generated workflow and agent classes, not just containers", () => {
+            expect.hasAssertions();
+
+            // Regression: only `containers` was ever forwarded, so a class-A app with
+            // a `defineWorkflow` (or `defineAgent`) got a `class_name` in
+            // wrangler.jsonc the bundle did not export and `wrangler deploy` hard-failed.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", ["agents", "containers", "workflows"]);
+
+            expect(code).toContain('export * from "./lunora/_generated/agents"');
+            expect(code).toContain('export * from "./lunora/_generated/containers"');
+            expect(code).toContain('export * from "./lunora/_generated/workflows"');
         });
 
         it("re-exports the generated container classes when the project declares containers", () => {
@@ -248,9 +279,34 @@ describe("framework-compose-plugin", () => {
             // wrangler requires every container class_name to be exported by the
             // worker; a class-A app has no hand-written entry, so the composed one
             // must forward them.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", true);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", ["containers"]);
 
             expect(code).toContain('export * from "./lunora/_generated/containers"');
+        });
+
+        it("emits a bare createShardDO() when no shard config is declared", () => {
+            expect.hasAssertions();
+
+            // Byte-identical to the pre-existing output for every project that
+            // declares nothing.
+            expect(buildWorkerEntrySource("tanstack-start", "./lunora/_generated")).toContain("export const ShardDO = createShardDO();");
+        });
+
+        it("bakes a declared shard config into the composed createShardDO() call", () => {
+            expect.hasAssertions();
+
+            // Regression: a class-A app has no worker entry, so it never calls the
+            // generated `defineApp()` builder and never reached
+            // `createShardDO(config)` — `cdc` and the whole reactive query cache
+            // were unreachable for TanStack Start / vinext / React Router /
+            // SolidStart no matter what the app wanted.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], false, false, {
+                reactiveCache: { maxEntries: 250 },
+                cdc: true,
+            });
+
+            // Keys sorted, so the emitted entry does not churn on literal ordering.
+            expect(code).toContain('export const ShardDO = createShardDO({"cdc":true,"reactiveCache":{"maxEntries":250}});');
         });
 
         it("imports the runtime from the granular `@lunora/runtime` by default", () => {
@@ -267,7 +323,7 @@ describe("framework-compose-plugin", () => {
             // A `lunorash`-only install (the starter-template default) does not expose
             // the bare `@lunora/runtime` specifier, so the composed worker must reach
             // the runtime through the umbrella subpath instead.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", false, true);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], true);
 
             expect(code).toContain('import { composeWorker } from "lunorash/runtime"');
             expect(code).not.toContain('from "@lunora/runtime"');

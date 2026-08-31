@@ -69,13 +69,27 @@ export const report = httpAction(
 );
 ```
 
-**Settlement order:** the HTTP-action rail settles **after** the handler runs
-(the handler's response is passed to settlement as transport context). A
-settlement failure on this path cannot undo a handler that already ran, so a
-handler gated with `withX402` **must be idempotent or compensatable** if it has
-side effects: a retried/duplicate charge attempt (or a settlement failure
-after the handler already committed something) must not double-apply that
-effect.
+**Settlement order:** the HTTP-action rail settles **before** the handler runs
+(`createChargeMiddleware`'s `settleBeforeHandler` default). A payment that
+passes `verify` but fails `/settle` — an underfunded wallet, a facilitator
+refusal — therefore never reaches the handler's side effects at all. Once
+settlement succeeds the payment is final on-chain, so a handler failure after
+that point is an ordinary application error, not a payment to unwind.
+
+Settle-**after** is the opt-in: it passes the handler's response to settlement
+as transport context (`responseHeaders`, read by some schemes for settlement
+overrides) and releases a verified-but-unsettled payment when the handler
+throws. `withX402` does not expose it — build the middleware directly when you
+need it, and note that settlement can still fail after the handler already ran,
+so such a handler **must be idempotent or compensatable**:
+
+```ts
+import { createChargeMiddleware } from "@lunora/x402/charge";
+
+const charge = await createChargeMiddleware(config, undefined, { settleBeforeHandler: false });
+
+export const report = httpAction(async (ctx, request) => charge.handle(request, () => handler(ctx, request)));
+```
 
 ### Gate a procedure
 

@@ -418,6 +418,56 @@ describe(subscribeToMirror, () => {
         expect(double.applied).toStrictEqual([]);
     });
 
+    it("keeps the ids of a frame whose apply threw, so their deletes are not orphaned", () => {
+        expect.assertions(3);
+
+        // `knownIds` used to advance BEFORE `applyDiff`. One throwing frame — the
+        // id-less row the docstring warns about fails the `NOT NULL` insert — then
+        // dropped the previous frame's ids while their rows were still in the
+        // mirror, and nothing ever emitted those deletes again.
+        const applied: TableDiff[] = [];
+        let failNext = false;
+
+        const mirror = {
+            applyDiff: (diff: TableDiff) => {
+                if (failNext) {
+                    throw new Error("NOT NULL constraint failed: fn_todos_list.id");
+                }
+
+                applied.push(diff);
+            },
+            registerTable: () => undefined,
+        } as unknown as LocalMirror;
+
+        let callback: ((data: unknown) => void) | undefined;
+        const client = {
+            subscribe: (_reference: { __lunoraRef: string }, _arguments: Record<string, unknown>, onData: (data: unknown) => void) => {
+                callback = onData;
+
+                return () => undefined;
+            },
+        };
+
+        subscribeToMirror(client, mirror, functionRef, {});
+
+        callback?.([{ id: "1", title: "a" }]);
+
+        expect(applied).toHaveLength(1);
+
+        // A frame carrying an id-less row: the apply throws.
+        failNext = true;
+
+        expect(() => {
+            callback?.([{ title: "no id" }]);
+        }).toThrow(/NOT NULL/);
+
+        // Next healthy frame drops row "1" — the delete must still be emitted.
+        failNext = false;
+        callback?.([]);
+
+        expect(applied[1]?.changes).toStrictEqual([{ id: "1", type: "delete" }]);
+    });
+
     it("tears down the underlying client subscription on unsubscribe", () => {
         expect.assertions(2);
 

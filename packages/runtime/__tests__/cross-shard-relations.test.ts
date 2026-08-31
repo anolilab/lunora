@@ -1,6 +1,7 @@
 import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import { createCrossShardRelationCapabilities } from "../src/cross-shard-relations";
@@ -103,6 +104,29 @@ describe("createCrossShardRelationCapabilities", () => {
         expect(page.page.map((row) => row["_id"]).toSorted((a, b) => String(a).localeCompare(String(b)))).toEqual(["l1", "l2"]);
         // Identity is forwarded to BOTH shards (the worker honoured x-lunora-userid).
         expect(cluster.seen.filter((entry) => entry.functionPath === "__lunora_relation__:read").map((entry) => entry.userId)).toEqual(["user_42", "user_42"]);
+    });
+
+    it("decodes the shard's wire-encoded rows, so a bigint arrives as a bigint", async () => {
+        expect.assertions(3);
+
+        // The producing shard runs `encodeWire` on its relation result, so bigints
+        // and byte arrays land as `["$lunora.wire$", …]` tags. Without the matching
+        // `decodeWire` here, every child row's 64-bit id reaches the parent as a
+        // tag ARRAY instead of a value.
+        const row = encodeWire({ _id: "l1", blob: new Uint8Array([1, 2, 3]), views: 9_007_199_254_740_993n }) as Record<string, unknown>;
+        const cluster = createShardCluster({ s1: [row], s2: [] }, {});
+        const worker = buildWorker(cluster);
+        const capabilities = createCrossShardRelationCapabilities({
+            fetch: ((request: Request) => worker.fetch(request, {}, fakeContext)) as typeof globalThis.fetch,
+            origin: "https://worker.test",
+            userId: "user_42",
+        });
+
+        const page = await capabilities.crossShardReader("local", { where: {} });
+
+        expect(page.page).toHaveLength(1);
+        expect(page.page[0]?.["views"]).toBe(9_007_199_254_740_993n);
+        expect(page.page[0]?.["blob"]).toStrictEqual(new Uint8Array([1, 2, 3]));
     });
 
     it("fans a `count` out across every shard and sums the per-shard tallies", async () => {

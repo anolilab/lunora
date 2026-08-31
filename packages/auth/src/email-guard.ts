@@ -64,14 +64,6 @@ interface EmailGateConfig {
     denyDomains?: ReadonlyArray<string>;
 
     /**
-     * Reserved for callers that branch on free-vs-business (e.g. gate a feature
-     * behind a business email). Purely advisory — {@link EmailClassification}'s
-     * `emailClass` already reports `free`, so this flag exists for symmetry/intent
-     * and never blocks. Defaults to `false`.
-     */
-    flagFreeEmail?: boolean;
-
-    /**
      * Opt-in MX deliverability verification. Off by default because it needs DNS
      * (`@visulima/email-verifier/checks/mx` → `node:dns`), which is not available
      * on the default workerd path. When `true`, {@link assertEmailAllowed} rejects

@@ -320,6 +320,7 @@ interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
     dispatch: InboundDispatch<TEnv>;
     onError?: (error: unknown, context: InboundDispatchContext<TEnv>) => Promise<void> | void;
     parse: (raw: RawInboundEmail) => Promise<InboundEmail>;
+    retain?: InboundRetain<TEnv>;
     verify?: InboundVerify<TEnv>;
 }
 ```

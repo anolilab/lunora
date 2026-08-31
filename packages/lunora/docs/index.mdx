@@ -27,19 +27,37 @@ installs.
 
 ## Subpaths
 
-| Import                         | Re-exports                   | Use                                                        |
-| ------------------------------ | ---------------------------- | ---------------------------------------------------------- |
-| `lunorash` / `lunorash/server` | `@lunora/server`             | `defineSchema`, `defineTable`, `initLunora`, `cronJobs`, … |
-| `lunorash/server/types`        | `@lunora/server/types`       | server context and data-model types                        |
-| `lunorash/server/data-model`   | `@lunora/server/data-model`  | data-model type helpers                                    |
-| `lunorash/server/drizzle`      | `@lunora/server/drizzle`     | the Drizzle table builders                                 |
-| `lunorash/server/rls/testing`  | `@lunora/server/rls/testing` | RLS policy test helpers                                    |
-| `lunorash/values`              | `@lunora/values`             | the `v.*` validator suite                                  |
-| `lunorash/runtime`             | `@lunora/runtime`            | `createWorker`, `composeWorker`, the query coordinator     |
-| `lunorash/do`                  | `@lunora/do`                 | `ShardDO` / `SessionDO`                                    |
-| `lunorash/platform`            | `@lunora/platform`           | Host contracts (`ShardHost`, `SocketHost`, …)              |
-| `lunorash/observability`       | `@lunora/observability`      | Telemetry: logs, metrics, traces, issues                   |
-| `lunorash/client`              | `@lunora/client`             | the browser SDK (`LunoraClient`, `preloadQuery`, …)        |
+Every subpath the package publishes, in full — `package.json`'s `exports` is the
+source of truth, and `__tests__/exports-map.test.ts` holds it, the built `dist/`,
+and the sources together.
+
+| Import                         | Re-exports                         | Use                                                        |
+| ------------------------------ | ---------------------------------- | ---------------------------------------------------------- |
+| `lunorash` / `lunorash/server` | `@lunora/server`                   | `defineSchema`, `defineTable`, `initLunora`, `cronJobs`, … |
+| `lunorash/server/types`        | `@lunora/server/types`             | server context and data-model types                        |
+| `lunorash/server/data-model`   | `@lunora/server/data-model`        | data-model type helpers                                    |
+| `lunorash/server/drizzle`      | `@lunora/server/drizzle`           | the Drizzle table builders                                 |
+| `lunorash/server/rls/testing`  | `@lunora/server/rls/testing`       | RLS policy test helpers                                    |
+| `lunorash/server/otel`         | `@lunora/server/otel`              | OpenTelemetry helpers for server code                      |
+| `lunorash/values`              | `@lunora/values`                   | the `v.*` validator suite                                  |
+| `lunorash/errors`              | `@lunora/errors`                   | `LunoraError`, the error catalog, `toErrorBody`            |
+| `lunorash/runtime`             | `@lunora/runtime`                  | `createWorker`, `composeWorker`, the query coordinator     |
+| `lunorash/do`                  | `@lunora/do`                       | `ShardDO` / `SessionDO`                                    |
+| `lunorash/platform`            | `@lunora/platform`                 | Host contracts (`ShardHost`, `SocketHost`, …)              |
+| `lunorash/observability`       | `@lunora/observability`            | Telemetry: logs, metrics, traces, issues                   |
+| `lunorash/ratelimit`           | `@lunora/ratelimit`                | `rateLimit()` middleware, `RateLimiter`, `createDbStore`   |
+| `lunorash/flags`               | `@lunora/flags`                    | feature flags: `defineFlags`, evaluation                   |
+| `lunorash/flags/env`           | `@lunora/flags/providers/env`      | flags backed by environment variables                      |
+| `lunorash/flags/flagship`      | `@lunora/flags/providers/flagship` | flags backed by Cloudflare Flagship                        |
+| `lunorash/flags/memory`        | `@lunora/flags/providers/memory`   | in-memory flag provider (tests, local dev)                 |
+| `lunorash/flags/web`           | `@lunora/flags/web`                | the browser-side flag reader                               |
+| `lunorash/client`              | `@lunora/client`                   | the browser SDK (`LunoraClient`, `preloadQuery`, …)        |
+| `lunorash/client/query`        | `@lunora/client/query`             | the query/subscription primitives                          |
+| `lunorash/client/auth`         | `@lunora/client/auth`              | client-side auth wiring                                    |
+| `lunorash/client/pagination`   | `@lunora/client/pagination`        | paginated-query helpers                                    |
+| `lunorash/client/ssr`          | `@lunora/client/ssr`               | SSR preload / hydration                                    |
+| `lunorash/client/upload`       | `@lunora/client/upload`            | direct-to-storage uploads                                  |
+| `lunorash/client/service`      | `@lunora/client/service`           | the service (server-to-server) client                      |
 
 The default entry (`lunorash`) mirrors `lunorash/server`, so
 `import { defineSchema } from "lunorash"` works out of the box.

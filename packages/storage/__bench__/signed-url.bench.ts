@@ -40,7 +40,13 @@ describe("verifySignedUrl", () => {
     // undefined URL.
     beforeAll(async () => {
         // Pre-mint a valid URL once so both benches measure only the verify cost.
-        signedUrl = await buildSignedUrl({ baseUrl: "https://cdn.test", expiresInSeconds: 7 * 24 * 60 * 60, key: "uploads/x.png", secret: SECRET });
+        signedUrl = await buildSignedUrl({
+            baseUrl: "https://cdn.test",
+            bucketName: "default",
+            expiresInSeconds: 7 * 24 * 60 * 60,
+            key: "uploads/x.png",
+            secret: SECRET,
+        });
 
         const url = new URL(signedUrl);
         const exp = Number(url.searchParams.get("exp"));

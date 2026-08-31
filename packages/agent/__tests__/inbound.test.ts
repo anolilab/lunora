@@ -132,8 +132,8 @@ describe(dispatchAgentEmail, () => {
         const handler = dispatchAgentEmail([{ agent: { onEmail: claim }, binding: "AGENT_SUPPORT" }]);
         const { message, rejects } = fakeMessage();
 
-        // No AGENT_SUPPORT binding on env → the dispatch throws, routing through the
-        // inbound handler's default onError (a generic, non-reflecting setReject).
+        // No AGENT_SUPPORT binding on env → a permanently misconfigured deployment, so
+        // the dispatch bounces it itself with a generic, non-reflecting setReject.
         await handler(message, {}, {});
 
         expect(rejects).toHaveLength(1);

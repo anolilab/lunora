@@ -82,70 +82,6 @@ type MergeStrategy =
     | { kind: "sum" }
     | { kind: "groupBy"; op?: "max" | "min" | "sum" };
 
-/**
- * Convenience: build the right wire-serializable {@link MergeStrategy} for a
- * given aggregate read. The reader doesn't know which op the caller chose, so
- * a fan-out wrapper passes the user's op + by-keys through this to derive the
- * merge.
- *
- * - `count` → `sum`.
- * - `aggregate({ op })` → `sum`/`max`/`min` (or throws for `avg`).
- * - `groupBy({ by, agg })` → `groupBy({ op })` (defaults to `sum` since
- * `groupBy`'s default reducer is `count`).
- * @returns the derived {@link MergeStrategy}.
- */
-const mergeStrategyForAggregate = (
-    input:
-        | { agg?: { op?: "avg" | "count" | "max" | "min" | "sum" }; kind: "groupBy" }
-        | { kind: "count" }
-        | { kind: "scalar"; op: "avg" | "count" | "max" | "min" | "sum" },
-): MergeStrategy => {
-    if (input.kind === "count") {
-        return { kind: "sum" };
-    }
-
-    if (input.kind === "scalar") {
-        if (input.op === "count" || input.op === "sum") {
-            return { kind: "sum" };
-        }
-
-        if (input.op === "max") {
-            return { kind: "max" };
-        }
-
-        if (input.op === "min") {
-            return { kind: "min" };
-        }
-
-        // avg (or any op the union does not yet list) must fail loudly — a
-        // silent default would mis-merge per-shard aggregate results across the
-        // fan-out.
-        throw new LunoraError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
-            code: "BAD_REQUEST",
-            status: 400,
-        });
-    }
-
-    const op = input.agg?.op ?? "count";
-
-    if (op === "count" || op === "sum") {
-        return { kind: "groupBy", op: "sum" };
-    }
-
-    if (op === "max") {
-        return { kind: "groupBy", op: "max" };
-    }
-
-    if (op === "min") {
-        return { kind: "groupBy", op: "min" };
-    }
-
-    throw new LunoraError('groupBy({ agg: { op: "avg" } }) is not supported across shards in v1 — fan out sum + count separately', {
-        code: "BAD_REQUEST",
-        status: 400,
-    });
-};
-
 interface FanOutSpec {
     merge: MergeStrategy;
     /** Table whose shard keys drive the fan-out. */
@@ -193,6 +129,22 @@ interface QueryCoordinatorOptions {
     registry: ShardRegistry;
 }
 
+/**
+ * Shard a fan-out falls back to when registry discovery finds nothing — normally
+ * the worker's `"__root__"` — or `null` to deliberately keep an empty discovery
+ * as an empty fan-out.
+ *
+ * Required on every request that has it, with no default, on purpose. Discovery
+ * is registry-driven and a registry only knows the keys an app registers for its
+ * `.shardBy(...)` tables, so on a plain root-DO app it comes back empty and a
+ * fan-out that reads that as "nothing to do" reports success having touched
+ * nothing: an export streamed an empty NDJSON backup, a migration reported
+ * `completed` with `processed: 0`. Fan-outs inherited that bug by simply not
+ * passing the field, so omission is no longer expressible — say `null` when you
+ * mean it. See {@link withDefaultShard}.
+ */
+type DefaultShardKey = string | null;
+
 interface FanOutRequest {
     args?: Record<string, unknown>;
     fanOut: FanOutSpec;
@@ -218,12 +170,8 @@ type ShardRpcRequest = Pick<FanOutRequest, "args" | "functionPath" | "headers">;
 interface MigrationFanOutRequest {
     args?: Record<string, unknown>;
 
-    /**
-     * Shard to fall back to when registry discovery finds nothing — normally
-     * `"__root__"`. See {@link withDefaultShard}; omit it to keep an empty
-     * discovery as an empty fan-out.
-     */
-    defaultShardKey?: string;
+    /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
+    defaultShardKey: DefaultShardKey;
     functionPath: string;
     headers?: Record<string, string>;
     /** Table whose live shard keys the migration runs across. */
@@ -448,22 +396,8 @@ interface QueryCoordinator {
 interface ExportFanOutRequest {
     args?: Record<string, unknown>;
 
-    /**
-     * Shard to fall back to when registry discovery yields NOTHING for the
-     * requested tables — normally `"__root__"`.
-     *
-     * Discovery is registry-driven, and a registry only knows the shard keys an
-     * app registers for its `.shardBy(...)` tables. A plain root-DO table has no
-     * entry and never will, so the union came back empty and the export fanned
-     * out to zero shards — returning an empty NDJSON body that looks like a
-     * successful backup of a table that simply had no rows. `orchestrateImport`
-     * has always resolved the same case to the default shard; export not doing so
-     * meant a round trip could silently write back nothing.
-     *
-     * Omit to keep the old "no keys, no shards" behavior (a caller that has
-     * already resolved its own shard set).
-     */
-    defaultShardKey?: string;
+    /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
+    defaultShardKey: DefaultShardKey;
     headers?: Record<string, string>;
 
     /**
@@ -498,12 +432,8 @@ interface ExportFanOutResult {
 interface CdcSyncFanOutRequest {
     cursors?: Record<string, number>;
 
-    /**
-     * Shard to fall back to when registry discovery finds nothing — normally
-     * `"__root__"`. See {@link withDefaultShard}; omit it to keep an empty
-     * discovery as an empty fan-out.
-     */
-    defaultShardKey?: string;
+    /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
+    defaultShardKey: DefaultShardKey;
     headers?: Record<string, string>;
     limit?: number;
     tables: ReadonlyArray<string>;
@@ -1317,11 +1247,11 @@ const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<str
  * `orchestrateImport` has always resolved this case to the default shard. This
  * is that answer, made shareable.
  *
- * Callers that legitimately mean "no shards, no answer" pass no
- * `defaultShardKey` and keep the empty list — see `orchestrateRank`.
+ * Callers that legitimately mean "no shards, no answer" pass `null` and keep the
+ * empty list — see `orchestrateRank`.
  */
-const withDefaultShard = (discovered: ReadonlyArray<string>, defaultShardKey: string | undefined): ReadonlyArray<string> =>
-    discovered.length > 0 || defaultShardKey === undefined ? discovered : [defaultShardKey];
+const withDefaultShard = (discovered: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): ReadonlyArray<string> =>
+    discovered.length > 0 || defaultShardKey === null ? discovered : [defaultShardKey];
 
 const runBoundedFanOut = async (
     namespace: ShardNamespaceInput,
@@ -1376,8 +1306,8 @@ const combineGroupByValue = (current: number, incoming: number, op: GroupByMerge
 
         default: {
             // Compile-time exhaustiveness guard; an op outside the union can
-            // only arrive via untyped input, and `mergeStrategyForAggregate`
-            // already rejected it upstream — never evaluate `Math[op]` on it.
+            // only arrive via untyped input, which the fan-out envelope
+            // validation rejects upstream — never evaluate `Math[op]` on it.
             op satisfies never;
 
             return current;
@@ -1706,8 +1636,9 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpMigration(results);
         },
-        // No `withDefaultShard` on the rank/rankPage/shardTraffic paths below, and
-        // that is deliberate: they answer questions ABOUT the shard set, so an empty
+        // No `withDefaultShard` on the rank/rankPage/shardTraffic paths below —
+        // they are the `defaultShardKey: null` case in permanent form, and that
+        // is deliberate: they answer questions ABOUT the shard set, so an empty
         // registry genuinely means "no shards to rank across" rather than "ask the
         // default one". A root-table read never reaches them — codegen routes it
         // straight to the default shard instead of through the coordinator.
@@ -1841,7 +1772,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     };
 };
 
-export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate };
+export { createQueryCoordinator, createStaticShardRegistry };
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,

@@ -74,22 +74,26 @@ const { mutate, pending } = useMutation(api.messages.send);
 
 ## API
 
-| Composable            | React equivalent      | Description                                                                     |
-| --------------------- | --------------------- | ------------------------------------------------------------------------------- |
-| `createLunora`        | `LunoraProvider`      | Vue plugin — call `app.use(createLunora(client))` at the app root.              |
-| `useLunora`           | `useLunora`           | Inject the ambient `LunoraClient` from the nearest provider.                    |
-| `useQuery`            | `useQuery`            | Live query `ShallowRef` — re-subscribes when reactive args change.              |
-| `useMutation`         | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset`).     |
-| `useSubscription`     | `useSubscription`     | Raw subscription `ShallowRef` — unbounded live stream.                          |
-| `usePaginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, and `results`.                |
-| `useInfiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `usePaginatedQuery`.                                 |
-| `useAuth`             | `useAuth`             | Reactive auth: readonly `token`/`user` refs plus `setToken`.                    |
-| `usePresence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members `ShallowRef`.        |
-| `useFlag`             | `useFlag`             | Live OpenFeature flag as a readonly `Ref` — holds `default` until resolved.     |
-| `useFlags`            | `useFlags`            | Batch variant — a readonly `Ref` of one value per key in the defaults map.      |
-| `useRateLimit`        | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` as ComputedRefs. |
-| `useConnectionStatus` | `useConnectionStatus` | Reactive connection state (`idle`, `connecting`, `connected`, `offline`).       |
-| `hydratePreloaded`    | `usePreloadedQuery`   | Seed a query synchronously from an SSR `Preloaded` token, then go live.         |
+| Composable            | React equivalent      | Description                                                                       |
+| --------------------- | --------------------- | --------------------------------------------------------------------------------- |
+| `createLunora`        | `LunoraProvider`      | Vue plugin — call `app.use(createLunora(client))` at the app root.                |
+| `useLunora`           | `useLunora`           | Inject the ambient `LunoraClient` from the nearest provider.                      |
+| `useQuery`            | `useQuery`            | Live query `ShallowRef` — re-subscribes when reactive args change.                |
+| `useMutation`         | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset`).       |
+| `useSubscription`     | `useSubscription`     | Raw subscription `ShallowRef` — unbounded live stream.                            |
+| `usePaginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, and `results`.                  |
+| `useInfiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `usePaginatedQuery`.                                   |
+| `useAuth`             | `useAuth`             | Reactive auth: readonly `token`/`user` refs plus `setToken`.                      |
+| `usePresence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members `ShallowRef`.          |
+| `useFlag`             | `useFlag`             | Live OpenFeature flag as a readonly `Ref` — holds `default` until resolved.       |
+| `useFlags`            | `useFlags`            | Batch variant — a readonly `Ref` of one value per key in the defaults map.        |
+| `useRateLimit`        | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` as ComputedRefs.   |
+| `useConnectionStatus` | `useConnectionStatus` | Reactive connection state (`idle`, `connecting`, `connected`, `offline`).         |
+| `hydratePreloaded`    | `usePreloadedQuery`   | Seed a query synchronously from an SSR `Preloaded` token, then go live.           |
+| `useAgentToolEvents`  | `useAgentToolEvents`  | One agent thread's tool lifecycle as a `ComputedRef` of discriminated events.     |
+| `useVoiceAgent`       | `useVoiceAgent`       | Full-duplex voice call — refs for status/transcript/level, `startCall`/`endCall`. |
+
+`useVoiceAgent` opens nothing until `startCall()` — that call is what requests the microphone, so it must run from a user gesture. `endCall()` releases the socket, the mic tracks and the Web Audio graph, and `onScopeDispose` runs it for you on unmount.
 
 ## Related
 

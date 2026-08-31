@@ -254,6 +254,14 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `SubscriptionError` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `SubscriptionErrorCallback` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `Unauthenticated` (const)
 
 ```ts
@@ -478,6 +486,7 @@ interface UsePresenceResult<L extends ListPresentReference> {
 
 ```ts
 interface UseQueryOptions {
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -608,7 +617,7 @@ const createLunora: (client: LunoraClient) => {
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>) => Ref<T | undefined>;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>) => Ref<T>;
 ```
 
 ### `provideLunora` (const)

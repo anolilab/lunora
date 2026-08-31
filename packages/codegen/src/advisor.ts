@@ -24,6 +24,7 @@ import type {
     ContainerIR,
     ContainerKeyAccessIR,
     ContainerOverrideIR,
+    ContextPropertyCallIR,
     FailOpenGuardIR,
     FlagReadIR,
     FlagSecurityDefaultIR,
@@ -45,7 +46,6 @@ import type {
     ProcedureMiddlewareIR,
     QueryReadIR,
     QueueIR,
-    R2sqlCallIR,
     RatelimitKeySelectorIR,
     RawRowReturnIR,
     RelationLoadIR,
@@ -191,6 +191,7 @@ interface LintSchemaOptions {
     geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<HttpActionGuardIR>;
     httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>;
+    hyperdriveCalls?: ReadonlyArray<ContextPropertyCallIR>;
     identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>;
     imageDeliveryUrlAccesses?: ReadonlyArray<ImageDeliveryUrlAccessIR>;
     inserts?: ReadonlyArray<InsertWriteIR>;
@@ -209,7 +210,7 @@ interface LintSchemaOptions {
     procedureProtections?: ReadonlyArray<ProcedureMiddlewareIR>;
     queries?: ReadonlyArray<QueryReadIR>;
     queues?: ReadonlyArray<QueueIR>;
-    r2sqlCalls?: ReadonlyArray<R2sqlCallIR>;
+    r2sqlCalls?: ReadonlyArray<ContextPropertyCallIR>;
     ratelimitKeySelectors?: ReadonlyArray<RatelimitKeySelectorIR>;
     rawRowReturns?: ReadonlyArray<RawRowReturnIR>;
     relationLoads?: ReadonlyArray<RelationLoadIR>;

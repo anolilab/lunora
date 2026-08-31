@@ -14,12 +14,13 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
+import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
 import { createNodeShardKvStore } from "./node-kv-store";
 import type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
 import { createNodeQueueHost } from "./node-queue-host";
+import { createNodeR2Bucket } from "./node-r2-bucket";
 import type { NodeSchedulerHostOptions } from "./node-scheduler-host";
 import { createNodeSchedulerHost } from "./node-scheduler-host";
 import type { NodeShardHostOptions } from "./node-shard-host";
@@ -27,9 +28,15 @@ import { createNodeShardHost } from "./node-shard-host";
 import type { NodeShardRegistryOptions } from "./node-shard-registry";
 import { createNodeShardRegistry } from "./node-shard-registry";
 import { createNodeSocketHost } from "./node-socket-host";
+import type { NodeWorkflowHost } from "./node-workflow-host";
+import { createNodeWorkflowHost } from "./node-workflow-host";
+import { createNodeWorkflowStore } from "./node-workflow-store";
 
 /** Every contract this package provides, composed for one Node process. */
-export interface NodePlatform<Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>> {
+export interface NodePlatform<
+    Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>,
+    Workflows extends Record<string, { isLunoraWorkflow: true }> = Record<string, never>,
+> {
     /** `using platform = createNodePlatform(...)` support — delegates to `close()`. */
     [Symbol.dispose]: () => void;
 
@@ -77,6 +84,14 @@ export interface NodePlatform<Queues extends Record<string, { isLunoraQueue: tru
     kv: ShardKvStore;
 
     /**
+     * The local-filesystem bucket, or `undefined` when the caller named no
+     * bucket directory. Same reasoning as `queues`: `objectStorage` is rated
+     * `emulated`, so codegen emits `ctx.storage` for this target, and a bucket
+     * nobody bound fails at the first `put` with nothing upstream to warn.
+     */
+    objectStorage?: R2BucketLike;
+
+    /**
      * The declared queues, or `undefined` when the caller declared none.
      *
      * Present only when `queues` is passed: with no declarations there is
@@ -91,6 +106,13 @@ export interface NodePlatform<Queues extends Record<string, { isLunoraQueue: tru
     shard: ShardHost;
     /** Socket registry with mutable tags and SQLite-persisted attachments. */
     sockets: SocketHost;
+
+    /**
+     * The declared workflows, or `undefined` when the caller declared none.
+     * Runs are persisted to the same `better-sqlite3` database as the shard, so
+     * they survive a restart without a second store to configure.
+     */
+    workflows?: NodeWorkflowHost<Workflows>;
 }
 
 /**
@@ -101,8 +123,23 @@ export interface NodePlatform<Queues extends Record<string, { isLunoraQueue: tru
  * or job with nowhere to land is bookkeeping. `directory` makes the shards the
  * directory resolves for fan-out file-backed too, and `onAlarm` gives their
  * durable alarms somewhere to land.
+ *
+ * `queues`, `workflows` and `objectStorageDirectory` are the three
+ * declarations: each binds its half of an `emulated` capability, and each is
+ * absent from the returned platform when its declaration is omitted.
  */
-export type NodePlatformOptions<Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>> = {
+export type NodePlatformOptions<
+    Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>,
+    Workflows extends Record<string, { isLunoraWorkflow: true }> = Record<string, never>,
+> = {
+    /**
+     * Directory the object-storage bucket keeps its objects in, one file per
+     * key. Omit when the app declares no buckets — there is no default,
+     * because a bucket silently rooted at the process's working directory is
+     * worse than an absent one.
+     */
+    objectStorageDirectory?: string;
+
     /**
      * Deliver one assembled queue batch — wire this to `dispatchQueueBatch`.
      * Required alongside `queues`; without it the messages would be stored
@@ -111,14 +148,19 @@ export type NodePlatformOptions<Queues extends Record<string, { isLunoraQueue: t
     onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
     /** The app's `defineQueue` results, keyed by export name. Omit when the app declares no queues. */
     queues?: Queues;
+    /** The app's `defineWorkflow` results, keyed by export name. Omit when the app declares no workflows. */
+    workflows?: Workflows;
 } & NodeSchedulerHostOptions &
     NodeShardHostOptions &
     NodeShardRegistryOptions;
 
 /** Compose every contract this package provides over one `better-sqlite3` database. */
-export const createNodePlatform = <Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>>(
-    options: NodePlatformOptions<Queues> = {},
-): NodePlatform<Queues> => {
+export const createNodePlatform = <
+    Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>,
+    Workflows extends Record<string, { isLunoraWorkflow: true }> = Record<string, never>,
+>(
+    options: NodePlatformOptions<Queues, Workflows> = {},
+): NodePlatform<Queues, Workflows> => {
     const { database, dispose: disposeShard, drain, host: shard } = createNodeShardHost(options);
     const kv = createNodeShardKvStore(database);
     const registry = createNodeShardRegistry(options);
@@ -126,11 +168,12 @@ export const createNodePlatform = <Queues extends Record<string, { isLunoraQueue
     const { socket: sockets } = createNodeSocketHost(database);
     const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, options);
 
-    // Composed here rather than left for a caller to assemble: `NODE_CAPABILITIES`
-    // rates queues `emulated`, and codegen emits the whole `ctx.queues` surface
-    // for anything not rated `unsupported`. A host that declares the capability
-    // and binds nothing is the one combination that fails at runtime with no
-    // diagnostic anywhere before it.
+    // Queues, workflows and object storage are all composed here rather than
+    // left for a caller to assemble: `NODE_CAPABILITIES` rates all three
+    // `emulated`, and codegen emits the whole `ctx.queues` / `ctx.workflows` /
+    // `ctx.storage` surface for anything not rated `unsupported`. A host that
+    // declares the capability and binds nothing is the one combination that
+    // fails at runtime with no diagnostic anywhere before it.
     const queues =
         options.queues === undefined
             ? undefined
@@ -146,6 +189,15 @@ export const createNodePlatform = <Queues extends Record<string, { isLunoraQueue
                   queues: options.queues,
               });
 
+    const objectStorage = options.objectStorageDirectory === undefined ? undefined : createNodeR2Bucket({ directory: options.objectStorageDirectory });
+
+    // The shard's own connection carries the run rows, so a caller that wants
+    // durable workflows does not have to configure a second store — and cannot
+    // accidentally get the in-process one, which `createNodeWorkflowHost`
+    // refuses to default to for exactly that reason.
+    const workflows =
+        options.workflows === undefined ? undefined : createNodeWorkflowHost({ store: createNodeWorkflowStore(database), workflows: options.workflows });
+
     const close = (): void => {
         // Scheduler timers first: `disposeShard` closes the connection, and a
         // job timer that fired in between would find it closed. Both are
@@ -156,5 +208,18 @@ export const createNodePlatform = <Queues extends Record<string, { isLunoraQueue
         registry.close();
     };
 
-    return { capabilities: NODE_CAPABILITIES, close, directory, drain, kv, queues, scheduler, shard, sockets, [Symbol.dispose]: close };
+    return {
+        capabilities: NODE_CAPABILITIES,
+        close,
+        directory,
+        drain,
+        kv,
+        objectStorage,
+        queues,
+        scheduler,
+        shard,
+        sockets,
+        workflows,
+        [Symbol.dispose]: close,
+    };
 };

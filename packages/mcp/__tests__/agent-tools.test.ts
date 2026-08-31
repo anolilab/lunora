@@ -279,3 +279,44 @@ describe(callAgentTool, () => {
         expect(parseText(result)).toStrictEqual({ status: "running", threadKey: "t-1" });
     });
 });
+
+describe("awaiting_input is a stopped state", () => {
+    // `AgentThreadStatus` is "awaiting_input" | "cancelled" | "error" | "idle" |
+    // "running". Treating `awaiting_input` as still-running burned the whole
+    // `maxWaitMs` budget — one admin query per poll — on every human-in-the-loop
+    // pause, then returned `status: "running"` with a hint to poll a tool that
+    // would answer `awaiting_input` forever. MCP has no way to supply the input.
+    it("returns immediately instead of polling out the budget", async () => {
+        expect.assertions(4);
+
+        const client = mockClient({
+            messages: [{ content: "Ready to charge the card. Approve?", role: "assistant" }],
+            threads: [{ status: "awaiting_input" }],
+        });
+
+        const result = await callAgentTool(
+            client.asClient,
+            "agent_billing",
+            { prompt: "refund order 7" },
+            baseOptions({ maxWaitMs: 60_000, pollIntervalMs: 600 }),
+        );
+        const payload = parseText(result);
+
+        expect(result.isError).toBeUndefined();
+        expect(payload["status"]).toBe("awaiting_input");
+        expect(String(payload["hint"])).toContain("approval");
+        // One thread poll + one message read — not ~100 polls.
+        expect(client.query).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports awaiting_input from the generic status tool too", async () => {
+        expect.assertions(2);
+
+        const client = mockClient({ messages: [], threads: [{ status: "awaiting_input" }] });
+        const result = await callAgentTool(client.asClient, "lunora_agent_status", { threadKey: "t-x" }, baseOptions());
+        const payload = parseText(result);
+
+        expect(result.isError).toBeUndefined();
+        expect(payload["status"]).toBe("awaiting_input");
+    });
+});

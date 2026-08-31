@@ -30,6 +30,7 @@ interface ComposedApp extends LunoraWorker {
 class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private cdcEnabled = false;
+    private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
@@ -53,6 +54,17 @@ class AppBuilder<Env extends object> {
      */
     public cdc(enabled = true): this {
         this.cdcEnabled = enabled;
+
+        return this;
+    }
+
+    /**
+     * Enable the per-shard reactive query cache: query results are memoized by `(functionPath, args, identity)` and invalidated by the ctx-db write hooks BEFORE the subscription broadcast, so a subscriber re-running its query always observes the post-write state.
+     *
+     * Off by default (every dispatch re-runs its handler). Pass an options object to tune the caps: `maxEntries` (default 1000) and `maxBytes` (default 4 MiB); either accepts `Number.POSITIVE_INFINITY` to disable that cap.
+     */
+    public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {
+        this.reactiveCacheConfig = config;
 
         return this;
     }
@@ -101,6 +113,7 @@ class AppBuilder<Env extends object> {
     private assemble(): ComposedApp {
         const ShardDO = createShardDO({
             cdc: this.cdcEnabled,
+            reactiveCache: this.reactiveCacheConfig,
         });
 
         // Per-isolate singletons: the worker (and auth instance) are expensive to

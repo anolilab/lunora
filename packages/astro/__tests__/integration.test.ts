@@ -108,7 +108,7 @@ describe("lunora() Astro integration", () => {
             directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
             writeFileSync(
                 join(directory, "worker.ts"),
-                'import { withLunora } from "@lunora/astro/server";\nexport default withLunora(astroWorker, { shardDO: env.SHARD });\n',
+                'import { withLunora } from "@lunora/astro";\nexport default withLunora(astroWorker, (env) => ({ shardDO: env.SHARD }));\n',
             );
 
             const warn = vi.fn<(message: string) => void>();
@@ -128,7 +128,7 @@ describe("lunora() Astro integration", () => {
             // guard must look for an actual `withLunora(...)` call, not mere
             // presence of the identifier.
             directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
-            writeFileSync(join(directory, "worker.ts"), 'import { withLunora } from "@lunora/astro/server";\nexport default astroWorker;\n');
+            writeFileSync(join(directory, "worker.ts"), 'import { withLunora } from "@lunora/astro";\nexport default astroWorker;\n');
 
             const warn = vi.fn<(message: string) => void>();
             const integration = lunora({ serverEntry: "worker.ts" });
@@ -138,6 +138,33 @@ describe("lunora() Astro integration", () => {
 
             expect(warn).toHaveBeenCalledTimes(1);
             expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` call/u);
+        });
+
+        it("prints a wiring snippet that actually resolves and runs", () => {
+            expect.assertions(4);
+
+            // Regression: the snippet told the user to import `withLunora` from
+            // `@lunora/astro/server` — which only re-exports `@lunora/client/ssr`, so
+            // the import is unresolved — and wrote `env.SHARD` at module top level
+            // where `env` is not in scope, a `ReferenceError`. The remedy for the
+            // warning was itself two errors.
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+            writeFileSync(join(directory, "worker.ts"), "export default astroWorker;\n");
+
+            const warn = vi.fn<(message: string) => void>();
+            const integration = lunora({ serverEntry: "worker.ts" });
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            const message = warn.mock.calls[0]?.[0] ?? "";
+
+            expect(message).toContain('from "@lunora/astro"');
+            expect(message).not.toContain("@lunora/astro/server");
+            // `env` is only ever reached through the `(env) => options` factory …
+            expect(message).toContain("(env) => ({ shardDO: env.SHARD");
+            // … never as a bare top-level reference.
+            expect(message).not.toMatch(/^export default withLunora\(astroWorker, \{ shardDO: env\./mu);
         });
 
         it("warns (does not throw) when serverEntry exists but cannot be read", () => {
