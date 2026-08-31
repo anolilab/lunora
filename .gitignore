@@ -109,8 +109,10 @@ dist/
 
 # Playwright artifacts
 test-results/
+test-results-cloud/
 test-results-examples/
 playwright-report/
+playwright-report-cloud/
 playwright-report-examples/
 
 # Claude
