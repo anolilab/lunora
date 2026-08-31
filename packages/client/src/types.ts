@@ -350,6 +350,8 @@ export interface LunoraClientOptions {
      */
     connectTimeoutMs?: number;
 
+    /* eslint-disable jsdoc/check-indentation -- intentional bullet list enumerating which surfaces a follower is served */
+
     /**
      * When `true`, tabs sharing the same origin (and the same signed-in identity)
      * coordinate via BroadcastChannel so only one tab — the "leader" — opens
@@ -381,6 +383,7 @@ export interface LunoraClientOptions {
      * use shapes, whispers, streams, or connection context.
      */
     crossTabSync?: boolean;
+    /* eslint-enable jsdoc/check-indentation */
     fetch?: typeof fetch;
 
     /**

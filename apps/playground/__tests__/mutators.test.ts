@@ -21,9 +21,8 @@ import { sendMessage } from "../lunora/mutators";
  * `server` impl runs, so `auth` is the whole surface they touch. Typed off the
  * handler's own parameter so a change to that signature surfaces here.
  */
-const contextFor = (userId: string | undefined): Parameters<typeof sendMessage.handler>[0] => {
-    return { auth: { userId } } as Parameters<typeof sendMessage.handler>[0];
-};
+const contextFor = (userId: string | undefined): Parameters<typeof sendMessage.handler>[0] =>
+    ({ auth: { userId } }) as Parameters<typeof sendMessage.handler>[0];
 
 const validArgs = (overrides: Record<string, unknown> = {}): Record<string, unknown> => {
     return {

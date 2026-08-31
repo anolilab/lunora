@@ -59,7 +59,11 @@ describe("wire-codec fixtures", () => {
     it.each(rejected.map((testCase) => [testCase.name, testCase.encoded] as const))("rejects %s", (_name, encoded) => {
         expect.hasAssertions();
 
-        expect(() => decodeWire(encoded)).toThrow();
+        // Only that it throws with a message, not which one: a bad base64 payload
+        // surfaces the host's own `atob` DOMException, whose wording differs
+        // between runtimes, while the codec's own refusals are `wire-codec:`
+        // TypeErrors. Pinning either spelling would fail on the other.
+        expect(() => decodeWire(encoded)).toThrow(/./u);
     });
 });
 

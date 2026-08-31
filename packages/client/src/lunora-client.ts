@@ -1049,6 +1049,8 @@ class LunoraClient {
 
     /** Live shape subscriptions (partial replication), keyed by their wire id. */
 
+    /* eslint-disable jsdoc/check-indentation, jsdoc/no-undefined-types -- intentional numbered list; `subscribeScheduledJobs`/`mutation` are methods on this class, which the rule cannot resolve */
+
     /**
      * Teardown callbacks for the admin sockets {@link subscribeScheduledJobs}
      * opens. Those run their own reconnect loop off a closure-local `closed`
@@ -1075,6 +1077,7 @@ class LunoraClient {
      *    racing write was never in the queue.
      */
     private readonly offlineFlushes = new Map<string, Promise<void>>();
+    /* eslint-enable jsdoc/check-indentation, jsdoc/no-undefined-types */
 
     private readonly shapeSubscriptions = new Map<string, ShapeSubscriptionState>();
 
@@ -2085,6 +2088,8 @@ class LunoraClient {
         return demuxBatchResults(body.results ?? [], calls.length);
     }
 
+    /* eslint-disable jsdoc/check-indentation, no-secrets/no-secrets -- intentional bullet list; the back-ticked `Promise<ReturnOf<F>>` type is prose, not a credential */
+
     /**
      * Invoke a mutation. Errors propagate as rejections.
      *
@@ -2111,6 +2116,7 @@ class LunoraClient {
      * on a mutation's return value in an offline-capable app —
      * {@link LunoraClient.importRows} documents the same caveat for its counts.
      */
+    /* eslint-enable jsdoc/check-indentation, no-secrets/no-secrets */
     public async mutation<F extends FunctionReference>(
         function_: F,
         args: ArgsOf<F>,
@@ -6306,6 +6312,8 @@ class LunoraClient {
         this.clearQueryCacheForIdentityChange();
     }
 
+    /* eslint-disable no-secrets/no-secrets -- the back-ticked method name in the prose below, not a credential */
+
     /**
      * Migrate every identity stamp from `from` to `to` — used when the auth
      * identity label changes but the underlying credential (token) does NOT, e.g.
@@ -6323,6 +6331,7 @@ class LunoraClient {
      * `setAuthToken`'s sticky-`subject` contract promises to protect. The queue's
      * own re-stamp covers both the entry and its durable record.
      */
+    /* eslint-enable no-secrets/no-secrets */
     private restampQueuedIdentity(from: string | null, to: string | null): void {
         for (const [id, stamp] of this.queuedIdentities) {
             if (stamp === from) {
@@ -6422,13 +6431,18 @@ class LunoraClient {
             return;
         }
 
-        const flush = (previous ?? Promise.resolve()).then(async () => {
+        // An async IIFE rather than `.then()`: this is a sequencing barrier with
+        // no value to pass along, and chaining off `previous` is what serializes
+        // overlapping flushes for the same shard.
+        const flush = (async () => {
+            await (previous ?? Promise.resolve());
+
             try {
                 await this.drainOfflineQueue(shardKey);
             } catch {
                 /* per-item verdicts are settled inside the drain — never poison the chain */
             }
-        });
+        })();
 
         this.offlineFlushes.set(key, flush);
 

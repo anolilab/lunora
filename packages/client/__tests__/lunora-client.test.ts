@@ -36,7 +36,13 @@ interface MockSocket {
 
 const sockets: MockSocket[] = [];
 
-const createMockWebSocket = (): typeof WebSocket => {
+/**
+ * @param deferClose Dispatch `close` on a macrotask instead of synchronously, as
+ * a browser does. The synchronous default accidentally hides ordering bugs:
+ * `teardownConnection` clears `conn.socket` AFTER calling `close()`, so a
+ * same-tick close still finds the identity guard satisfied.
+ */
+const createMockWebSocket = (deferClose = false): typeof WebSocket => {
     class WS {
         public readonly url: string;
 
@@ -95,6 +101,14 @@ const createMockWebSocket = (): typeof WebSocket => {
         }
 
         public close(): void {
+            if (deferClose) {
+                setTimeout(() => {
+                    this.triggerClose();
+                }, 0);
+
+                return;
+            }
+
             this.triggerClose();
         }
 
@@ -4682,73 +4696,19 @@ describe("lunoraClient", () => {
     });
 
     describe("lunoraClient — a torn-down connection settles the streams it was carrying", () => {
-        /**
-         * A WebSocket double whose `close()` fires the `close` event on a LATER
-         * turn, the way a real browser socket does. The shared double above fires
-         * it synchronously, which accidentally hides this bug: `teardownConnection`
-         * clears `conn.socket` right AFTER calling `close()`, so a synchronous
-         * close still finds the identity guard satisfied and reaches
-         * `handleDisconnect`. With the real (deferred) ordering the guard has
-         * already tripped and nothing settles the stream.
-         */
-        const createDeferredCloseWebSocket = (): typeof WebSocket => {
-            class WS {
-                public readonly url: string;
-
-                public readyState = 0;
-
-                private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
-
-                public constructor(url: string) {
-                    this.url = url;
-                    deferredSockets.push(this);
-                }
-
-                public addEventListener(type: string, listener: (event?: unknown) => void): void {
-                    const existing = this.listeners.get(type) ?? [];
-
-                    existing.push(listener);
-                    this.listeners.set(type, existing);
-                }
-
-                public open(): void {
-                    this.readyState = 1;
-                    this.dispatch("open");
-                }
-
-                // eslint-disable-next-line class-methods-use-this -- test double: never actually sends
-                public send(): void {}
-
-                public close(): void {
-                    this.readyState = 3;
-                    setTimeout(() => {
-                        this.dispatch("close");
-                    }, 0);
-                }
-
-                private dispatch(type: string, event?: unknown): void {
-                    for (const listener of this.listeners.get(type) ?? []) {
-                        listener(event);
-                    }
-                }
-            }
-
-            return WS as unknown as typeof WebSocket;
-        };
-
-        const deferredSockets: { open: () => void }[] = [];
-
         it("fails an in-flight stream when cross-tab leadership is lost instead of hanging its consumer", async () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             vi.useFakeTimers();
-            deferredSockets.length = 0;
+            sockets.length = 0;
 
             const client = new LunoraClient({
                 crossTabSync: true,
                 fetch: async () => jsonResponse({ result: {} }),
                 url: "https://app.example",
-                WebSocket: createDeferredCloseWebSocket(),
+                // Deferred close: a browser dispatches `close` on a later turn, and
+                // the synchronous default hides this bug entirely.
+                WebSocket: createMockWebSocket(true),
             });
 
             try {
@@ -4757,25 +4717,25 @@ describe("lunoraClient", () => {
                 // Solo self-promotion (default 3s leaderTimeout) opens the socket.
                 await vi.advanceTimersByTimeAsync(3100);
 
-                expect(deferredSockets).toHaveLength(1);
+                expect(sockets).toHaveLength(1);
 
-                deferredSockets[0]?.open();
+                sockets[0]?.open();
 
                 const iterable = client.stream(fnRef("s:tail") as FunctionReference<"stream">, {});
 
                 let outcome = "pending";
+                const drained: unknown[] = [];
                 const consumer = (async () => {
-                    for await (const _chunk of iterable) {
-                        /* drain */
-                    }
-                })().then(
-                    () => {
+                    try {
+                        for await (const chunk of iterable) {
+                            drained.push(chunk);
+                        }
+
                         outcome = "completed";
-                    },
-                    (error: unknown) => {
+                    } catch (error: unknown) {
                         outcome = (error as Error).message;
-                    },
-                );
+                    }
+                })();
 
                 // An identity change stops the coordinator, and a leader that stops
                 // fires `onStopBeingLeader` → `teardownConnection`. That clears
@@ -4788,6 +4748,10 @@ describe("lunoraClient", () => {
                 expect(outcome).toContain("torn down");
 
                 await consumer;
+
+                // The teardown settles the stream by failing it, so the consumer
+                // never saw a frame — it must not have silently completed empty.
+                expect(drained).toHaveLength(0);
             } finally {
                 client.close();
                 vi.useRealTimers();
@@ -4920,7 +4884,7 @@ describe("lunoraClient", () => {
                 hydratedQueryCache: Map<string, unknown>;
                 subscriptions: { all: () => unknown[] };
             };
-            const {subscribers} = (client as unknown as { clientQueryStore: { subscribers: Map<string, Set<unknown>> } }).clientQueryStore;
+            const { subscribers } = (client as unknown as { clientQueryStore: { subscribers: Map<string, Set<unknown>> } }).clientQueryStore;
 
             expect(internals.subscriptions.all()).toHaveLength(1);
             expect(subscribers.size).toBe(1);
