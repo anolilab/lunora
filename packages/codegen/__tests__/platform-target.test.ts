@@ -348,6 +348,27 @@ describe("app-declarable signals with no capability row", () => {
         expect(result.diagnostics[0]?.message).toContain("durable streams");
     });
 
+    it("diagnoses a `.commitOrdered()` table the target cannot order", async () => {
+        expect.assertions(3);
+
+        // `commitOrderedTables` was rated in every matrix and read by nothing, so
+        // a host marking it unsupported emitted the full `.commitOrdered()`
+        // surface and silently dropped the ordering guarantee — which is the only
+        // thing the feature is.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const matrix: PlatformCapabilities = {
+            features: { commitOrderedTables: { level: "unsupported" } },
+            id: "some-host",
+            name: "Some Host",
+        };
+
+        const result = gateAgainstMatrix(ALL_OFF, matrix, "some-host", { commitOrderedTables: true });
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.name).toBe("platform_unsupported_feature");
+        expect(result.diagnostics[0]?.message).toContain("commit-ordered tables");
+    });
+
     it("fails closed on an unrated app-declarable feature", async () => {
         expect.assertions(2);
 
