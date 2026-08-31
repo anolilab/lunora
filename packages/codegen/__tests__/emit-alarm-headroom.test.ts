@@ -5,12 +5,13 @@ import discoverSchema from "../src/discover/schema";
 import { emitShard } from "../src/emit";
 
 /**
- * Plan 207 step 2: alarm-driven writes (TTL sweeps, via `deleteRowThroughWriter`)
- * must be metered like every other write path, via a BY-VALUE tracker threaded
- * through the override rather than an ambient instance field (which would race a
- * concurrent `/rpc` dispatch or a sibling alarm work item). `deleteRowThroughWriter`
- * is emitted unconditionally for any schema with tables — no `.ttl()`/`.source()`
- * needed to exercise it, unlike `pollExternalSources` (see `emit-external-source.test.ts`).
+ * Plan 207 step 2: alarm-driven writes (TTL sweeps) must be metered like every
+ * other write path, via a BY-VALUE tracker threaded through the override rather
+ * than an ambient instance field (which would race a concurrent `/rpc` dispatch or
+ * a sibling alarm work item). The sweep routes through `runShardWrite` — the one
+ * single-row writer seam — which is emitted unconditionally for any schema with
+ * tables, so no `.ttl()`/`.source()` is needed to exercise it (unlike
+ * `pollExternalSources`, see `emit-external-source.test.ts`).
  */
 
 const discover = (source: string) => {
@@ -30,19 +31,22 @@ const PLAIN = `
     });
 `;
 
-describe("emitShard — deleteRowThroughWriter alarm headroom (plan 207)", () => {
+describe("emitShard — runShardWrite alarm headroom (plan 207)", () => {
     it("threads an optional headroom parameter through to the writer, falling back to the per-dispatch meter", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const shard = emitShard({ schema: discover(PLAIN) });
 
         // The signature accepts an explicit BY-VALUE override (the TTL sweep's
         // fresh per-pass tracker) ...
-        expect(shard).toContain("protected override async deleteRowThroughWriter(table: string, id: string, headroom?: TransactionHeadroomTracker)");
-        // ... which the writer uses when supplied, and otherwise falls back to the
-        // SAME per-dispatch meter every other write goes through (so a plain
-        // `/rpc`-dispatched runShardBulkDelete stays metered exactly like before).
+        expect(shard).toContain("protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker)");
+        // ... which the writer uses when supplied, and otherwise falls back to
+        // `this.transactionHeadroom()` — which for an ADMIN rpc is `undefined`,
+        // since `handleAdminRpc` answers before `beginDispatch`.
         expect(shard).toContain("headroom: headroom ?? this.transactionHeadroom()");
+        // Every by-id op pins its table, so a row that vanished between an admin
+        // read and this write cannot fall through to the `.global()` D1 twin.
+        expect(shard).toContain('await writer.delete(args.id ?? "", args.table);');
         // `TransactionHeadroomTracker` is a TYPE-only reference here — it must
         // already be in the generated file's import list (buildDoTypeImports),
         // not a new runtime import this override would need.

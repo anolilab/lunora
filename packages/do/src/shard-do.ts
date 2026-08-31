@@ -2109,7 +2109,7 @@ abstract class ShardDO {
      * Subclasses implement function dispatch.
      *
      * `headroom` is an optional BY-VALUE override, mirroring
-     * {@link ShardDO.deleteRowThroughWriter}'s pattern: the main `/rpc` dispatch
+     * {@link ShardDO.runShardWrite}'s pattern: the main `/rpc` dispatch
      * (`handleFetchCloudflare`) captures its freshly-minted tracker in a LOCAL and
      * passes it here explicitly, so the ctx this dispatch builds never depends on
      * `this.currentTransactionHeadroom` still holding the right value by the time
@@ -2992,32 +2992,16 @@ abstract class ShardDO {
      * so it reports the table as unknown; the codegen-generated subclass overrides
      * this to run the op against a live `createShardCtxDb(...)` writer (which
      * maintains the FTS/aggregate/rank shadow tables and runs validators).
+     *
+     * The single seam every writer-routed single-row write goes through — a studio
+     * row edit, a bulk row op, a TTL expiry. `headroom` is an optional BY-VALUE
+     * meter: a normal `/rpc` dispatch omits it and the override falls back to
+     * `this.transactionHeadroom()`, while {@link ShardDO.pollTtlSweeps} (an alarm
+     * work item, no dispatch in flight) passes its own tracker explicitly.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
-    protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+    protected runShardWrite(args: RunShardWriteArgs, _headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
         return Promise.reject(new LunoraError("UNKNOWN_TABLE", `unknown table: ${args.table}`, { status: 404 }));
-    }
-
-    /**
-     * Delete one row by primary key THROUGH the schema-aware writer — the
-     * per-row seam {@link runShardBulkRowOp} loops over. Routing each delete
-     * through the writer (not raw SQL) is the whole point: it keeps the FTS /
-     * aggregate / rank shadow tables in sync and fires `onDelete` cascades,
-     * exactly like {@link runShardWrite}'s single-row delete.
-     *
-     * The base class can't build a writer without the user's `schema.ts`, so it
-     * reports the table as unknown; the codegen-generated subclass overrides
-     * this to call `writer.delete(id)` on a live `createShardCtxDb(...)` writer.
-     *
-     * `headroom` is an optional BY-VALUE override: {@link ShardDO.runShardBulkRowOp}
-     * (a normal `/rpc` dispatch) omits it, so the override falls back to
-     * `this.transactionHeadroom()` — the per-dispatch meter every other write
-     * already uses. {@link ShardDO.pollTtlSweeps} (an alarm work item, no dispatch
-     * in flight) passes its own fresh tracker explicitly instead.
-     */
-    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
-    protected deleteRowThroughWriter(_table: string, _id: string, _headroom?: TransactionHeadroomTracker): Promise<void> {
-        return Promise.reject(new LunoraError("UNKNOWN_TABLE", `unknown table: ${_table}`, { status: 404 }));
     }
 
     /**
@@ -4159,7 +4143,7 @@ abstract class ShardDO {
 
     /**
      * Sweep every `.ttl()` table once: page the rows past their expiry and remove
-     * each THROUGH the schema-aware writer (`deleteRowThroughWriter`) so companions
+     * each THROUGH the schema-aware writer (`runShardWrite`) so companions
      * / CDC / live subscriptions stay correct and a `.softDelete()` table soft-deletes
      * instead of physically removing the row. Work is bounded per tick
      * ({@link TTL_SWEEP_BATCH} × {@link TTL_SWEEP_MAX_BATCHES}) so a large backlog
@@ -6821,7 +6805,9 @@ abstract class ShardDO {
 
         if (isClear || functionPath === ADMIN_FUNCTIONS.deleteRows) {
             const parsed = isClear ? parseClearTableArgs(args) : parseBulkDeleteArgs(args);
-            const { count, hasMore } = await this.runShardBulkRowOp(parsed, (id) => this.deleteRowThroughWriter(parsed.table, id));
+            const { count, hasMore } = await this.runShardBulkRowOp(parsed, async (id) => {
+                await this.runShardWrite({ id, op: "delete", table: parsed.table });
+            });
             const result: RunShardBulkDeleteResult = { deleted: count, hasMore };
 
             this.recordAudit(isClear ? "clearTable" : "deleteRows", { table: parsed.table, detail: { ...result } });
@@ -10027,7 +10013,9 @@ abstract class ShardDO {
     }
 
     /**
-     * Delete one expired row through {@link ShardDO.deleteRowThroughWriter},
+     * Delete one expired row through {@link ShardDO.runShardWrite}, passing this
+     * sweep's own by-value meter (an alarm has no dispatch in flight, so the
+     * override's `this.transactionHeadroom()` fallback would be `undefined`),
      * absorbing a `TRANSACTION_LIMIT_EXCEEDED` as "batch full" rather than
      * letting it propagate — split out of {@link ShardDO.pollTtlSweeps} to keep
      * that method's own complexity down. Returns `true` when the limit was hit
@@ -10037,7 +10025,7 @@ abstract class ShardDO {
      */
     private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker, trace?: TraceRefLike): Promise<boolean> {
         try {
-            await this.deleteRowThroughWriter(table, id, headroom);
+            await this.runShardWrite({ id, op: "delete", table }, headroom);
 
             return false;
         } catch (error) {

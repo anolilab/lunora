@@ -342,8 +342,7 @@ abstract class ShardDO {
     protected runtimeAdvisories(): AdvisoryFinding[];
     protected runShardExport(_args: RunShardExportArgs): Promise<ExportRow[]>;
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult>;
-    protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult>;
-    protected deleteRowThroughWriter(_table: string, _id: string, _headroom?: TransactionHeadroomTracker): Promise<void>;
+    protected runShardWrite(args: RunShardWriteArgs, _headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult>;
     protected runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>): Promise<RunShardBulkRowResult>;
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{
         before: number;

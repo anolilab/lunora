@@ -686,7 +686,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             });
         }
 
-        protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+        protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
             const definition = (schema as unknown as SchemaLike).tables[args.table];
 
             if (!definition) {
@@ -714,6 +714,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
+                // An admin `/rpc` caller passes nothing, so this falls back to
+                // `this.transactionHeadroom()` — which for an admin RPC resolves to
+                // `undefined`: `handleAdminRpc` answers before `beginDispatch`, so no
+                // per-dispatch meter is in flight and a bulk loop is bounded by its
+                // per-call row cap alone. The TTL sweep (an alarm work item, no dispatch)
+                // passes its own by-value tracker explicitly instead.
+                headroom: headroom ?? this.transactionHeadroom(),
                 // Live predicate, same as the user-facing ctx — see `databaseOptions`.
                 inTransaction: () => this.isInTransaction(),
                 scheduler,
@@ -727,19 +734,23 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return { id, op: "insert" };
             }
 
+            // Every by-id op PINS `args.table`. Without it a row that is absent —
+            // deleted between an admin read and this write — falls through to the
+            // `.global()` D1 twin, which would apply a shard row's edit to a global
+            // table. The `.global()` guard above already proved this table is not one.
             if (args.op === "delete") {
-                await writer.delete(args.id ?? "");
+                await writer.delete(args.id ?? "", args.table);
 
                 return { id: args.id ?? null, op: "delete" };
             }
 
             if (args.op === "replace") {
-                await writer.replace(args.id ?? "", args.doc ?? {});
+                await writer.replace(args.id ?? "", args.doc ?? {}, args.table);
 
                 return { id: args.id ?? null, op: "replace" };
             }
 
-            await writer.patch(args.id ?? "", args.doc ?? {});
+            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
 
             return { id: args.id ?? null, op: "patch" };
         }
@@ -820,52 +831,6 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // database's `_id`s carry across verbatim and every foreign key
             // referencing them stays valid without a second remapping pass.
             return importShardRows(writer, schema as unknown as SchemaLike, { rows: args.rows, startLine: args.startLine });
-        }
-
-        protected override async deleteRowThroughWriter(table: string, id: string, headroom?: TransactionHeadroomTracker): Promise<void> {
-            const definition = (schema as unknown as SchemaLike).tables[table];
-
-            if (!definition) {
-                throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
-            }
-
-            // `.global()` tables live in D1, not this DO's SQLite — the same
-            // guard `runShardWrite` applies to single-row edits.
-            if (definition.shardMode?.kind === "global") {
-                throw new LunoraError("GLOBAL_TABLE_NOT_EDITABLE", `table "${table}" is global; edit it through D1, not the shard`, { status: 400 });
-            }
-
-            this.ensureMigrated();
-
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                // Admin and maintenance writes go through the SAME reactive-cache hooks as
-                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
-                // import, a CDC apply or a data-migration backfill writes without
-                // invalidating, and the next query answers from the pre-write snapshot.
-                ...this.ctxDbTuning(),
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                // `runShardBulkRowOp` (a normal `/rpc` dispatch) calls this with no
-                // explicit `headroom`, so it falls back to `this.transactionHeadroom()`.
-                // For an ADMIN rpc that fallback resolves to `undefined`:
-                // `handleAdminRpc` answers before `beginDispatch`, so no per-dispatch
-                // meter is in flight and the bulk loop is bounded by its per-call row
-                // cap alone. The TTL sweep (an alarm work item, no dispatch in flight)
-                // passes its own by-value tracker explicitly instead.
-                headroom: headroom ?? this.transactionHeadroom(),
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
-
-            // Routes through the writer (not raw SQL) so FTS / aggregate / rank
-            // shadow tables stay in sync and `onDelete` cascades fire — the
-            // bounded loop lives in the base `runShardBulkRowOp`.
-            await writer.delete(id);
         }
 
         protected override async runShardRankBefore(args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {

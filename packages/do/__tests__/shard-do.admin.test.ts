@@ -3173,10 +3173,13 @@ const todosSchema: SchemaLike = {
 /**
  * Drives the `__lunora_admin__:deleteRows` / `clearTable` / `patchRows` ops
  * through a real schema-aware writer, mirroring the codegen-generated subclass'
- * `deleteRowThroughWriter` and `runShardWrite` overrides. The base
- * `runShardBulkRowOp` owns the bounded id-collection loop;
- * this only supplies the per-row writer call, so the FTS / aggregate / rank
- * shadow tables stay in sync exactly like a single `writeRow`.
+ * `runShardWrite` override. The base `runShardBulkRowOp` owns the bounded
+ * id-collection loop; this only supplies the per-row writer call, so the FTS /
+ * aggregate / rank shadow tables stay in sync exactly like a single `writeRow`.
+ *
+ * ONE override covers all three ops, because they all route through the single
+ * `runShardWrite` seam. Pins `args.table` on every by-id call, as the generated
+ * override does, so an absent row raises rather than reaching a `.global()` twin.
  */
 class BulkOpsShard extends ShardDO {
     // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
@@ -3184,28 +3187,24 @@ class BulkOpsShard extends ShardDO {
         throw new Error("handleRpc must not run for admin RPCs");
     }
 
-    protected override async deleteRowThroughWriter(_table: string, id: string): Promise<void> {
-        await this.writer().delete(id);
-    }
-
     protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
-        if (args.op !== "patch") {
-            throw new Error(`unexpected op in the bulk harness: ${args.op}`);
-        }
-
-        await this.writer().patch(args.id ?? "", args.doc ?? {});
-
-        return { id: args.id ?? null, op: "patch" };
-    }
-
-    private writer(): DatabaseWriterLike {
-        return createShardContextDatabase({
+        const writer: DatabaseWriterLike = createShardContextDatabase({
             broadcast: (delta) => {
                 this.recordChangedTable(delta.table);
             },
             schema: todosSchema,
             sql: this.sql as SqlExec,
         });
+
+        if (args.op === "delete") {
+            await writer.delete(args.id ?? "", args.table);
+        } else if (args.op === "patch") {
+            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
+        } else {
+            throw new Error(`unexpected op in the bulk harness: ${args.op}`);
+        }
+
+        return { id: args.id ?? null, op: args.op };
     }
 }
 
@@ -3398,8 +3397,8 @@ describe("shardDO admin bulk delete", () => {
         const shard = new BareShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { table: "todos" }));
 
-        // The id collection succeeds, but the base `deleteRowThroughWriter`
-        // stub rejects the first row as an unknown table.
+        // The id collection succeeds, but the base `runShardWrite` stub rejects
+        // the first row as an unknown table.
         expect(response.status).toBe(404);
         await expect(response.json()).resolves.toMatchObject({ error: { code: "UNKNOWN_TABLE" } });
     });
