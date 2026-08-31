@@ -7535,6 +7535,14 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 
+### `ObjectColumnValidator` (interface)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `ParseOptions` (interface)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
 ### `SchemaNodeReader` (interface)
 
 Re-exported from `@lunora/values` — signature tracked at its source.

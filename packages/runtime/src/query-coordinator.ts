@@ -1246,6 +1246,9 @@ const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<str
  *
  * `orchestrateImport` has always resolved this case to the default shard. This
  * is that answer, made shareable.
+ *
+ * Callers that legitimately mean "no shards, no answer" pass `null` and keep the
+ * empty list — see `orchestrateRank`.
  */
 const withDefaultShard = (discovered: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): ReadonlyArray<string> =>
     discovered.length > 0 || defaultShardKey === null ? discovered : [defaultShardKey];

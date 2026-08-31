@@ -1,3 +1,26 @@
+## @lunora/studio [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.139...@lunora/studio@1.0.0-alpha.140) (2026-08-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.66
+* **@lunora/react:** upgraded to 1.0.0-alpha.71
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.83
+
+## @lunora/studio [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.138...@lunora/studio@1.0.0-alpha.139) (2026-08-30)
+
+### Documentation
+
+* **sharding:** .global() adoption path; drop a runtime lint that never fired ([#528](https://github.com/anolilab/lunora/issues/528)) ([e390e3f](https://github.com/anolilab/lunora/commit/e390e3f94a7aa7efc031e95411ade96a059a4528))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.100
+* **@lunora/client:** upgraded to 1.0.0-alpha.65
+* **@lunora/react:** upgraded to 1.0.0-alpha.70
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.82
+
 ## @lunora/studio [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.137...@lunora/studio@1.0.0-alpha.138) (2026-08-29)
 
 
