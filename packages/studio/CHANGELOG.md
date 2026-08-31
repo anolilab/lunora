@@ -1,3 +1,20 @@
+## @lunora/studio [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.140...@lunora/studio@1.0.0-alpha.141) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.101
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.43
+* **@lunora/client:** upgraded to 1.0.0-alpha.67
+* **@lunora/react:** upgraded to 1.0.0-alpha.72
+* **@lunora/mail:** upgraded to 1.0.0-alpha.56
+* **@lunora/notify:** upgraded to 1.0.0-alpha.30
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.84
+
 ## @lunora/studio [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.139...@lunora/studio@1.0.0-alpha.140) (2026-08-30)
 
 
