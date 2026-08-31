@@ -18,42 +18,55 @@
  * dependency's release — that is a different, already-guarded mechanism, not
  * catalog drift.
  *
- * NOT wired into CI/`postinstall` yet: one pre-existing violation ("stripe",
- * hand-pinned differently in `packages/payment` and `examples/payment-demo`)
- * means it does not pass clean — see plan 327 §9. Has a script entry
- * (`pnpm run lint:catalog-drift`) so it's runnable by hand; wire it into a
- * gate once that violation is resolved.
+ * Run by the `dependency-manifests` job in `.github/workflows/lint.yml`, and by
+ * hand as `pnpm run lint:catalog-drift`. (The header used to say it was unwired
+ * because of a pre-existing "stripe" violation; both the violation and the
+ * wiring gap are gone.)
  */
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const rootDir = join(import.meta.dirname, "..");
+import { workspaceGroups } from "./workspace-config.js";
 
-const WORKSPACE_GLOBS = ["apps", "packages", "examples", "tests"];
+const rootDir = join(import.meta.dirname, "..");
 
 const isSibling = (name) => name === "lunorash" || name.startsWith("@lunora/");
 
 const manifests = [];
 
-for (const group of WORKSPACE_GLOBS) {
+// From `pnpm-workspace.yaml`, not a hardcoded list: a new workspace glob was
+// otherwise never walked, and the `catch { continue }` below meant a group that
+// could not be read looked exactly like a group with nothing in it.
+for (const group of workspaceGroups()) {
     const groupDir = join(rootDir, group);
     let entries;
 
     try {
         entries = readdirSync(groupDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-    } catch {
-        continue;
+    } catch (error) {
+        console.error(`❌ pnpm-workspace.yaml declares "${group}/*" but ${group}/ could not be read: ${error.message}`);
+        process.exit(1);
     }
+
+    let found = 0;
 
     for (const entry of entries) {
         try {
             const manifest = JSON.parse(readFileSync(join(groupDir, entry.name, "package.json"), "utf8"));
 
             manifests.push({ dir: `${group}/${entry.name}`, manifest });
+            found += 1;
         } catch {
             continue;
         }
+    }
+
+    // A declared workspace glob with no readable member is a broken checkout or a
+    // stale glob, not a clean bill of health.
+    if (found === 0) {
+        console.error(`❌ pnpm-workspace.yaml declares "${group}/*" but no ${group}/*/package.json could be read — nothing was checked for that group.`);
+        process.exit(1);
     }
 }
 
@@ -100,4 +113,4 @@ if (violations > 0) {
     process.exit(1);
 }
 
-console.log("✅ No dependency is hand-pinned outside a catalog in more than one manifest.");
+console.log(`✅ No dependency is hand-pinned outside a catalog in more than one manifest (${manifests.length} manifests read).`);

@@ -24,7 +24,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,9 +59,55 @@ const codegenWorkspaces = () =>
         })
         .sort();
 
+/**
+ * Every `examples/*` that COMMITS a `lunora/_generated` tree, from git rather
+ * than from a hand-kept list.
+ *
+ * `codegenWorkspaces()` discovers by the presence of a `codegen` script, so
+ * renaming or deleting that script in one example silently drops it from the
+ * sweep — the run then prints "All 15 generators…" and stays green. Committed
+ * generated output is the thing that can go stale, so it is the floor: an
+ * example that commits one has to be covered.
+ */
+const committedGeneratedExamples = () => {
+    const raw = execFileSync("git", ["ls-files", "--", "examples/*/lunora/_generated/*"], { cwd: rootDir, encoding: "utf8" });
+
+    return [
+        ...new Set(
+            raw
+                .split("\n")
+                .filter(Boolean)
+                .map((path) => path.split("/").slice(0, 2).join("/")),
+        ),
+    ].sort();
+};
+
+const covered = new Set(codegenWorkspaces());
+const uncovered = committedGeneratedExamples().filter((dir) => !covered.has(dir));
+
+if (uncovered.length > 0) {
+    console.error(`❌ ${uncovered.length} example(s) commit a \`lunora/_generated\` tree that this sweep never regenerates:`);
+    console.error("");
+
+    for (const dir of uncovered) {
+        console.error(`   ${dir} — no \`codegen\` script in its package.json`);
+    }
+
+    console.error("");
+    console.error("   Restore the script (discovery keys on it), or stop committing the generated tree.");
+
+    process.exit(1);
+}
+
 /** The generators that own a committed file, in the order postinstall/build run them. */
 const GENERATORS = [
-    ["node", ["scripts/generate-labeler-config.js", "--skip-ci"]],
+    // NOT `--skip-ci`. That flag is for the root `postinstall`, and
+    // `generate-labeler-config.js` honours it by writing NOTHING when `CI` is
+    // set — which GitHub Actions always sets. Passing it here ran 15 of the 16
+    // generators in CI, satisfied the before/after comparison vacuously, and
+    // still printed "All 16 generators reproduce their committed output": add a
+    // package, let `labeler-config.yml` go stale, and only a local run noticed.
+    ["node", ["scripts/generate-labeler-config.js"]],
     ["node", ["scripts/generate-package-og-images.js"]],
     ["node", ["apps/docs/scripts/generate-packages.js"]],
     // Its own declared `codegen` script, not a hand-rolled CLI call: that is the
@@ -70,11 +116,197 @@ const GENERATORS = [
     ...codegenWorkspaces().map((dir) => ["pnpm", ["run", "codegen"], dir]),
 ];
 
+/** The newest mtime under `dir`, or 0 when it does not exist. */
+const newestMtime = (dir) => {
+    let newest = 0;
+    const queue = [dir];
+
+    while (queue.length > 0) {
+        const current = queue.pop();
+
+        let entries;
+
+        try {
+            entries = readdirSync(current, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+
+        for (const entry of entries) {
+            const full = join(current, entry.name);
+
+            if (entry.isDirectory()) {
+                queue.push(full);
+            } else if (entry.isFile()) {
+                newest = Math.max(newest, statSync(full).mtimeMs);
+            }
+        }
+    }
+
+    return newest;
+};
+
 if (!existsSync(cliBin)) {
     console.error(`❌ The \`lunora\` CLI is not built: ${cliBin} is missing.`);
     console.error("");
     console.error("   `lunora codegen` regenerates the examples' committed `lunora/_generated`");
     console.error("   trees, so this check needs a build first:");
+    console.error("");
+    console.error("     pnpm run build:packages");
+
+    process.exit(1);
+}
+
+/**
+ * The binary EXISTING is not the same as it being current.
+ *
+ * `lunora codegen` runs out of `packages/lunora/dist/bin.mjs`, which loads
+ * `@lunora/cli` then `@lunora/codegen` from THEIR `dist/`. Edit
+ * `packages/codegen/src/emit.ts`, run this without rebuilding, and the sweep
+ * regenerates every example with the OLD emitter, matches the committed tree,
+ * and prints a tick — the drift it exists to catch, reported as absent. CI
+ * happens to build first (`lint.yml`'s "Build packages" step), but nothing in
+ * this script required it, so a local run and a reordered workflow both lied.
+ *
+ * Two deliberate narrowings, both because a wider rule reports staleness that
+ * is not there and teaches everyone to ignore this gate:
+ *
+ *  - Only the umbrella's dependency closure. A dirty `packages/react/src` has
+ *    no bearing on what the emitter writes.
+ *  - Only sources git reports as DIRTY. `dist/` is restored from the build
+ *    cache with its cached mtimes and a branch checkout rewrites source mtimes
+ *    wholesale, so a plain "newest src vs newest dist" comparison calls most of
+ *    the repo stale in a freshly built tree. An uncommitted edit that postdates
+ *    the build is the case mtimes answer honestly.
+ */
+const emitterClosure = () => {
+    const dirOfName = new Map();
+
+    for (const entry of readdirSync(join(rootDir, "packages"), { withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+            continue;
+        }
+
+        try {
+            const { name } = JSON.parse(readFileSync(join(rootDir, "packages", entry.name, "package.json"), "utf8"));
+
+            dirOfName.set(name, `packages/${entry.name}`);
+        } catch {
+            continue;
+        }
+    }
+
+    const closure = new Set();
+    const queue = ["lunorash"];
+
+    while (queue.length > 0) {
+        const name = queue.pop();
+        const dir = dirOfName.get(name);
+
+        if (dir === undefined || closure.has(dir)) {
+            continue;
+        }
+
+        closure.add(dir);
+
+        const manifest = JSON.parse(readFileSync(join(rootDir, dir, "package.json"), "utf8"));
+
+        queue.push(...Object.keys(manifest.dependencies ?? {}).filter((dependency) => dirOfName.has(dependency)));
+    }
+
+    return closure;
+};
+
+const staleFromDirtySources = () => {
+    const closure = emitterClosure();
+    const raw = execFileSync("git", ["status", "--porcelain=v1", "--", "packages/*/src/*"], { cwd: rootDir, encoding: "utf8" });
+    const distMtime = new Map();
+    const stale = new Set();
+
+    for (const line of raw.split("\n")) {
+        if (line.trim() === "") {
+            continue;
+        }
+
+        // "XY <path>", and for a rename "XY <old> -> <new>" — the destination is
+        // the file on disk.
+        const path = line.slice(3).trim().split(" -> ").pop();
+        const packageDir = path.split("/").slice(0, 2).join("/");
+
+        if (!closure.has(packageDir)) {
+            continue;
+        }
+
+        if (!distMtime.has(packageDir)) {
+            distMtime.set(packageDir, newestMtime(join(rootDir, packageDir, "dist")));
+        }
+
+        const built = distMtime.get(packageDir);
+
+        if (built === 0) {
+            continue;
+        }
+
+        let sourceMtime;
+
+        try {
+            sourceMtime = statSync(join(rootDir, path)).mtimeMs;
+        } catch {
+            // Deleted source, `dist/` still carrying what it compiled to.
+            stale.add(packageDir);
+
+            continue;
+        }
+
+        if (sourceMtime > built) {
+            stale.add(packageDir);
+        }
+    }
+
+    return [...stale].sort();
+};
+
+/**
+ * The other half, and the one that gates the workflow rather than the developer:
+ * every package behind the emitter has to be BUILT.
+ *
+ * `lint.yml` runs `build:packages` before `lint:generated`, and if that step is
+ * ever dropped or reordered the sweep regenerates with whatever `dist/` happened
+ * to be lying around — on a fresh runner, nothing, and the examples would be
+ * rewritten from a half-resolved CLI. Asserted by presence rather than by mtime
+ * because a build cache legitimately restores `dist/` older than `src/`.
+ */
+const unbuilt = [...emitterClosure()].filter((dir) => !existsSync(join(rootDir, dir, "dist"))).sort();
+
+if (unbuilt.length > 0) {
+    console.error(`❌ ${unbuilt.length} package(s) behind \`lunora codegen\` are not built:`);
+    console.error("");
+
+    for (const dir of unbuilt) {
+        console.error(`   ${dir}`);
+    }
+
+    console.error("");
+    console.error("   The sweep loads the emitter from these dist/ trees, so it cannot run without them:");
+    console.error("");
+    console.error("     pnpm run build:packages");
+
+    process.exit(1);
+}
+
+const stale = staleFromDirtySources();
+
+if (stale.length > 0) {
+    console.error(`❌ ${stale.length} package(s) behind \`lunora codegen\` have uncommitted sources newer than their build output.`);
+    console.error("   The sweep would run an OLD emitter and report no drift:");
+    console.error("");
+
+    for (const dir of stale) {
+        console.error(`   ${dir}`);
+    }
+
+    console.error("");
+    console.error("   Rebuild before regenerating, or the comparison proves nothing:");
     console.error("");
     console.error("     pnpm run build:packages");
 
