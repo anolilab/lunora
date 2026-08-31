@@ -419,6 +419,13 @@ clears only once every concurrent call settles.
 - `getKey?`: row key extractor; defaults to `row._id`.
 - `scopeBy?`: a field that scopes the list (a shard key); makes the collection
   re-pointable via `db.scope.<table>`.
+- `shardKey?`: routes the `list` subscription — and the confirmed-mutation
+  watermark its frames advance the checkpoint gate from — to a specific shard's
+  Durable Object. **Set this on any collection whose table is `.shardBy()`'d.**
+  Without it the overlay gate compares against the default `""` watermark
+  bucket, which that shard's sequence line never advances, so optimistic rows
+  are held or dropped against a watermark that is not theirs — silent staleness,
+  with no error anywhere.
 - `load?`: `"eager"` to sync at boot, or `"lazy"` (default) to sync on first use
   (see [When collections load](#when-collections-load)).
 - `insert?`: `{ mutation, optimistic, toArgs }` to make the table writable

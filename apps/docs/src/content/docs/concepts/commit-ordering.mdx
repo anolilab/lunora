@@ -63,14 +63,12 @@ value and therefore compare equal.
 That makes this query complete:
 
 ```ts
-export const changesSince = internalQuery({
-    args: { cursor: v.number() },
-    handler: async (ctx, { cursor }) =>
-        ctx.db.orders.findMany({
-            where: { _commitSeq: { gt: cursor } },
-            orderBy: [{ _commitSeq: "asc" }],
-        }),
-});
+export const changesSince = internalQuery.input({ cursor: v.number() }).query(async ({ ctx, args: { cursor } }) =>
+    ctx.db.orders.findMany({
+        where: { _commitSeq: { gt: cursor } },
+        orderBy: [{ _commitSeq: "asc" }],
+    }),
+);
 ```
 
 Store the highest `_commitSeq` you have processed; ask for everything above it.

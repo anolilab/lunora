@@ -255,21 +255,20 @@ and its `log` alias, `warn`, `error`, `fatal`) and takes either console-style
 values or a structured message + **fields** object:
 
 ```ts
-export const placeOrder = mutation({
-    handler: async (ctx, args) => {
-        // Console-style: any number of values, joined into the message.
-        ctx.log.debug("placing order", args);
+export const placeOrder = mutation.mutation(async ({ ctx, args }) => {
+    // Console-style: any number of values, joined into the message.
+    ctx.log.debug("placing order", args);
 
-        // Structured: a message plus a fields object. The fields become
-        // filterable/indexable log-record attributes.
-        ctx.log.info("order placed", { orderId: order._id, total: order.total });
+    // Structured: a message plus a fields object. The fields become
+    // filterable/indexable log-record attributes.
+    ctx.log.info("order placed", { orderId: order._id, total: order.total });
 
-        // Bind context once with `.with(...)`; every line inherits it
-        // (per-call fields win on a key clash).
-        const log = ctx.log.with({ orderId: order._id });
-        log.warn("inventory low", { sku });
-        log.fatal("charge failed", { code: err.code });
-    },
+    // Bind context once with `.with(...)`; every line inherits it
+    // (per-call fields win on a key clash).
+    const log = ctx.log.with({ orderId: order._id });
+
+    log.warn("inventory low", { sku });
+    log.fatal("charge failed", { code: err.code });
 });
 ```
 
@@ -289,19 +288,17 @@ you a request took 900ms; it doesn't tell you _which part_ took 900ms. `ctx.trac
 wraps a sub-operation so it becomes its own span nested under the request:
 
 ```ts
-export const checkout = action({
-    handler: async (ctx, args) => {
-        const cart = await ctx.trace("cart.load", () => loadCart(args.cartId));
+export const checkout = action.input({ cartId: v.id("carts") }).action(async ({ ctx, args }) => {
+    const cart = await ctx.trace("cart.load", () => loadCart(args.cartId));
 
-        // Attributes are structured like log fields, and become span attributes.
-        const charge = await ctx.trace("stripe.charge", () => stripe.charges.create({ amount: cart.total }), { cartId: cart._id });
+    // Attributes are structured like log fields, and become span attributes.
+    const charge = await ctx.trace("stripe.charge", () => stripe.charges.create({ amount: cart.total }), { cartId: cart._id });
 
-        // Nesting is explicit: the body receives a tracer bound to its own span,
-        // and calling that is what makes a child.
-        await ctx.trace("fulfil", async (trace) => {
-            await Promise.all([trace("reserve.stock", () => reserve(cart)), trace("email.receipt", () => sendReceipt(charge))]);
-        });
-    },
+    // Nesting is explicit: the body receives a tracer bound to its own span,
+    // and calling that is what makes a child.
+    await ctx.trace("fulfil", async (trace) => {
+        await Promise.all([trace("reserve.stock", () => reserve(cart)), trace("email.receipt", () => sendReceipt(charge))]);
+    });
 });
 ```
 
@@ -538,19 +535,17 @@ The third signal, alongside logs and traces. A trace tells you what one request
 did; a metric tells you what a _million_ requests did.
 
 ```ts
-export const checkout = action({
-    handler: async (ctx, args) => {
-        const started = Date.now();
+export const checkout = action.action(async ({ ctx }) => {
+    const started = Date.now();
 
-        // "How many" — summed over time.
-        ctx.metrics.count("orders.placed", 1, { plan: user.plan });
+    // "How many" — summed over time.
+    ctx.metrics.count("orders.placed", 1, { plan: user.plan });
 
-        // "How many right now" — replaces the previous reading.
-        ctx.metrics.gauge("cart.items", cart.items.length);
+    // "How many right now" — replaces the previous reading.
+    ctx.metrics.gauge("cart.items", cart.items.length);
 
-        // "What's the distribution" — percentiles, not just a mean.
-        ctx.metrics.record("checkout.latency_ms", Date.now() - started);
-    },
+    // "What's the distribution" — percentiles, not just a mean.
+    ctx.metrics.record("checkout.latency_ms", Date.now() - started);
 });
 ```
 

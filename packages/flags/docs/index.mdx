@@ -54,11 +54,13 @@ export default defineFlags({
     // Or any OpenFeature provider — a factory that receives env:
     // provider: (env) => new SomeOpenFeatureProvider({ apiKey: env.FLAGS_API_KEY }),
     // Optional: default targetingKey for every evaluation (usually the user id).
-    identify: (ctx) => ctx.auth?.userId,
+    identify: (auth) => auth.userId ?? undefined,
 });
 ```
 
-The `provider` is either a Flagship config or any factory `(env) => OpenFeatureProvider`. `identify` derives the default `targetingKey` from each request's context, so per-user targeting works without threading the key through every call.
+The `provider` is either a Flagship config or any factory `(env) => OpenFeatureProvider`. `identify` derives the default `targetingKey` from each request's auth, so per-user targeting works without threading the key through every call.
+
+Its argument is a `FlagsAuth` — `{ identity, userId }`, both `null` when the request is anonymous — **not** the function `ctx`. Return `undefined` (not `null`) for "no targeting key", which is why the `?? undefined` matters: `auth.userId` alone is `string | null`, and the property is typed `string | undefined`.
 
 ## Built-in providers
 
@@ -107,16 +109,13 @@ Flags ride every ctx (query, mutation, and action) like `ctx.kv`. Each typed acc
 ```ts
 import { query } from "./_generated/server";
 
-export const dashboard = query({
-    args: {},
-    handler: async (ctx) => {
-        const darkMode = await ctx.flags.boolean("dark-mode", false);
-        const theme = await ctx.flags.string("theme", "system");
-        const limit = await ctx.flags.number("page-size", 25);
-        const layout = await ctx.flags.object("layout", { columns: 2 });
+export const dashboard = query.query(async ({ ctx }) => {
+    const darkMode = await ctx.flags.boolean("dark-mode", false);
+    const theme = await ctx.flags.string("theme", "system");
+    const limit = await ctx.flags.number("page-size", 25);
+    const layout = await ctx.flags.object("layout", { columns: 2 });
 
-        return { darkMode, theme, limit, layout };
-    },
+    return { darkMode, theme, limit, layout };
 });
 ```
 

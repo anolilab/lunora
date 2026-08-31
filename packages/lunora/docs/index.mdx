@@ -89,19 +89,16 @@ schema, so they are not exported from `lunorash/server`.
 import { query, mutation } from "@/lunora/_generated/server";
 import { v } from "lunorash/values";
 
-export const list = query({
-    args: { author: v.id("users") },
-    handler: async (ctx, { author }) =>
-        ctx.db
-            .query("messages")
-            .withIndex("by_author", (q) => q.eq("author", author))
-            .collect(),
-});
+export const list = query.input({ author: v.id("users") }).query(async ({ ctx, args: { author } }) =>
+    ctx.db
+        .query("messages")
+        .withIndex("by_author", (q) => q.eq("author", author))
+        .collect(),
+);
 
-export const send = mutation({
-    args: { body: v.string(), author: v.id("users") },
-    handler: async (ctx, { body, author }) => ctx.db.insert("messages", { body, author }),
-});
+export const send = mutation
+    .input({ body: v.string(), author: v.id("users") })
+    .mutation(async ({ ctx, args: { body, author } }) => ctx.db.insert("messages", { body, author }));
 ```
 
 When a project depends on `lunorash`, codegen emits `lunorash/*` imports in the

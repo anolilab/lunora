@@ -4,7 +4,9 @@ description: The unified error layer — LunoraError, the error catalog, isLunor
 ---
 
 `@lunora/errors` is the single source of truth for how Lunora throws and surfaces
-errors. It provides one `LunoraError` base (built on `@visulima/error`) plus a
+errors. It provides one `LunoraError` base — shaped to mirror `@visulima/error`'s
+error model, but deliberately not extending it (see
+[Rendering](#rendering)) — plus a
 central catalog mapping each machine `code` to its transport `status`, a human
 `title`, and, where useful, a Markdown `hint` and `docsUrl`. Those
 hints render consistently in the CLI, the Vite error overlay, the Studio UI, and
@@ -62,6 +64,12 @@ the code — use it for failures the caller can act on.
 
 `LunoraError` mirrors `@visulima/error`'s error model (`type: "VisulimaError"`
 plus `hint`/`title`/`loc`), so `@visulima/error`'s `renderError` renders it
-directly, hint and all. The CLI does this in `@lunora/cli`'s `renderLunoraError` util;
-`@lunora/errors` itself is **zero-dependency** so its class/catalog tree-shakes
-cleanly into browser and workerd bundles.
+directly, hint and all. The CLI does this in `@lunora/cli`'s `renderLunoraError` util.
+
+It **does not `extend`** `VisulimaError`: that class's module statically pulls
+the Node-only `renderError` (which imports `node:module`), and bundlers inline
+the whole barrel rather than tree-shaking it — so extending it would drag
+`node:module` into the browser client and workerd bundles. Reimplementing the
+(tiny) shape here is what keeps `@lunora/errors` **zero-dependency**, so its
+class/catalog tree-shakes cleanly into every runtime while staying fully
+renderer-compatible.

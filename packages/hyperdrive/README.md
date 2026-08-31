@@ -83,19 +83,33 @@ pnpm add mysql2     # mysql2        → fromMysql2
 
 ## Usage
 
-`ctx.sql` is wired by codegen onto `ActionCtx` only — never `QueryCtx`/`MutationCtx`. The procedure builders (`action`, `v`) and `api` come from your app-local generated modules:
+`ctx.sql` is wired by codegen onto `ActionCtx` only — never `QueryCtx`/`MutationCtx`, and it is `readonly`, so it is built once at the app level rather than assigned in a handler. Codegen emits a `sql` config thunk for it (`createHyperdrive` returns connection info; only you know which driver wraps it):
 
 ```ts
+// src/server/index.ts
+import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
+import { defineApp } from "../../lunora/_generated/app";
+
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .build();
+
+export const ShardDO = app.ShardDO;
+```
+
+Hand-composing the worker instead? The same thunk is `createShardDO({ sql: (env) => … })`. Without it, every `ctx.sql` method throws a message pointing back at this wiring.
+
+Handlers then just read it. The procedure builders (`action`, `v`) and `api` come from your app-local generated modules:
+
+```ts
 import { api } from "@/lunora/_generated/api";
 import { action, v } from "@/lunora/_generated/server";
 
 export const syncCustomer = action.input({ orgId: v.string() }).action(async ({ args: { orgId }, ctx }) => {
-    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-    ctx.sql = fromPostgresJs(postgres(connectionString));
-
     const rows = await ctx.sql.query<{ id: string; name: string }>("select id, name from customers where org = $1", [orgId]);
 
     // Want it reactive? Project it into a Lunora table — THIS write is tracked.
