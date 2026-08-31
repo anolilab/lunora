@@ -30,7 +30,7 @@ Edit `lunora/ratelimit/schema.ts` — add named limits to the `limits` map:
 
 ```ts
 export const limits = {
-    default: { kind: "token bucket", period: 60_000, rate: 10 },
+    send: { kind: "token bucket", period: 60_000, rate: 10 },
     login: { kind: "fixed window", period: 60_000, rate: 5 },
 } as const satisfies RateLimitConfigMap;
 ```
@@ -69,7 +69,7 @@ import { ratelimit } from "./ratelimit/index.js";
 const c = initLunora.dataModel<DataModel>().create();
 
 export const sendMessage = c.mutation.use(ratelimit.middleware).handler(async (ctx, args) => {
-    const status = await ctx.api.ratelimit.limit("default", { key: ctx.userId });
+    const status = await ctx.api.ratelimit.limit("send", { key: ctx.userId });
     if (!status.ok) {
         throw new Error("slow down");
     }

@@ -283,4 +283,38 @@ export default crons;
         expect(typeof result.code).toBe("number");
         expect(errors).toBeInstanceOf(Array);
     });
+
+    // `--update-schema-baseline` is the documented way to refresh a stale
+    // `lunora/.lunora-schema.json`, and nothing exercised it end to end: the
+    // gate's unit tests stop at the `rebless` thunk, so a break anywhere between
+    // the flag and the file on disk went unnoticed by this suite.
+    it("re-blesses a stale schema baseline that would otherwise block, under --update-schema-baseline", async () => {
+        expect.assertions(4);
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+        const baselinePath = join(workdir, "lunora", ".lunora-schema.json");
+        const { logger } = silentLogger();
+
+        // First run captures the baseline (no baseline is never blocking).
+        await runPrepareCommand({ cwd: workdir, logger });
+
+        // Age it: drop a required field the current schema still declares, on a
+        // table no fixture migration iterates (`backfill-read-by` is on
+        // `messages`), so the drift is breaking AND uncovered.
+        const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as { tables: { users: { fields: Record<string, unknown> } } };
+
+        delete baseline.tables.users.fields.role;
+        writeFileSync(baselinePath, JSON.stringify(baseline), "utf8");
+
+        const blocked = await runPrepareCommand({ cwd: workdir, logger });
+
+        expect(blocked.code).toBe(1);
+        expect(blocked.schemaDrift?.blocked).toBe(true);
+
+        const reblessed = await runPrepareCommand({ cwd: workdir, logger, updateSchemaBaseline: true });
+
+        expect(reblessed.code).toBe(0);
+        expect(JSON.parse(readFileSync(baselinePath, "utf8")).tables.users.fields.role).toBeDefined();
+    });
 });

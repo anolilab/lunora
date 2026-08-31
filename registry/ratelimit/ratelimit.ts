@@ -31,7 +31,7 @@
  * ```ts
  * export const sendInvite = mutation
  *     .input({ email: v.string() })
- *     .use(rateLimit(makeRateLimiter(ctx), "default", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
+ *     .use(rateLimit(makeRateLimiter(ctx), "send", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
  *     .mutation(async ({ args, ctx }) => { … });
  * ```
  *
@@ -42,7 +42,7 @@ import { internalMutation, internalQuery, v } from "#lunora/_generated/server.js
 
 import { limits, makeRateLimiter } from "./schema.js";
 
-/** Validator for a configured limit name (e.g. `"default"`). */
+/** Validator for a configured limit name (e.g. `"send"`). */
 const limitName = v.union(...(Object.keys(limits) as (keyof typeof limits)[]).map((name) => v.literal(name)));
 
 /**
