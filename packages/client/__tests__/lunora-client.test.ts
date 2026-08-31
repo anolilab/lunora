@@ -37,12 +37,13 @@ interface MockSocket {
 const sockets: MockSocket[] = [];
 
 /**
- * @param deferClose Dispatch `close` on a macrotask instead of synchronously, as
- * a browser does. The synchronous default accidentally hides ordering bugs:
- * `teardownConnection` clears `conn.socket` AFTER calling `close()`, so a
- * same-tick close still finds the identity guard satisfied.
+ * A browser dispatches `close` on a LATER turn, never synchronously inside
+ * `close()`. Modelling that faithfully is not optional: `teardownConnection`
+ * clears `conn.socket` AFTER calling `close()`, so a same-tick close still
+ * finds the identity guard satisfied and reaches `handleDisconnect` — which
+ * hides the whole class of teardown-ordering bug from every test using it.
  */
-const createMockWebSocket = (deferClose = false): typeof WebSocket => {
+const createMockWebSocket = (): typeof WebSocket => {
     class WS {
         public readonly url: string;
 
@@ -101,15 +102,17 @@ const createMockWebSocket = (deferClose = false): typeof WebSocket => {
         }
 
         public close(): void {
-            if (deferClose) {
-                setTimeout(() => {
-                    this.triggerClose();
-                }, 0);
+            // Faithful to the browser: `readyState` flips synchronously, but the
+            // `close` EVENT lands on a later turn. Dispatching it synchronously
+            // hides teardown-ordering bugs, because `teardownConnection` clears
+            // `conn.socket` AFTER calling `close()` — a same-tick event still
+            // finds the identity guard satisfied and reaches `handleDisconnect`.
+            this.readyState = 3;
 
-                return;
-            }
-
-            this.triggerClose();
+            setTimeout(() => {
+                this.onclose?.();
+                this.dispatch("close");
+            }, 0);
         }
 
         private dispatch(type: string, event?: unknown): void {
@@ -4708,7 +4711,7 @@ describe("lunoraClient", () => {
                 url: "https://app.example",
                 // Deferred close: a browser dispatches `close` on a later turn, and
                 // the synchronous default hides this bug entirely.
-                WebSocket: createMockWebSocket(true),
+                WebSocket: createMockWebSocket(),
             });
 
             try {

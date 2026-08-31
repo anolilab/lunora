@@ -87,11 +87,13 @@ export { runPostCodegenHook } from "./post-codegen-hook";
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
 export {
     interpretRemote,
+    isRunnableTarget,
     LUNORA_CONFIG_FILE,
     readProjectRemotePreference,
     readProjectTarget,
     resolveProjectTarget,
     resolveTargetOrThrow,
+    runnableTargetIds,
 } from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";

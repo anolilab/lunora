@@ -98,6 +98,15 @@ for (const workspace of WORKSPACE_DIRECTORIES) {
         process.exit(1);
     }
 
+    // A declared group that resolves to no member at all is the same vacuous pass
+    // as an unreadable one: the loop below finds no offenders and the total floor
+    // still clears on the OTHER groups' files. Floored on member directories, not
+    // on `project.json` files — not every member has one, by design.
+    if (entries.filter((entry) => entry.isDirectory()).length === 0) {
+        console.error(`❌ pnpm-workspace.yaml declares "${workspace}/*" but ${workspace}/ holds no member directories — this check examined nothing there.`);
+        process.exit(1);
+    }
+
     for (const entry of entries) {
         if (!entry.isDirectory()) {
             continue;

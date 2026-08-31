@@ -61,9 +61,19 @@ const listLunoraSourceFiles = (directory: string, accumulator: string[] = [], ro
 
 /**
  * Where the worker entry lives, probed relative to the project root when a
- * security discoverer widens its scan past `lunora/`. Mirrors
- * `@lunora/config`'s `WORKER_ENTRY_FALLBACKS`, with `src/server` taken as a
- * whole directory because the entry routinely splits helpers out beside itself.
+ * security discoverer widens its scan past `lunora/`.
+ *
+ * Deliberately NOT the same list as `@lunora/config`'s
+ * `WORKER_ENTRY_FALLBACKS`, and not a copy of it: that one picks THE entry file
+ * when `wrangler.main` is absent, so it names exact paths
+ * (`src/server/index.ts`, `.tsx`). This one decides which files a security lint
+ * gets to see, so it takes `src/server` as a whole directory — the entry
+ * routinely splits `createBrowser`/`createPayment` wiring into helpers beside
+ * itself, and a lint that missed those would report clean on a real defect.
+ *
+ * The overlap is why they look alike; if a new entry convention is added to
+ * either, check whether the other wants it too. They are not kept in sync
+ * mechanically because equal lists would be wrong for one of the two jobs.
  */
 const WORKER_ENTRY_ROOTS = ["src/server", "src/index.ts", "src/worker.ts"] as const;
 

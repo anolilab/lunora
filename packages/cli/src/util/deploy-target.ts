@@ -11,7 +11,7 @@
  * needs it; see `resolveProjectTarget` in `@lunora/config` for why those two
  * must agree.
  */
-import { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver, resolveTargetOrThrow } from "@lunora/config";
+import { DEFAULT_DEPLOY_TARGET, deployTargetIds, isRunnableTarget, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
 
 /**
  * Human-readable list of registered targets, for help text and errors.
@@ -76,8 +76,8 @@ const resolveRunnableTargetOrError = (projectRoot: string, explicit?: string): {
         return resolved;
     }
 
-    if (resolveDeployDriver(resolved.target).toolchain === undefined) {
-        const runnable = deployTargetIds().filter((id) => resolveDeployDriver(id).toolchain !== undefined);
+    if (!isRunnableTarget(resolved.target)) {
+        const runnable = runnableTargetIds();
 
         return {
             error: `deploy target "${resolved.target}" has no command-line toolchain, so the Lunora CLI cannot deploy or serve it — it can only generate for it (\`lunora codegen --target ${resolved.target}\`). Deployable targets: ${runnable.join(", ")}`,

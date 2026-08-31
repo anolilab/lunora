@@ -1049,10 +1049,10 @@ class LunoraClient {
 
     /** Live shape subscriptions (partial replication), keyed by their wire id. */
 
-    /* eslint-disable jsdoc/check-indentation, jsdoc/no-undefined-types -- intentional numbered list; `subscribeScheduledJobs`/`mutation` are methods on this class, which the rule cannot resolve */
+    /* eslint-disable jsdoc/check-indentation -- intentional numbered list */
 
     /**
-     * Teardown callbacks for the admin sockets {@link subscribeScheduledJobs}
+     * Teardown callbacks for the admin sockets {@link LunoraClient.subscribeScheduledJobs}
      * opens. Those run their own reconnect loop off a closure-local `closed`
      * flag rather than `this.closed` (they predate `ensureSocket`'s guard), so
      * without this registry a `close()` left every one of them reconnecting on
@@ -1067,7 +1067,7 @@ class LunoraClient {
      *
      * 1. It serializes overlapping flushes for the same shard — two reconnect
      *    events in quick succession used to drain and replay concurrently.
-     * 2. It is the barrier {@link mutation} waits on before sending a FRESH
+     * 2. It is the barrier {@link LunoraClient.mutation} waits on before sending a FRESH
      *    write directly. The socket's `open` handler flips `wsState` to `"open"`
      *    first and calls the flush last, so from that instant `mutation()`'s
      *    offline gate is false and a new write raced straight to `/rpc` against
@@ -1077,7 +1077,7 @@ class LunoraClient {
      *    racing write was never in the queue.
      */
     private readonly offlineFlushes = new Map<string, Promise<void>>();
-    /* eslint-enable jsdoc/check-indentation, jsdoc/no-undefined-types */
+    /* eslint-enable jsdoc/check-indentation */
 
     private readonly shapeSubscriptions = new Map<string, ShapeSubscriptionState>();
 
