@@ -86,6 +86,7 @@ export const ADMIN_FUNCTIONS = {
     maskPolicies: "__lunora_admin__:maskPolicies",
     migrationStatus: "__lunora_admin__:migrationStatus",
     pitrRestore: "__lunora_admin__:pitrRestore",
+    patchRows: "__lunora_admin__:patchRows",
     readTablePage: "__lunora_admin__:readTablePage",
     replayQueueMessage: "__lunora_admin__:replayQueueMessage",
     resolveIssue: "__lunora_admin__:resolveIssue",
@@ -165,6 +166,23 @@ export interface WriteRowResult {
 export interface BulkDeleteResult {
     deleted: number;
     hasMore: boolean;
+}
+
+/**
+ * Result of a bulk patch (`__lunora_admin__:patchRows`) op — "set these fields
+ * on every row matching the active view". `patched` is the rows written in this
+ * call; `hasMore` is `true` when matching rows remain beyond the server's
+ * per-call cap.
+ *
+ * Unlike {@link BulkDeleteResult} this carries a `cursor` the caller MUST feed
+ * back as `after` on the next call. A delete drains because its own writes
+ * shrink the match set; a patch usually leaves the row matching, so without the
+ * cursor the loop would rewrite the same first batch until it hit its bound.
+ */
+export interface BulkPatchResult {
+    cursor?: string;
+    hasMore: boolean;
+    patched: number;
 }
 
 /**

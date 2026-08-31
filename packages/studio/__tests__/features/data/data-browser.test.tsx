@@ -1320,10 +1320,11 @@ interface FilterArg {
 /**
  * A stateful client over a mutable `messages` table that honours structured
  * `filters`, single-row `writeRow` deletes, and the writer-routed bulk ops
- * (`deleteRows` / `clearTable`). The bulk ops mirror the server: they match the
- * same `eq`-filter predicate `readTablePage` previews, delete in bulk, and
- * return `{ deleted, hasMore }` — bounded by `bulkCap` so a test can drive the
- * client's multi-call loop.
+ * (`deleteRows` / `clearTable` / `patchRows`). The bulk ops mirror the server:
+ * they match the same `eq`-filter predicate `readTablePage` previews, write in
+ * bulk, and report `hasMore` — bounded by `bulkCap` so a test can drive the
+ * client's multi-call loop. `patchRows` additionally mirrors the server's keyset
+ * cursor, so a client that fails to thread it round-trips forever.
  */
 const createFilterableClient = (bulkCap = 50): MockClientHooks => {
     let rows = [
@@ -1360,6 +1361,21 @@ const createFilterableClient = (bulkCap = 50): MockClientHooks => {
                 rows = rows.filter((row) => !doomed.has(row["__id__"]));
 
                 return { deleted: batch.length, hasMore: matched.length > bulkCap };
+            }
+
+            if (reference === ADMIN_FUNCTIONS.patchRows) {
+                const { after, doc = {}, filters = [] } = args as { after?: string; doc?: Record<string, unknown>; filters?: FilterArg[] };
+                // Keyset by id exactly as the shard does: only rows past the
+                // caller's cursor are in scope for this batch.
+                const matched = rows
+                    .filter((row) => matchesFilters(row as Record<string, unknown>, filters))
+                    .filter((row) => after === undefined || row["__id__"] > after);
+                const batch = matched.slice(0, bulkCap);
+                const touched = new Set(batch.map((row) => row["__id__"]));
+
+                rows = rows.map((row) => (touched.has(row["__id__"]) ? { ...row, ...doc } : row));
+
+                return { cursor: batch.at(-1)?.["__id__"], hasMore: matched.length > bulkCap, patched: batch.length };
             }
 
             // readTablePage: apply each structured filter (eq only, enough here).
@@ -1488,6 +1504,57 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         // hasMore=false stops the loop — so at least two, capped by the loop.
         expect(bulk.length).toBeGreaterThanOrEqual(2);
         expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
+    });
+
+    it("bulk-patches every matching row, threading the server's cursor so the loop advances", async () => {
+        expect.assertions(4);
+
+        // Cap each server call at one row, so patching the two active rows takes
+        // two `patchRows` round-trips. The patch writes `text` while the filter
+        // is on `status`, so a patched row STILL matches — only the cursor moves
+        // the scan forward. A client that dropped it would re-patch row one until
+        // it hit its batch bound and surface the truncation error.
+        const mock = createFilterableClient(1);
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        // Each filter edit re-keys the page read; the toolbar (and the filter row
+        // with it) unmounts until the new page lands - await each control back.
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "active" } });
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 2) {
+                throw new Error("filter not applied yet");
+            }
+        });
+
+        fireEvent.click(screen.getByTestId("db-bulk-patch"));
+        fireEvent.change(await screen.findByTestId("bulk-patch-column"), { target: { value: "text" } });
+        // JSON-typed, so the quotes are what make this a string rather than a
+        // parse error - the same encoding the row editor uses.
+        fireEvent.change(screen.getByTestId("bulk-patch-value"), { target: { value: '"seen"' } });
+        fireEvent.click(screen.getByTestId("bulk-patch-apply"));
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").filter((row) => (row.textContent ?? "").includes("seen")).length !== 2) {
+                throw new Error("rows not patched yet");
+            }
+        });
+
+        const bulk = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.patchRows);
+
+        expect(bulk.length).toBeGreaterThanOrEqual(2);
+        expect(bulk[0]?.[1]).toMatchObject({ doc: { text: "seen" }, filters: [{ column: "status", operator: "eq", value: "active" }] });
+        // The second call resumes from the first call's cursor rather than
+        // re-reading from the top.
+        expect((bulk[1]?.[1] as { after?: string }).after).toBe("m1");
+        // The loop finished on `hasMore: false`, so no truncation notice.
+        expect(screen.queryByTestId("db-write-error")).toBeNull();
     });
 
     it("clears the whole table via the clearTable op when no filter is active", async () => {

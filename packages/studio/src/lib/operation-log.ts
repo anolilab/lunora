@@ -103,6 +103,14 @@ const SUMMARISERS: Readonly<Partial<Record<keyof typeof ADMIN_FUNCTIONS, Argumen
     deleteRows: (args) => joinParts([scalar(args.table), Array.isArray(args.ids) ? `${String(args.ids.length)} rows` : undefined]),
     facetColumn: (args) => joinParts([scalar(args.table), scalar(args.column)]),
     lintSql: () => "sql",
+    // The patched VALUES are operator-supplied data and are not recorded — only
+    // the field NAMES (schema, not data) and the size of the predicate.
+    patchRows: (args) =>
+        joinParts([
+            scalar(args.table),
+            typeof args.doc === "object" && args.doc !== null ? `set ${Object.keys(args.doc).join(", ")}` : undefined,
+            Array.isArray(args.filters) && args.filters.length > 0 ? `${String(args.filters.length)} filters` : undefined,
+        ]),
     readTablePage: (args) =>
         joinParts([
             scalar(args.table),

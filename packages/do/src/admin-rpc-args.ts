@@ -149,6 +149,44 @@ interface RunShardBulkDeleteResult {
 }
 
 /**
+ * The bulk patch behind the data browser's "set column on N matching rows"
+ * action — the write half of the same predicate "delete matching" removes by.
+ * `doc` is shallow-merged into every matching row THROUGH the schema-aware
+ * writer (validators, FTS / aggregate / rank shadow tables, reactive
+ * invalidation), never as a raw `UPDATE`.
+ *
+ * Bounded like {@link RunShardBulkDeleteArgs}, but resumed by an explicit
+ * `after` CURSOR rather than by the write shrinking its own match set: a patch
+ * that leaves the row still matching (`priority = 1` → `seen = true` while the
+ * filter is on `priority`) would otherwise re-read the same first batch on every
+ * loop and never finish.
+ */
+interface RunShardBulkPatchArgs {
+    /** Keyset cursor — the `cursor` a previous call returned. Omit for the first batch. */
+    after?: string;
+    /** Fields to shallow-merge into each matching row. Must be a non-empty object. */
+    doc: Record<string, unknown>;
+    filters?: FilterClause[];
+    /** Per-call row cap; clamped server-side to `[1, SHARD_BULK_ROW_CAP]`. */
+    limit?: number;
+    search?: string;
+    table: string;
+}
+
+/** Outcome of a {@link RunShardBulkPatchArgs} operation. */
+interface RunShardBulkPatchResult {
+    /**
+     * Resume key for the next call — the last id this batch patched. Absent when
+     * the batch was empty (the scan reached the end). Always paired with `hasMore`.
+     */
+    cursor?: string;
+    /** `true` when matching rows remain beyond this batch — loop the call with `cursor` to drain them. */
+    hasMore: boolean;
+    /** Rows patched through the writer in this call. */
+    patched: number;
+}
+
+/**
  * Arguments accepted by the `__lunora_admin__:rankBefore` admin RPC. The query
  * coordinator fans this out to every shard to count, for the row identified by
  * `rowId`, how many rows precede it under `index` within `partitionKey`; the
@@ -475,6 +513,41 @@ const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkDeleteA
     }
 
     return {
+        filters: parseTablePageFilters(args["filters"]),
+        limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+        search: typeof args["search"] === "string" ? args["search"] : undefined,
+        table,
+    };
+};
+
+/**
+ * Validate the `__lunora_admin__:patchRows` payload. Mirrors
+ * {@link parseBulkDeleteArgs}'s predicate args, plus the `doc` to merge and the
+ * optional keyset `after` cursor.
+ *
+ * An EMPTY `doc` is rejected rather than treated as a no-op: the writer would
+ * happily patch nothing onto every matching row, so the call would report
+ * hundreds of "patched" rows having changed none of them, and it would still
+ * fire an invalidation for each. A caller that means "touch every row" has to
+ * say which field it is setting.
+ */
+const parseBulkPatchArgs = (args: Record<string, unknown>): RunShardBulkPatchArgs => {
+    const table = typeof args["table"] === "string" ? args["table"] : "";
+
+    if (table.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "patchRows: `table` is required");
+    }
+
+    const raw = args["doc"];
+    const fields = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
+
+    if (fields === undefined || Object.keys(fields).length === 0) {
+        throw new LunoraError("BAD_REQUEST", "patchRows: `doc` must be a non-empty object of fields to set");
+    }
+
+    return {
+        after: typeof args["after"] === "string" ? args["after"] : undefined,
+        doc: fields,
         filters: parseTablePageFilters(args["filters"]),
         limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
         search: typeof args["search"] === "string" ? args["search"] : undefined,
@@ -1237,6 +1310,7 @@ export {
     parseApplyCdcArgs,
     parseAssigneeArgument,
     parseBulkDeleteArgs,
+    parseBulkPatchArgs,
     parseCdcSyncArgs,
     parseClearTableArgs,
     parseClientSeqHeader,
@@ -1276,6 +1350,8 @@ export type {
     RunShardApplyCdcResult,
     RunShardBulkDeleteArgs,
     RunShardBulkDeleteResult,
+    RunShardBulkPatchArgs,
+    RunShardBulkPatchResult,
     RunShardCdcSyncArgs,
     RunShardExportArgs,
     RunShardImportArgs,

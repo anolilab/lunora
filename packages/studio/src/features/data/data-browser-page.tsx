@@ -39,6 +39,7 @@ const DataBrowserViewControls = ({
     maskOn,
     onAddRow,
     onBulkDelete,
+    onBulkPatch,
     onAskAiFilter,
     onClearTable,
     onFilterChange,
@@ -63,6 +64,8 @@ const DataBrowserViewControls = ({
     /** Ask the model for structured clauses; omitted when no AI binding is available. */
     onAskAiFilter?: (prompt: string) => void;
     onBulkDelete: () => void;
+    /** Open the "set a column on every matching row" dialog. */
+    onBulkPatch: () => void;
     onClearTable: () => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
@@ -113,6 +116,12 @@ const DataBrowserViewControls = ({
                         {`Delete ${total.toString()} matching`}
                     </ConfirmButton>
                 )}
+                {/* No `ConfirmButton`: the dialog IS the confirmation step — it names the row count and cannot be submitted without a parsed value. */}
+                {editable && total > 0 && (
+                    <button className={CONTROL_TOGGLE_BTN} data-testid="db-bulk-patch" onClick={onBulkPatch} type="button">
+                        {`Set column on ${total.toString()} matching`}
+                    </button>
+                )}
                 {editable && total > 0 && filter === "" && filters.length === 0 && (
                     <ConfirmButton confirmLabel={`Clear all ${total.toString()} rows?`} onConfirm={onClearTable} testId="db-clear-table">
                         {`Clear table (${total.toString()})`}
@@ -150,6 +159,7 @@ const DataBrowserPage = ({
     editable,
     onAskAiFilter,
     onInspect,
+    onOpenBulkPatch,
     onOpenGenerateRows,
     onRowDelete,
     onSaveQuery,
@@ -178,6 +188,8 @@ const DataBrowserPage = ({
     readonly onAskAiFilter: (prompt: string) => void;
     /** Open a row's detail drawer. From `useRowInspection`, whose other fields the page never reads. */
     readonly onInspect: (row: TableRow | null) => void;
+    /** Open the bulk-patch dialog. Host-owned like `onOpenGenerateRows` — the dialog renders alongside the browser, not inside the page. */
+    readonly onOpenBulkPatch: () => void;
     readonly onOpenGenerateRows: () => void;
 
     /**
@@ -216,6 +228,7 @@ const DataBrowserPage = ({
                 onAddRow={browser.addRow}
                 onAskAiFilter={assistant.unavailable ? undefined : onAskAiFilter}
                 onBulkDelete={browser.bulkDelete}
+                onBulkPatch={onOpenBulkPatch}
                 onClearTable={browser.clearTable}
                 onFilterChange={browser.onFilterChange}
                 onFiltersChange={browser.onFiltersChange}

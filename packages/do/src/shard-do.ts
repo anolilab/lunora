@@ -257,6 +257,8 @@ import type {
     RunShardApplyCdcResult,
     RunShardBulkDeleteArgs,
     RunShardBulkDeleteResult,
+    RunShardBulkPatchArgs,
+    RunShardBulkPatchResult,
     RunShardCdcSyncArgs,
     RunShardExportArgs,
     RunShardImportArgs,
@@ -277,6 +279,7 @@ import {
     parseApplyCdcArgs,
     parseAssigneeArgument,
     parseBulkDeleteArgs,
+    parseBulkPatchArgs,
     parseCdcSyncArgs,
     parseClearTableArgs,
     parseClientSeqHeader,
@@ -973,13 +976,14 @@ const ROOT_SHARD_NAME = "__root__";
 const ADMIN_WILDCARD = "*";
 
 /**
- * Hard server-side ceiling on rows removed per `deleteRows` / `clearTable` call.
- * The op never deletes more than this in one round-trip; the result's `hasMore`
- * tells the caller to loop. Bound TO `readTablePage`'s `MAX_PAGE_SIZE` (not just
- * documented as matching it) so one "delete matching" batch drains exactly one
- * full preview page's worth of rows and the two can't silently drift apart.
+ * Hard server-side ceiling on rows written per bulk admin call — `deleteRows`,
+ * `clearTable`, `patchRows`. The op never touches more than this in one
+ * round-trip; the result's `hasMore` tells the caller to loop. Bound TO
+ * `readTablePage`'s `MAX_PAGE_SIZE` (not just documented as matching it) so one
+ * "delete matching" / "set matching" batch drains exactly one full preview
+ * page's worth of rows and the two can't silently drift apart.
  */
-const SHARD_BULK_DELETE_CAP = MAX_PAGE_SIZE;
+const SHARD_BULK_ROW_CAP = MAX_PAGE_SIZE;
 
 /** Rows swept per TTL batch, and the max batches drained per alarm tick (bounds one sweep's work so it can't stall the shard). */
 const TTL_SWEEP_BATCH = 200;
@@ -3018,7 +3022,7 @@ abstract class ShardDO {
 
     /**
      * Bulk-delete the rows of `table` matching the active `filters`/`search`
-     * (or every row, for `clearTable`), bounded to {@link SHARD_BULK_DELETE_CAP}
+     * (or every row, for `clearTable`), bounded to {@link SHARD_BULK_ROW_CAP}
      * per call. Concrete in the base: it collects the matching ids with the same
      * predicate {@link readTablePage} previews, then deletes them ONE AT A TIME
      * through {@link deleteRowThroughWriter} so the FTS / aggregate / rank shadow
@@ -3029,7 +3033,7 @@ abstract class ShardDO {
      * on OCC — so the per-row `await` is intentional.
      */
     protected async runShardBulkDelete(args: RunShardBulkDeleteArgs): Promise<RunShardBulkDeleteResult> {
-        const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_DELETE_CAP), 1), SHARD_BULK_DELETE_CAP);
+        const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_ROW_CAP), 1), SHARD_BULK_ROW_CAP);
 
         // Collect this batch's ids first (a read; raw SQL is fine), then remove
         // each through the writer. `hasMore` reflects whether matches remained
@@ -3051,6 +3055,51 @@ abstract class ShardDO {
         }
 
         return { deleted, hasMore };
+    }
+
+    /**
+     * Bulk-patch the rows of `table` matching the active `filters`/`search`,
+     * shallow-merging `doc` into each, bounded to {@link SHARD_BULK_ROW_CAP} per
+     * call. The write half of the predicate {@link runShardBulkDelete} deletes
+     * by, and the reason the SQL console can stay read-only: an operator can set
+     * a field across a filtered set without a raw `UPDATE` that would bypass the
+     * writer and desync the FTS / aggregate / rank shadow tables.
+     *
+     * Each row is patched through {@link runShardWrite} — the same single-row
+     * seam the studio's row editor uses, so the `.global()` guard, the
+     * validators and the reactive invalidation all apply unchanged, and codegen
+     * needs no second writer override.
+     *
+     * Resumed by an explicit `cursor` (the last id patched), NOT by the write
+     * shrinking its own match set the way the delete loop is. A patch that
+     * leaves the row still matching the predicate — the common case, since the
+     * filter is usually on a different column than the one being set — would
+     * otherwise have every batch re-read and re-write the same first rows.
+     */
+    protected async runShardBulkPatch(args: RunShardBulkPatchArgs): Promise<RunShardBulkPatchResult> {
+        const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_ROW_CAP), 1), SHARD_BULK_ROW_CAP);
+
+        const { hasMore, ids } = selectMatchingIds(this.sql as SqlExec, {
+            after: args.after,
+            filters: args.filters,
+            limit,
+            search: args.search,
+            table: args.table,
+        });
+
+        let patched = 0;
+
+        for (const id of ids) {
+            // Sequential: serialise writes to avoid OCC contention on this DO.
+            // eslint-disable-next-line no-await-in-loop -- per-row writer patches must serialise to avoid OCC contention on the shard DO
+            await this.runShardWrite({ doc: args.doc, id, op: "patch", table: args.table });
+            patched += 1;
+        }
+
+        // The cursor is the last id SCANNED, not the last one changed — they are
+        // the same here (every scanned row is patched), and it must advance past
+        // the batch either way or the next call re-reads it.
+        return { cursor: ids.at(-1), hasMore, patched };
     }
 
     /**
@@ -6786,6 +6835,65 @@ abstract class ShardDO {
     }
 
     /**
+     * Serve the writer-routed BULK row ops — `deleteRows`, `clearTable`,
+     * `patchRows`. One seam rather than three arms of {@link handleAdminRpc}'s
+     * dispatch chain, because all three share the same shape: parse a predicate,
+     * run a bounded batch THROUGH the schema-aware writer, flush the touched
+     * tables so live subscribers re-run, and audit the counts.
+     *
+     * Returns `undefined` when `functionPath` is none of them, so the caller's
+     * chain falls through to the remaining ops.
+     */
+    private async handleBulkRowOp(functionPath: string, args: Record<string, unknown>): Promise<Response | undefined> {
+        if (functionPath === ADMIN_FUNCTIONS.deleteRows) {
+            const parsed = parseBulkDeleteArgs(args);
+            const result = await this.runShardBulkDelete(parsed);
+
+            // Every row was removed through the writer, which records each
+            // touched table; flush so live subscribers re-run against the
+            // shrunken set.
+            await this.flushChangedTables();
+
+            this.recordAudit("deleteRows", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
+
+            return adminResponse(result);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.clearTable) {
+            const parsed = parseClearTableArgs(args);
+
+            // `clearTable` is `deleteRows` with no predicate — the same
+            // writer-routed bounded loop, matching every row.
+            const result = await this.runShardBulkDelete(parsed);
+
+            await this.flushChangedTables();
+
+            this.recordAudit("clearTable", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
+
+            return adminResponse(result);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.patchRows) {
+            const parsed = parseBulkPatchArgs(args);
+            const result = await this.runShardBulkPatch(parsed);
+
+            // Every row was patched through the writer, which records each
+            // touched table; flush so live subscribers re-run against the new
+            // values.
+            await this.flushChangedTables();
+
+            this.recordAudit("patchRows", {
+                table: parsed.table,
+                detail: { fields: Object.keys(parsed.doc), hasMore: result.hasMore, patched: result.patched },
+            });
+
+            return adminResponse(result);
+        }
+
+        return undefined;
+    }
+
+    /**
      * Serve a reserved admin-introspection RPC (`__lunora_admin__:*`) for the
      * data browser. Gated by `env.LUNORA_ADMIN_TOKEN`: introspection is
      * **disabled unless the token is configured**, and when it is, the request
@@ -6867,32 +6975,10 @@ abstract class ShardDO {
                 return adminResponse(result);
             }
 
-            if (functionPath === ADMIN_FUNCTIONS.deleteRows) {
-                const parsed = parseBulkDeleteArgs(args);
-                const result = await this.runShardBulkDelete(parsed);
+            const bulk = await this.handleBulkRowOp(functionPath, args);
 
-                // Every row was removed through the writer, which records each
-                // touched table; flush so live subscribers re-run against the
-                // shrunken set.
-                await this.flushChangedTables();
-
-                this.recordAudit("deleteRows", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
-
-                return adminResponse(result);
-            }
-
-            if (functionPath === ADMIN_FUNCTIONS.clearTable) {
-                const parsed = parseClearTableArgs(args);
-
-                // `clearTable` is `deleteRows` with no predicate — the same
-                // writer-routed bounded loop, matching every row.
-                const result = await this.runShardBulkDelete(parsed);
-
-                await this.flushChangedTables();
-
-                this.recordAudit("clearTable", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
-
-                return adminResponse(result);
+            if (bulk !== undefined) {
+                return bulk;
             }
 
             if (functionPath === ADMIN_FUNCTIONS.rankBefore) {
@@ -11192,6 +11278,8 @@ export type {
     RunShardApplyCdcResult,
     RunShardBulkDeleteArgs,
     RunShardBulkDeleteResult,
+    RunShardBulkPatchArgs,
+    RunShardBulkPatchResult,
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,

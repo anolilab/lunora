@@ -1433,6 +1433,12 @@ const MESSAGE_IDS = [
     "The health endpoint is in the admin posture. Paste a valid admin token in the connect popover, or set its auth to public.",
     "Couldn't reach the health endpoint: {message}",
     "no response",
+    // Bulk-patch dialog ("set a column on every matching row").
+    "Set a column on matching rows",
+    "Writes {total} rows of {table} through the schema-aware writer — validators and indexes apply, exactly like a mutation.",
+    "Column",
+    'Enter a JSON value — for example true, 0, null, or "done".',
+    "Set on {total} rows",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

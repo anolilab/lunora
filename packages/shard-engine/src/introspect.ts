@@ -105,6 +105,7 @@ const ADMIN_FUNCTIONS = {
     maskPolicies: "__lunora_admin__:maskPolicies",
     migrationStatus: "__lunora_admin__:migrationStatus",
     pitrRestore: "__lunora_admin__:pitrRestore",
+    patchRows: "__lunora_admin__:patchRows",
     rankBefore: "__lunora_admin__:rankBefore",
     rankPage: "__lunora_admin__:rankPage",
     readTablePage: "__lunora_admin__:readTablePage",
@@ -860,6 +861,8 @@ interface ReadTablePageOptions {
  * `[1, 500]`) so the delete can never run unbounded.
  */
 interface SelectMatchingIdsOptions {
+    /** Keyset cursor: only ids strictly greater than this are returned. Omit for the first batch. */
+    after?: string;
     filters?: FilterClause[];
     limit?: number;
     search?: string;
@@ -1358,6 +1361,9 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
  * `limit + 1`-th row existed — so the caller can loop bounded server calls
  * rather than deleting an unbounded set in one transaction. With no `search`
  * and no `filters` this matches the whole table (the `clearTable` path).
+ *
+ * Ordered by primary key and resumable through `after`, so a caller whose writes
+ * do NOT remove the row from the match set (the bulk-patch path) still advances.
  */
 const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { hasMore: boolean; ids: string[] } => {
     const { table } = options;
@@ -1371,12 +1377,32 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     const needle = options.search?.trim() ?? "";
     const predicate = buildTablePredicate(columns, needle, options.filters);
 
+    // Keyset by primary key, so a caller that loops by passing the previous
+    // batch's last id as `after` always advances. The bulk-DELETE loop could get
+    // away without a cursor — its own deletes shrink the match set, so the next
+    // unpaged read returns the next rows — but a bulk PATCH does not: a patch
+    // that leaves the row still matching the predicate would re-read and
+    // re-write the same first batch forever.
+    const conditions: string[] = [];
+    const parameters: unknown[] = [];
+
+    if (predicate !== undefined) {
+        // Already parenthesised per conjunct by `buildTablePredicate`, so ANDing
+        // the cursor on can't bind tighter than an inner OR.
+        conditions.push(predicate.where);
+        parameters.push(...predicate.parameters);
+    }
+
+    if (options.after !== undefined) {
+        conditions.push("id > ?");
+        parameters.push(options.after);
+    }
+
+    const whereSql = conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`;
+
     // Over-fetch by one: a returned `limit + 1`-th row means more matches remain
     // beyond this batch, surfaced as `hasMore` (the extra id is dropped).
-    const fetched =
-        predicate === undefined
-            ? sql.exec<{ id: string }>(`SELECT id FROM ${quoted} LIMIT ?`, limit + 1).toArray()
-            : sql.exec<{ id: string }>(`SELECT id FROM ${quoted} WHERE ${predicate.where} LIMIT ?`, ...predicate.parameters, limit + 1).toArray();
+    const fetched = sql.exec<{ id: string }>(`SELECT id FROM ${quoted}${whereSql} ORDER BY id LIMIT ?`, ...parameters, limit + 1).toArray();
 
     const hasMore = fetched.length > limit;
     const ids = fetched.slice(0, limit).map((row) => row.id);

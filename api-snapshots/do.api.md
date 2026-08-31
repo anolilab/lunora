@@ -344,6 +344,7 @@ abstract class ShardDO {
     protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult>;
     protected deleteRowThroughWriter(_table: string, _id: string, _headroom?: TransactionHeadroomTracker): Promise<void>;
     protected runShardBulkDelete(args: RunShardBulkDeleteArgs): Promise<RunShardBulkDeleteResult>;
+    protected runShardBulkPatch(args: RunShardBulkPatchArgs): Promise<RunShardBulkPatchResult>;
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{
         before: number;
         total: number;
