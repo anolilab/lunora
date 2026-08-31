@@ -1,3 +1,9 @@
+## @lunora/notify [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.29...@lunora/notify@1.0.0-alpha.30) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
 ## @lunora/notify [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.28...@lunora/notify@1.0.0-alpha.29) (2026-08-30)
 
 ### Features
