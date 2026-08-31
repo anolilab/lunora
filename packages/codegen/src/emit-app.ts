@@ -215,7 +215,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(hasGlobal
             ? [
                   `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-                  `import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
+                  `import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
               ]
             : []),
         ...(hasHyperdriveGlobal
@@ -959,6 +959,13 @@ const buildGlobalHelpers = (hasGlobal: boolean): string =>
  * read-only retry; writes — including the \`UPDATE … RETURNING\` the store's
  * optimistic-concurrency check issues through \`all\` — pass straight through,
  * because a transient error never says whether the write applied.
+ *
+ * Every read and write also records D1's own \`meta\` accounting (\`rows_read\` /
+ * \`rows_written\` / \`duration\`) against a low-cardinality \`verb:table\` tag.
+ * Rows READ is rows SCANNED, not returned, so this is the number that explains
+ * a D1 bill and the one a missing index inflates without anything being
+ * deployed; the dashboard's own metric is per-database and can't name the query.
+ * The emit is best-effort — instrumentation must never fail a served query.
  */
 const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     // Real D1 always exposes \`withSession\`; guarded the same way as \`batch\`
@@ -969,6 +976,13 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
     const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
     const target = session ?? database;
     const batchFn = target.batch;
+    const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
+        try {
+            emitD1QueryCost(sql, meta);
+        } catch {
+            // Best-effort: never let cost accounting fail the query it measures.
+        }
+    };
 
     return retryingExec({
         all: async (sql, parameters) => {
@@ -976,6 +990,8 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
                 .prepare(sql)
                 .bind(...parameters)
                 .all<Record<string, unknown>>();
+
+            meter(sql, result.meta);
 
             return result.results;
         },
@@ -1001,10 +1017,12 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
               }
             : undefined,
         run: async (sql, parameters) => {
-            await target
+            const result = await target
                 .prepare(sql)
                 .bind(...parameters)
                 .run();
+
+            meter(sql, result.meta);
             onBookmark?.(session?.getBookmark() ?? undefined);
         },
     });

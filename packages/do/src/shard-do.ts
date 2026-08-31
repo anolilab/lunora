@@ -187,6 +187,7 @@ import {
     readCdcCursor,
     readCdcEpoch,
     readClientWatermark,
+    readDeployInfo,
     readGlobalShapeSnapshot,
     readIdempotent,
     readMigrationStatus,
@@ -1737,9 +1738,9 @@ abstract class ShardDO {
      * dropped and `currentStmtSamplesTruncated` is set — already-tracked
      * statements keep folding regardless.
      *
-     * `rowsWritten` is always 0 here — the ctx-db adapter doesn't expose a
-     * `changes()` count through the structural `SqlExec` surface, so we
-     * attribute only SELECT result sizes as `rowsRead`.
+     * `rowsRead`/`rowsWritten` come from the cursor's own counters — rows
+     * SCANNED and WRITTEN, which is what storage bills — falling back to the
+     * result-set size only on a host that doesn't expose them.
      */
     private currentStmtSamples: Map<string, StmtSample> | undefined;
 
@@ -2324,6 +2325,27 @@ abstract class ShardDO {
             if (cursor !== null && typeof cursor === "object") {
                 const c = cursor as Record<string, unknown>;
 
+                /**
+                 * Rows the statement SCANNED and WROTE, read off the cursor
+                 * after iteration. This is the number SQLite actually did work
+                 * for and the one storage bills — a query filtering on an
+                 * unindexed column scans the whole table to return three rows,
+                 * so the result-set size reports 3 while the real cost grows
+                 * with the table. Reading the result array instead would make
+                 * the leaderboard understate exactly the queries it exists to
+                 * surface.
+                 *
+                 * Falls back to the result-set size when the host doesn't
+                 * expose the counters (test doubles, non-workerd hosts), which
+                 * is the previous behaviour and still orders a leaderboard
+                 * sensibly — just without the scan/return distinction.
+                 */
+                const counterOf = (key: "rowsRead" | "rowsWritten"): number | undefined => {
+                    const value = c[key];
+
+                    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+                };
+
                 const wrap = (name: "one" | "toArray", rowsOf: (value: unknown) => number): boolean => {
                     const method = c[name];
 
@@ -2336,7 +2358,7 @@ abstract class ShardDO {
                     c[name] = () => {
                         const value = original();
 
-                        foldSample(query, Date.now() - start, rowsOf(value), 0);
+                        foldSample(query, Date.now() - start, counterOf("rowsRead") ?? rowsOf(value), counterOf("rowsWritten") ?? 0);
 
                         return value;
                     };
@@ -7784,20 +7806,48 @@ abstract class ShardDO {
      */
     private persistRequestLog(entry: AppendRequestLogEntry, config: { captureRaw: boolean; emit: boolean; retention: number | undefined }): void {
         const writeOptions: RequestLogWriteOptions = { captureRaw: config.captureRaw, retention: config.retention };
+        const attributed = this.attributeToDeploy(entry);
 
         try {
-            appendRequestLogEntry(this.shardHost.sql, entry, writeOptions);
+            appendRequestLogEntry(this.shardHost.sql, attributed, writeOptions);
         } catch {
             // Best-effort: never let request-log persistence fail the caller.
         }
 
-        if (config.emit || entry.outcome === "error") {
+        if (config.emit || attributed.outcome === "error") {
             try {
-                emitRequestLogEvent(entry, writeOptions);
+                emitRequestLogEvent(attributed, writeOptions);
             } catch {
                 // Best-effort: never let event emission fail the caller.
             }
         }
+    }
+
+    /**
+     * Stamp the deploying Worker's version onto a request-log entry, so the
+     * durable row AND the emitted Workers-Logs event both carry it.
+     *
+     * This is the attribution half of request logging: an alert tells you the
+     * error rate moved, but only a version on the event itself turns "did this
+     * start with a deploy?" into a group-by. Doing it at deploy time (here) is
+     * the point — correlating a spike against a deploy timeline after the fact
+     * is the archaeology this avoids.
+     *
+     * Reads the `CF_VERSION_METADATA` binding via the shared
+     * {@link readDeployInfo}, which returns an empty object when the binding
+     * isn't declared — so an app that hasn't added it logs exactly as before.
+     * Resolved per call rather than cached: `this.env` is the DO's own env and a
+     * new version gets a new isolate, but re-reading two fields off a bound
+     * object costs nothing and removes the staleness question entirely.
+     */
+    private attributeToDeploy(entry: AppendRequestLogEntry): AppendRequestLogEntry {
+        const { deploymentId, versionTag } = readDeployInfo(this.env as Record<string, unknown>);
+
+        if (deploymentId === undefined && versionTag === undefined) {
+            return entry;
+        }
+
+        return { ...entry, ...(deploymentId === undefined ? {} : { deploymentId }), ...(versionTag === undefined ? {} : { versionTag }) };
     }
 
     /**

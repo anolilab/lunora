@@ -389,7 +389,7 @@ export type {
     WithInput,
 } from "./schema-types";
 export { serializeSqlValue } from "./serialize-sql";
-export { buildSettings, isDevEnvironment } from "./settings";
+export { buildSettings, isDevEnvironment, readDeployInfo } from "./settings";
 export { buildShapeDiff } from "./shape-diff";
 export { createShapeDiffCache, globalShapeReadKey, ShapeDiffCache } from "./shape-diff-cache";
 export type { PokeFrameMeta, ShapePokePart, ShapeRowOp } from "./shape-global-diff";

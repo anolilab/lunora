@@ -73,6 +73,7 @@ interface D1DatabaseLike {
 ```ts
 interface D1PreparedStatementLike {
     all: <T = unknown>() => Promise<{
+        meta?: Record<string, unknown>;
         results: T[];
         success: boolean;
     }>;

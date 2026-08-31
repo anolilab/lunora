@@ -99,6 +99,7 @@
         "limits",
         "versioning",
         "---Lunora Cloud---",
+        "cloud/cli",
         "cloud/monitoring",
         "---Reference---",
         "errors",

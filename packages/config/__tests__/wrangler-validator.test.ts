@@ -1195,6 +1195,57 @@ describe("wrangler-validator", () => {
         });
     });
 
+    describe("limits.cpu_ms", () => {
+        const withLimits = (limits: unknown): WranglerConfig => ({ compatibility_date: REQUIRED_COMPATIBILITY_DATE, limits }) as WranglerConfig;
+
+        it("accepts a positive integer cap", () => {
+            expect.assertions(1);
+
+            expect(validateWranglerConfig(withLimits({ cpu_ms: 30_000 })).errors.join(" ")).not.toContain("cpu_ms");
+        });
+
+        it("rejects a non-positive or fractional cap", () => {
+            expect.assertions(3);
+
+            for (const value of [0, -1, 1.5]) {
+                expect(validateWranglerConfig(withLimits({ cpu_ms: value })).errors.join(" ")).toContain("limits.cpu_ms must be a positive integer");
+            }
+        });
+
+        it("rejects a cap above Cloudflare's ceiling, which would fail at deploy", () => {
+            expect.assertions(1);
+
+            expect(validateWranglerConfig(withLimits({ cpu_ms: 300_001 })).errors.join(" ")).toContain("at most 300000");
+        });
+
+        it("rejects a non-object limits block", () => {
+            expect.assertions(1);
+
+            expect(validateWranglerConfig(withLimits(30_000)).errors.join(" ")).toContain("limits must be an object");
+        });
+    });
+
+    describe("observability.logs.invocation_logs", () => {
+        const withLogs = (logs: unknown): WranglerConfig =>
+            ({ compatibility_date: REQUIRED_COMPATIBILITY_DATE, observability: { enabled: true, logs } }) as WranglerConfig;
+
+        it("accepts the boolean that keeps per-invocation summaries", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(withLogs({ invocation_logs: true }));
+
+            expect(report.errors.join(" ")).not.toContain("invocation_logs");
+        });
+
+        it("rejects a non-boolean, which wrangler would otherwise ignore silently", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(withLogs({ invocation_logs: "true" }));
+
+            expect(report.errors.join(" ")).toContain("observability.logs.invocation_logs must be a boolean");
+        });
+    });
+
     describe("containers", () => {
         const baseConfig = (overrides: Partial<WranglerConfig>): WranglerConfig => {
             return {

@@ -1,14 +1,14 @@
 diff --git a/index.d.ts b/index.d.ts
-index 11742cf719031a09304f2186d1c3664f1a70dee0..6a1ba9388eef1a34a189a5151505a388c85044a4 100755
+index 34e836c15..ce7b149ac 100755
 --- a/index.d.ts
 +++ b/index.d.ts
-@@ -487,8 +487,7 @@ declare const scheduler: Scheduler;
+@@ -483,8 +483,7 @@ declare const scheduler: Scheduler;
  declare const performance: Performance;
  declare const Cloudflare: Cloudflare;
  declare const origin: string;
 -declare const Buffer: any;
 -declare const process: any;
-+// `Buffer` and `process` intentionally omitted — see patches/@cloudflare__workers-types@5.20260811.1.patch.
++// `Buffer` and `process` intentionally omitted — see patches/@cloudflare__workers-types@5.20260827.1.patch.
  declare const global: ServiceWorkerGlobalScope;
  declare function setImmediate(
    $function: (...param0: any[]) => void,

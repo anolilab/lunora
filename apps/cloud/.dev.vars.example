@@ -1,0 +1,100 @@
+# Bearer token gating the control plane's admin endpoints (studio + platform
+# tools). Generate with: openssl rand -hex 32
+LUNORA_ADMIN_TOKEN=replace-with-openssl-rand-hex-32
+
+# Secret backing the hosted studio's better-auth email/password sessions.
+# Generate with: openssl rand -hex 32
+AUTH_SECRET=replace-with-openssl-rand-hex-32
+
+# Optional: base URL better-auth resolves session callbacks against. Defaults to
+# the request origin when unset (fine for local dev on a single origin).
+# AUTH_URL=http://localhost:5174
+
+# Cloudflare API token for the cell's account — used by the provisioner to
+# create D1/R2 and upload tenant Workers into the dispatch namespace.
+CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
+
+# Per-org "Cloudflare costs" tab (Billable Usage API): each BYO org connects its
+# OWN Cloudflare account + a token scoped to "Billing Read" from the console's
+# Cloudflare costs tab. That token is encrypted at the edge with
+# SECRET_ENCRYPTION_KEY (below) before storage, so no extra env var is needed —
+# only that SECRET_ENCRYPTION_KEY is set, which the summary read reuses to decrypt.
+
+# Secret shared with the GitHub App/webhook; verifies x-hub-signature-256.
+# Generate with: openssl rand -hex 32
+GITHUB_WEBHOOK_SECRET=replace-with-openssl-rand-hex-32
+
+# ── Billing (§4) — Creem (Merchant of Record) via @lunora/payment ───────────
+# Creem is the legal seller and handles sales tax/VAT globally (GAPS.md C3).
+# Absent → entitlement reads still work (everyone resolves to the free plan);
+# checkout / portal / webhook fail until these are set.
+CREEM_API_KEY=creem_test_replace-me
+CREEM_WEBHOOK_SECRET=whsec_replace-me
+# Point the SDK at Creem's sandbox (test-api.creem.io) during development.
+CREEM_TEST_MODE=true
+
+# ── Email (§3) — @lunora/mail ────────────────────────────────────────────────
+# In dev, mail is captured into the studio Mail tab (no transport needed). For
+# real delivery set a sender + a Resend key (or bind a SEND_EMAIL transport).
+MAIL_FROM=Lunora Cloud <noreply@example.com>
+# RESEND_API_KEY=re_replace-me
+# Force-capture mail even outside dev: LUNORA_MAIL_CAPTURE=true
+
+# ── Tenant secrets (§7) — AES-256-GCM envelope encryption ────────────────────
+# 32-byte master key (64 hex chars) for encrypting tenant env secrets at rest.
+# Generate with: openssl rand -hex 32
+SECRET_ENCRYPTION_KEY=replace-with-openssl-rand-hex-32
+
+# ── Dispatcher worker (dispatcher.wrangler.jsonc) ────────────────────────────
+# The dispatcher resolves per-tenant plan limits via the control plane and emits
+# per-request usage to an Analytics Engine dataset. Set these on the dispatcher:
+#   CONTROL_PLANE_URL   = https://<control-plane-host>   (enables per-plan limits)
+#   CONTROL_PLANE_TOKEN = <LUNORA_ADMIN_TOKEN>           (bearer for the lookup)
+#   USAGE_ANALYTICS     = an Analytics Engine dataset binding (metering source)
+
+# ── Studio social sign-in (optional) — enabled only when both halves are set ──
+# GITHUB_CLIENT_ID=replace-me
+# GITHUB_CLIENT_SECRET=replace-me
+# GOOGLE_CLIENT_ID=replace-me
+# GOOGLE_CLIENT_SECRET=replace-me
+
+# ── Optional subsystems — every one below degrades SILENTLY when unset ────────
+# These are the knobs that make a control plane boot and look healthy while a
+# subsystem is inert. Each line names the symptom you get without it, because
+# that symptom is otherwise indistinguishable from the feature not existing.
+
+# Cloudflare account id — the path segment for the Analytics Engine and R2 SQL
+# read endpoints. Absent → the Traffic tab, the Metrics trend and the per-script
+# health charts all render empty with no error.
+# CLOUDFLARE_ACCOUNT_ID=replace-with-cloudflare-account-id
+
+# Shared secret for POST /v1/logs/tail, the tail-consumer ingest.
+# Absent → that route answers 503 and tenant runtime logs never arrive.
+# LUNORA_TAIL_SECRET=replace-with-openssl-rand-hex-32
+
+# Bearer for R2 SQL, backing the archived-span read-back.
+# Absent → Traces beyond the 7-day hot window return empty rather than erroring.
+# R2_SQL_TOKEN=replace-with-r2-sql-token
+
+# Telemetry storage names. All optional with hardcoded defaults, so a mismatch
+# with the actual bindings reads as "no telemetry" rather than as a misconfig.
+# TELEMETRY_BUCKET_NAME=lunora-telemetry
+# TELEMETRY_SPAN_TABLE=default.telemetry_spans
+# TELEMETRY_DATASET=TELEMETRY
+# USAGE_ANALYTICS_DATASET=lunora_tenant_usage
+
+# OTLP endpoint injected into tenant Workers as their telemetry sink.
+# Absent → tenants deploy untelemetered; nothing reports it.
+# LUNORA_OTLP_ENDPOINT=https://<control-plane-host>/v1/traces
+
+# GitHub App credentials (PKCS#8 key — convert with `openssl pkcs8 -topk8 -nocrypt`).
+# Absent → server-side builds cannot fetch source and no commit status is written
+# back. NOTE: setting these alone does not make builds run; execution additionally
+# needs a build-container binding (see GAPS.md A3).
+# GITHUB_APP_ID=replace-me
+# GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----"
+
+# Apex domain tenant subdomains hang off, and this cell's name for the
+# `x-lunora-id` debug header. Both default; set them once you run more than one cell.
+# LUNORA_APP_DOMAIN=lunora.app
+# LUNORA_CELL=default

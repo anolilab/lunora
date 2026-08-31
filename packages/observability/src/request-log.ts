@@ -61,7 +61,7 @@ const REQUEST_LOG_EVENT_SOURCE = "lunora";
  * {@link ensureRequestLogTable}. A new column is one entry here plus the matching
  * line in the `CREATE`; nothing else needs a migration.
  */
-const ADDED_COLUMNS = ["error_fingerprint TEXT", "trace_id TEXT"];
+const ADDED_COLUMNS = ["error_fingerprint TEXT", "trace_id TEXT", "deployment_id TEXT", "version_tag TEXT"];
 
 /** Outcome of one dispatch — `ok` for a returned result, `error` for a thrown handler. */
 type RequestOutcome = "error" | "ok";
@@ -70,6 +70,8 @@ type RequestOutcome = "error" | "ok";
 interface RequestLogEntry {
     /** Whether the result was served from the reactive cache; `undefined` when the cache is disabled or the path isn't cached (a write/action). */
     cacheHit?: boolean;
+    /** Worker deployment id from the `CF_VERSION_METADATA` binding; `undefined` when the binding isn't declared. Group on this to answer "did this start with a deploy?". */
+    deploymentId?: string;
     /** Handler wall-clock duration in milliseconds (before the subscription write-flush, matching the per-function metrics). */
     durationMs: number;
     /** Error message when `outcome === "error"`, redacted like args/identity; absent on success. */
@@ -99,11 +101,14 @@ interface RequestLogEntry {
     ts: number;
     /** Acting userId forwarded by the runtime, or `undefined` when anonymous. */
     userId?: string;
+    /** Worker version tag from the `CF_VERSION_METADATA` binding; `undefined` when the binding isn't declared or the deploy carried no tag. */
+    versionTag?: string;
 }
 
 /** Fields accepted when appending one request-log entry; `seq` is assigned by the table. */
 interface AppendRequestLogEntry {
     cacheHit?: boolean;
+    deploymentId?: string;
     durationMs: number;
     errorMessage?: string;
     functionPath: string;
@@ -117,6 +122,7 @@ interface AppendRequestLogEntry {
     traceId?: string;
     ts: number;
     userId?: string;
+    versionTag?: string;
 }
 
 /** Knobs the dispatch site threads into a request-log write. */
@@ -294,6 +300,8 @@ const ensureRequestLogTable = (sql: SqlExec): void => {
             error_message TEXT,
             error_fingerprint TEXT,
             trace_id TEXT,
+            deployment_id TEXT,
+            version_tag TEXT,
             duration_ms REAL NOT NULL,
             tables_read TEXT NOT NULL DEFAULT '[]',
             tables_written TEXT NOT NULL DEFAULT '[]',
@@ -361,8 +369,8 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
     runSql(
         sql,
         `INSERT INTO "${REQUEST_LOG_TABLE}"
-            (ts, function_path, shard_key, user_id, identity, args, outcome, error_message, error_fingerprint, trace_id, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (ts, function_path, shard_key, user_id, identity, args, outcome, error_message, error_fingerprint, trace_id, deployment_id, version_tag, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         entry.ts,
         entry.functionPath,
         // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for a request with no shard key / anonymous caller / absent field.
@@ -387,6 +395,14 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
         // data, and redacting it would destroy the only thing it is for.
         // eslint-disable-next-line unicorn/no-null -- dispatch with no ambient trace, or a legacy row appended before this column existed.
         entry.traceId ?? null,
+        // Deploy attribution, never redacted for the same reason as `trace_id`:
+        // an opaque deployment id / version tag is Cloudflare's own identifier,
+        // not user data, and it is the whole point of the column — grouping the
+        // log by it is what answers "did this start with a deploy?".
+        // eslint-disable-next-line unicorn/no-null -- `version_metadata` binding not declared, or a legacy row appended before this column existed.
+        entry.deploymentId ?? null,
+        // eslint-disable-next-line unicorn/no-null -- binding absent, or the deploy carried no version tag.
+        entry.versionTag ?? null,
         entry.durationMs,
         encodeTables(entry.tablesRead),
         encodeTables(entry.tablesWritten),
@@ -420,6 +436,11 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
     const event = {
         args: entry.redactedArgs === undefined ? undefined : redactArgs(entry.redactedArgs, captureRaw),
         cacheHit: entry.cacheHit,
+        // Deploy attribution on EVERY invocation, so "did this start with a
+        // specific deploy?" is a group-by in the Workers Logs Query Builder
+        // rather than a correlation against a deploy timeline. Requires the
+        // `version_metadata` binding; absent from the event when unbound.
+        deploymentId: entry.deploymentId,
         durationMs: entry.durationMs,
         error: entry.errorMessage === undefined ? undefined : redactArgs(entry.errorMessage, captureRaw),
         function: entry.functionPath,
@@ -437,6 +458,7 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
         ts: entry.ts,
         type: "request",
         userId: entry.userId,
+        versionTag: entry.versionTag,
     };
 
     const line = JSON.stringify(event);
@@ -638,6 +660,7 @@ const pushScopeFilters = (conjuncts: string[], parameters: unknown[], options: {
 interface RequestLogRow {
     args: null | string;
     cache_hit: null | number;
+    deployment_id: null | string;
     duration_ms: number;
     error_message: null | string;
     function_path: string;
@@ -651,6 +674,7 @@ interface RequestLogRow {
     trace_id: null | string;
     ts: number;
     user_id: null | string;
+    version_tag: null | string;
 }
 
 /** Parse a JSON string array column back to `string[]`, tolerating a malformed/empty value. */
@@ -721,7 +745,7 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
 
     const rows = runSql<RequestLogRow>(
         sql,
-        `SELECT seq, ts, function_path, shard_key, user_id, identity, args, outcome, error_message, trace_id, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun
+        `SELECT seq, ts, function_path, shard_key, user_id, identity, args, outcome, error_message, trace_id, deployment_id, version_tag, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun
          FROM "${REQUEST_LOG_TABLE}" WHERE ${conjuncts.join(" AND ")} ORDER BY seq DESC LIMIT ?`,
         ...parameters,
     ).toArray();
@@ -772,6 +796,14 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
 
         if (row.trace_id !== null) {
             base.traceId = row.trace_id;
+        }
+
+        if (row.deployment_id !== null) {
+            base.deploymentId = row.deployment_id;
+        }
+
+        if (row.version_tag !== null) {
+            base.versionTag = row.version_tag;
         }
 
         return base;

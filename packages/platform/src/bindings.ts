@@ -111,8 +111,16 @@ export interface AnalyticsEngineDataPointLike {
 export interface D1PreparedStatementLike {
     // T lets callers type result rows (e.g. `.all<{ id: string }>()`); it flows
     // from the call site into the return, so it is intentionally caller-supplied.
+    //
+    // `meta` carries D1's per-query accounting — `rows_read`, `rows_written`,
+    // `duration`. It is the only place the SCANNED row count is observable, and
+    // scanned is what D1 bills and what a missing index inflates: a query
+    // filtering on an unindexed column reads the whole table to return three
+    // rows, so the result-set size says 3 while the cost says 200k. Projected
+    // here (the real `D1Result` has always carried it) so the exec layer can
+    // record it instead of discarding it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-    all: <T = unknown>() => Promise<{ results: T[]; success: boolean }>;
+    all: <T = unknown>() => Promise<{ meta?: Record<string, unknown>; results: T[]; success: boolean }>;
     bind: (...values: unknown[]) => D1PreparedStatementLike;
     first: <T = unknown>(column?: string) => Promise<T | null>;
     raw: <T = unknown>() => Promise<T[][]>;

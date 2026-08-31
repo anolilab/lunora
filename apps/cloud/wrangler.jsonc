@@ -1,0 +1,148 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // The Lunora Cloud CONTROL-PLANE worker (the platform itself), not a tenant
+    // worker. See CLOUD-PLAN.md.
+    "name": "lunora-cloud",
+    "main": "src/server.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "SHARD",
+                "class_name": "ShardDO",
+            },
+            {
+                "class_name": "SchedulerDO",
+                "name": "SCHEDULER",
+            },
+        ],
+    },
+    "migrations": [
+        {
+            "tag": "v1",
+            "new_sqlite_classes": ["ShardDO"],
+        },
+        {
+            "new_sqlite_classes": ["SchedulerDO"],
+            "tag": "v2",
+        },
+    ],
+    "d1_databases": [
+        {
+            // Control-plane DB: cells + organizations (the `.global()` tables).
+            "binding": "DB",
+            "database_name": "lunora-cloud",
+            "database_id": "<replace-with-d1-create-id>",
+        },
+    ],
+    // Bind the dispatch namespace so the every-minute tick can fan tenant cron
+    // jobs out to namespaced workers (WfP drops their own triggers.crons; §2.4).
+    //
+    // Deliberately NOT `remote: true`, despite the dev-server warning that
+    // dispatch namespaces have no local emulation. Setting it makes `lunora dev`
+    // open a remote proxy session at startup, which hard-fails with API code
+    // 10121 ("you do not have access to dispatch namespaces") on any account
+    // without Workers for Platforms — i.e. it trades an advisory warning for a
+    // dev server that won't boot. Tenant fan-out is inert locally either way;
+    // exercise it against a WfP-enabled account.
+    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
+    // Platform-owned queue consumer (§2.4): tenants can't be queue consumers under
+    // WfP, so the control plane drains a shared queue and forwards each message to
+    // its tenant's /_lunora/queue. Tenant producers tag messages with their script.
+    "queues": {
+        "consumers": [{ "queue": "lunora-tenant-queue", "max_batch_size": 100, "max_batch_timeout": 5 }],
+    },
+    "triggers": {
+        // `0 */1 * * *` fires the control plane's own code crons (preview cleanup,
+        // usage rollup). `* * * * *` drives the tenant cron fan-out — the fan-out
+        // matches each tenant's expression against the current minute (src/fanout).
+        "crons": ["0 */1 * * *", "*/1 * * * *", "0 */6 * * *"],
+    },
+    "vars": {
+        // The Cloudflare account this cell provisions into.
+        "CLOUDFLARE_ACCOUNT_ID": "<replace-with-cf-account-id>",
+        // Cell id + the apex the dispatcher routes tenant scripts under.
+        "LUNORA_CELL": "default",
+        "LUNORA_APP_DOMAIN": "lunora.app",
+        // This cell's public OTLP ingest base — injected into every tenant Worker
+        // as `LUNORA_OTLP_ENDPOINT` (+ a scoped `LUNORA_OTLP_TOKEN` secret) so its
+        // `otlpSink` ships traces/logs/metrics back here. Set to this cloud
+        // worker's own reachable URL; when unset, tenants deploy untelemetered.
+        "LUNORA_OTLP_ENDPOINT": "https://cloud.lunora.app",
+    },
+    "analytics_engine_datasets": [
+        {
+            "binding": "ANALYTICS",
+            "dataset": "ANALYTICS",
+        },
+        {
+            // Observability metrics stream (issue/incident counts per ingest);
+            // read back via the AE SQL API for the hosted dashboards.
+            "binding": "TELEMETRY",
+            "dataset": "TELEMETRY",
+        },
+    ],
+    // Durable archive for raw decoded telemetry events (Pipeline → R2, read back
+    // with R2 SQL). The bucket is bound here; the `TELEMETRY_PIPELINE` producer is
+    // provisioned per cell with `wrangler pipelines create` (its remote name can't
+    // be minted from config) and the telemetry store no-ops until it is present.
+    "r2_buckets": [
+        {
+            "binding": "TELEMETRY_BUCKET",
+            "bucket_name": "lunora-cloud-telemetry",
+        },
+    ],
+    // The producer half of that archive. `src/telemetry/store.ts` reads it as
+    // `env.TELEMETRY_PIPELINE` and no-ops when absent, so declaring the binding costs
+    // nothing where the pipeline hasn't been created yet. The `stream` value must
+    // match what `wrangler pipelines create` minted for this cell — the resource is
+    // not auto-provisioned, which is why the dev server hints about it.
+    "pipelines": [
+        {
+            "binding": "TELEMETRY_PIPELINE",
+            // `stream`, not the deprecated `pipeline` — wrangler renamed the field.
+            "stream": "lunora-cloud-telemetry",
+        },
+    ],
+    // Workers AI — powers the on-demand incident AI-triage action
+    // (`incidents.triage`). Inference is billed per call; the action only runs when a
+    // member clicks "Triage" in the dashboard, and the `ai` rate-limit bucket in
+    // `lunora/guards.ts` meters it per hour rather than per minute for that reason.
+    //
+    // Deliberately NOT `remote: true`, for the same reason as the dispatch namespace
+    // above: it makes `lunora dev` open a remote proxy session at startup, so anyone
+    // without authenticated Cloudflare credentials can no longer boot the control
+    // plane locally — and it would bill real inference from a dev server. Remote
+    // bindings are meant to be an opt-in per dev session (`LUNORA_REMOTE`), not a
+    // committed default. The dev-server warning about AI reaching the remote account
+    // is accurate and accepted.
+    "ai": {
+        "binding": "AI",
+    },
+    // Blast-radius cap on the control plane itself. Alerting is lagging by
+    // definition, so a CPU ceiling is one of the few controls that bounds the
+    // damage rather than reporting it after the fact. Generous enough for the
+    // deploy orchestrator's longest legitimate path.
+    "limits": {
+        "cpu_ms": 60000,
+    },
+    // `invocation_logs` keeps the per-invocation summary line, which is what the
+    // Workers Logs Query Builder groups on; without it only explicit `console`
+    // events survive and "which deploy did this start with" has nothing to
+    // group. Paired with the `version_metadata` binding below.
+    "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "logs": {
+            "invocation_logs": true,
+        },
+    },
+    // Deploy attribution. The runtime reads this binding (`CF_VERSION_METADATA`)
+    // and stamps `deploymentId` / `versionTag` onto every request-log row and
+    // every emitted Workers-Logs event, so a spike resolves to a deploy by
+    // group-by rather than by correlating graphs. Costs nothing when unused.
+    "version_metadata": {
+        "binding": "CF_VERSION_METADATA",
+    },
+}
