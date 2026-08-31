@@ -280,6 +280,49 @@ dry-run toggle; a real (non-dry-run) run is behind a confirm gate. The panel
 issues no credentials of its own; it relies on the worker's `LUNORA_ADMIN_TOKEN`
 gate like the CLI.
 
+## One-off data edits without a deploy
+
+A `defineMigration` is the right tool for a backfill you want reviewed,
+versioned and re-runnable. It is the wrong tool for _"mark these 800 rows
+`seen`"_ — that shouldn't need a deploy at all.
+
+The Studio's data browser has **Set column on N matching** beside **Delete N
+matching**. Filter the table to the rows you mean, pick a column, give it a
+JSON value, and every matching row is patched through the same schema-aware
+writer a mutation uses: validators run, indexes and FTS/aggregate/rank shadow
+tables stay in sync, and live subscribers are poked. Point the Studio at
+production with `lunora view --remote`.
+
+The value is parsed as **JSON**, not taken as text, so `true`, `42` and `null`
+arrive as themselves — a `v.boolean()` column takes `true`, not `"true"`. A
+`v.bigint()` or `v.bytes()` column takes the same tagged form the grid displays.
+
+<Callout type="info">
+    The SQL console (**Database → SQL**) is deliberately read-only. A raw `UPDATE` would bypass the schema-aware writer and desync the FTS, aggregate and rank
+    shadow tables, so bulk edits go through this path instead.
+</Callout>
+
+Things worth knowing before you run one:
+
+- **It is scoped to one shard.** The data browser is shard-addressed, so on a
+  [`.shardBy()`](/docs/concepts/sharding) table "every matching row" means every
+  matching row _in the shard you are viewing_. The dialog names the shard. Other
+  shards are untouched — repeat per shard, or write a `defineMigration`, which
+  runs across all of them.
+- **It is bounded.** The shard writes at most one page per round-trip and the
+  browser loops it. A very large set stops with _"rows still match"_; running it
+  again resumes from where it stopped rather than rescanning from the top.
+- **A unique column is refused.** Setting a single-column `.unique()` index to
+  the same value on more than one row cannot succeed, so the dialog blocks it
+  rather than letting the writer fail partway.
+- **A failure mid-run is partial, not rolled back.** Each row commits on its
+  own, so the message reports how many rows had already been written.
+- **Every call is audited** — table, the field _names_ set, and the row count.
+  The values themselves are never recorded.
+
+For anything you want to keep, review or run again later, write a
+`defineMigration` instead.
+
 ## Resetting local state
 
 `lunora reset` is not a migration command, but it's the companion when a local

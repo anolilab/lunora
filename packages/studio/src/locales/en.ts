@@ -1440,6 +1440,9 @@ const MESSAGE_IDS = [
     'Enter a JSON value — for example true, 0, null, or "done".',
     "Set on {total} rows",
     "Set column on {total} matching",
+    "Shard: root",
+    "Shard: {shardKey} — rows in other shards are not touched.",
+    "{column} has a unique index — the same value cannot be set on {total} rows.",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

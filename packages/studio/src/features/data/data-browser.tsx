@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import type { ColumnMeta, FilterClause, TableInfo, TablePage, TablesColumnsResult } from "../../lib/admin";
+import type { ColumnMeta, FilterClause, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult, TablesIndexesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
 import { advisorSchemaFromColumns } from "../../lib/cascade-schema";
@@ -31,6 +31,14 @@ import { TableListSidebar } from "./table-list-sidebar";
 
 /** Browser-local store for per-table enabled reverse-relation columns. */
 const BACK_RELATIONS_KEY = "lunora-studio-back-relations";
+
+/**
+ * Columns covered by a single-column UNIQUE index. Only single-column ones: a
+ * composite unique index does not make its members individually unique, so
+ * flagging them would cry wolf on every ordinary bulk set.
+ */
+const uniqueColumnsFor = (indexes: ReadonlyArray<TableIndexInfo> | undefined): ReadonlySet<string> =>
+    new Set((indexes ?? []).filter((index) => index.unique === true && index.fields.length === 1).map((index) => index.fields[0] ?? ""));
 
 /** Hoisted empty schema map so an unresolved `describeTables` doesn't churn the resolver's identity. */
 const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
@@ -186,6 +194,13 @@ export const DataBrowser = ({
     // them. The EDGES are derived from schema metadata the studio can fetch once;
     // only the COUNTS need a per-page round trip.
     const schemaQuery = useAdminQuery<TablesColumnsResult>(ADMIN_FUNCTIONS.describeTables, {}, { shardKey: initialShardKey ?? "" });
+
+    // Declared indexes, for the one thing the column metadata cannot answer:
+    // which columns carry a UNIQUE index. Setting such a column to a constant
+    // across two or more matching rows is a guaranteed mid-batch constraint
+    // failure — a partial write — so the bulk-patch dialog warns before the
+    // operator commits rather than after the writer refuses.
+    const indexesQuery = useAdminQuery<TablesIndexesResult>(ADMIN_FUNCTIONS.listTablesIndexes, {}, { shardKey: initialShardKey ?? "" });
     const columnsByTable = schemaQuery.data?.columnsByTable ?? EMPTY_COLUMNS_BY_TABLE;
     const [backRelationsOn, setBackRelationsOn] = usePersistedValue<Record<string, string[]>>(BACK_RELATIONS_KEY, {});
 
@@ -562,8 +577,10 @@ export const DataBrowser = ({
                     columns={browser.columns.filter((name) => browser.editableColumn(name))}
                     onApply={browser.bulkPatch}
                     onClose={closeBulkPatch}
+                    shardKey={browser.queryShardKey}
                     table={selectedTable}
                     total={browser.total}
+                    uniqueColumns={uniqueColumnsFor(indexesQuery.data?.indexesByTable[selectedTable])}
                 />
             )}
 

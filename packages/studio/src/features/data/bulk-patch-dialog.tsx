@@ -24,10 +24,20 @@ interface BulkPatchDialogProps {
      */
     readonly onApply: (document_: Record<string, unknown>) => void;
     readonly onClose: () => void;
+
+    /**
+     * The shard these rows live in — the write reaches THIS shard only. The data
+     * browser is shard-addressed, so on a `.shardBy()` table "every matching row"
+     * means "every matching row here", and an operator who typed a shard key to
+     * get to this view should be told the write inherits it. Empty ⇒ root.
+     */
+    readonly shardKey: string;
     /** The table being edited — for display only. */
     readonly table: string;
     /** Rows matching the active view: what the operator is about to write. */
     readonly total: number;
+    /** Columns carrying a single-column UNIQUE index — setting one to a constant across rows cannot succeed. */
+    readonly uniqueColumns: ReadonlySet<string>;
 }
 
 /**
@@ -45,7 +55,7 @@ interface BulkPatchDialogProps {
  * disabled and names the problem BEFORE the operator commits a write across
  * hundreds of rows.
  */
-const BulkPatchDialog = ({ columns, onApply, onClose, table, total }: BulkPatchDialogProps): ReactElement => {
+const BulkPatchDialog = ({ columns, onApply, onClose, shardKey, table, total, uniqueColumns }: BulkPatchDialogProps): ReactElement => {
     const t = useT();
 
     const [column, setColumn] = useState<string>(columns[0] ?? "");
@@ -75,7 +85,13 @@ const BulkPatchDialog = ({ columns, onApply, onClose, table, total }: BulkPatchD
         }
     }
 
-    const canApply = column !== "" && !pristine && parseError === undefined;
+    // A single-column unique index cannot hold the same value twice, so setting
+    // one across two or more matching rows is guaranteed to fail partway — after
+    // the first row has already committed. Blocked rather than warned: there is no
+    // input the operator could add that would make it work.
+    const uniqueBlocked = uniqueColumns.has(column) && total > 1;
+
+    const canApply = column !== "" && !pristine && parseError === undefined && !uniqueBlocked;
 
     const onConfirm = (): void => {
         if (!canApply) {
@@ -98,6 +114,9 @@ const BulkPatchDialog = ({ columns, onApply, onClose, table, total }: BulkPatchD
                             table,
                             total: total.toString(),
                         })}
+                    </p>
+                    <p className="text-xs text-muted-foreground" data-testid="bulk-patch-shard">
+                        {shardKey === "" ? t("Shard: root") : t("Shard: {shardKey} — rows in other shards are not touched.", { shardKey })}
                     </p>
                 </div>
                 <Button data-testid="bulk-patch-close" onClick={onClose} size="xs" variant="ghost">
@@ -146,7 +165,13 @@ const BulkPatchDialog = ({ columns, onApply, onClose, table, total }: BulkPatchD
                 </p>
             )}
 
-            {pristine && (
+            {uniqueBlocked && (
+                <p className="text-xs text-destructive" data-testid="bulk-patch-unique" role="alert">
+                    {t("{column} has a unique index — the same value cannot be set on {total} rows.", { column, total: total.toString() })}
+                </p>
+            )}
+
+            {pristine && !uniqueBlocked && (
                 <p className="text-xs text-muted-foreground" data-testid="bulk-patch-hint">
                     {t('Enter a JSON value — for example true, 0, null, or "done".')}
                 </p>

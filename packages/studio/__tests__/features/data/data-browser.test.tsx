@@ -1328,9 +1328,9 @@ interface FilterArg {
  */
 const createFilterableClient = (bulkCap = 50): MockClientHooks => {
     let rows = [
-        { __id__: "m1", status: "active", text: "hello" },
-        { __id__: "m2", status: "active", text: "world" },
-        { __id__: "m3", status: "archived", text: "again" },
+        { __id__: "m1", slug: "a", status: "active", text: "hello" },
+        { __id__: "m2", slug: "b", status: "active", text: "world" },
+        { __id__: "m3", slug: "c", status: "archived", text: "again" },
     ];
 
     const matchesFilters = (row: Record<string, unknown>, filters: FilterArg[]): boolean =>
@@ -1340,6 +1340,11 @@ const createFilterableClient = (bulkCap = 50): MockClientHooks => {
         query: (reference, args): unknown => {
             if (reference === ADMIN_FUNCTIONS.listTables) {
                 return [{ name: "messages", rowCount: rows.length }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.listTablesIndexes) {
+                // `slug` carries a single-column unique index; `status` and `text` carry none.
+                return { indexesByTable: { messages: [{ fields: ["slug"], name: "bySlug", type: "index", unique: true }] } };
             }
 
             if (reference === ADMIN_FUNCTIONS.writeRow) {
@@ -1392,7 +1397,7 @@ const createFilterableClient = (bulkCap = 50): MockClientHooks => {
 
             const matched = rows.filter((row) => matchesFilters(row as Record<string, unknown>, filters));
 
-            return { columns: ["__id__", "status", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
+            return { columns: ["__id__", "slug", "status", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
         },
     });
 };
@@ -1564,6 +1569,42 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         expect((bulk[1]?.[1] as { after?: string }).after).toBe("m1");
         // The loop finished on `hasMore: false`, so no truncation notice.
         expect(screen.queryByTestId("db-write-error")).toBeNull();
+    });
+
+    it("refuses to set a unique column across more than one matching row", async () => {
+        expect.assertions(3);
+
+        const mock = createFilterableClient();
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "active" } });
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 2) {
+                throw new Error("filter not applied yet");
+            }
+        });
+
+        fireEvent.click(screen.getByTestId("db-bulk-patch"));
+
+        // `slug` is uniquely indexed and two rows match: the same value cannot land
+        // on both, and the writer would fail PARTWAY — after row one committed.
+        fireEvent.change(await screen.findByTestId("bulk-patch-column"), { target: { value: "slug" } });
+        fireEvent.change(screen.getByTestId("bulk-patch-value"), { target: { value: '"seen"' } });
+
+        expect(screen.getByTestId("bulk-patch-unique").textContent).toContain("unique index");
+        expect(screen.getByTestId<HTMLButtonElement>("bulk-patch-apply").disabled).toBe(true);
+
+        // `status` is not unique, so the same view is writable through it.
+        fireEvent.change(screen.getByTestId("bulk-patch-column"), { target: { value: "status" } });
+
+        expect(screen.getByTestId<HTMLButtonElement>("bulk-patch-apply").disabled).toBe(false);
     });
 
     it("clears the whole table via the clearTable op when no filter is active", async () => {

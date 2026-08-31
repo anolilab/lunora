@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // Bundler-inlined shared helper (see CLAUDE.md `shared/` rules) — the same wire
 // codec the shard writer stores `__doc__` with, so display and save agree on the
 // encoding rather than studio growing a second, drifting decoder.
+import { drainBulkOp } from "../../../../../../shared/bulk-drain";
 import { decodeDocument, decodeWire, encodeWire, isPlainObject } from "../../../../../../shared/wire-codec";
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
@@ -321,13 +322,6 @@ const resolveStagedChanges = (page: TablePage | null, staged: StagedEditsModel["
 
 /** Whether a column is editable in place — every column but the meta ones. */
 const editableColumn = (column: string): boolean => !META_COLUMNS.has(column);
-
-/**
- * Why `drainBulk` stopped: `"completed"` when the server reported no more
- * matching rows; `"cap-hit"` when the client's own `MAX_BULK_BATCHES`
- * loop ran out first — matching rows may still remain.
- */
-type BulkDrainOutcome = "cap-hit" | "completed";
 
 /** Shown when a delete drain hits its batch bound. Re-running always makes progress: the removed rows no longer match. */
 const DELETE_TRUNCATED = `Stopped after ${MAX_BULK_BATCHES.toString()} batches — rows still match. Run it again to remove the rest.`;
@@ -986,41 +980,28 @@ const useDataBrowser = ({
         setWriteError(null);
         setWriteNotice(null);
 
-        // The cursor is owned HERE and never travels in `args`. It used to be seeded
-        // by the caller putting `after: ""` in the args bag, which the loop's own
-        // `{ ...args, after }` then silently overwrote with `undefined` on the first
-        // batch — an unordered scan whose returned cursor is an arbitrary id, which
-        // the next batch used as a keyset boundary and skipped every row below it.
-        // One owner, so the two cannot disagree.
+        // A resumable op ALWAYS opens with a cursor — the one a previous capped run
+        // of this EXACT request parked, otherwise `""`, which sorts below every real
+        // id. A non-resumable one opens with none, which is what keeps its scan
+        // unordered. `drainBulkOp` owns it from there; it never travels in `args`.
         const resumeKey = bulkResumeKey(reference, args, debouncedShard);
         const parked = bulkResume.current?.key === resumeKey ? bulkResume.current.after : undefined;
-        // A resumable op ALWAYS opens with a cursor — the parked one when this exact
-        // request was capped before, otherwise `""`, which sorts below every real id.
-        // A non-resumable one sends none, which is what keeps its scan unordered.
-        let after = spec.resumable ? (parked ?? "") : undefined;
+        const openCursor = spec.resumable ? (parked ?? "") : undefined;
+
         let written = 0;
 
         try {
-            let outcome: BulkDrainOutcome = "cap-hit";
+            const drained = await drainBulkOp({
+                args,
+                maxBatches: MAX_BULK_BATCHES,
+                openCursor,
+                query: async (batchArgs) => (await client.query(reference, batchArgs, callOptions(debouncedShard))) as BulkRowOpResult,
+            });
 
-            for (let batch = 0; batch < MAX_BULK_BATCHES; batch += 1) {
-                // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each call reflects the prior batch's writes)
-                const result = (await client.query(reference, { ...args, after }, callOptions(debouncedShard))) as BulkRowOpResult;
+            written = drained.written;
+            bulkResume.current = drained.cursor === undefined ? null : { after: drained.cursor, key: resumeKey };
 
-                written += result.count;
-                after = result.cursor;
-
-                if (!result.hasMore) {
-                    outcome = "completed";
-                    break;
-                }
-            }
-
-            // A cap-hit keeps its place so the operator's next identical run resumes;
-            // a clean finish clears it so a later run starts from the top.
-            bulkResume.current = outcome === "cap-hit" && after !== undefined ? { after, key: resumeKey } : null;
-
-            if (outcome === "cap-hit") {
+            if (drained.outcome === "cap-hit") {
                 setWriteError(spec.truncated);
             }
 
@@ -1028,9 +1009,9 @@ const useDataBrowser = ({
 
             return written;
         } catch (error) {
-            // `written` counts only batches that RETURNED, so the failing batch's own
-            // committed rows are not in it — hence "at least". The rows before the
-            // failure are already on disk, so silence here would be the worse lie.
+            // A throw loses the failing batch's own committed count, so this is a
+            // lower bound — hence "at least". The rows before the failure are already
+            // on disk, so silence here would be the worse lie.
             setWriteError(`${(error as Error).message} (at least ${written.toString()} rows were already ${spec.verb})`);
 
             bulkResume.current = null;

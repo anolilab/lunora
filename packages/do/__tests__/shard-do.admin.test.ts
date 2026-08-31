@@ -32,6 +32,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
+import { drainBulkOp } from "../../../shared/bulk-drain";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
@@ -3264,6 +3265,14 @@ describe("shardDO admin bulk delete", () => {
 
     const rowCount = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "todos"`)[0]?.["c"] ?? 0);
 
+    /** Rows of `project` whose `done` is now `true` — what a bulk patch is supposed to have changed. */
+    const doneCount = (project: string): number =>
+        Number(
+            database.raw(
+                `SELECT COUNT(*) AS c FROM "todos" WHERE json_extract("__doc__", '$.projectId') = '${project}' AND json_extract("__doc__", '$.done') = 1`,
+            )[0]?.["c"] ?? 0,
+        );
+
     /** Seed `count` todos in the given project, returning the writer used (its reads hit the shadow tables). */
     const seedProject = async (writer: DatabaseWriterLike, project: string, count: number): Promise<void> => {
         for (let index = 0; index < count; index += 1) {
@@ -3404,14 +3413,6 @@ describe("shardDO admin bulk delete", () => {
     });
 
     describe("patchRows", () => {
-        /** Rows of `project` whose `done` is now `true` — what a bulk patch is supposed to have changed. */
-        const doneCount = (project: string): number =>
-            Number(
-                database.raw(
-                    `SELECT COUNT(*) AS c FROM "todos" WHERE json_extract("__doc__", '$.projectId') = '${project}' AND json_extract("__doc__", '$.done') = 1`,
-                )[0]?.["c"] ?? 0,
-            );
-
         it("patches only the rows matching a filter, leaving the rest", async () => {
             expect.assertions(3);
 
@@ -3567,6 +3568,98 @@ describe("shardDO admin bulk delete", () => {
             expect(doneCount("p1")).toBe(2);
             // …and the subscriber was told, rather than being left on a stale read.
             expect(sent.some((raw) => (JSON.parse(raw) as { type: string }).type === "data")).toBe(true);
+        });
+    });
+
+    describe("client drain against a real shard", () => {
+        /**
+         * Drives the STUDIO'S OWN drain loop (`shared/bulk-drain`) against a real
+         * `ShardDO` — no mock client, no hand-written server.
+         *
+         * This is the seam every other test in this feature stops short of. The
+         * studio's component tests mock the server; the tests above bypass the
+         * client. The one defect that reached `alpha` lived exactly between them: the
+         * client dropped its opening keyset cursor, the shard answered an unordered
+         * scan with a cursor anyway, and BOTH mocks had independently "corrected" the
+         * missing cursor into "ordered, from the top" — so neither could see it.
+         *
+         * Crossing the seam is what makes the ids matter: they are real
+         * `crypto.randomUUID()` values, so insertion order (what an unordered scan
+         * returns) is uncorrelated with id order (what a keyset walk assumes). An
+         * unordered opening batch therefore skips a random ~half of the table.
+         */
+        const drainThroughShard = async (
+            shard: ShardDO,
+            functionPath: string,
+            args: Record<string, unknown>,
+            openCursor?: string,
+        ): Promise<{ outcome: string; written: number }> => {
+            const drained = await drainBulkOp({
+                args,
+                maxBatches: 50,
+                openCursor,
+                query: async (batchArgs) => {
+                    const response = await shard.fetch(bulkRequest(functionPath, batchArgs));
+
+                    if (!response.ok) {
+                        throw new Error(`bulk op failed: ${response.status.toString()}`);
+                    }
+
+                    const body = await response.json<{ result: { count: number; cursor?: string; hasMore: boolean } }>();
+
+                    return body.result;
+                },
+            });
+
+            return { outcome: drained.outcome, written: drained.written };
+        };
+
+        it("patches every matching row when the patch leaves them matching", async () => {
+            expect.assertions(3);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            // Comfortably more than one server page (`limit: 5` below), so the drain
+            // must actually walk the keyset rather than finishing in one call.
+            await seedProject(seed, "p1", 23);
+            await seedProject(seed, "p2", 4);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            // The filter is on `projectId` and the write is on `done`, so every
+            // patched row STILL matches — the shape where the cursor is the only
+            // thing that advances the scan.
+            const { outcome, written } = await drainThroughShard(
+                shard,
+                ADMIN_FUNCTIONS.patchRows,
+                { doc: { done: true }, filters: [{ column: "projectId", operator: "eq", value: "p1" }], limit: 5, table: "todos" },
+                "",
+            );
+
+            expect(outcome).toBe("completed");
+            expect(written).toBe(23);
+            // Every p1 row, not the ~half an unordered opening scan would have left.
+            expect(doneCount("p1")).toBe(23);
+        });
+
+        it("drains a delete without a cursor, exactly as the client sends it", async () => {
+            expect.assertions(2);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedProject(seed, "p1", 12);
+            await seedProject(seed, "p2", 3);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const { written } = await drainThroughShard(shard, ADMIN_FUNCTIONS.deleteRows, {
+                filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                limit: 5,
+                table: "todos",
+            });
+
+            expect(written).toBe(12);
+            expect(rowCount()).toBe(3);
         });
     });
 
