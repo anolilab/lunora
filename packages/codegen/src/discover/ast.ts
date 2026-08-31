@@ -1,5 +1,5 @@
 import { lstatSync, readdirSync } from "node:fs";
-import { extname, join, relative, sep } from "node:path";
+import { dirname, extname, join, relative, sep } from "node:path";
 
 import type { CallExpression, Expression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -57,6 +57,101 @@ const listLunoraSourceFiles = (directory: string, accumulator: string[] = [], ro
     }
 
     return accumulator;
+};
+
+/**
+ * Where the worker entry lives, probed relative to the project root when a
+ * security discoverer widens its scan past `lunora/`. Mirrors
+ * `@lunora/config`'s `WORKER_ENTRY_FALLBACKS`, with `src/server` taken as a
+ * whole directory because the entry routinely splits helpers out beside itself.
+ */
+const WORKER_ENTRY_ROOTS = ["src/server", "src/index.ts", "src/worker.ts"] as const;
+
+/** Source extensions the worker-entry probe accepts — a `.tsx` entry is one of `@lunora/config`'s fallbacks. */
+const ENTRY_EXTENSIONS = new Set([".ts", ".tsx"]);
+
+/**
+ * Collect source files at `path`, which may be a single file or a directory to
+ * recurse. Anything that is neither (a missing path, a symlink — `lstatSync`
+ * classifies by the link, so a directory symlink is never descended into) is
+ * skipped.
+ */
+const listEntrySourceFiles = (path: string, accumulator: string[] = []): string[] => {
+    let info;
+
+    try {
+        info = lstatSync(path);
+    } catch {
+        return accumulator;
+    }
+
+    if (info.isFile()) {
+        if (ENTRY_EXTENSIONS.has(extname(path))) {
+            accumulator.push(path);
+        }
+
+        return accumulator;
+    }
+
+    if (!info.isDirectory()) {
+        return accumulator;
+    }
+
+    for (const entry of readdirSync(path)) {
+        if (entry === "_generated" || entry === "node_modules") {
+            continue;
+        }
+
+        listEntrySourceFiles(join(path, entry), accumulator);
+    }
+
+    return accumulator;
+};
+
+/** One file a security discoverer scans: where to parse it from, and how a finding names it. */
+interface ScannedSourceFile {
+    /** How a finding refers to the file — project-relative, POSIX separators, no extension. */
+    displayPath: string;
+    /** Absolute path to parse. */
+    filePath: string;
+}
+
+/**
+ * The file set the *security* discoverers scan: the `lunora/` tree plus the
+ * worker entry (`src/server/**`, `src/index.ts`, `src/worker.ts`).
+ *
+ * The worker-entry factories those lints inspect — `createInboundEmailHandler`,
+ * `createPayment`, `createBrowser`, the CDC export sinks — are constructed in the
+ * entry by convention and never under `lunora/`, so a `lunora/`-only walk saw
+ * zero call sites and five ERROR-level lints could not fire at all.
+ *
+ * Deliberately a second, explicitly-scoped walk rather than a widening of
+ * {@link listLunoraSourceFiles}: that set is the *function* file set — every other
+ * discoverer, plus `refreshCodegenProject`'s add/remove reconciliation, depends on
+ * it staying exactly `lunora/`.
+ *
+ * The project root is `dirname(lunoraDirectory)`, which is how `runCodegen` builds
+ * the lunora directory in the first place.
+ */
+const listSecurityScanFiles = (lunoraDirectory: string): ScannedSourceFile[] => {
+    const projectRoot = dirname(lunoraDirectory);
+    const files: ScannedSourceFile[] = listLunoraSourceFiles(lunoraDirectory).map((filePath) => {
+        return { displayPath: lunoraRelativePath(lunoraDirectory, filePath), filePath };
+    });
+    const seen = new Set(files.map((file) => file.filePath));
+
+    for (const root of WORKER_ENTRY_ROOTS) {
+        for (const filePath of listEntrySourceFiles(join(projectRoot, root))) {
+            if (seen.has(filePath)) {
+                continue;
+            }
+
+            seen.add(filePath);
+            files.push({ displayPath: lunoraRelativePath(projectRoot, filePath), filePath });
+        }
+    }
+
+    return files;
 };
 
 /**
@@ -371,6 +466,7 @@ export {
     isDatabaseAccessor,
     limitNameOf,
     listLunoraSourceFiles,
+    listSecurityScanFiles,
     lunoraRelativePath,
     propertyInitializer,
     readTargetOf,
@@ -382,3 +478,4 @@ export {
     unwrapExpression,
     unwrapToCallExpression,
 };
+export type { ScannedSourceFile };

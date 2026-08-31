@@ -295,7 +295,9 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             workflows,
         }),
         storageRulesMetadata,
-        usesSandbox: sandboxUsage.usesSandboxBrowser || sandboxUsage.usesSandboxContainer,
+        // ANY sandbox tool needs the `sandbox:invoke` dispatcher registered — the
+        // receiver's `fs` arm is as unreachable without it as the browser one.
+        usesSandbox: sandboxUsage.usesSandboxBrowser || sandboxUsage.usesSandboxContainer || sandboxUsage.usesSandboxFs,
         useUmbrella,
         workflows,
     };

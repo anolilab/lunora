@@ -647,10 +647,11 @@ export interface LintContext {
 
     /**
      * Bounded row samples per table — the `constraint_validator` lint input.
-     * Supplied by the studio backend, which reads up to the configured row cap
-     * from each table via `readTablePage` and assembles the existing-id set for
-     * FK referential-integrity checks. Absent for static callers or codegen
-     * feeders, where the constraint lint simply finds nothing.
+     * There is NO shipped feeder: neither the runtime nor the studio reads row
+     * samples out of a shard, so this is absent for every caller in-tree and the
+     * constraint lint finds nothing. Supply it yourself (a paged read per table,
+     * plus the existing-id set for the FK referential-integrity checks) to drive
+     * that lint.
      *
      * Each entry carries `existingIds` (every `_id` in the sample window) so
      * FK columns can be cross-checked across tables in O(1) per value. When

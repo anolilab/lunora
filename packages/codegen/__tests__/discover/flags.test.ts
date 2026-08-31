@@ -48,6 +48,22 @@ describe("discover/flags", () => {
         expect(discoverFlags(newProject(), workdir)).toStrictEqual({ bindingName: "FLAGS", mode: "binding", provider: "flagship" });
     });
 
+    // Regression: every template depends on `lunorash`, never `@lunora/flags`, so
+    // pinning only the granular specifier meant an umbrella project degraded to
+    // `{ provider: "custom" }` — no flagship binding reconciled, no diagnostic.
+    it("reads a flagship provider imported through the umbrella specifier", () => {
+        expect.assertions(1);
+
+        writeFlags(`
+            import { defineFlags } from "lunorash/flags";
+            import { flagshipProvider } from "lunorash/flags/flagship";
+
+            export default defineFlags({ provider: flagshipProvider({ binding: "FLAGS" }) });
+        `);
+
+        expect(discoverFlags(newProject(), workdir)).toStrictEqual({ bindingName: "FLAGS", mode: "binding", provider: "flagship" });
+    });
+
     it("treats an HTTP-mode flagship provider as flagship with no binding", () => {
         expect.assertions(1);
 
