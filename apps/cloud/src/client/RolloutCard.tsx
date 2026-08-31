@@ -38,9 +38,9 @@ export const RolloutCard = ({
     /** The rollout in progress, if any. Candidate and share arrive together by construction. */
     rollout?: { percent: number; scriptName: string };
 }): ReactElement | null => {
-    const setRollout = useMutation(api.deployments.setRollout);
-    const promote = useMutation(api.deployments.promoteRollout);
-    const abort = useMutation(api.deployments.abortRollout);
+    const setRollout = useMutation(api.rollouts.setRollout);
+    const promote = useMutation(api.rollouts.promoteRollout);
+    const abort = useMutation(api.rollouts.abortRollout);
     const [error, setError] = useState<null | string>(null);
 
     const active = rollout !== undefined;

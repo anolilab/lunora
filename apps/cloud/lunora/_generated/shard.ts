@@ -3343,60 +3343,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public write emits no structured event"
     },
     {
-        "cacheKey": "procedure_without_structured_event:deployments:setRollout",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `setRollout` (deployments) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "setRollout",
-            "file": "deployments",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:deployments:promoteRollout",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `promoteRollout` (deployments) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "promoteRollout",
-            "file": "deployments",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:deployments:abortRollout",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `abortRollout` (deployments) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "abortRollout",
-            "file": "deployments",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
         "cacheKey": "procedure_without_structured_event:domains:add",
         "categories": [
             "SCHEMA"
@@ -3840,6 +3786,60 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "metadata": {
             "exportName": "setPreviewProtection",
             "file": "projects",
+            "kind": "mutation"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
+        "cacheKey": "procedure_without_structured_event:rollouts:setRollout",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public mutation `setRollout` (rollouts) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "setRollout",
+            "file": "rollouts",
+            "kind": "mutation"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
+        "cacheKey": "procedure_without_structured_event:rollouts:promoteRollout",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public mutation `promoteRollout` (rollouts) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "promoteRollout",
+            "file": "rollouts",
+            "kind": "mutation"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
+        "cacheKey": "procedure_without_structured_event:rollouts:abortRollout",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public mutation `abortRollout` (rollouts) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "abortRollout",
+            "file": "rollouts",
             "kind": "mutation"
         },
         "name": "procedure_without_structured_event",
@@ -5356,81 +5356,6 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
-        "exportName": "setRollout",
-        "file": "deployments",
-        "hasEmailArg": false,
-        "kind": "mutation",
-        "visibility": "public"
-    },
-    {
-        "callsMail": false,
-        "emitsEvent": false,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": true,
-        "usesRls": false,
-        "analyzableBody": true,
-        "exportName": "promoteRollout",
-        "file": "deployments",
-        "hasEmailArg": false,
-        "kind": "mutation",
-        "visibility": "public"
-    },
-    {
-        "callsMail": false,
-        "emitsEvent": false,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": true,
-        "usesRls": false,
-        "analyzableBody": true,
-        "exportName": "abortRollout",
-        "file": "deployments",
-        "hasEmailArg": false,
-        "kind": "mutation",
-        "visibility": "public"
-    },
-    {
-        "callsMail": false,
-        "emitsEvent": false,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": true,
-        "usesRls": false,
-        "analyzableBody": true,
         "exportName": "add",
         "file": "domains",
         "hasEmailArg": false,
@@ -6686,6 +6611,81 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "hasEmailArg": false,
         "kind": "query",
         "visibility": "internal"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "setRollout",
+        "file": "rollouts",
+        "hasEmailArg": false,
+        "kind": "mutation",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "promoteRollout",
+        "file": "rollouts",
+        "hasEmailArg": false,
+        "kind": "mutation",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "abortRollout",
+        "file": "rollouts",
+        "hasEmailArg": false,
+        "kind": "mutation",
+        "visibility": "public"
     },
     {
         "callsMail": false,

@@ -53,16 +53,13 @@ export interface ApiTypes {
         verify: FunctionReference<"mutation", { key: unknown }, { deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
     };
     deployments: {
-        abortRollout: FunctionReference<"mutation", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, void>;
         activate: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments"> }, void>;
         adminTarget: FunctionReference<"query", { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         create: FunctionReference<"mutation", { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }, { deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
         listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; branch?: string; bundleHash?: string; projectId: Id<"projects">; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; expiresAt?: number; url?: string; version?: number }[]>;
         planForScript: FunctionReference<"query", { scriptName: unknown }, { plan: string; protected?: boolean; }>;
-        promoteRollout: FunctionReference<"mutation", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, void>;
         rollback: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { scriptName: string; version?: number; }>;
         routeForAlias: FunctionReference<"query", { alias: unknown }, { candidateScriptName?: string; percent?: number; scriptName: string; } | null>;
-        setRollout: FunctionReference<"mutation", { id: Id<"deployments">; organizationId: Id<"organizations">; percent: number }, { percent: number; }>;
         updateStatus: FunctionReference<"mutation", { bundleHash?: unknown; deployKey?: unknown; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: unknown }, void>;
     };
     domains: {
@@ -125,6 +122,11 @@ export interface ApiTypes {
         remove: FunctionReference<"mutation", { id: Id<"projects">; organizationId: Id<"organizations"> }, { destroyed: number; }>;
         rename: FunctionReference<"mutation", { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }, void>;
         setPreviewProtection: FunctionReference<"mutation", { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }, { protected: boolean; }>;
+    };
+    rollouts: {
+        abortRollout: FunctionReference<"mutation", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, void>;
+        promoteRollout: FunctionReference<"mutation", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, void>;
+        setRollout: FunctionReference<"mutation", { id: Id<"deployments">; organizationId: Id<"organizations">; percent: number }, { percent: number; }>;
     };
     secrets: {
         list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number; }[]>;

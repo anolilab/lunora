@@ -112,6 +112,14 @@ export const recordPush = internalMutation
     });
 
 /**
+ * Rows scanned per status when looking for claimable work.
+ *
+ * Small because both reads are ordered oldest-first and only the head is taken —
+ * the bound exists to cap the read, not to sample.
+ */
+const CLAIM_SCAN = 50;
+
+/**
  * Claim the next runnable build under a lease (GAPS.md A3). Picks the oldest
  * `pending` build — or a `building` one whose lease went stale (dead runner) —
  * and stamps the runner id + lease start. SYSTEM only (cron dispatch).
@@ -120,14 +128,24 @@ export const claimNext = internalMutation
     .input({ runnerId: v.string() })
     .mutation(async ({ ctx: context, args: { runnerId } }): Promise<null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects"> }> => {
         const { now } = context;
-        const { page } = await context.db.builds.findMany({});
-        const claimable = (page as unknown as BuildRow[])
-            .filter(
-                (build) =>
-                    build.status === "pending" ||
-                    (build.status === "building" && build.processingStartedAt != null && now - build.processingStartedAt > LEASE_STALE_MS),
-            )
-            .toSorted((a, b) => a.createdAt - b.createdAt);
+
+        // Two bounded, status-scoped reads rather than one page of EVERY build.
+        // `findMany({})` returned an arbitrary 1000-row slice across all statuses
+        // and filtered afterwards, so on any real fleet the page filled with
+        // finished builds and a queued one was simply never claimed — the queue
+        // stalled while the sweep reported success, and `expireStale` failed the
+        // build 24 hours later with no explanation.
+        const [pendingPage, buildingPage] = await Promise.all([
+            context.db.builds.findMany({ limit: CLAIM_SCAN, orderBy: [{ createdAt: "asc" }], where: { status: "pending" } }),
+            context.db.builds.findMany({ limit: CLAIM_SCAN, orderBy: [{ createdAt: "asc" }], where: { status: "building" } }),
+        ]);
+
+        // A `building` row is claimable only once its lease has gone stale — that is
+        // how a dead runner's work is recovered.
+        const stale = (buildingPage.page as unknown as BuildRow[]).filter(
+            (build) => build.processingStartedAt != null && now - build.processingStartedAt > LEASE_STALE_MS,
+        );
+        const claimable = [...(pendingPage.page as unknown as BuildRow[]), ...stale].toSorted((a, b) => a.createdAt - b.createdAt);
         const next = claimable[0];
 
         if (!next) {

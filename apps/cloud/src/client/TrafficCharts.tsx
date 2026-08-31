@@ -52,6 +52,31 @@ export const countryFlag = (code: string): string => {
 };
 
 /**
+ * The shared region formatter, built once.
+ *
+ * `new Intl.DisplayNames(...)` rebuilds its locale data on every construction,
+ * and this is called once per row of the country breakdown — so constructing it
+ * inside the function turned a lookup into a per-row locale-table build.
+ *
+ * Lazily memoised rather than built at module scope: the constructor throws on a
+ * runtime without the region table, and a module-level throw would take down the
+ * whole chunk rather than degrading one column to raw country codes.
+ */
+let cachedRegionNames: Intl.DisplayNames | null | undefined;
+
+const regionNames = (): Intl.DisplayNames | null => {
+    cachedRegionNames ??= (() => {
+        try {
+            return new Intl.DisplayNames(undefined, { type: "region" });
+        } catch {
+            return null;
+        }
+    })();
+
+    return cachedRegionNames;
+};
+
+/**
  * Human country name for an ISO code, falling back to the code itself.
  *
  * `Intl.DisplayNames` is the platform's own localized region table — shipping a
@@ -64,7 +89,7 @@ export const countryName = (code: string): string => {
     }
 
     try {
-        return new Intl.DisplayNames(undefined, { type: "region" }).of(code.toUpperCase()) ?? code;
+        return regionNames()?.of(code.toUpperCase()) ?? code;
     } catch {
         // A runtime without the region table — show the code rather than nothing.
         return code;
