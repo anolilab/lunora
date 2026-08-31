@@ -127,7 +127,14 @@ describe("schema-drift", () => {
             );
 
             expect(safe.changes).toStrictEqual([
-                { scope: "table", severity: "safe", summary: "added optional field users.bio", table: "users", type: "addedOptionalField" },
+                {
+                    remediation: "none",
+                    scope: "table",
+                    severity: "safe",
+                    summary: "added optional field users.bio",
+                    table: "users",
+                    type: "addedOptionalField",
+                },
             ]);
             expect(breaking.changes.some((c) => c.type === "addedRequiredField" && c.severity === "breaking")).toBe(true);
         });
@@ -160,7 +167,14 @@ describe("schema-drift", () => {
             );
 
             expect(widened.changes).toStrictEqual([
-                { scope: "table", severity: "safe", summary: "field users.name became optional", table: "users", type: "fieldRequiredToOptional" },
+                {
+                    remediation: "none",
+                    scope: "table",
+                    severity: "safe",
+                    summary: "field users.name became optional",
+                    table: "users",
+                    type: "fieldRequiredToOptional",
+                },
             ]);
             expect(newTable.changes.some((c) => c.type === "addedTable" && c.severity === "safe")).toBe(true);
         });
@@ -203,7 +217,7 @@ describe("schema-drift", () => {
             expect.assertions(2);
 
             const current = buildSchemaSnapshot(schema([table("users", { bio: optionalString, name: stringField })]), []);
-            const decision = evaluateSchemaDrift({ baseline, current });
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [] });
 
             expect(decision.blocked).toBe(false);
             expect(decision.reason).toContain("additive/safe");
@@ -213,7 +227,7 @@ describe("schema-drift", () => {
             expect.assertions(3);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
-            const decision = evaluateSchemaDrift({ baseline, current });
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [] });
 
             expect(decision.blocked).toBe(true);
             expect(decision.reason).toContain("deploy blocked");
@@ -246,20 +260,23 @@ describe("schema-drift", () => {
             expect(decision.reason).toContain("not covered by a new migration");
         });
 
-        it("blocks a migration whose table codegen could not lift to a literal", () => {
-            expect.assertions(1);
+        it("blocks a migration whose table codegen could not lift to a literal, and says so", () => {
+            // Failing closed is right; failing closed SILENTLY is not — the
+            // operator wrote exactly the `defineMigration` the message asks for.
+            expect.assertions(2);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["dynamic"]);
             const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "dynamic", table: "" }] });
 
             expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("Migration(s) dynamic declare a non-literal `table`");
         });
 
         it("a shard-mode change stays blocked even with a migration on that very table", () => {
             // `defineMigration` runs inside one shard and can only replace the row
             // it was handed, so it can never re-home rows. The studio cites this
             // block to justify not shipping a stranded-rows detector.
-            expect.assertions(2);
+            expect.assertions(3);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: { field: "tenantId", kind: "shardBy" } })]), [
                 "rehome-users",
@@ -267,25 +284,99 @@ describe("schema-drift", () => {
             const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "rehome-users", table: "users" }] });
 
             expect(decision.blocked).toBe(true);
-            // …and it must not tell the operator to scaffold the tool that cannot work.
+            // …and it must not name the tool that cannot work — neither as a
+            // scaffold line nor as the bullet above it.
             expect(decision.reason).not.toContain("lunora migrate create");
+            expect(decision.reason).not.toContain("defineMigration");
+        });
+
+        it("offers no migration for a dropped index — that is a code change, not a backfill", () => {
+            // A row transform cannot restore DDL. Offering `migrate create` here
+            // sends the operator to the one tool guaranteed not to work.
+            expect.assertions(3);
+
+            const indexed = buildSchemaSnapshot(schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []);
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
+            const { blocked, reason } = evaluateSchemaDrift({ baseline: indexed, current, migrations: [] });
+
+            expect(blocked).toBe(true);
+            expect(reason).toContain("removed index byName");
+            expect(reason).not.toContain("lunora migrate create");
+        });
+
+        it("offers no migration for a dropped table — its rows are unreachable, not transformable", () => {
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("messages", { body: stringField })]), []);
+            const { blocked, reason } = evaluateSchemaDrift({ baseline, current, migrations: [] });
+
+            expect(blocked).toBe(true);
+            expect(reason).not.toContain("lunora migrate create");
         });
 
         it("prints a paste-ready scaffold command for each table still owed a backfill", () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
             const { reason } = evaluateSchemaDrift({ baseline, current, migrations: [] });
 
-            expect(reason).toContain("Scaffold the missing migration(s):");
+            expect(reason).toContain("Scaffold the missing migration(s)");
             expect(reason).toContain("lunora migrate create backfill_users --table users");
+            // The generated `up` is `(document) => document`, which would clear the
+            // block without backfilling a row. Say so.
+            expect(reason).toContain("identity placeholder you must fill in");
+        });
+
+        it("suppresses the scaffold line for a table name `migrate create` would reject", () => {
+            // Table names are object keys with no identifier constraint; `--table`
+            // requires one. Printing a command that cannot run is worse than none.
+            expect.assertions(2);
+
+            const odd = buildSchemaSnapshot(schema([table("user-profiles", { name: stringField })]), []);
+            const current = buildSchemaSnapshot(schema([table("user-profiles", { name: numberField })]), []);
+            const { blocked, reason } = evaluateSchemaDrift({ baseline: odd, current, migrations: [] });
+
+            expect(blocked).toBe(true);
+            expect(reason).not.toContain("lunora migrate create");
+        });
+
+        it("blocks on only the tables a partial set of migrations left uncovered", () => {
+            expect.assertions(4);
+
+            const twoTables = buildSchemaSnapshot(schema([table("users", { name: stringField }), table("posts", { title: stringField })]), []);
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField }), table("posts", { title: numberField })]), ["fix-users"]);
+            const { blocked, reason } = evaluateSchemaDrift({ baseline: twoTables, current, migrations: [{ id: "fix-users", table: "users" }] });
+
+            expect(blocked).toBe(true);
+            // The covered table is neither listed as a problem nor scaffolded…
+            expect(reason).not.toContain("field users.name changed type");
+            expect(reason).not.toContain("--table users");
+            // …and the uncovered one is.
+            expect(reason).toContain("lunora migrate create backfill_posts --table posts");
+        });
+
+        it("names only the migrations that covered something, not every new id", () => {
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["fix-users", "unrelated"]);
+            const { blocked, reason } = evaluateSchemaDrift({
+                baseline,
+                current,
+                migrations: [
+                    { id: "fix-users", table: "users" },
+                    { id: "unrelated", table: "messages" },
+                ],
+            });
+
+            expect(blocked).toBe(false);
+            expect(reason).toContain("covered by 1 new migration(s) (fix-users)");
         });
 
         it("passes breaking drift when overridden with allowDrift", () => {
             expect.assertions(2);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
-            const decision = evaluateSchemaDrift({ allowDrift: true, baseline, current });
+            const decision = evaluateSchemaDrift({ allowDrift: true, baseline, current, migrations: [] });
 
             expect(decision.blocked).toBe(false);
             expect(decision.reason).toContain("overridden by --allow-schema-drift");
@@ -301,7 +392,7 @@ describe("schema-drift", () => {
             it("offers both flags on deploy", () => {
                 expect.assertions(2);
 
-                const { reason } = evaluateSchemaDrift({ baseline, command: "deploy", current: breaking() });
+                const { reason } = evaluateSchemaDrift({ baseline, command: "deploy", current: breaking(), migrations: [] });
 
                 expect(reason).toContain("--allow-schema-drift");
                 expect(reason).toContain("--update-schema-baseline");
@@ -310,7 +401,7 @@ describe("schema-drift", () => {
             it("offers only --allow-schema-drift on verify, and points at prepare for the other", () => {
                 expect.assertions(3);
 
-                const { reason } = evaluateSchemaDrift({ baseline, command: "verify", current: breaking() });
+                const { reason } = evaluateSchemaDrift({ baseline, command: "verify", current: breaking(), migrations: [] });
 
                 expect(reason).toContain("pass `--allow-schema-drift`");
                 expect(reason).toContain("lunora prepare --update-schema-baseline");
@@ -320,7 +411,7 @@ describe("schema-drift", () => {
             it("falls back to listing both when the caller is unknown", () => {
                 expect.assertions(2);
 
-                const { reason } = evaluateSchemaDrift({ baseline, current: breaking() });
+                const { reason } = evaluateSchemaDrift({ baseline, current: breaking(), migrations: [] });
 
                 expect(reason).toContain("--allow-schema-drift");
                 expect(reason).toContain("--update-schema-baseline");
@@ -331,7 +422,7 @@ describe("schema-drift", () => {
             expect.assertions(1);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
-            const decision = evaluateSchemaDrift({ baseline: undefined, current });
+            const decision = evaluateSchemaDrift({ baseline: undefined, current, migrations: [] });
 
             expect(decision.blocked).toBe(false);
         });
@@ -342,7 +433,7 @@ describe("schema-drift", () => {
             const withMigration = buildSchemaSnapshot(schema([table("users", { name: stringField })]), ["m1"]);
             // breaking change but the only migration id is the same one the baseline already knew.
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["m1"]);
-            const decision = evaluateSchemaDrift({ baseline: withMigration, current });
+            const decision = evaluateSchemaDrift({ baseline: withMigration, current, migrations: [{ id: "m1", table: "users" }] });
 
             expect(decision.blocked).toBe(true);
         });

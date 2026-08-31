@@ -3,8 +3,8 @@
  *
  * Reads the committed structural baseline (`lunora/.lunora-schema.json`),
  * compares it against the snapshot codegen produced this run, and decides
- * whether breaking drift without an accompanying data migration should block
- * the deploy. The pure diff/classify/decision logic lives in `@lunora/codegen`
+ * whether breaking drift that no new data migration covers should block the
+ * deploy. The pure diff/classify/decision logic lives in `@lunora/codegen`
  * (`evaluateSchemaDrift`); this module is the thin I/O + logging shell the
  * deploy / verify / prepare commands call, mirroring the D1-placeholder guard.
  *
@@ -183,8 +183,6 @@ const runSchemaDriftGate = (options: {
         baseline: baseline.status === "ok" ? baseline.snapshot : undefined,
         command,
         current: codegen.schemaSnapshot,
-        // Without this the gate can only count new ids, and an unrelated backfill
-        // waves through a required field added to a different table.
         migrations: codegen.migrations,
     });
 

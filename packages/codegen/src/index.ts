@@ -3,6 +3,7 @@
 // package's published API and the CLI consumes them through it.
 export type {
     DriftChange,
+    DriftRemediation,
     DriftScope,
     FieldSnapshot,
     IndexSnapshot,

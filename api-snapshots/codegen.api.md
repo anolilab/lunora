@@ -189,12 +189,19 @@ const DEFAULT_TARGET = "cloudflare";
 
 ```ts
 interface DriftChange {
+    remediation: DriftRemediation;
     scope: DriftScope;
     severity: "breaking" | "safe";
     summary: string;
     table?: string;
     type: "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedFieldKind" | "changedIndex" | "changedJurisdiction" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "removedField" | "removedIndex" | "removedRelation" | "removedTable";
 }
+```
+
+### `DriftRemediation` (type)
+
+```ts
+type DriftRemediation = "backfill" | "code" | "none" | "rehome";
 ```
 
 ### `DriftScope` (type)
@@ -1277,10 +1284,7 @@ const evaluateSchemaDrift: (options: {
     baseline: SchemaSnapshot | undefined;
     command?: string;
     current: SchemaSnapshot;
-    migrations?: ReadonlyArray<{
-        id: string;
-        table: string;
-    }>;
+    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "table">>;
 }) => SchemaDriftDecision;
 ```
 
