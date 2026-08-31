@@ -1,3 +1,15 @@
+## @lunora/sql-store [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.100...@lunora/sql-store@1.0.0-alpha.101) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.48
+* **@lunora/do:** upgraded to 1.0.0-alpha.110
+
 ## @lunora/sql-store [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.99...@lunora/sql-store@1.0.0-alpha.100) (2026-08-29)
 
 ### ⚠ BREAKING CHANGES
