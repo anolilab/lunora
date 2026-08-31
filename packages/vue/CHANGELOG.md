@@ -1,3 +1,15 @@
+## @lunora/vue [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.101...@lunora/vue@1.0.0-alpha.102) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.67
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.31
+
 ## @lunora/vue [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.100...@lunora/vue@1.0.0-alpha.101) (2026-08-30)
 
 
