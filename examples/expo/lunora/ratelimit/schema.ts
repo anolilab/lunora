@@ -2,18 +2,14 @@
  * Rate-limit schema extension + plugin.
  *
  * Defines the `ratelimit_buckets` table used by `createDbStore` for durable,
- * DO-backed rate limiting. Included automatically in every Lunora project.
+ * DO-backed rate limiting. Named limits live here and nowhere else, so tuning
+ * one is a change to this file rather than to the procedure that enforces it.
  */
 import type { Middleware } from "lunorash/server";
 import { defineSchemaExtension, defineTable, definePlugin, v } from "lunorash/server";
 import { createDbStore, RateLimiter } from "lunorash/ratelimit";
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
 
-/**
- * Named limits this app enforces. This is the one place they live — add your own
- * and reference them by name from `rateLimit(limiter, "<name>", …)` (see
- * `lunora/messages.ts`).
- */
 export const limits = {
     /** Chat writes: 30 per caller per minute, refilling continuously over 60s. */
     send: { kind: "token bucket", period: 60_000, rate: 30 },

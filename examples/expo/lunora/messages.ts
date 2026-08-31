@@ -1,7 +1,20 @@
 import { LunoraError } from "lunorash/server";
+import { rateLimit } from "lunorash/ratelimit";
 
-import type { Id } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
+import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+
+/**
+ * Everyone posting here is signed in, so the limit keys on the user — one
+ * account cannot exhaust another's budget, and `ctx.ip` is only the fallback for
+ * a request that somehow reached the handler without a resolved session. Never
+ * key on a value out of `args`: a caller can rotate that per request and never
+ * share a bucket with themselves. Limits themselves live in
+ * `lunora/ratelimit/schema.ts`.
+ */
+const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+const byUser = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
 interface MessageRow {
     _id: Id<"messages">;
@@ -54,6 +67,7 @@ export const send = mutation
         authorName: v.string().meta({ schema: { maxLength: 256 } }),
         text: v.string().meta({ schema: { maxLength: 4096 } }),
     })
+    .use(rateLimit(limiter, "send", byUser))
     .mutation(async ({ args: { authorName, text }, ctx }): Promise<Id<"messages">> => {
         const userId = assertSignedIn(ctx.auth.userId);
         const trimmed = text.trim();

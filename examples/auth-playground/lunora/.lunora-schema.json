@@ -25,8 +25,8 @@
                 }
             },
             "indexes": {
-                "by_org_created": {
-                    "fields": ["organizationId", "createdAt"],
+                "by_org_owner_created": {
+                    "fields": ["organizationId", "ownerId", "createdAt"],
                     "unique": false
                 }
             },

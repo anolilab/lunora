@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, QueryReadScope, RunShardApplyCdcArgs, RunShardExportArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike, TelemetrySink, WriteHook } from "lunorash/do";
-import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "lunorash/do";
+import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
 import { asBucketStorage, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
 import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@lunora/bindings/vectors";
@@ -18,27 +18,10 @@ interface FunctionReference {
 }
 
 /** Foreign-key columns per table (`v.id("target")` fields) for the data browser. */
-const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {
-    "posts": {
-        "authorId": "users"
-    },
-    "drafts": {
-        "authorId": "users"
-    }
-};
+const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {};
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
 const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
-    "users": [
-        {
-            "fields": [
-                "email"
-            ],
-            "name": "by_email",
-            "type": "index",
-            "unique": true
-        }
-    ],
     "posts": [
         {
             "fields": [
@@ -62,6 +45,23 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
             ],
             "name": "by_updated",
             "type": "index"
+        },
+        {
+            "fields": [
+                "authorId",
+                "updatedAt"
+            ],
+            "name": "by_author_updated",
+            "type": "index"
+        }
+    ],
+    "ratelimit_buckets": [
+        {
+            "fields": [
+                "key"
+            ],
+            "name": "by_key",
+            "type": "index"
         }
     ]
 };
@@ -71,34 +71,6 @@ const LUNORA_TABLE_COLUMNS: Record<
     string,
     Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>
 > = {
-    "users": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "email",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "name",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "passwordHash",
-            "optional": false,
-            "type": "string"
-        }
-    ],
     "posts": [
         {
             "name": "_id",
@@ -114,8 +86,7 @@ const LUNORA_TABLE_COLUMNS: Record<
         {
             "name": "authorId",
             "optional": false,
-            "type": "id",
-            "ref": "users"
+            "type": "string"
         },
         {
             "name": "title",
@@ -153,8 +124,7 @@ const LUNORA_TABLE_COLUMNS: Record<
         {
             "name": "authorId",
             "optional": false,
-            "type": "id",
-            "ref": "users"
+            "type": "string"
         },
         {
             "name": "title",
@@ -171,6 +141,39 @@ const LUNORA_TABLE_COLUMNS: Record<
             "optional": false,
             "type": "number"
         }
+    ],
+    "ratelimit_buckets": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "key",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "value",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "ts",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "prev",
+            "optional": true,
+            "type": "number"
+        }
     ]
 };
 
@@ -183,102 +186,12 @@ const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [
     {
-        "cacheKey": "error_without_catalog:drafts:save",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A procedure throws a bare `new Error(...)`. It reaches the client as an opaque message the caller cannot branch on, and error grouping cannot fingerprint it into a stable issue.",
-        "detail": "mutation `save` (drafts) throws a bare `new Error(...)`. Use `LunoraError` with a catalog code so the client can branch on it and Studio can group it.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "save",
-            "file": "drafts",
-            "kind": "mutation"
-        },
-        "name": "error_without_catalog",
-        "remediation": "Throw a coded error instead: `throw new LunoraError(\"<CODE>\", { … })` from `@lunora/errors`, adding the code to `ERROR_CATALOG` if it is new.",
-        "title": "Bare Error thrown instead of a coded LunoraError"
-    },
-    {
-        "cacheKey": "error_without_catalog:posts:requestImageUpload",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A procedure throws a bare `new Error(...)`. It reaches the client as an opaque message the caller cannot branch on, and error grouping cannot fingerprint it into a stable issue.",
-        "detail": "action `requestImageUpload` (posts) throws a bare `new Error(...)`. Use `LunoraError` with a catalog code so the client can branch on it and Studio can group it.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "requestImageUpload",
-            "file": "posts",
-            "kind": "action"
-        },
-        "name": "error_without_catalog",
-        "remediation": "Throw a coded error instead: `throw new LunoraError(\"<CODE>\", { … })` from `@lunora/errors`, adding the code to `ERROR_CATALOG` if it is new.",
-        "title": "Bare Error thrown instead of a coded LunoraError"
-    },
-    {
-        "cacheKey": "error_without_catalog:posts:publish",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A procedure throws a bare `new Error(...)`. It reaches the client as an opaque message the caller cannot branch on, and error grouping cannot fingerprint it into a stable issue.",
-        "detail": "mutation `publish` (posts) throws a bare `new Error(...)`. Use `LunoraError` with a catalog code so the client can branch on it and Studio can group it.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "publish",
-            "file": "posts",
-            "kind": "mutation"
-        },
-        "name": "error_without_catalog",
-        "remediation": "Throw a coded error instead: `throw new LunoraError(\"<CODE>\", { … })` from `@lunora/errors`, adding the code to `ERROR_CATALOG` if it is new.",
-        "title": "Bare Error thrown instead of a coded LunoraError"
-    },
-    {
-        "cacheKey": "table_without_insert:users",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
-        "detail": "No function calls `ctx.db.insert(\"users\", …)` — table \"users\" has no discovered insert path.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "table": "users"
-        },
-        "name": "table_without_insert",
-        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
-        "title": "Table has no insert path"
-    },
-    {
-        "cacheKey": "filter_without_index:cleanup:14:drafts",
-        "categories": [
-            "PERFORMANCE"
-        ],
-        "description": "A query calls `.filter()` without a `.withIndex()` / `.withSearchIndex()`, so it loads every row in the table and filters in memory — a full table scan that gets linearly slower as the table grows.",
-        "detail": "Query on \"drafts\" at cleanup:14 calls .filter() without an index — it loads every row of \"drafts\" from the root Durable Object's SQLite and filters in memory.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "purgeStaleDrafts",
-            "file": "cleanup",
-            "line": 14,
-            "shardKind": "root",
-            "table": "drafts"
-        },
-        "name": "filter_without_index",
-        "remediation": "Narrow the read with `.withIndex(\"name\", (q) => q.eq(...))` first, then `.filter()` only for what the index cannot express.",
-        "title": "Filter without index"
-    },
-    {
-        "cacheKey": "nondeterministic_query_mutation:cleanup:13:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:cleanup:14:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in purgeStaleDrafts (cleanup:13) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `purgeStaleDrafts` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in purgeStaleDrafts (cleanup:14) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `purgeStaleDrafts` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -286,19 +199,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "purgeStaleDrafts",
             "file": "cleanup",
             "kind": "mutation",
-            "line": 13
+            "line": 14
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:drafts:40:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:drafts:78:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in save (drafts:40) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `save` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in save (drafts:78) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `save` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -306,19 +219,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "save",
             "file": "drafts",
             "kind": "mutation",
-            "line": 40
+            "line": 78
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:drafts:45:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:drafts:83:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in save (drafts:45) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `save` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in save (drafts:83) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `save` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -326,19 +239,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "save",
             "file": "drafts",
             "kind": "mutation",
-            "line": 45
+            "line": 83
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:posts:93:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:posts:120:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in publish (posts:93) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `publish` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in publish (posts:120) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `publish` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -346,238 +259,11 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "publish",
             "file": "posts",
             "kind": "mutation",
-            "line": 93
+            "line": 120
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
         "title": "Non-deterministic call in query/mutation handler"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:cleanup:purgeStaleDrafts",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `purgeStaleDrafts` (cleanup) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "purgeStaleDrafts",
-            "file": "cleanup",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:drafts:save",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `save` (drafts) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "save",
-            "file": "drafts",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:posts:requestImageUpload",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `requestImageUpload` (posts) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "requestImageUpload",
-            "file": "posts",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:posts:publish",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `publish` (posts) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "publish",
-            "file": "posts",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:drafts:save:title",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `title` of public procedure `save` (drafts:30) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "title",
-            "exportName": "save",
-            "file": "drafts",
-            "line": 30
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:drafts:save:body",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `body` of public procedure `save` (drafts:30) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "body",
-            "exportName": "save",
-            "file": "drafts",
-            "line": 30
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:posts:search:text",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `text` of public procedure `search` (posts:31) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "text",
-            "exportName": "search",
-            "file": "posts",
-            "line": 31
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:posts:requestImageUpload:contentType",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `contentType` of public procedure `requestImageUpload` (posts:59) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "contentType",
-            "exportName": "requestImageUpload",
-            "file": "posts",
-            "line": 59
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:posts:publish:title",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `title` of public procedure `publish` (posts:82) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "title",
-            "exportName": "publish",
-            "file": "posts",
-            "line": 82
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:posts:publish:body",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `body` of public procedure `publish` (posts:82) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "body",
-            "exportName": "publish",
-            "file": "posts",
-            "line": 82
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:posts:publish:imageKey",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `imageKey` of public procedure `publish` (posts:82) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "imageKey",
-            "exportName": "publish",
-            "file": "posts",
-            "line": 82
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:cleanup:purgeStaleDrafts",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `purgeStaleDrafts` (cleanup) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "purgeStaleDrafts",
-            "file": "cleanup",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
     },
     {
         "cacheKey": "procedure_without_structured_event:drafts:save",
@@ -632,24 +318,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "procedure_without_structured_event",
         "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
         "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "action_without_error_handling:posts:requestImageUpload",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "An `action` calls an outbound surface (fetch, mail, queues, storage, sql, ai) with no `try`/`catch`. Those fail routinely, and an uncaught rejection reaches the caller with no indication of which dependency broke.",
-        "detail": "Action `requestImageUpload` (posts) calls an outbound surface with no `try`/`catch`. A dependency failure will surface to the caller unexplained.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "requestImageUpload",
-            "file": "posts",
-            "kind": "action"
-        },
-        "name": "action_without_error_handling",
-        "remediation": "Wrap the outbound call in `try`/`catch`, then either degrade or rethrow a coded `LunoraError` naming the dependency that failed.",
-        "title": "Action performs outbound I/O with no error handling"
     }
 ];
 
@@ -678,7 +346,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "file": "cleanup",
         "hasEmailArg": false,
         "kind": "mutation",
-        "visibility": "public"
+        "visibility": "internal"
     },
     {
         "callsMail": false,
@@ -712,7 +380,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "handlesErrors": false,
         "reachesOutbound": false,
         "runsAiGeneration": false,
-        "throwsBareError": true,
+        "throwsBareError": false,
         "unboundedAiGeneration": false,
         "usesInsertManyUnsafe": false,
         "writesUserTable": false,
@@ -721,7 +389,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "save",
@@ -809,10 +477,10 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "callsMail": false,
         "emitsEvent": false,
         "fanOut": false,
-        "handlesErrors": false,
+        "handlesErrors": true,
         "reachesOutbound": true,
         "runsAiGeneration": false,
-        "throwsBareError": true,
+        "throwsBareError": false,
         "unboundedAiGeneration": false,
         "usesInsertManyUnsafe": false,
         "writesUserTable": false,
@@ -821,7 +489,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "requestImageUpload",
@@ -837,7 +505,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "handlesErrors": false,
         "reachesOutbound": false,
         "runsAiGeneration": false,
-        "throwsBareError": true,
+        "throwsBareError": false,
         "unboundedAiGeneration": false,
         "usesInsertManyUnsafe": false,
         "writesUserTable": false,
@@ -846,7 +514,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "publish",
@@ -891,7 +559,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
 };
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
-const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "e15b280e5b1ef0e4", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"drafts\": {\n      \"fields\": {\n        \"authorId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_updated\": {\n          \"fields\": [\n            \"updatedAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"posts\": {\n      \"fields\": {\n        \"authorId\": {\n          \"kind\": \"id\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"imageKey\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"publishedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_published\": {\n          \"fields\": [\n            \"publishedAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"users\": {\n      \"fields\": {\n        \"email\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"passwordHash\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_email\": {\n          \"fields\": [\n            \"email\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"global\"\n    }\n  },\n  \"version\": 1\n}\n" };
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "bfb942b65017cfb4", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"drafts\": {\n      \"fields\": {\n        \"authorId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_updated\": {\n          \"fields\": [\n            \"updatedAt\"\n          ],\n          \"unique\": false\n        },\n        \"by_author_updated\": {\n          \"fields\": [\n            \"authorId\",\n            \"updatedAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"posts\": {\n      \"fields\": {\n        \"authorId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"imageKey\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"publishedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_published\": {\n          \"fields\": [\n            \"publishedAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -907,7 +575,6 @@ export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
     vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;
-    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;
 }
 
 const schedulerStub = {
@@ -946,54 +613,6 @@ const storageStub = {
     },
     upload: async () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
-    },
-};
-
-const globalDbStub: DatabaseWriterLike = {
-    aggregate: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    count: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    delete: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    findFirst: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    findFirstOrThrow: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    findMany: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    get: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    groupBy: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    insert: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    normalizeId: () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    patch: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    query: () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    rank: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    rankPage: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
-    },
-    replace: async () => {
-        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
 };
 
@@ -1156,14 +775,6 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         // paths answer `false`; `handleRpc` above rejects them anyway.
         protected override isMutationFunction(functionPath: string): boolean {
             return LUNORA_FUNCTIONS[functionPath]?.kind === "mutation";
-        }
-
-        protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
-            this.ensureMigrated();
-
-            const { db } = this.buildCtx({ functionPath }) as { db: DatabaseWriterLike };
-
-            return serveRelationFanout(schema as unknown as SchemaLike, db, functionPath, args);
         }
 
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
@@ -1734,8 +1345,6 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // so both write to the same trace.
             const span = this.makeDispatchSpan(traceAnchor, observability);
 
-            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };
-            const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;
             // `ctx.db`, wrapped in automatic instrumentation: by default this
             // adds aggregate counters (call count, total time, per-operation
             // breakdown) to the wide event rather than a span per call, so a
@@ -1778,13 +1387,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
                 storage,
-                globalDb,
             }), logFunctionPath, traceAnchor, observability);
 
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
-            facade["users"] = bindTableFacade(db, "users");
             facade["posts"] = bindTableFacade(db, "posts");
             facade["drafts"] = bindTableFacade(db, "drafts");
+            facade["ratelimit_buckets"] = bindTableFacade(db, "ratelimit_buckets");
 
 
             // `ctx.trace` / `ctx.metrics`: spans and measurements to the same sink.

@@ -24,9 +24,10 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
         {
             "fields": [
                 "organizationId",
+                "ownerId",
                 "createdAt"
             ],
-            "name": "by_org_created",
+            "name": "by_org_owner_created",
             "type": "index"
         }
     ]
@@ -86,12 +87,12 @@ const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [
     {
-        "cacheKey": "nondeterministic_query_mutation:documents:64:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:documents:77:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in create (documents:64) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `create` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in create (documents:77) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `create` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -99,7 +100,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "create",
             "file": "documents",
             "kind": "mutation",
-            "line": 64
+            "line": 77
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
@@ -123,82 +124,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "public_mutation_without_ratelimit",
         "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
         "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:documents:list:organizationId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `organizationId` of public procedure `list` (documents:39) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "organizationId",
-            "exportName": "list",
-            "file": "documents",
-            "line": 39
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:documents:create:organizationId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `organizationId` of public procedure `create` (documents:50) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "organizationId",
-            "exportName": "create",
-            "file": "documents",
-            "line": 50
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:documents:create:title",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `title` of public procedure `create` (documents:50) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "title",
-            "exportName": "create",
-            "file": "documents",
-            "line": 50
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:documents:create:body",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `body` of public procedure `create` (documents:50) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "body",
-            "exportName": "create",
-            "file": "documents",
-            "line": 50
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
     },
     {
         "cacheKey": "procedure_without_structured_event:documents:create",
@@ -308,7 +233,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
 };
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
-const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "e0b79250c7e65012", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"documents\": {\n      \"fields\": {\n        \"organizationId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_created\": {\n          \"fields\": [\n            \"organizationId\",\n            \"createdAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "ebd5b6187ac48f56", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"documents\": {\n      \"fields\": {\n        \"organizationId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_owner_created\": {\n          \"fields\": [\n            \"organizationId\",\n            \"ownerId\",\n            \"createdAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */

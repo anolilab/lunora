@@ -12,5 +12,5 @@ export const documents = sqliteTable("documents", {
     body: text("body").notNull(),
     createdAt: real("createdAt").notNull(),
 }, (t) => ({
-    by_org_created: index("by_org_created").on(t.organizationId, t.createdAt),
+    by_org_owner_created: index("by_org_owner_created").on(t.organizationId, t.ownerId, t.createdAt),
 }));
