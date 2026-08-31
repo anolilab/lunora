@@ -124,6 +124,15 @@ const paymentConfig = (env: ShardEnv): PaymentsFromContextOptions => {
                     }),
                     webhookSecret: env.CREEM_WEBHOOK_SECRET ?? "",
                 }),
+                // Always true HERE because the check cannot be expressed here: this
+                // config is cached per encryption-key, not per request, so it has no
+                // caller identity to authorize against. `@lunora/payment`'s hook
+                // exists to stop cross-tenant checkout attachment, and that is
+                // enforced one layer up instead — `billing.checkout` calls
+                // `assertMember(organizationId, ["owner","admin"])` before passing
+                // the org id as `referenceId`, which is framework-controlled and
+                // never caller-supplied. Left explicit because an unexplained
+                // `() => true` on an authorization hook reads as an oversight.
                 authorize: () => true,
                 entitlements: LUNORA_CLOUD_PLANS,
                 observability: (event) => {

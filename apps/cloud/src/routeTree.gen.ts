@@ -22,6 +22,7 @@ import { Route as AuthedOrgsOrganizationIdCloudflareCostsRouteImport } from './r
 import { Route as AuthedOrgsOrganizationIdDashboardsRouteImport } from './routes/_authed.orgs.$organizationId.dashboards'
 import { Route as AuthedOrgsOrganizationIdDomainsRouteImport } from './routes/_authed.orgs.$organizationId.domains'
 import { Route as AuthedOrgsOrganizationIdIncidentsRouteImport } from './routes/_authed.orgs.$organizationId.incidents'
+import { Route as AuthedOrgsOrganizationIdIntegrationsRouteImport } from './routes/_authed.orgs.$organizationId.integrations'
 import { Route as AuthedOrgsOrganizationIdInvitationsRouteImport } from './routes/_authed.orgs.$organizationId.invitations'
 import { Route as AuthedOrgsOrganizationIdIssuesRouteImport } from './routes/_authed.orgs.$organizationId.issues'
 import { Route as AuthedOrgsOrganizationIdKeysRouteImport } from './routes/_authed.orgs.$organizationId.keys'
@@ -108,6 +109,12 @@ const AuthedOrgsOrganizationIdIncidentsRoute =
   AuthedOrgsOrganizationIdIncidentsRouteImport.update({
     id: '/incidents',
     path: '/incidents',
+    getParentRoute: () => AuthedOrgsOrganizationIdRoute,
+  } as any)
+const AuthedOrgsOrganizationIdIntegrationsRoute =
+  AuthedOrgsOrganizationIdIntegrationsRouteImport.update({
+    id: '/integrations',
+    path: '/integrations',
     getParentRoute: () => AuthedOrgsOrganizationIdRoute,
   } as any)
 const AuthedOrgsOrganizationIdInvitationsRoute =
@@ -201,6 +208,7 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationId/dashboards': typeof AuthedOrgsOrganizationIdDashboardsRoute
   '/orgs/$organizationId/domains': typeof AuthedOrgsOrganizationIdDomainsRoute
   '/orgs/$organizationId/incidents': typeof AuthedOrgsOrganizationIdIncidentsRoute
+  '/orgs/$organizationId/integrations': typeof AuthedOrgsOrganizationIdIntegrationsRoute
   '/orgs/$organizationId/invitations': typeof AuthedOrgsOrganizationIdInvitationsRoute
   '/orgs/$organizationId/issues': typeof AuthedOrgsOrganizationIdIssuesRoute
   '/orgs/$organizationId/keys': typeof AuthedOrgsOrganizationIdKeysRoute
@@ -227,6 +235,7 @@ export interface FileRoutesByTo {
   '/orgs/$organizationId/dashboards': typeof AuthedOrgsOrganizationIdDashboardsRoute
   '/orgs/$organizationId/domains': typeof AuthedOrgsOrganizationIdDomainsRoute
   '/orgs/$organizationId/incidents': typeof AuthedOrgsOrganizationIdIncidentsRoute
+  '/orgs/$organizationId/integrations': typeof AuthedOrgsOrganizationIdIntegrationsRoute
   '/orgs/$organizationId/invitations': typeof AuthedOrgsOrganizationIdInvitationsRoute
   '/orgs/$organizationId/issues': typeof AuthedOrgsOrganizationIdIssuesRoute
   '/orgs/$organizationId/keys': typeof AuthedOrgsOrganizationIdKeysRoute
@@ -256,6 +265,7 @@ export interface FileRoutesById {
   '/_authed/orgs/$organizationId/dashboards': typeof AuthedOrgsOrganizationIdDashboardsRoute
   '/_authed/orgs/$organizationId/domains': typeof AuthedOrgsOrganizationIdDomainsRoute
   '/_authed/orgs/$organizationId/incidents': typeof AuthedOrgsOrganizationIdIncidentsRoute
+  '/_authed/orgs/$organizationId/integrations': typeof AuthedOrgsOrganizationIdIntegrationsRoute
   '/_authed/orgs/$organizationId/invitations': typeof AuthedOrgsOrganizationIdInvitationsRoute
   '/_authed/orgs/$organizationId/issues': typeof AuthedOrgsOrganizationIdIssuesRoute
   '/_authed/orgs/$organizationId/keys': typeof AuthedOrgsOrganizationIdKeysRoute
@@ -285,6 +295,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationId/dashboards'
     | '/orgs/$organizationId/domains'
     | '/orgs/$organizationId/incidents'
+    | '/orgs/$organizationId/integrations'
     | '/orgs/$organizationId/invitations'
     | '/orgs/$organizationId/issues'
     | '/orgs/$organizationId/keys'
@@ -311,6 +322,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationId/dashboards'
     | '/orgs/$organizationId/domains'
     | '/orgs/$organizationId/incidents'
+    | '/orgs/$organizationId/integrations'
     | '/orgs/$organizationId/invitations'
     | '/orgs/$organizationId/issues'
     | '/orgs/$organizationId/keys'
@@ -339,6 +351,7 @@ export interface FileRouteTypes {
     | '/_authed/orgs/$organizationId/dashboards'
     | '/_authed/orgs/$organizationId/domains'
     | '/_authed/orgs/$organizationId/incidents'
+    | '/_authed/orgs/$organizationId/integrations'
     | '/_authed/orgs/$organizationId/invitations'
     | '/_authed/orgs/$organizationId/issues'
     | '/_authed/orgs/$organizationId/keys'
@@ -453,6 +466,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedOrgsOrganizationIdIncidentsRouteImport
       parentRoute: typeof AuthedOrgsOrganizationIdRoute
     }
+    '/_authed/orgs/$organizationId/integrations': {
+      id: '/_authed/orgs/$organizationId/integrations'
+      path: '/integrations'
+      fullPath: '/orgs/$organizationId/integrations'
+      preLoaderRoute: typeof AuthedOrgsOrganizationIdIntegrationsRouteImport
+      parentRoute: typeof AuthedOrgsOrganizationIdRoute
+    }
     '/_authed/orgs/$organizationId/invitations': {
       id: '/_authed/orgs/$organizationId/invitations'
       path: '/invitations'
@@ -556,6 +576,7 @@ interface AuthedOrgsOrganizationIdRouteChildren {
   AuthedOrgsOrganizationIdDashboardsRoute: typeof AuthedOrgsOrganizationIdDashboardsRoute
   AuthedOrgsOrganizationIdDomainsRoute: typeof AuthedOrgsOrganizationIdDomainsRoute
   AuthedOrgsOrganizationIdIncidentsRoute: typeof AuthedOrgsOrganizationIdIncidentsRoute
+  AuthedOrgsOrganizationIdIntegrationsRoute: typeof AuthedOrgsOrganizationIdIntegrationsRoute
   AuthedOrgsOrganizationIdInvitationsRoute: typeof AuthedOrgsOrganizationIdInvitationsRoute
   AuthedOrgsOrganizationIdIssuesRoute: typeof AuthedOrgsOrganizationIdIssuesRoute
   AuthedOrgsOrganizationIdKeysRoute: typeof AuthedOrgsOrganizationIdKeysRoute
@@ -586,6 +607,8 @@ const AuthedOrgsOrganizationIdRouteChildren: AuthedOrgsOrganizationIdRouteChildr
     AuthedOrgsOrganizationIdDomainsRoute: AuthedOrgsOrganizationIdDomainsRoute,
     AuthedOrgsOrganizationIdIncidentsRoute:
       AuthedOrgsOrganizationIdIncidentsRoute,
+    AuthedOrgsOrganizationIdIntegrationsRoute:
+      AuthedOrgsOrganizationIdIntegrationsRoute,
     AuthedOrgsOrganizationIdInvitationsRoute:
       AuthedOrgsOrganizationIdInvitationsRoute,
     AuthedOrgsOrganizationIdIssuesRoute: AuthedOrgsOrganizationIdIssuesRoute,

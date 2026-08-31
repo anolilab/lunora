@@ -143,6 +143,59 @@
                   "path": "tests/e2e/playwright-report"
                   "retention-days": 7
 
+    # The control-plane suite is separate from `e2e` above because it boots a
+    # different app (`apps/cloud`) behind its own Playwright config, and a cold
+    # Vite start for it is minutes rather than seconds. Nightly only: it is far
+    # too slow to gate a PR, and until now it ran nowhere at all, which is how a
+    # browser suite quietly rots.
+    "e2e-cloud":
+        "name": "E2E — control plane (Playwright)"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 45
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "e2e-cloud"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "parallel":
+                  - "name": "Build packages"
+                    "run": "pnpm run build:packages"
+
+                  - "name": "Install Playwright browsers"
+                    "run": "pnpm --filter @lunora/e2e exec playwright install chromium"
+
+            # The suite writes its own `.dev.vars` when the app has none and skips
+            # with a stated reason if it cannot boot — so a missing secret is a
+            # skipped run, never a false red.
+            - "name": "Run control-plane E2E"
+              "env":
+                  "CI": "true"
+                  "LUNORA_E2E": "true"
+              "run": "pnpm --filter @lunora/e2e run e2e:cloud"
+
+            - "name": "Upload Playwright report on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "playwright-report-cloud"
+                  "path": "tests/e2e/playwright-report-cloud"
+                  "retention-days": 7
+
     # On PRs this matrix is path-gated and the filter excludes `packages/**`, since a
     # 40-minute job would fire on nearly every PR. But that is exactly where the drift
     # comes from — the `vue-demi` build script that broke every scaffold's first

@@ -70,6 +70,40 @@ Shipped since (2026-08-28, same pass):
 | **Deployment protection on previews** | ✅ A per-project password gates every PREVIEW deployment at the dispatcher, before dispatch. The salted hash stays in the control plane (`POST /v1/tenants/preview-auth`); the dispatcher mints a signed, script-scoped cookie so later requests cost no round trip. Production is never gated. |
 | **Staged rollouts (A1 follow-on)**    | ✅ `setRollout` / `promoteRollout` / `abortRollout` serve a candidate to a share of traffic alongside the active release. The split is deterministic per client and monotonic in the percentage, so advancing never moves anyone back. Error rate per script is already readable on Traffic.    |
 
+### Audit pass — 2026-08-31
+
+A review across correctness, security, performance, tests and debt, then the
+fixes. What it turned up is worth recording as a shape, not just a list: **almost
+everything severe was invisible to a green suite**, because the test doubles
+modelled a store that no longer exists.
+
+| Item                          | Now                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **The Worker could not boot** | ✅ Two runtime-only defects, invisible to `lint:types`, codegen and 647 unit tests. `v.bigint()` on a `.global()` table is refused by `defineSchema` (a global table stores it as decimal TEXT, so `"100"` sorts before `"25"`); every table here is `.global()`, so the schema never constructed. And `patch(id, { field: undefined })` throws — nineteen fields across fourteen call sites, including `activate`, the last step of every deploy. |
+| **Domain hijack**             | ✅ `markVerified` was a PUBLIC mutation taking `verified` as a caller boolean, so the edge route's DNS proof was decorative. With `by_hostname` globally unique, one tenant could claim a hostname it did not own, lock the real owner out platform-wide, and serve its own script there. Now `internalMutation`.                                                                                                                                  |
+| **Admin proxy**               | ✅ Forwarded a caller-chosen path and verb to the tenant carrying that tenant's admin bearer; `..` escaped the admin prefix. A read-only `viewer` had write access. Path shape and method allow-listed, role list explicit.                                                                                                                                                                                                                        |
+| **`recordIngestKey`**         | ✅ Took `hashedKey` as a caller input, so any live deploy key could mint an org-wide telemetry credential of its own choosing that outlived revocation. Internal now.                                                                                                                                                                                                                                                                              |
+| **Fleet sweeps truncated**    | ✅ `ControlPlaneDatabase` had no cursor, so no `src/` sweep could drain. The overage reconciler under-billed past 1000 rows; teardown leaked dispatch scripts, D1 and R2; uptime stopped probing. Interface widened, `drainTable` added, four sweeps converted.                                                                                                                                                                                    |
+| **Erasure purge**             | ✅ Covered 12 of 25 org-scoped tables while claiming all of them — leaving end-user telemetry, live alert destinations and the org's encrypted billing token orphaned. A test now diffs the list against the schema.                                                                                                                                                                                                                               |
+| **Unindexed hot reads**       | ✅ `deployments` had no `organizationId` index despite three reads filtering on it; `members` none on `userId`, so the org switcher scanned the whole table per page load. `organizations.list`/`getBySlug` read one page of EVERY org and truncated silently.                                                                                                                                                                                     |
+| R3#9 integrations hub         | ✅ **Shipped**, minimally — an Integrations tab listing the org's GitHub App installations, with the release (unclaim) action `claim` never had an inverse for.                                                                                                                                                                                                                                                                                    |
+| **Project deletion**          | ✅ New. Projects could be created and renamed but never removed; the only exit was deleting the organization. Scoped rows are erased, deployments transition to `destroyed` so teardown still reclaims the real resources, and it is audited.                                                                                                                                                                                                      |
+| **Browser coverage**          | ✅ First e2e for the control plane (`tests/e2e/cloud/`), running nightly. Covers sign-in, the org switcher, a project's Deployments tab and the Traffic tab's SSR/hydration seam.                                                                                                                                                                                                                                                                  |
+
+**The lesson worth keeping.** Three separate fake stores here discarded `where`,
+`limit`, `cursor` and the explicit-`undefined` guard the real store enforces —
+so the truncation bug, the cross-org predicate and nineteen throwing patches were
+all equally invisible, and a review pass reading the store internals concluded
+the opposite of the truth. The doubles now model the real behaviour, and each
+fix landed with the double that can catch it regressing. Coverage is measurable
+for the first time (`test:coverage` existed nowhere in this app): 41% overall,
+**24% across `lunora/`**, which is where the money and authorization live.
+
+**Still open:** the dispatcher-facing `adminToken` routes are a real second
+router seam, deferred to its own diff. Deploy-key `type` is now enforced as a
+ceiling, which will 403 a tenant currently deploying production with a lower
+scope — a product call, flagged rather than assumed.
+
 ### Status pass — 2026-08-30
 
 Three loops that were each half-built, closed at the end nobody had reached.

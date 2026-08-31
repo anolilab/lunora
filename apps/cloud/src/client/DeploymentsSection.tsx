@@ -21,6 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
+import { DeleteProjectCard } from "./DeleteProjectCard";
 import { formatDateTime, formatTime } from "./format";
 import { PreviewProtectionCard } from "./PreviewProtectionCard";
 import { ProjectGraph } from "./ProjectGraph";
@@ -548,6 +549,7 @@ export const DeploymentsSection = ({
                 rollout={rollout}
             />
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
+            <DeleteProjectCard onDeleted={onBack} organizationId={organizationId} projectId={projectId} projectName={projectName} />
             <DeploymentsTable
                 activeId={active?._id}
                 deployments={deployments ?? EMPTY}

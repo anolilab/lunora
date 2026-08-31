@@ -8,6 +8,7 @@ import {
     Coins01Icon,
     CreditCardIcon,
     File01Icon,
+    GithubIcon,
     Globe02Icon,
     Key01Icon,
     MailAdd01Icon,
@@ -35,6 +36,7 @@ import type { OrgId } from "./types";
  */
 export const TABS = [
     { id: "projects", label: "Projects", to: "/orgs/$organizationId/projects", group: "Deploy", icon: PackageIcon },
+    { id: "integrations", label: "Integrations", to: "/orgs/$organizationId/integrations", group: "Deploy", icon: GithubIcon },
     { id: "members", label: "Members", to: "/orgs/$organizationId/members", group: "Team", icon: UserMultipleIcon },
     { id: "keys", label: "Deploy keys", to: "/orgs/$organizationId/keys", group: "Deploy", icon: Key01Icon },
     { id: "secrets", label: "Secrets", to: "/orgs/$organizationId/secrets", group: "Deploy", icon: SquareLockPasswordIcon },
