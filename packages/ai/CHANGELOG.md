@@ -1,3 +1,9 @@
+## @lunora/ai [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.65...@lunora/ai@1.0.0-alpha.66) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
 ## @lunora/ai [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.64...@lunora/ai@1.0.0-alpha.65) (2026-08-30)
 
 ### Features
