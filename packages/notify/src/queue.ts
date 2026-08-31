@@ -62,31 +62,45 @@ interface QueueProducerLike {
  * across MULTIPLE messages (one bounded page per message), not one.
  *
  * ```ts
- * // in a mutation/action:
- * await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body: "…" } });
+ * // lunora/notify-fanout.ts — an INTERNAL ACTION, because that is where
+ * // `ctx.push` and `ctx.queues` exist.
+ * import { internalAction, v } from "./_generated/server";
+ * import { enqueuePushBroadcast, runPushBroadcastPage } from "@lunora/notify";
  *
- * // in lunora/queues.ts consumer:
- * export const push = defineQueue({ async handler(batch, ctx) {
- *     for (const message of batch.messages) {
- *         const { failedIds, nextCursor } = await runPushBroadcastPage(ctx.push, message.body);
+ * export const deliverPage = internalAction
+ *     .input({ job: v.any() })
+ *     .action(async ({ args: { job }, ctx }) => {
+ *         const { failedIds, nextCursor } = await runPushBroadcastPage(ctx.push, job);
  *
  *         if (nextCursor !== undefined) {
  *             // More pages remain — enqueue the continuation. Each message still
  *             // does only ONE bounded page of work.
  *             await enqueuePushBroadcast(ctx.queues.push, {
- *                 payload: message.body.payload,
- *                 filter: { ...message.body.filter, after: nextCursor },
+ *                 filter: { ...job.filter, after: nextCursor },
+ *                 payload: job.payload,
  *             });
  *         }
  *
  *         if (failedIds.length > 0) {
  *             // Redeliver ONLY the recipients that failed — never the whole page.
- *             await enqueuePushBroadcast(ctx.queues.push, { payload: message.body.payload, retryIds: failedIds });
+ *             await enqueuePushBroadcast(ctx.queues.push, { payload: job.payload, retryIds: failedIds });
  *         }
+ *     });
  *
- *         message.ack();
- *     }
- * }});
+ * // lunora/queues.ts — the consumer itself has NO ctx.push / ctx.queues: a
+ * // `QueueRunContext` is exactly `{ env, log, run }` (handler signature
+ * // `(context, batch)`, in that order). It hands each message to the action above.
+ * export const push = defineQueue<PushBroadcastJob>({
+ *     handler: async (context, batch) => {
+ *         for (const message of batch.messages) {
+ *             await message.run(internal.notifyFanout.deliverPage, { job: message.body });
+ *             message.ack();
+ *         }
+ *     },
+ * });
+ *
+ * // in a mutation/action, to start it:
+ * await enqueuePushBroadcast(ctx.queues.push, { payload: { body: "…", title: "New drop" } });
  * ```
  */
 const enqueuePushBroadcast = (queue: QueueProducerLike, job: Omit<PushBroadcastJob, "type">): Promise<void> =>
@@ -137,8 +151,8 @@ const runRetryIds = async (push: LunoraPush, payload: PushContent, ids: Readonly
  *
  * RETRY / CONTINUATION SEMANTICS:
  *
- * - A job processes exactly ONE bounded page (see `CreateNotifyOptions`'s
- * page-size option, default 250, or `job.filter.limit` when smaller),
+ * - A job processes exactly ONE bounded page (see `defineNotify`'s
+ * `broadcastPageSize`, default 250, or `job.filter.limit` when smaller),
  * keyset-paginated on the subscription `id` (see `SubscriptionFilter.after`)
  * — so per-message work is bounded regardless of total audience size.
  * - A page NEVER throws for a partial failure. Throwing discarded the page's
@@ -148,7 +162,7 @@ const runRetryIds = async (push: LunoraPush, payload: PushContent, ids: Readonly
  * every already-delivered recipient on each retry, dead-letter, and leave
  * every LATER page unreached. The page's `nextCursor` and its `failedIds`
  * both come back instead.
- * - The CALLER (the `lunora/queues.ts` consumer) re-enqueues: `filter.after:
+ * - The CALLER re-enqueues: `filter.after:
  * nextCursor` while more pages remain, and a `retryIds: failedIds` job when
  * any recipient failed. `@lunora/notify` cannot do it itself — it has no
  * `@lunora/queue` dependency (the seam stays structural) and no reference to

@@ -197,6 +197,13 @@ describe("targetOf / ids / isGoneError", () => {
         // 64-bit digest = 16 hex chars, behind the `wp2_`/`fcm2_` version prefix.
         expect(webPushId("https://push.example/abc")).toMatch(/^wp2_[\da-f]{16}$/u);
         expect(fcmId("device-token-1")).toMatch(/^fcm2_[\da-f]{16}$/u);
+
+        // The EXACT digests, not just the shape. These ids are persisted primary
+        // keys: if `shared/fnv1a`'s `fnv1a64Hex` ever changes, every stored
+        // subscription silently re-keys — the old row goes dark and the device
+        // re-registers as a duplicate. A shape-only assertion cannot see that.
+        expect(webPushId("https://push.example/abc")).toBe("wp2_ebdefb71ba92d7d5");
+        expect(fcmId("device-token-1")).toBe("fcm2_3d944cc157b58d75");
     });
 
     it("does not collide across a large synthetic-endpoint sample", () => {

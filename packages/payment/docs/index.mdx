@@ -285,11 +285,17 @@ export const apiCallsRemaining = action.action(async ({ ctx }): Promise<{ allowe
 });
 ```
 
-`track` writes a durable, append-only usage ledger (exactly-once by idempotency
-key) that `check` sums over the current billing period. When the provider
-advertises usage metering, the event is also forwarded to its metering API. That
-forward is best-effort: a reporting failure is observed, never thrown, and the
-local ledger `check` reads is always updated.
+`track` writes a durable, append-only usage ledger that `check` folds over the
+current billing period. When the provider advertises usage metering, the event
+is also forwarded to its metering API. That forward is best-effort: a reporting
+failure is observed, never thrown, and the local ledger `check` reads is always
+updated.
+
+<Callout type="warn">
+    **Deduping a retry is opt-in.** Pass your own `idempotencyKey` — a unique index over `(provider, idempotencyKey)` then makes the append exactly-once, so a
+    retried call records once. Omit it (as the example above does) and `track` mints a fresh `crypto.randomUUID()` per call, which means "always record": the
+    same call retried after a timeout counts twice. Derive the key from whatever identifies the unit of work — the request id, the message id, the job id.
+</Callout>
 
 ## Webhooks
 
@@ -337,10 +343,17 @@ export const processWebhook = internalAction
 
 `handleWebhook` verifies the signature, normalizes the event into a
 `WebhookAction` (e.g. `subscription.active`, `payment.captured`,
-`payment.refunded`), and applies it through the state machine. Once verified it
-always returns `200` so the provider stops retrying; a duplicate or no-op event
-is acknowledged, not re-applied. The inbound provider event id keys an
-append-only `events` log for idempotency and audit.
+`payment.refunded`), and applies it through the state machine. A duplicate or
+no-op event is acknowledged with `200`, not re-applied. The inbound provider
+event id keys an append-only `events` log for idempotency and audit.
+
+There is one deliberate non-200. An **orphaned** event — one that patches a row
+whose create event has not arrived yet, which is how providers deliver
+out-of-order — returns `500` so the provider retries it, and the update applies
+once the create lands. Do not "fix" that by always answering `200`: swallowing
+the retry is how an out-of-order delivery is lost for good. Malformed deliveries
+(a missing provider event id) likewise surface as a `5xx` rather than a `400`,
+so every provider retries them instead of some treating a `400` as "stop".
 
 <Callout type="warn">
     Webhooks are eventually-but-not-guaranteed: an endpoint down past the provider's retry window can drop an event for good. `reconcile` re-fetches the
@@ -357,13 +370,22 @@ in `@lunora/payment`'s exported `paymentTables` (the canonical column reference
 the store reads/writes). Declaring them locally also lets you chain `.global()`
 on read-heavy tables (e.g. `subscriptions`) for cross-region reads from D1.
 
-`paymentTables` covers: `products`, `prices`, `customers`, `subscriptions`,
-`checkouts`, `paymentSessions`, `payments`, `captures`, `refunds`, `invoices`,
-`events` (the append-only webhook log), and `usageEvents` (the metered-usage
-ledger). Money is stored as `(amountMinor: bigint, currency: string)` columns;
-every row carries a `provider` discriminator so multiple providers can coexist
-during a migration. Captures and refunds are append-only records linked to a
-payment, not booleans.
+`paymentTables` is exactly **five** tables — mirror only these:
+
+| Table             | Holds                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `customers`       | one row per `(provider, referenceId)`, carrying the provider's customer id              |
+| `subscriptions`   | one row per provider subscription: price, quantity, state, current period               |
+| `paymentSessions` | one row per payment: `amountMinor`, `capturedMinor`, `refundedMinor`, `currency`, state |
+| `events`          | the append-only webhook log — inbound idempotency, audit, debugging                     |
+| `usageEvents`     | the append-only metered-usage ledger `check` folds over                                 |
+
+Money is stored as `(amountMinor: bigint, currency: string)` columns; every row
+carries a `provider` discriminator so multiple providers can coexist during a
+migration. A **capture or refund is not its own table**: both fold into the
+payment's `paymentSessions` row as `capturedMinor` / `refundedMinor` plus a
+state (`refunded` / `partially_refunded`). Products, prices, checkouts and
+invoices stay with the provider — the store does not mirror them.
 
 ### Backfilling money columns written before the storage fix
 

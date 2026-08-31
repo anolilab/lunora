@@ -118,15 +118,21 @@ interface MyEvents {
 
 const emitter = new EventEmitter<MyEvents>();
 
-emitter.on("data", (payload) => console.log(payload.id));
+// `on` is keyed to the map, so an unknown event name is a compile error.
+// It returns an unsubscribe function; `off(event, handler)` is the same thing.
+const unsubscribe = emitter.on("data", (payload) => console.log(payload.id));
+
 emitter.emit("data", { id: "abc", value: 42 });
 
-// Wildcard listener — receives every event:
-emitter.on("*", (event, payload) => console.log(event, payload));
+// Wildcard listener — `onAny` (there is no `"*"` event name), also returning
+// an unsubscribe function; `offAny(handler)` is the explicit form.
+emitter.onAny((event, payload) => console.log(event, payload));
 
-// One-shot:
-emitter.once("error", (payload) => console.error(payload.message));
+unsubscribe();
 ```
+
+There is no `once`: unsubscribe from inside the handler with the function `on`
+returned.
 
 ## defineEvents
 
@@ -227,19 +233,32 @@ unsub();
 
 ## eventsContext
 
-Wires the event-sourcing runtime into a Lunora action context, so events are
-available to your actions:
+Wires the event log into a Lunora procedure context, so appends are available to
+your handlers.
+
+`eventsContext(client)` takes a configured `EventLogDOClient` and returns a
+**middleware**, so it goes on `.use(...)`, not around the handler. It attaches
+one member, `ctx.events`, which is the client itself — so `append` takes the
+same **array** of input events as `client.append`.
 
 ```ts
-import { eventsContext } from "@lunora/replica";
+import { EventLogDOClient, eventsContext } from "@lunora/replica";
 
-// In your schema or action definition:
-export const myAction = action({
-    args: {/* ... */},
-    handler: eventsContext(async (ctx, args) => {
-        // ctx.events.source — the EventSource
-        // ctx.events.append(type, payload) — shorthand
-        await ctx.events.append("user-action", { action: args.type });
-    }),
+import { action, v } from "@/lunora/_generated/server";
+
+const client = new EventLogDOClient({
+    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
 });
+
+export const myAction = action
+    .input({ type: v.string() })
+    .use(eventsContext(client))
+    .action(async ({ ctx, args }) => {
+        const [entry] = await ctx.events.append([{ type: "user.action", payload: { action: args.type } }]);
+
+        return entry;
+    });
 ```
+
+The middleware is unopinionated about the context it extends, so the same
+`.use(eventsContext(client))` works on a `query`, `mutation`, or `action`.

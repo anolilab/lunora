@@ -107,7 +107,7 @@ export interface SubscriptionFilter {
      * subscriptions reached across every internally-walked page (still
      * deliberately left unset by default — it must reach every matched
      * device); the PER-PAGE batch size is a separate, independent knob (see
-     * `CreateNotifyOptions`'s `broadcastPageSize`, default 250) so a caller
+     * `defineNotify`'s `broadcastPageSize`, default 250) so a caller
      * that sets `limit` to bound the audience doesn't also have to reason
      * about page sizing.
      *
@@ -250,7 +250,7 @@ export interface LunoraPush {
      *
      * Internally walks the audience in bounded pages (via {@link LunoraPush.broadcastPage},
      * keyset-paginated on the subscription `id`) so a huge audience is never
-     * materialized wholesale in the isolate — see `CreateNotifyOptions`'s
+     * materialized wholesale in the isolate — see `defineNotify`'s
      * `broadcastPageSize`. This call still processes the WHOLE matched
      * audience in one request/queue message; use {@link LunoraPush.broadcastPage}
      * directly (as `runPushBroadcastPage` does) to bound a single queue message
@@ -260,7 +260,7 @@ export interface LunoraPush {
 
     /**
      * Fan-out a push to ONE bounded page of stored subscriptions matching
-     * `filter` (page size: `CreateNotifyOptions`'s `broadcastPageSize`, default
+     * `filter` (page size: `defineNotify`'s `broadcastPageSize`, default
      * 250, capped by `filter.limit` when set). Same delivery semantics as
      * {@link LunoraPush.broadcast} (retry/circuit-breaker, gone-pruning) but
      * scoped to a single page; returns the page's own {@link BroadcastResult}
@@ -337,10 +337,33 @@ export interface NotifyConfig {
     allowedPushOrigins?: string[];
 
     /**
+     * Page size for `push.broadcast`'s internal keyset pagination over the
+     * subscription store (default 250, minimum 1). Each page is fetched,
+     * delivered, and counted before the next page's store round trip, so a huge
+     * audience is never materialized wholesale in the isolate. Also the
+     * per-message bound `push.broadcastPage` (and `runPushBroadcastPage`) uses.
+     *
+     * Declared here, and not only on `createNotify`'s third argument, because
+     * this file is the only handle an app has: the sole production constructor is
+     * codegen's fixed `createNotify(definition, env, { log, metrics })`, so a knob
+     * that lives only on those options is unsettable by every Lunora app —
+     * while {@link SubscriptionFilter.limit}'s own docs point at it as the way to
+     * size pages.
+     */
+    broadcastPageSize?: number;
+
+    /**
      * Optional chat provider factory (Slack/Discord/Teams/Telegram). Wire with a
      * provider from `@visulima/notification/providers/*`. Edge-safe (fetch-based).
      */
     chat?: (env: NotifyEnv) => unknown;
+
+    /**
+     * Max concurrent sends during a `push.broadcast` (default 10, minimum 1).
+     * Same reasoning as {@link NotifyConfig.broadcastPageSize}: this is where an
+     * app can reach it.
+     */
+    concurrency?: number;
     /** FCM (Firebase Cloud Messaging HTTP v1) config. Edge-safe — supply an OAuth2 token. */
     fcm?: FcmConfig | FcmConfigFactory;
     /** Optional in-app inbox provider factory. Edge-safe. */

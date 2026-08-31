@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
-import { fnv1aHex } from "../../../../shared/fnv1a";
+import { fnv1a64Hex, fnv1aHex } from "../../../../shared/fnv1a";
 import { isPrivateHost } from "../../../../shared/ssrf-host";
 import type { RegisterInput, StoredSubscription } from "../types";
 
@@ -72,64 +72,22 @@ const validateMetadata = (metadata: unknown): Record<string, unknown> | undefine
     return metadata as Record<string, unknown>;
 };
 
-/** One 16-bit limb of a 64-bit hash as 4 lowercase hex digits. */
-const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
-
 /**
- * FNV-1a (64-bit) as 16 lowercase hex digits — a tiny, dependency-free,
- * synchronous, edge-safe hash used to derive a compact, deterministic
- * subscription id from its (long) endpoint/token. Deterministic so re-registering
- * the same device upserts rather than duplicates; not security-sensitive (ids are
- * opaque store keys, never a secret).
+ * Stable store id for a web-push endpoint — `fnv1a64Hex` of the (long) endpoint,
+ * so re-registering the same device upserts rather than duplicates.
+ *
+ * The digest comes from the canonical `shared/fnv1a`, not a local copy. This id
+ * is a PERSISTED primary key: a digest that drifts in one copy silently re-keys
+ * every existing subscription — the old row goes dark and the device
+ * re-registers as a duplicate — so the implementation must have exactly one
+ * home. `shared/fnv1a`'s is bit-verified against a BigInt reference in
+ * `packages/replica/__tests__/apply-diff.test.ts`.
  *
  * Widened from the previous 32-bit FNV-1a (8 hex): at 100K devices a 32-bit key
  * collides with ~68% probability (birthday bound), and a collision silently
  * overwrites another device's row under the store's `ON CONFLICT(id) DO UPDATE` —
  * so the wrong user gets the push and the victim goes dark. 64 bits drops that to
  * negligible at any realistic device count.
- *
- * The hash state is four 16-bit limbs in plain `number`s (not a `BigInt`, which
- * allocates per op). The FNV-1a prime `0x0000_0100_0000_01b3` has only two
- * non-zero limbs, so the 4×4 limb product collapses to two multiplications per
- * limb; every intermediate stays under 2^32, so `>>> 16` is a valid carry.
- * Algorithm lifted from `@lunora/replica`'s bit-verified `fnv1a64Hex`.
- */
-const fnv1a64Hex = (input: string): string => {
-    /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and multiplication; the bit ops ARE the algorithm */
-    // Offset basis 0xcbf29ce484222325, low limb first.
-    let h0 = 0x23_25;
-    let h1 = 0x84_22;
-    let h2 = 0x9c_e4;
-    let h3 = 0xcb_f2;
-
-    for (let index = 0; index < input.length; index += 1) {
-        const point = input.codePointAt(index) ?? 0;
-
-        // A code point above the BMP occupies limbs 0 and 1.
-        h0 ^= point & 0xff_ff;
-        h1 ^= (point >>> 16) & 0xff_ff;
-
-        const p0 = h0 * 0x01_b3;
-        const p1 = h1 * 0x01_b3;
-        const p2 = h2 * 0x01_b3 + h0 * 0x01_00;
-        const p3 = h3 * 0x01_b3 + h1 * 0x01_00;
-
-        const c1 = p1 + (p0 >>> 16);
-        const c2 = p2 + (c1 >>> 16);
-        const c3 = p3 + (c2 >>> 16);
-
-        h0 = p0 & 0xff_ff;
-        h1 = c1 & 0xff_ff;
-        h2 = c2 & 0xff_ff;
-        h3 = c3 & 0xff_ff;
-    }
-
-    return hex4(h3) + hex4(h2) + hex4(h1) + hex4(h0);
-    /* eslint-enable no-bitwise */
-};
-
-/**
- * Stable store id for a web-push endpoint.
  *
  * The `wp2_` prefix is a version tag (see also {@link fcmId}'s `fcm2_`): it marks
  * the 64-bit-id revision so the pre-existing 32-bit `wp_` rows stay readable and a

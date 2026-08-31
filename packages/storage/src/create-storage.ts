@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { toBase64 } from "../../../shared/base64";
 import { hasControlChar } from "../../../shared/hmac-url";
 import { toHex, trimTrailingSlashes } from "./internal";
 import { buildPresignedUrl } from "./presigned-url";
@@ -30,18 +31,6 @@ const MAX_LIST_LIMIT = 1000;
 /** Default page size for `list()` — chosen to bound a default call's response shape. */
 const DEFAULT_LIST_LIMIT = 100;
 
-/** Base64-encode an `ArrayBuffer` (RFC 9530 digest headers want base64, not hex). */
-const toBase64 = (buffer: ArrayBuffer): string => {
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
-
-    return btoa(binary);
-};
-
 /**
  * Surface R2's SHA-256 checksum as `sha256` (hex) and `sha256Base64` (base64)
  * fields on the object metadata.
@@ -71,7 +60,7 @@ const withSha256 = <T extends R2ObjectLike>(object: T): T => {
     }
 
     const sha256 = toHex(raw);
-    const sha256Base64 = toBase64(raw);
+    const sha256Base64 = toBase64(new Uint8Array(raw));
 
     return new Proxy(object, {
         get(target, property) {
@@ -142,7 +131,7 @@ const toListObject = (object: R2ObjectLike): R2ObjectLike => {
         httpMetadata: object.httpMetadata,
         key: object.key,
         sha256: raw === undefined ? undefined : toHex(raw),
-        sha256Base64: raw === undefined ? undefined : toBase64(raw),
+        sha256Base64: raw === undefined ? undefined : toBase64(new Uint8Array(raw)),
         size: object.size,
         uploaded: object.uploaded,
     };
