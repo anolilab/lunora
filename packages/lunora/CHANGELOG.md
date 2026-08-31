@@ -1,3 +1,21 @@
+## lunorash [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.213...lunorash@1.0.0-alpha.214) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.211
+* **@lunora/client:** upgraded to 1.0.0-alpha.67
+* **@lunora/do:** upgraded to 1.0.0-alpha.110
+* **@lunora/observability:** upgraded to 1.0.0-alpha.49
+* **@lunora/platform:** upgraded to 1.0.0-alpha.22
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.31
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.84
+* **@lunora/server:** upgraded to 1.0.0-alpha.95
+
 ## lunorash [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.212...lunorash@1.0.0-alpha.213) (2026-08-30)
 
 
