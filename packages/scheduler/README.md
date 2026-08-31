@@ -83,7 +83,7 @@ import { api } from "@/lunora/_generated/api";
 
 const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl: "https://app.acme.test" });
 
-const { id } = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
+const id = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
 await scheduler.cancel(id);
 ```
 
