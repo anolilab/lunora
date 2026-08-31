@@ -1,3 +1,16 @@
+## @lunora/agent [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.76...@lunora/agent@1.0.0-alpha.77) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.66
+* **@lunora/mail:** upgraded to 1.0.0-alpha.56
+* **@lunora/server:** upgraded to 1.0.0-alpha.95
+
 ## @lunora/agent [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.75...@lunora/agent@1.0.0-alpha.76) (2026-08-30)
 
 
