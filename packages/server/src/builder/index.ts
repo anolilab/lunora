@@ -57,10 +57,12 @@ interface BuilderState {
  *   (`@lunora/auth`'s Turnstile and email-gate middlewares both read a field
  *   out of it). Without this a `.use()` step is blind to what it is guarding.
  *
- * Every builder procedure gets this clone, so `ctx` inside a handler is a spread
- * copy rather than the dispatch context object. Harmless for the generated
- * context (own enumerable data properties only); a host that put a getter or a
- * non-enumerable property on it would not see that survive the spread.
+ * A procedure with at least one `.use()` step or a `.meta()` payload gets this
+ * clone, so `ctx` inside its handler is a spread copy rather than the dispatch
+ * context object. Harmless for the generated context (own enumerable data
+ * properties only); a host that put a getter or a non-enumerable property on it
+ * would not see that survive the spread. Procedures with neither are handed the
+ * dispatch context unchanged.
  *
  * `args` is the **validated** result of {@link validateArgs}, never the raw wire
  * object: middleware — including security middleware — must not be handed input
@@ -72,7 +74,16 @@ interface BuilderState {
  * per call, this does not.
  */
 /* eslint-enable jsdoc/check-indentation */
-const withCallContext = (context: unknown, meta: Record<string, unknown> | undefined, args: Record<string, unknown>): unknown => {
+const withCallContext = (context: unknown, meta: Record<string, unknown> | undefined, args: Record<string, unknown>, middlewareCount: number): unknown => {
+    // Nothing can read `ctx.args`/`ctx.meta` without a `.use()` step — the
+    // handler receives `args` as its own parameter — so a procedure with no
+    // middleware and no `.meta()` skips the clone entirely. This is the dispatch
+    // floor every query and mutation pays, and cloning it unconditionally cost
+    // ~20% there.
+    if (middlewareCount === 0 && meta === undefined) {
+        return context;
+    }
+
     if (typeof context !== "object" || context === null) {
         return context;
     }
@@ -110,7 +121,7 @@ const makeHandler =
     ) =>
     async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
         const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
-        const resolvedContext = await runMiddleware(middlewares, withCallContext(context, meta, parsed));
+        const resolvedContext = await runMiddleware(middlewares, withCallContext(context, meta, parsed, middlewares.length));
         const result = await userHandler({ args: parsed, ctx: resolvedContext });
 
         return (output ? applyOutput(output, result) : result) as Awaited<R>;
@@ -139,7 +150,7 @@ const makeStreamHandler =
         // caller before returning an iterable — defer the chain to the first
         // `next()` pump by wrapping the iterator with an outer async generator.
         return (async function* drive(): AsyncGenerator<R, void, void> {
-            const resolvedContext = await runMiddleware(middlewares, withCallContext(context, meta, parsed));
+            const resolvedContext = await runMiddleware(middlewares, withCallContext(context, meta, parsed, middlewares.length));
             const source = userHandler({ args: parsed, ctx: resolvedContext, signal });
             // Drive the source through an explicit iterator so the abort check
             // can gate each `.next()` *before* the producer is resumed — a
