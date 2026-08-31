@@ -255,3 +255,76 @@ describe(handleDeployRequest, () => {
         expect(statuses).toStrictEqual(["provisioning", "failed"]);
     });
 });
+
+/**
+ * A deploy key's `type` is a privilege CEILING, not a default.
+ *
+ * It was only ever used to seed `kind` when the caller omitted it, so
+ * `body.kind` overrode it freely: a key issued and displayed in the dashboard as
+ * `dev` or `preview` could deploy `production`, which activates the project's
+ * stable-URL pointer and supersedes the live release. Operators hand out
+ * "preview-only" keys on the reasonable assumption that the scope binds
+ * somewhere, and it bound nowhere.
+ *
+ * `target.type` comes from the STORED key row (`deploy_keys.verify` returns
+ * `row.type`), not from the caller-supplied key string, so the ceiling cannot be
+ * self-asserted by re-encoding a key.
+ */
+describe("deploy kind is bounded by the key's type", () => {
+    const withType = (type: DeployTarget["type"]): DeployBackend => backendWith({ verifyKey: () => Promise.resolve({ ...target, type }) });
+
+    it.each([
+        ["preview", "production"],
+        ["dev", "production"],
+        ["dev", "preview"],
+    ])("refuses a %s key deploying %s", async (type, kind) => {
+        const response = await handleDeployRequest(
+            request("k", { bundle: BUNDLE, kind, projectId: "proj_1", scriptName: "s" }),
+            deps(withType(type as DeployTarget["type"]), okProvisioner),
+        );
+
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining(`scoped to ${type}`) as unknown as string });
+    });
+
+    it.each([
+        ["production", "preview"],
+        ["production", "dev"],
+        ["preview", "dev"],
+        ["preview", "preview"],
+    ])("allows a %s key deploying %s", async (type, kind) => {
+        const response = await handleDeployRequest(
+            request("k", { bundle: BUNDLE, kind, projectId: "proj_1", scriptName: "s" }),
+            deps(withType(type as DeployTarget["type"]), okProvisioner),
+        );
+
+        expect(response.status).not.toBe(403);
+    });
+
+    /**
+     * The hole the ceiling check alone did not close: `body.kind` is an arbitrary
+     * string, an unknown value ranked below every scope and so passed the ceiling,
+     * and it then became the deployment's `kind`. `activate` supersedes only
+     * SAME-KIND siblings, so a deployment stamped `"prod"` would never supersede
+     * the real `production` release, nor be superseded by it — two live releases,
+     * neither aware of the other.
+     */
+    it("refuses a kind that is not one of the three", async () => {
+        const response = await handleDeployRequest(
+            request("k", { bundle: BUNDLE, kind: "prod", projectId: "proj_1", scriptName: "s" }),
+            deps(backendWith({}), okProvisioner),
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining("unknown deploy kind") as unknown as string });
+    });
+
+    it("defaults to the key's own type when the caller names no kind", async () => {
+        const response = await handleDeployRequest(
+            request("k", { bundle: BUNDLE, projectId: "proj_1", scriptName: "s" }),
+            deps(withType("preview"), okProvisioner),
+        );
+
+        expect(response.status).not.toBe(403);
+    });
+});

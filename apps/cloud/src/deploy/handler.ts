@@ -92,7 +92,14 @@ interface DeployBody {
     bundle?: string;
     /** The tenant's cron expressions (wrangler `triggers.crons`) for the fan-out (§2.4). */
     cronSpecs?: string[];
-    kind?: DeployKind;
+
+    /**
+     * `string`, not `DeployKind` — this is a parsed JSON body, so the declared
+     * type is a claim about the wire, not a guarantee. Typing it as the union
+     * would narrow the runtime guard below to `never` and quietly delete the only
+     * thing standing between an arbitrary value and the deployment row.
+     */
+    kind?: string;
     projectId?: string;
     scriptName?: string;
 }
@@ -149,10 +156,23 @@ const json = (status: number, data: unknown): Response => Response.json(data, { 
  * `production` is the only one that can move a project's stable URL, so it sits
  * at the top; a key scoped to a lower rung may deploy at or below its own.
  */
-const DEPLOY_RANK: Record<string, number> = { dev: 0, preview: 1, production: 2 };
+const DEPLOY_RANK: Record<DeployKind, number> = { dev: 0, preview: 1, production: 2 };
+
+/**
+ * Whether a value is one of the three deploy kinds.
+ *
+ * `body.kind` arrives as an arbitrary string and flowed straight into the
+ * deployment row and the dispatch-namespace name. Unvalidated it was worse than
+ * untyped: an unknown kind ranked below every key scope, so it sailed through the
+ * ceiling check below — and `activate` supersedes only SAME-KIND siblings, so a
+ * deployment stamped `"prod"` would never supersede the real `production` release
+ * and the real one would never supersede it. Two live releases, neither aware of
+ * the other.
+ */
+const isDeployKind = (value: string): value is DeployKind => value === "dev" || value === "preview" || value === "production";
 
 /** Whether a requested deploy kind is within the key's own scope. */
-const deployKindWithin = (requested: string, allowed: string): boolean => (DEPLOY_RANK[requested] ?? 0) <= (DEPLOY_RANK[allowed] ?? 0);
+const deployKindWithin = (requested: DeployKind, allowed: DeployKind): boolean => DEPLOY_RANK[requested] <= DEPLOY_RANK[allowed];
 
 /** Decode the base64 bundle payload into the ArrayBuffer the provisioner uploads, or `null` if malformed. */
 const decodeBundle = (encoded: string): ArrayBuffer | null => {
@@ -269,15 +289,21 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
 
     const kind = body.kind ?? target.type;
 
+    if (!isDeployKind(kind)) {
+        return json(400, { error: `unknown deploy kind "${kind}" — expected dev, preview or production` });
+    }
+
     // The key's `type` is a CEILING, not just a default.
     //
     // It was only ever used to default `kind`, so `body.kind` overrode it freely
     // and a key issued — and shown in the UI — as `dev` or `preview` could deploy
     // `production`: activating the project's stable-URL pointer and superseding the
     // live release. Operators hand out "preview-only" keys on the reasonable
-    // assumption that the scope is enforced somewhere, and it was not.
+    // assumption that the scope binds somewhere, and it did not.
     if (!deployKindWithin(kind, target.type)) {
-        return json(403, { error: `this deploy key is scoped to ${target.type}; it cannot deploy ${kind}` });
+        return json(403, {
+            error: `this deploy key is scoped to ${target.type} and cannot deploy ${kind}. Issue a ${kind} key, or deploy with kind "${target.type}".`,
+        });
     }
     const { branch, projectId, scriptName } = body;
     // Tenant cron expressions to fan out (§2.4). Defensive: only strings, capped.

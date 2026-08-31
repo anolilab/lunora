@@ -212,6 +212,10 @@ export const DeployKeysSection = ({ organizationId, preloaded }: SectionProps<Re
                                     </SelectGroup>
                                 </SelectContent>
                             </Select>
+                            {/* The type is enforced as a ceiling at deploy time, so it is a
+                                privilege boundary rather than a label — say so where the
+                                choice is made, not in the 403 that follows it. */}
+                            <p className="text-xs text-muted-foreground">A ceiling, not a label — a preview key cannot deploy production.</p>
                         </Field>
                         <Button className="justify-self-start" disabled={issueKey.pending} type="submit">
                             {issueKey.pending ? "Issuing…" : "Issue"}
