@@ -595,8 +595,44 @@ For non-auth procedures, `@lunora/auth/email-guard` exports the building blocks:
 
 - `classifyEmail(email, config)`: sync, pure-data → `{ emailClass, domain }`.
 - `assertEmailAllowed(email, config)`: async; throws the coded error on a policy failure.
-- `emailGateMiddleware({ email: (ctx) => ctx.args.email })`: a `.use()` gate for your own signup mutation.
+- `emailGateMiddleware({ email })`: a `.use()` gate whose `email` selector reads the address off **`ctx`**, including the validated `ctx.args` — see the note below.
 - `loadEmailDomainLists()`: call once at worker init on workerd (the gate helpers already do).
+
+Call `assertEmailAllowed` at the top of your own signup mutation, where the
+address is in scope:
+
+```ts
+import { assertEmailAllowed } from "@lunora/auth/email-guard";
+
+import { mutation } from "@/lunora/_generated/server";
+import { v } from "lunorash/values";
+
+export const signUp = mutation.input({ email: v.string(), password: v.string() }).mutation(async ({ ctx, args }) => {
+    // Throws `EMAIL_DOMAIN_BLOCKED` / `VALIDATION_ERROR` before anything is written.
+    await assertEmailAllowed(args.email, { allowDomains: ["your-company.com"] });
+
+    return ctx.db.insert("users", { email: args.email });
+});
+```
+
+<Callout type="info">
+    **Declare `.input()` before `.use()`.** A `.use()` middleware receives the validated arguments as `ctx.args`, so a signup gate can select the address
+    directly:
+
+    ```ts
+    export const signUp = mutation
+        .input({ email: v.string(), password: v.string() })
+        .use(emailGateMiddleware({ email: (ctx) => ctx.args.email }))
+        .mutation(async ({ ctx, args }) => ctx.db.insert("users", { email: args.email }));
+    ```
+
+    `ctx.args` is typed from the input validator declared **so far**, so `.use()` placed before `.input()` sees an empty `args` and the selector will not
+    type-check. It is a frozen shallow copy taken after validation — middleware cannot rewrite what the handler then receives, and the gate never sees input
+    that has not crossed the validator.
+
+    Calling `assertEmailAllowed` in the handler, as above, stays equally valid — prefer it when the check depends on something the handler computes.
+
+</Callout>
 
 **MX / deliverability (opt-in, needs DNS).** Passing `mx: true` runs an MX check
 via `@visulima/email-verifier/checks/mx`, which uses `node:dns` and is therefore

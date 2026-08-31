@@ -11,6 +11,7 @@ export type {
     InternalQueryBuilder,
     LunoraBuilders,
     Middleware,
+    MiddlewareContext,
     MiddlewareNext,
     MutationBuilder,
     QueryBuilder,

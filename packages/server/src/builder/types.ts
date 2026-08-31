@@ -47,6 +47,25 @@ export interface MiddlewareNext<ContextIn> {
  */
 export type Middleware<ContextIn, ContextOut> = (options: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }) => ContextOut | Promise<ContextOut>;
 
+/**
+ * The context a `.use(...)` step actually receives: the procedure context plus
+ * `args`, the call's arguments as declared by `.input(...)` up to this point in
+ * the chain.
+ *
+ * A middleware that gates on the payload — a CAPTCHA token, a signup email —
+ * has nowhere else to read it from: the procedure context carries the resolved
+ * identity, not the request body. `args` is surfaced only AFTER the validators
+ * have run, and as a frozen shallow copy, so a middleware cannot rewrite what
+ * the handler is then handed.
+ *
+ * This is a PROCEDURE-builder surface. `httpAction` / `httpRoute` have no
+ * `.use()` chain at all (`HttpActionCtx` is not a builder context) — an HTTP
+ * handler reads its own `request` / `searchParams` / `body` and calls the
+ * underlying helper (`verifyTurnstile(...)`, `assertEmailAllowed(...)`) inline,
+ * or mounts a hono middleware.
+ */
+export type MiddlewareContext<Context, Args extends ArgsValidator> = Context & { readonly args: Readonly<InferArgs<Args>> };
+
 /** Options accepted by `initLunora.dataModel<DM>().create(...)`. Reserved for transformer/error-formatter wiring. */
 export type CreateOptions = Record<never, never>;
 
@@ -116,7 +135,7 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
               options?: StreamOptions,
           ) => RegisteredStream<Args, R>
         : never;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
 
     /**
      * Mark this query as paid. The origin worker answers an unpaid client RPC
@@ -157,7 +176,7 @@ export interface MutationBuilder<Context, Args extends ArgsValidator, Output = u
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => MutationBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => MutationBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => MutationBuilder<ContextOut, Args, Output>;
 
     /**
      * Mark this mutation as paid. The origin worker answers an unpaid client RPC
@@ -198,7 +217,7 @@ export interface ActionBuilder<Context, Args extends ArgsValidator, Output = und
      */
     meta: (value: Record<string, unknown>) => ActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
 
     /**
      * Mark this action as paid. The origin worker answers an unpaid client RPC
@@ -243,7 +262,7 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
         handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
         options?: StreamOptions,
     ) => RegisteredStream<Args, R>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 
 export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Output = undefined> {
@@ -269,7 +288,7 @@ export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Ou
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => InternalMutationBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
 }
 
 export interface InternalActionBuilder<Context, Args extends ArgsValidator, Output = undefined> {
@@ -295,7 +314,7 @@ export interface InternalActionBuilder<Context, Args extends ArgsValidator, Outp
      */
     meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
 }
 
 /** The public root builders plus their `internal*` counterparts, returned by `.create()`. */

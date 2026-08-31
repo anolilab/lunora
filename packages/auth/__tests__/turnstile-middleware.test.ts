@@ -34,9 +34,9 @@ interface LunoraErrorShape {
 }
 
 /** Drive a middleware and report whether `next` ran (the handler proceeded). */
-const run = async (middleware: Middleware<Ctx, Ctx>, ctx: Ctx): Promise<{ passed: boolean }> => {
+const run = async <C>(middleware: Middleware<C, C>, ctx: C): Promise<{ passed: boolean }> => {
     let passed = false;
-    const next = (async (): Promise<Ctx> => {
+    const next = (async (): Promise<C> => {
         passed = true;
 
         return ctx;
@@ -141,5 +141,46 @@ describe("verifyTurnstileMiddleware", () => {
         expect(passed).toBe(true);
 
         consoleError.mockRestore();
+    });
+});
+
+/**
+ * The shape `@lunora/server`'s procedure builder actually hands a `.use()` step:
+ * the call's VALIDATED arguments, frozen, on `ctx.args` (see `withCallContext`
+ * in `packages/server/src/builder/index.ts`). This is the recipe the option's
+ * JSDoc documents — a token cannot reach the middleware any other way, since the
+ * procedure context carries the resolved identity and no raw `Headers`.
+ */
+describe("verifyTurnstileMiddleware over the builder's ctx.args", () => {
+    interface ArgsCtx {
+        args: { turnstileToken?: string };
+    }
+
+    const builderCtx = (args: { turnstileToken?: string }): ArgsCtx => {
+        return { args: Object.freeze(args) };
+    };
+
+    it("verifies a token routed through the function args", async () => {
+        expect.assertions(2);
+
+        const fetch = vi.fn<FetchLike>(async () => jsonResponse({ success: true }));
+        const mw = verifyTurnstileMiddleware<ArgsCtx>({ fetch, secret: "sek", token: (c) => c.args.turnstileToken });
+
+        const { passed } = await run(mw, builderCtx({ turnstileToken: "good" }));
+
+        expect(passed).toBe(true);
+        expect(new URLSearchParams(fetch.mock.calls[0]![1]?.body as string).get("response")).toBe("good");
+    });
+
+    it("rejects when the procedure declared no token arg", async () => {
+        expect.assertions(2);
+
+        const fetch = vi.fn<FetchLike>(async () => jsonResponse({ success: true }));
+        const mw = verifyTurnstileMiddleware<ArgsCtx>({ fetch, secret: "sek", token: (c) => c.args.turnstileToken });
+
+        const error = (await run(mw, builderCtx({})).catch((error_: unknown) => error_)) as LunoraErrorShape;
+
+        expect(error.code).toBe("FORBIDDEN");
+        expect(fetch).not.toHaveBeenCalled();
     });
 });

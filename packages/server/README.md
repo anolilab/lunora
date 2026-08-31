@@ -116,7 +116,7 @@ The dev server and CLI automatically bump `compatibility_date` to the minimum re
 **Set cache headers declaratively** on an `httpRoute`:
 
 ```ts
-import { httpRoute } from "./_generated/server";
+import { httpRoute, v } from "@lunora/server";
 
 export const getProduct = httpRoute
     .get("/api/products/:id")

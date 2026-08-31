@@ -473,6 +473,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MiddlewareContext` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MiddlewareNext` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5160,6 +5164,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `Middleware` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MiddlewareContext` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

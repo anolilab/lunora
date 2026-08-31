@@ -45,20 +45,34 @@ interface BuilderState {
 }
 
 /**
- * Seed `ctx.meta` with the procedure's declared `.meta(...)` payload so
- * middleware can read the policy it is supposed to enforce
- * (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each `.use()`
- * site — see the `meta` builder member.
+ * Decorate the per-call context for the middleware chain with the two things a
+ * `.use()` step needs and the raw dispatch context does not carry:
  *
- * A procedure without `.meta(...)` gets the context back untouched, so the
- * no-meta path is byte-identical.
+ * - `ctx.meta` — the procedure's declared `.meta(...)` payload, so middleware
+ *   reads the policy it is supposed to enforce (`ctx.meta.rateLimit`, …)
+ *   instead of having it hard-wired at each `.use()` site.
+ * - `ctx.args` — the call's arguments, so a middleware can gate on the payload
+ *   (`@lunora/auth`'s Turnstile and email-gate middlewares both read a field
+ *   out of it). Without this a `.use()` step is blind to what it is guarding.
+ *
+ * `args` is the **validated** result of {@link validateArgs}, never the raw wire
+ * object: middleware — including security middleware — must not be handed input
+ * that has not crossed the validator. It is a frozen shallow COPY, so a
+ * middleware cannot rewrite what the handler then receives; nested objects stay
+ * shared with the handler's `args`.
+ * ponytail: shallow freeze; deep-freeze (as `.meta()` does) only if a nested
+ * write from middleware ever turns up as a real problem — that costs a clone
+ * per call, this does not.
  */
-const withMeta = (context: unknown, meta: Record<string, unknown> | undefined): unknown => {
-    if (meta === undefined || typeof context !== "object" || context === null) {
+const withCallContext = (context: unknown, meta: Record<string, unknown> | undefined, args: Record<string, unknown>): unknown => {
+    if (typeof context !== "object" || context === null) {
         return context;
     }
 
-    return Object.assign(Object.create(Object.getPrototypeOf(context) as object | null) as object, context, { meta });
+    return Object.assign(Object.create(Object.getPrototypeOf(context) as object | null) as object, context, {
+        args: Object.freeze({ ...args }),
+        ...(meta === undefined ? {} : { meta }),
+    });
 };
 
 /**
@@ -88,7 +102,7 @@ const makeHandler =
     ) =>
     async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
         const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
-        const resolvedContext = await runMiddleware(middlewares, withMeta(context, meta));
+        const resolvedContext = await runMiddleware(middlewares, withCallContext(context, meta, parsed as Record<string, unknown>));
         const result = await userHandler({ args: parsed, ctx: resolvedContext });
 
         return (output ? applyOutput(output, result) : result) as Awaited<R>;
@@ -117,7 +131,7 @@ const makeStreamHandler =
         // caller before returning an iterable — defer the chain to the first
         // `next()` pump by wrapping the iterator with an outer async generator.
         return (async function* drive(): AsyncGenerator<R, void, void> {
-            const resolvedContext = await runMiddleware(middlewares, withMeta(context, meta));
+            const resolvedContext = await runMiddleware(middlewares, withCallContext(context, meta, parsed as Record<string, unknown>));
             const source = userHandler({ args: parsed, ctx: resolvedContext, signal });
             // Drive the source through an explicit iterator so the abort check
             // can gate each `.next()` *before* the producer is resumed — a
@@ -397,6 +411,7 @@ export type {
     InternalQueryBuilder,
     LunoraBuilders,
     Middleware,
+    MiddlewareContext,
     MiddlewareNext,
     MutationBuilder,
     QueryBuilder,

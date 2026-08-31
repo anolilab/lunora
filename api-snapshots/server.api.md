@@ -41,7 +41,7 @@ interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined>
     input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
     meta: (value: Record<string, unknown>) => ActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => ActionBuilder<Context, Args, Output>;
 }
 ```
@@ -915,7 +915,7 @@ interface InternalActionBuilder<Context, Args extends ArgsValidator, Output = un
     input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
     meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
 }
 ```
 
@@ -939,7 +939,7 @@ interface InternalMutationBuilder<Context, Args extends ArgsValidator, Output = 
         ctx: Context;
     }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => InternalMutationBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
 }
 ```
 
@@ -968,7 +968,7 @@ interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = und
         ctx: Context;
         signal: AbortSignal;
     }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 ```
 
@@ -1235,6 +1235,14 @@ type Middleware<ContextIn, ContextOut> = (options: {
 }) => ContextOut | Promise<ContextOut>;
 ```
 
+### `MiddlewareContext` (type)
+
+```ts
+type MiddlewareContext<Context, Args extends ArgsValidator> = Context & {
+    readonly args: Readonly<InferArgs<Args>>;
+};
+```
+
 ### `MiddlewareNext` (interface)
 
 ```ts
@@ -1316,7 +1324,7 @@ interface MutationBuilder<Context, Args extends ArgsValidator, Output = undefine
         ctx: Context;
     }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => MutationBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => MutationBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => MutationBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => MutationBuilder<Context, Args, Output>;
 }
 ```
@@ -1584,7 +1592,7 @@ interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> 
         ctx: Context;
         signal: AbortSignal;
     }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R> : never;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => QueryBuilder<Context, Args, Output>;
 }
 ```
