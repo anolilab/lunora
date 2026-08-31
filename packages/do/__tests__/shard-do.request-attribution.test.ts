@@ -1,7 +1,7 @@
 import { readRequestLog } from "@lunora/observability";
 import { describe, expect, it } from "vitest";
 
-import type { ShardDOState } from "../src/shard-do";
+import type { QueryReadScope, ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -30,13 +30,13 @@ class AttributionShard extends ShardDO {
     /** Ran once, from inside the post-response subscription drain of whichever dispatch flushes first. */
     public parkOnFlush: (() => Promise<void>) | undefined;
 
-    public override async handleRpc(functionPath: string): Promise<unknown> {
+    public override async handleRpc(functionPath: string, _args?: Record<string, unknown>, _headroom?: unknown, scope?: QueryReadScope): Promise<unknown> {
         const table = functionPath.split(":")[0] ?? "";
 
         // Real wiring: this is the hook a generated subclass hands to
-        // `createShardCtxDb` as `onRead`, so the dep lands in whichever tracker
-        // the base class installed.
-        this.getCtxDbReadHook()(table, `${table}-1`);
+        // `createShardCtxDb` as `onRead`, bound to THIS dispatch's read scope so
+        // the dep lands in its own tracker.
+        this.getCtxDbReadHook(scope)(table, `${table}-1`);
         // Gives the tail of the dispatch a non-empty change set, so
         // `flushChangedTables` actually runs the drain that `dispatchReactors`
         // (and with it `parkOnFlush`) sits in.
@@ -109,8 +109,8 @@ describe("shardDO request-log attribution", () => {
             shard.entered.set("notes:list", enteredA.open);
             shard.entered.set("other:list", enteredB.open);
 
-            // A holds the cached-query slot; B arrives while A is parked, so it
-            // passes straight through the re-entry guard and is never memoized.
+            // B arrives while A is parked on an await. Each mints its own read
+            // scope, so both are memoized and each reports only its own tables.
             const a = shard.fetch(rpc("notes:list"));
 
             await enteredA.wait;
@@ -135,10 +135,10 @@ describe("shardDO request-log attribution", () => {
             const byPath = new Map(rows.map((row) => [row.functionPath, row]));
 
             expect(byPath.get("notes:list")?.tablesRead).toContain("notes");
-            // B never reached the cache, so it has nothing to report — and must
-            // not inherit A's read set or A's cache-hit verdict.
-            expect(byPath.get("other:list")?.tablesRead).toStrictEqual([]);
-            expect(byPath.get("other:list")?.cacheHit).toBeUndefined();
+            // B ran concurrently under its OWN scope: it reports its own table,
+            // never A's, and files its own cache-hit verdict.
+            expect(byPath.get("other:list")?.tablesRead).toStrictEqual(["other"]);
+            expect(byPath.get("other:list")?.cacheHit).toBe(false);
         } finally {
             database.close();
         }

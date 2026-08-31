@@ -9,7 +9,7 @@ import type { DatabaseWriterLike, SchemaLike, SocketAttachment, SqlExec, Subscri
 import { createShardCtxDb as createShardContextDatabase, ReactiveCache, reactiveCacheKey, runShardMigrations } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
+import type { QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 
 interface NodeStatement {
@@ -330,7 +330,7 @@ const createFakeState = (): ShardDOState & { sockets: FakeWebSocket[] } => {
  * subscribers when the cache invalidates.
  */
 class CachingShard extends ShardDO {
-    public handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
+    public handlers = new Map<string, (args: Record<string, unknown>, scope?: QueryReadScope) => Promise<unknown>>();
 
     public execCount = new Map<string, number>();
 
@@ -352,7 +352,7 @@ class CachingShard extends ShardDO {
             return { ok: true };
         }
 
-        return this.runCachedQuery(functionPath, args, async () => {
+        return this.runCachedQuery(functionPath, args, async (scope) => {
             const handler = this.handlers.get(functionPath);
 
             if (!handler) {
@@ -361,7 +361,7 @@ class CachingShard extends ShardDO {
 
             this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
 
-            return handler(args);
+            return handler(args, scope);
         });
     }
 
@@ -376,13 +376,13 @@ class CachingShard extends ShardDO {
 
     /**
      * Test-only: simulate a read inside the in-flight handler by calling the
-     * tracker that `runCachedQuery` installed. Real subclasses would plumb
-     * `getCtxDbReadHook()` into `createShardCtxDb`'s `onRead` option; this
-     * test fakes that wiring inline so we don't need to build a full ctx
-     * stack just to assert the cache-tracker contract.
+     * hook bound to the scope `runCachedQuery` handed this dispatch. Real
+     * subclasses plumb `getCtxDbReadHook(scope)` into `createShardCtxDb`'s
+     * `onRead` option; this test fakes that wiring inline so we don't need to
+     * build a full ctx stack just to assert the cache-tracker contract.
      */
-    public stampRead(table: string, idOrScan: string): void {
-        const hook = this.getCtxDbReadHook();
+    public stampRead(scope: QueryReadScope | undefined, table: string, idOrScan: string): void {
+        const hook = this.getCtxDbReadHook(scope);
 
         hook(table, idOrScan);
     }
@@ -399,10 +399,10 @@ class CachingShard extends ShardDO {
             return Promise.resolve(null);
         }
 
-        return this.runCachedQuery(functionPath, args, async () => {
+        return this.runCachedQuery(functionPath, args, async (scope) => {
             this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
 
-            return handler(args);
+            return handler(args, scope);
         }).then((result) => {
             return { result, tables: new Set(["users"]) };
         });
@@ -421,8 +421,8 @@ describe("shardDO + reactiveCache: dispatch path", () => {
     it("cache hit: identical query+args runs handler once across two RPC dispatches", async () => {
         expect.assertions(1);
 
-        shard.handlers.set("users:list", async () => {
-            shard.stampRead("users", "*scan");
+        shard.handlers.set("users:list", async (_args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
 
             return [{ name: "alice" }];
         });
@@ -436,8 +436,8 @@ describe("shardDO + reactiveCache: dispatch path", () => {
     it("args sensitivity: different args go to different cache slots", async () => {
         expect.assertions(1);
 
-        shard.handlers.set("users:list", async (args) => {
-            shard.stampRead("users", "*scan");
+        shard.handlers.set("users:list", async (args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
 
             return [args];
         });
@@ -497,8 +497,8 @@ describe("shardDO + reactiveCache: dispatch path", () => {
     it("identity isolation: same userId with DIFFERENT claims never shares a cache slot", async () => {
         expect.assertions(1);
 
-        shard.handlers.set("org:list", async () => {
-            shard.stampRead("users", "*scan");
+        shard.handlers.set("org:list", async (_args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
 
             return [{ ok: true }];
         });
@@ -515,8 +515,8 @@ describe("shardDO + reactiveCache: dispatch path", () => {
     it("cache hit preserved: same userId AND identical claims collapse to one run (key order agnostic)", async () => {
         expect.assertions(1);
 
-        shard.handlers.set("org:list", async () => {
-            shard.stampRead("users", "*scan");
+        shard.handlers.set("org:list", async (_args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
 
             return [{ ok: true }];
         });
@@ -545,8 +545,8 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
 
         let counter = 0;
 
-        shard.handlers.set("users:list", async () => {
-            shard.stampRead("users", "*scan");
+        shard.handlers.set("users:list", async (_args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
             counter += 1;
 
             return { version: counter };
@@ -596,8 +596,8 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
 
         const sequence: string[] = [];
 
-        shard.handlers.set("users:list", async () => {
-            shard.stampRead("users", "*scan");
+        shard.handlers.set("users:list", async (_args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
             sequence.push("query");
 
             return Date.now();
@@ -658,30 +658,24 @@ describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan
      * `mutationTablesToInvalidate` shortcut.
      */
     class RangeCachingShard extends ShardDO {
+        /** Scope-less writer the TEST writes through (a mutation builds no cache scope). */
         public readonly writer: DatabaseWriterLike;
 
         public handlers = new Map<string, (writer: DatabaseWriterLike) => Promise<unknown>>();
 
         public execCount = new Map<string, number>();
 
+        private readonly rawSql: SqlExec;
+
         public constructor(state: ShardDOState, env: unknown, sql: SqlExec, options: ShardDOOptions = {}) {
             super(state, env, options);
 
-            this.writer = createShardContextDatabase({
-                // The slice a generated `buildCtx` spreads in: the cache plus the
-                // relation knobs. Spread FIRST, exactly as the emitter must, so
-                // per-request options below still win.
-                ...this.ctxDbTuning(),
-                onIndexUse: this.getCtxDbIndexUseHook(),
-                onRead: this.getCtxDbReadHook(),
-                onReadRange: this.getCtxDbReadRangeHook(),
-                schema: rangeSchema,
-                sql,
-            });
+            this.rawSql = sql;
+            this.writer = this.buildWriter();
         }
 
         public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
-            return this.runCachedQuery(functionPath, args, async () => {
+            return this.runCachedQuery(functionPath, args, async (scope) => {
                 const handler = this.handlers.get(functionPath);
 
                 if (!handler) {
@@ -690,13 +684,30 @@ describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan
 
                 this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
 
-                return handler(this.writer);
+                // A generated `buildCtx` builds the ctx-db per dispatch, with the
+                // read hooks bound to that dispatch's scope. Mirror that here.
+                return handler(this.buildWriter(scope));
             });
         }
 
         /** Test-only: expose the protected `reactiveCache` field for assertions. */
         public cacheRef(): typeof this.reactiveCache {
             return this.reactiveCache;
+        }
+
+        /** The ctx-db a generated `buildCtx` builds, with the read hooks bound to `scope`. */
+        private buildWriter(scope?: QueryReadScope): DatabaseWriterLike {
+            return createShardContextDatabase({
+                // The slice a generated `buildCtx` spreads in: the cache plus the
+                // relation knobs. Spread FIRST, exactly as the emitter must, so
+                // per-request options below still win.
+                ...this.ctxDbTuning(),
+                onIndexUse: this.getCtxDbIndexUseHook(),
+                onRead: this.getCtxDbReadHook(scope),
+                onReadRange: scope === undefined ? undefined : this.getCtxDbReadRangeHook(scope),
+                schema: rangeSchema,
+                sql: this.rawSql,
+            });
         }
     }
 
@@ -827,15 +838,33 @@ describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan
  */
 describe("shardDO + reactiveCache: base dispatch wiring", () => {
     const REGISTRY: Readonly<Record<string, "action" | "mutation" | "query">> = {
+        "notes:list": "query",
+        "posts:list": "query",
         "users:create": "mutation",
         "users:list": "query",
         "users:notify": "action",
     };
 
+    /** A promise plus its resolver, for parking a handler until the test releases it. */
+    const gate = (): { open: () => void; wait: Promise<void> } => {
+        let open!: () => void;
+        const wait = new Promise<void>((resolve) => {
+            open = resolve;
+        });
+
+        return { open, wait };
+    };
+
     class GeneratedLikeShard extends ShardDO {
         public execCount = new Map<string, number>();
 
-        public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        /** functionPath -> a promise its handler parks on, resolved by the test. */
+        public gates = new Map<string, Promise<void>>();
+
+        /** functionPath -> resolver fired as its handler enters, so the test can sequence the interleave. */
+        public entered = new Map<string, () => void>();
+
+        public override async handleRpc(functionPath: string, args: Record<string, unknown>, _headroom?: unknown, scope?: QueryReadScope): Promise<unknown> {
             this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
 
             if (REGISTRY[functionPath] === "mutation") {
@@ -844,9 +873,18 @@ describe("shardDO + reactiveCache: base dispatch wiring", () => {
                 return { ok: true };
             }
 
+            this.entered.get(functionPath)?.();
+
+            // Park BEFORE the read, so a dispatch that arrives while this one is
+            // suspended does its own reading first — the interleave that used to
+            // stamp the second query's tables into the first query's dep set.
+            await this.gates.get(functionPath);
+
             // Stands in for a `ctx.db` read: the same `onRead` hook a generated
-            // `createShardCtxDb` call is handed.
-            this.getCtxDbReadHook()("users", "*scan");
+            // `createShardCtxDb` call is handed, bound to THIS dispatch's scope.
+            // One table per function namespace, so a dep set that picked up a
+            // concurrent dispatch's reads is visible as a cross-table eviction.
+            this.getCtxDbReadHook(scope)(functionPath.split(":")[0] ?? "", "*scan");
 
             return { args, rows: [] };
         }
@@ -886,6 +924,62 @@ describe("shardDO + reactiveCache: base dispatch wiring", () => {
 
         expect(shard.execCount.get("users:list")).toBe(1);
         expect(shard.cacheRef()?.stats().hits).toBe(1);
+    });
+
+    // Regression: the dep tracker used to be an INSTANCE field on the DO, which
+    // serves concurrent `/rpc` dispatches. A second query arriving while the
+    // first was parked on an await hit `runCachedQuery`'s re-entry guard — it
+    // was never read from the cache and never stored, and its reads stamped
+    // into the FIRST query's dep set. The tracker is threaded per dispatch now
+    // (`runCachedQuery` -> `handleRpc` -> `buildCtx` -> the ctx-db read hooks),
+    // so the two are independent.
+    it("two concurrent dispatches each get their own tracker: both memoized, neither's deps include the other's tables", async () => {
+        expect.assertions(5);
+
+        const shard = new GeneratedLikeShard(createFakeState(), {}, { reactiveCache: {} });
+
+        const parkA = gate();
+        const enteredA = gate();
+        const enteredB = gate();
+
+        shard.gates.set("notes:list", parkA.wait);
+        shard.entered.set("notes:list", enteredA.open);
+        shard.entered.set("posts:list", enteredB.open);
+
+        // A enters and parks; B arrives and runs to completion while A is
+        // suspended — the interleave a busy shard actually serves.
+        const a = rpc(shard, "notes:list");
+
+        await enteredA.wait;
+
+        const b = rpc(shard, "posts:list");
+
+        await enteredB.wait;
+        await b;
+
+        parkA.open();
+        await a;
+
+        // Pre-fix B was bypassed entirely, leaving ONE entry.
+        expect(shard.cacheRef()?.size().entries).toBe(2);
+
+        // Both are real memos: neither handler re-runs.
+        await rpc(shard, "notes:list");
+        await rpc(shard, "posts:list");
+
+        expect(shard.execCount.get("notes:list")).toBe(1);
+        expect(shard.execCount.get("posts:list")).toBe(1);
+
+        // A write to `posts` evicts B's entry and ONLY B's: `notes:list` never
+        // read `posts`, and — the half the shared tracker got wrong —
+        // `posts:list`'s reads never widened `notes:list`'s dep set either.
+        shard.cacheRef()?.invalidateTable("posts");
+
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+
+        await rpc(shard, "notes:list");
+
+        expect(shard.execCount.get("notes:list")).toBe(1);
     });
 
     it("never memoizes a non-query: an action's side effects must run on every dispatch", async () => {

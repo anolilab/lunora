@@ -12,6 +12,7 @@ export type { SessionRecord } from "./session-do";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do";
 export type {
     HibernatableWebSocket,
+    QueryReadScope,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
     RunShardBulkDeleteArgs,

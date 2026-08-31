@@ -61,12 +61,12 @@ describe("emitShard — handleRpc dispatch-race fix (plan 207 step 3)", () => {
         // `handleRunAs` (which mint no tracker) omit it and fall through to
         // `buildCtx`'s own `options.headroom ?? this.transactionHeadroom()`.
         expect(shard).toContain(
-            "public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown>",
+            "public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope): Promise<unknown>",
         );
         // `trusted` rides alongside it (an `onShardInit` hook has no caller
         // identity, so RLS has no user to scope to) — the assertion here is that
         // `headroom` is still threaded BY VALUE rather than falling back to the
         // shared field, which is what this suite exists to protect.
-        expect(shard).toContain('const ctx = this.buildCtx({ functionPath, headroom, trusted: registered.lifecycle === "init" });');
+        expect(shard).toContain('const ctx = this.buildCtx({ functionPath, headroom, scope, trusted: registered.lifecycle === "init" });');
     });
 });

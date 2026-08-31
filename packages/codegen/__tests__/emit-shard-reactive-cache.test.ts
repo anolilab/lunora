@@ -58,9 +58,24 @@ describe("emitShard — reactive cache wiring", () => {
     it("does not wrap handleRpc dispatch in runCachedQuery — the base /rpc path already does", () => {
         expect.assertions(1);
 
-        // A second wrap would let the inner call steal `currentTracker` and store
-        // an entry with zero deps, which is permanently stale.
+        // A second wrap would mint a second read scope, so every read would land
+        // in the inner tracker and the outer entry would be stored with zero
+        // deps, which is permanently stale.
         expect(emitShard({ schema: { tables: [], vectorIndexes: [] } })).not.toContain("this.runCachedQuery(");
+    });
+
+    it("threads the per-dispatch read scope from handleRpc into the ctx-db read hooks", () => {
+        expect.assertions(3);
+
+        // The scope is what makes the dep tracker per-dispatch instead of
+        // per-instance. If `handleRpc` drops it, the hooks fall back to unbound
+        // ones and every cached query is stored with an empty dep set — the
+        // reads still happen, so nothing fails until a write does not invalidate.
+        const emitted = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+        expect(emitted).toContain("headroom?: TransactionHeadroomTracker, scope?: QueryReadScope): Promise<unknown>");
+        expect(emitted).toContain("onRead: options.onRead ?? this.getCtxDbReadHook(options.scope),");
+        expect(emitted).toContain("onReadRange: options.onReadRange ?? (options.scope === undefined ? undefined : this.getCtxDbReadRangeHook(options.scope)),");
     });
 
     it("spreads ctxDbTuning() first into the ctx-db options so writes invalidate at row + index-range precision", () => {

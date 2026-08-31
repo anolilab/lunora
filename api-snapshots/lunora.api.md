@@ -2245,6 +2245,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `QueryReadScope` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `QueuesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
