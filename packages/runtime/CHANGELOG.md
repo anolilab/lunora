@@ -1,3 +1,17 @@
+## @lunora/runtime [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.83...@lunora/runtime@1.0.0-alpha.84) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.43
+* **@lunora/platform:** upgraded to 1.0.0-alpha.22
+* **@lunora/do:** upgraded to 1.0.0-alpha.110
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.48
+
 ## @lunora/runtime [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.82...@lunora/runtime@1.0.0-alpha.83) (2026-08-30)
 
 ### Bug Fixes
