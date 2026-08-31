@@ -343,7 +343,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A `.public()` `query` returns raw table rows (no `.output(...)` projection, no `.use(mask(...))`) from a table carrying PII-named columns (`email`, `phone`, `ssn`, …). Every column ships to the caller, and a column added to the table later leaks by default.",
-        "detail": "Public query `list` (feedback:44) returns raw `feedback` rows with no `.output(...)` projection — shipping PII column(s) authorEmail to every caller, and any column added to `feedback` later leaks by default. Project the return with `.output(v.object({ … }))` or mask the PII columns.",
+        "detail": "Public query `list` (feedback:44) returns raw `feedback` rows with no `.output(...)` projection — shipping PII column(s) authorEmail to every caller, and any column added to `feedback` later leaks by default. Project the return with `.output(v.object({ … }).strip())` or mask the PII columns.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
@@ -356,7 +356,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "table": "feedback"
         },
         "name": "output_projection_missing_on_public_read",
-        "remediation": "Add an explicit return projection to the public query — `.output(v.object({ … }))` listing only the fields a client needs — or apply a `.use(mask(...))` policy to the PII columns. This makes the exposed shape intentional and stops a newly-added column from leaking through this query by default.",
+        "remediation": "Add an explicit return projection to the public query — `.output(v.object({ … }).strip())` listing only the fields a client needs — or apply a `.use(mask(...))` policy to the PII columns. This makes the exposed shape intentional and stops a newly-added column from leaking through this query by default.",
         "title": "Public query returns raw rows with PII and no output projection"
     }
 ];
