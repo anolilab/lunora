@@ -128,7 +128,7 @@ const DataBrowserViewControls = ({
                  */}
                 {editable && total > 0 && (filter !== "" || filters.length > 0) && (
                     <button className={CONTROL_TOGGLE_BTN} data-testid="db-bulk-patch" onClick={onBulkPatch} type="button">
-                        {`Set column on ${total.toString()} matching`}
+                        {t("Set column on {total} matching", { total: total.toString() })}
                     </button>
                 )}
                 {editable && total > 0 && filter === "" && filters.length === 0 && (

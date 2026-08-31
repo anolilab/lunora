@@ -1360,22 +1360,27 @@ const createFilterableClient = (bulkCap = 50): MockClientHooks => {
 
                 rows = rows.filter((row) => !doomed.has(row["__id__"]));
 
-                return { deleted: batch.length, hasMore: matched.length > bulkCap };
+                return { count: batch.length, hasMore: matched.length > bulkCap };
             }
 
             if (reference === ADMIN_FUNCTIONS.patchRows) {
                 const { after, doc = {}, filters = [] } = args as { after?: string; doc?: Record<string, unknown>; filters?: FilterArg[] };
-                // Keyset by id exactly as the shard does: only rows past the
-                // caller's cursor are in scope for this batch.
-                const matched = rows
-                    .filter((row) => matchesFilters(row as Record<string, unknown>, filters))
-                    .filter((row) => after === undefined || row["__id__"] > after);
-                const batch = matched.slice(0, bulkCap);
+
+                // Mirrors the shard EXACTLY on the point that matters: `after`'s
+                // PRESENCE is what makes the scan ordered, and only an ordered scan
+                // answers with a cursor. Treating a missing cursor as "start from the
+                // top, ordered" — which both mocks used to do — is precisely how a
+                // client that never sends its opening `""` looks identical to one that
+                // does, and it hid a silent partial-write bug.
+                const keyset = after !== undefined;
+                const matched = rows.filter((row) => matchesFilters(row as Record<string, unknown>, filters)).filter((row) => !keyset || row["__id__"] > after);
+                const scanned = keyset ? matched.toSorted((a, b) => (a["__id__"] < b["__id__"] ? -1 : 1)) : matched;
+                const batch = scanned.slice(0, bulkCap);
                 const touched = new Set(batch.map((row) => row["__id__"]));
 
                 rows = rows.map((row) => (touched.has(row["__id__"]) ? { ...row, ...doc } : row));
 
-                return { cursor: batch.at(-1)?.["__id__"], hasMore: matched.length > bulkCap, patched: batch.length };
+                return { count: batch.length, cursor: keyset ? batch.at(-1)?.["__id__"] : undefined, hasMore: matched.length > bulkCap };
             }
 
             // readTablePage: apply each structured filter (eq only, enough here).
@@ -1551,7 +1556,9 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         // Exactly two: call one patches m1 and reports hasMore, call two patches m2
         // and reports done. A third would mean the loop re-asked after the drain.
         expect(bulk).toHaveLength(2);
-        expect(bulk[0]?.[1]).toMatchObject({ doc: { text: "seen" }, filters: [{ column: "status", operator: "eq", value: "active" }] });
+        // The opening `after: ""` is the whole contract: without it the server scans
+        // unordered and the cursor it returns is an arbitrary id.
+        expect(bulk[0]?.[1]).toMatchObject({ after: "", doc: { text: "seen" }, filters: [{ column: "status", operator: "eq", value: "active" }] });
         // The second call resumes from the first call's cursor rather than
         // re-reading from the top.
         expect((bulk[1]?.[1] as { after?: string }).after).toBe("m1");
@@ -2052,21 +2059,24 @@ const createCapExhaustingClient = (rowCount: number, bulkCap: number): MockClien
 
                 rows = rows.filter((row) => !doomed.has(row["__id__"]));
 
-                return { deleted: batch.length, hasMore: rows.length > 0 };
+                return { count: batch.length, hasMore: rows.length > 0 };
             }
 
             if (reference === ADMIN_FUNCTIONS.patchRows) {
                 // Keyset, and the patch does NOT remove rows from the match set — the
                 // shape that makes the cursor load-bearing. Ids sort lexically, so the
-                // fixture pads them to a fixed width.
-                const { after = "", doc = {} } = args as { after?: string; doc?: Record<string, unknown> };
-                const remaining = rows.filter((row) => row["__id__"] > after);
+                // fixture pads them to a fixed width. A missing `after` is NOT defaulted
+                // to `""`: an unordered scan is what the server would really do, and
+                // defaulting it away is what let a client bug through unseen.
+                const { after, doc = {} } = args as { after?: string; doc?: Record<string, unknown> };
+                const keyset = after !== undefined;
+                const remaining = keyset ? rows.filter((row) => row["__id__"] > after) : rows;
                 const batch = remaining.slice(0, bulkCap);
                 const touched = new Set(batch.map((row) => row["__id__"]));
 
                 rows = rows.map((row) => (touched.has(row["__id__"]) ? { ...row, ...doc } : row));
 
-                return { cursor: batch.at(-1)?.["__id__"], hasMore: remaining.length > bulkCap, patched: batch.length };
+                return { count: batch.length, cursor: keyset ? batch.at(-1)?.["__id__"] : undefined, hasMore: remaining.length > bulkCap };
             }
 
             const { limit = 50, offset = 0, table } = args as { limit?: number; offset?: number; table: string };

@@ -4814,44 +4814,50 @@ ${vectorNamespaceField}
             }`;
 
     /**
-     * The admin/maintenance entry points (migrations, shard writes, imports, …)
-     * each build the same bare ctx-db writer: no RLS, no read hooks — just
-     * broadcast + CDC over this instance's SQLite.
+     * The single generated builder for the bare admin/maintenance ctx-db writer —
+     * no RLS, no read hooks, just broadcast + CDC over this instance's SQLite.
      *
-     * `headroomExpression` adds a transaction meter. Only `runShardWrite` passes
-     * one, because it is the only entry point a caller can drive in a loop from
-     * OUTSIDE a dispatch — the TTL sweep runs on an alarm and hands over its own
-     * by-value tracker, which is the sole reason this seam is parameterised.
+     * Emitted ONCE per shard class and called by all seven admin entry points
+     * (migrations, shard writes, imports, exports, ranks). Inlining it at each
+     * call site put seven copies of this block — and seven copies of its comments
+     * — into every user's `_generated/shard.ts`, which was ~15% of the file.
      */
-    const adminWriterPrelude = (headroomExpression?: string): string => `            const env = (this.env ?? {}) as Record<string, unknown>;
+    const adminWriterMethod = `        /**
+         * The bare writer every admin/maintenance entry point writes through.
+         *
+         * Admin and maintenance writes go through the SAME reactive-cache hooks as a
+         * user mutation. Without this, a studio row edit, a TTL sweep, an admin
+         * import, a CDC apply or a data-migration backfill writes without
+         * invalidating, and the next query answers from the pre-write snapshot.
+         *
+         * \`headroom\` meters the transaction. An admin \`/rpc\` caller passes nothing
+         * and falls back to \`this.transactionHeadroom()\`, which for an admin RPC is
+         * \`undefined\` — \`handleAdminRpc\` answers before \`beginDispatch\`, so no
+         * per-dispatch meter is in flight and a bulk loop is bounded by its per-call
+         * row cap alone. The TTL sweep (an alarm work item, no dispatch) passes its
+         * own by-value tracker explicitly instead.
+         */
+        private adminWriter(headroom?: TransactionHeadroomTracker): DatabaseWriterLike {
+            const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                // Admin and maintenance writes go through the SAME reactive-cache hooks as
-                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
-                // import, a CDC apply or a data-migration backfill writes without
-                // invalidating, and the next query answers from the pre-write snapshot.
+
+            return createShardCtxDb({
                 ...this.ctxDbTuning(),
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
-                cdc: config.cdc ?? false,${
-                    headroomExpression === undefined
-                        ? ""
-                        : `
-                // An admin \`/rpc\` caller passes nothing, so this falls back to
-                // \`this.transactionHeadroom()\` — which for an admin RPC resolves to
-                // \`undefined\`: \`handleAdminRpc\` answers before \`beginDispatch\`, so no
-                // per-dispatch meter is in flight and a bulk loop is bounded by its
-                // per-call row cap alone. The TTL sweep (an alarm work item, no dispatch)
-                // passes its own by-value tracker explicitly instead.
-                headroom: ${headroomExpression},`
-                }
+                cdc: config.cdc ?? false,
+                headroom,
                 // Live predicate, same as the user-facing ctx — see \`databaseOptions\`.
                 inTransaction: () => this.isInTransaction(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
-            });`;
+            });
+        }`;
+
+    /** Call the generated {@link adminWriterMethod}; only `runShardWrite` needs a meter. */
+    const adminWriterPrelude = (headroomExpression = ""): string => `            const writer = this.adminWriter(${headroomExpression});`;
 
     const vectorsContextField = hasVectors ? `\n                vectors,` : "";
 
@@ -5576,6 +5582,8 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             return LUNORA_ADVISOR_PROCEDURES;
         }
 
+${adminWriterMethod}
+
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
             this.ensureMigrated();
 
@@ -5632,10 +5640,13 @@ ${adminWriterPrelude("headroom ?? this.transactionHeadroom()")}
                 return { id, op: "insert" };
             }
 
-            // Every by-id op PINS \`args.table\`. Without it a row that is absent —
-            // deleted between an admin read and this write — falls through to the
-            // \`.global()\` D1 twin, which would apply a shard row's edit to a global
-            // table. The \`.global()\` guard above already proved this table is not one.
+            // Every by-id op PINS \`args.table\`. Unpinned, \`locateRowById\` probes
+            // every non-global table for the id, so a request naming table A with an
+            // id belonging to table B locates and mutates B's row — the by-id IDOR
+            // the per-table \`ctx.db.<table>\` facade pins against. Pinning also stops
+            // an absent row falling through to the \`.global()\` D1 twin, though that
+            // branch is already unreachable here: \`adminWriter\` is built without a
+            // \`globalDb\`, so a miss throws \`NOT_FOUND\` either way.
             if (args.op === "delete") {
                 await writer.delete(args.id ?? "", args.table);
 

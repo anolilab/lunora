@@ -255,8 +255,6 @@ import type {
     QueueBindingHandle,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
-    RunShardBulkDeleteResult,
-    RunShardBulkPatchResult,
     RunShardBulkRowArgs,
     RunShardBulkRowResult,
     RunShardCdcSyncArgs,
@@ -3015,22 +3013,27 @@ abstract class ShardDO {
      * The three ops differ only in the per-row call and in what they name the
      * count, so they share this and rename `count` at the wire boundary.
      *
+     * `after` is the KEYSET CURSOR, passed explicitly rather than read off `args`
+     * so that "this scan was ordered" and "a cursor may be returned" cannot drift
+     * apart: a cursor comes back only when one went in. The last id of an
+     * UNORDERED scan is an arbitrary point in id space, and a caller resuming from
+     * it would skip every matching row sorting below it — silently.
+     *
      * Applications are sequential by design — parallel writes to one DO would
-     * contend on OCC — so the per-row `await` is intentional. That also makes
-     * each row an interleaving point, so a mid-batch throw is reachable (an OCC
+     * contend on OCC — so the per-row `await` is intentional. That also makes each
+     * row an interleaving point, so a mid-batch throw is reachable (an OCC
      * conflict, or a `.unique()` column patched to a constant across two rows).
      * Rows applied before it are ALREADY COMMITTED — the writer commits per row —
-     * which is why the flush lives in a `finally`: without it the touched tables
-     * stay un-drained on the failure path and live subscribers keep serving
-     * pre-write values until some unrelated later write happens to flush them.
+     * so the caller must flush on the failure path too; {@link handleBulkRowOp}
+     * owns that, alongside every other admin arm's flush.
      */
-    protected async runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>): Promise<RunShardBulkRowResult> {
+    protected async runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>, after?: string): Promise<RunShardBulkRowResult> {
         const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_ROW_CAP), 1), SHARD_BULK_ROW_CAP);
 
         // Collect this batch's ids first (a read; raw SQL is fine), then write
         // each through the writer.
         const { hasMore, ids } = selectMatchingIds(this.sql as SqlExec, {
-            after: args.after,
+            after,
             filters: args.filters,
             limit,
             search: args.search,
@@ -3039,20 +3042,14 @@ abstract class ShardDO {
 
         let count = 0;
 
-        try {
-            for (const id of ids) {
-                // eslint-disable-next-line no-await-in-loop -- see the note above: per-row writer calls must serialise to avoid OCC contention on the shard DO
-                await apply(id);
-                count += 1;
-            }
-        } finally {
-            await this.flushChangedTables();
+        for (const id of ids) {
+            // eslint-disable-next-line no-await-in-loop -- see the note above: per-row writer calls must serialise to avoid OCC contention on the shard DO
+            await apply(id);
+            count += 1;
         }
 
-        // The cursor is the last id SCANNED, not the last one changed — the same
-        // thing here (every scanned row is applied), and it must advance past the
-        // batch either way or a resuming caller re-reads it.
-        return { count, cursor: ids.at(-1), hasMore };
+        // Only an ordered scan yields a resumable boundary — see the note above.
+        return { count, cursor: after === undefined ? undefined : ids.at(-1), hasMore };
     }
 
     /**
@@ -6794,45 +6791,83 @@ abstract class ShardDO {
      * run a bounded batch THROUGH the schema-aware writer, flush the touched
      * tables so live subscribers re-run, and audit the counts.
      *
-     * Returns `undefined` when `functionPath` is none of them, so the caller's
-     * chain falls through to the remaining ops.
+     * The caller checks the three paths before calling, so this always answers.
      */
-    private async handleBulkRowOp(functionPath: string, args: Record<string, unknown>): Promise<Response | undefined> {
-        // `clearTable` is `deleteRows` with no predicate — the same writer-routed
-        // bounded loop, matching every row — so the two share an arm and differ
-        // only in which parser reads the args and which name the audit carries.
-        const isClear = functionPath === ADMIN_FUNCTIONS.clearTable;
+    private async handleBulkRowOp(functionPath: string, args: Record<string, unknown>): Promise<Response> {
+        let applied = 0;
 
-        if (isClear || functionPath === ADMIN_FUNCTIONS.deleteRows) {
-            const parsed = isClear ? parseClearTableArgs(args) : parseBulkDeleteArgs(args);
-            const { count, hasMore } = await this.runShardBulkRowOp(parsed, async (id) => {
-                await this.runShardWrite({ id, op: "delete", table: parsed.table });
-            });
-            const result: RunShardBulkDeleteResult = { deleted: count, hasMore };
+        try {
+            // `clearTable` is `deleteRows` with no predicate — the same
+            // writer-routed bounded loop, matching every row — so the two share an
+            // arm and differ only in which parser reads the args and which verb the
+            // audit carries. Neither resumes, so neither passes a cursor.
+            const isClear = functionPath === ADMIN_FUNCTIONS.clearTable;
 
-            this.recordAudit(isClear ? "clearTable" : "deleteRows", { table: parsed.table, detail: { ...result } });
+            if (isClear || functionPath === ADMIN_FUNCTIONS.deleteRows) {
+                const parsed = isClear ? parseClearTableArgs(args) : parseBulkDeleteArgs(args);
+                const result = await this.runShardBulkRowOp(parsed, async (id) => {
+                    await this.runShardWrite({ id, op: "delete", table: parsed.table });
+                    applied += 1;
+                });
 
-            return adminResponse(result);
-        }
+                this.recordAudit(isClear ? "clearTable" : "deleteRows", { table: parsed.table, detail: { deleted: result.count, hasMore: result.hasMore } });
 
-        if (functionPath === ADMIN_FUNCTIONS.patchRows) {
+                return adminResponse(result);
+            }
+
             const parsed = parseBulkPatchArgs(args);
             // Each row goes through `runShardWrite` — the same single-row seam the
             // studio's row editor uses — so the `.global()` guard, the validators
             // and the reactive invalidation apply unchanged and codegen needs no
             // second writer override.
-            const { count, cursor, hasMore } = await this.runShardBulkRowOp(parsed, async (id) => {
-                await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table });
-            });
-            const result: RunShardBulkPatchResult = { cursor, hasMore, patched: count };
+            //
+            // A row that vanished between the id scan and here is SKIPPED, not
+            // fatal: the scan and the write are separated by an `await` per row, so
+            // a concurrent client mutation, another operator, or this table's own
+            // `.ttl()` sweep can remove one mid-batch. The delete arm is already
+            // silent on a missing row (`writer.delete` is idempotent); this makes
+            // the patch arm match rather than 500 on a routine race.
+            const result = await this.runShardBulkRowOp(
+                parsed,
+                async (id) => {
+                    try {
+                        await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table });
+                        applied += 1;
+                    } catch (error) {
+                        if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND") {
+                            throw error;
+                        }
+                    }
+                },
+                parsed.after,
+            );
 
             // Field NAMES only — the patched values are operator data.
-            this.recordAudit("patchRows", { table: parsed.table, detail: { fields: Object.keys(parsed.doc), hasMore, patched: count } });
+            this.recordAudit("patchRows", { table: parsed.table, detail: { fields: Object.keys(parsed.doc), hasMore: result.hasMore, patched: result.count } });
 
             return adminResponse(result);
-        }
+        } catch (error) {
+            // Rows applied before the throw are ALREADY COMMITTED (the writer
+            // commits per row), so a privileged partial write still gets an audit
+            // record — otherwise a batch that wrote 200 rows and then failed leaves
+            // no trace at all.
+            if (applied > 0) {
+                this.recordAudit("bulkRowOpFailed", { table: typeof args["table"] === "string" ? args["table"] : undefined, detail: { applied } });
+            }
 
-        return undefined;
+            throw error;
+        } finally {
+            // Flushed here, alongside every other admin arm's flush, and on the
+            // failure path too: without it the tables a partial batch touched stay
+            // un-drained and live subscribers keep serving pre-write values until
+            // some unrelated later write happens to flush them.
+            //
+            // Swallowed rather than awaited bare: a flush rejection would REPLACE
+            // the per-row error above, losing which row actually failed.
+            await this.flushChangedTables().catch((flushError: unknown) => {
+                this.recordShapeError("bulkRowOp:flush", flushError);
+            });
+        }
     }
 
     /**
@@ -6917,10 +6952,8 @@ abstract class ShardDO {
                 return adminResponse(result);
             }
 
-            const bulk = await this.handleBulkRowOp(functionPath, args);
-
-            if (bulk !== undefined) {
-                return bulk;
+            if (functionPath === ADMIN_FUNCTIONS.deleteRows || functionPath === ADMIN_FUNCTIONS.clearTable || functionPath === ADMIN_FUNCTIONS.patchRows) {
+                return await this.handleBulkRowOp(functionPath, args);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.rankBefore) {
@@ -11220,9 +11253,7 @@ export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
 export type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
-    RunShardBulkDeleteResult,
     RunShardBulkPatchArgs,
-    RunShardBulkPatchResult,
     RunShardBulkRowArgs,
     RunShardBulkRowResult,
     RunShardExportArgs,

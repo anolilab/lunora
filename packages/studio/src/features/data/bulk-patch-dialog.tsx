@@ -107,7 +107,21 @@ const BulkPatchDialog = ({ columns, onApply, onClose, table, total }: BulkPatchD
 
             <div className="flex items-center gap-2">
                 <Label htmlFor="bulk-patch-column">{t("Column")}</Label>
-                <select aria-label={t("Column")} data-testid="bulk-patch-column" id="bulk-patch-column" onChange={onColumnChange} value={column}>
+                {/*
+                 * A native `<select>`, not `components/ui/select`: that one is a Base UI
+                 * listbox, and the data browser's other column pickers (`DataFilters`)
+                 * are native for the same reason — `fireEvent.change` drives them
+                 * directly in the component tests. Styled to match the shared `Input`
+                 * beside it so the row doesn't read as half-designed.
+                 */}
+                <select
+                    aria-label={t("Column")}
+                    className="h-8 rounded-md border border-input bg-transparent px-2 py-1 text-xs outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50 dark:bg-input/30"
+                    data-testid="bulk-patch-column"
+                    id="bulk-patch-column"
+                    onChange={onColumnChange}
+                    value={column}
+                >
                     {columns.map((name) => (
                         <option key={name} value={name}>
                             {name}

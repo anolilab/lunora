@@ -643,6 +643,40 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_ADVISOR_PROCEDURES;
         }
 
+        /**
+         * The bare writer every admin/maintenance entry point writes through.
+         *
+         * Admin and maintenance writes go through the SAME reactive-cache hooks as a
+         * user mutation. Without this, a studio row edit, a TTL sweep, an admin
+         * import, a CDC apply or a data-migration backfill writes without
+         * invalidating, and the next query answers from the pre-write snapshot.
+         *
+         * `headroom` meters the transaction. An admin `/rpc` caller passes nothing
+         * and falls back to `this.transactionHeadroom()`, which for an admin RPC is
+         * `undefined` — `handleAdminRpc` answers before `beginDispatch`, so no
+         * per-dispatch meter is in flight and a bulk loop is bounded by its per-call
+         * row cap alone. The TTL sweep (an alarm work item, no dispatch) passes its
+         * own by-value tracker explicitly instead.
+         */
+        private adminWriter(headroom?: TransactionHeadroomTracker): DatabaseWriterLike {
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+
+            return createShardCtxDb({
+                ...this.ctxDbTuning(),
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table, delta.indexKeys);
+                },
+                cdc: config.cdc ?? false,
+                headroom,
+                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
+                inTransaction: () => this.isInTransaction(),
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });
+        }
+
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
             this.ensureMigrated();
 
@@ -658,24 +692,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 throw new LunoraError("MIGRATION_NOT_FOUND", `data migration "${args.id}" is not registered`, { status: 404 });
             }
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                // Admin and maintenance writes go through the SAME reactive-cache hooks as
-                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
-                // import, a CDC apply or a data-migration backfill writes without
-                // invalidating, and the next query answers from the pre-write snapshot.
-                ...this.ctxDbTuning(),
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
-                inTransaction: () => this.isInTransaction(),
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+            const writer = this.adminWriter();
 
             return runDataMigration({
                 batchSize: args.batchSize,
@@ -708,31 +725,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                // Admin and maintenance writes go through the SAME reactive-cache hooks as
-                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
-                // import, a CDC apply or a data-migration backfill writes without
-                // invalidating, and the next query answers from the pre-write snapshot.
-                ...this.ctxDbTuning(),
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                // An admin `/rpc` caller passes nothing, so this falls back to
-                // `this.transactionHeadroom()` — which for an admin RPC resolves to
-                // `undefined`: `handleAdminRpc` answers before `beginDispatch`, so no
-                // per-dispatch meter is in flight and a bulk loop is bounded by its
-                // per-call row cap alone. The TTL sweep (an alarm work item, no dispatch)
-                // passes its own by-value tracker explicitly instead.
-                headroom: headroom ?? this.transactionHeadroom(),
-                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
-                inTransaction: () => this.isInTransaction(),
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+            const writer = this.adminWriter(headroom ?? this.transactionHeadroom());
 
             if (args.op === "insert") {
                 const id = await writer.insert(args.table, args.doc ?? {});
@@ -740,10 +733,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 return { id, op: "insert" };
             }
 
-            // Every by-id op PINS `args.table`. Without it a row that is absent —
-            // deleted between an admin read and this write — falls through to the
-            // `.global()` D1 twin, which would apply a shard row's edit to a global
-            // table. The `.global()` guard above already proved this table is not one.
+            // Every by-id op PINS `args.table`. Unpinned, `locateRowById` probes
+            // every non-global table for the id, so a request naming table A with an
+            // id belonging to table B locates and mutates B's row — the by-id IDOR
+            // the per-table `ctx.db.<table>` facade pins against. Pinning also stops
+            // an absent row falling through to the `.global()` D1 twin, though that
+            // branch is already unreachable here: `adminWriter` is built without a
+            // `globalDb`, so a miss throws `NOT_FOUND` either way.
             if (args.op === "delete") {
                 await writer.delete(args.id ?? "", args.table);
 
@@ -780,24 +776,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         protected override async runShardExport(args: RunShardExportArgs): Promise<ExportRow[]> {
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                // Admin and maintenance writes go through the SAME reactive-cache hooks as
-                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
-                // import, a CDC apply or a data-migration backfill writes without
-                // invalidating, and the next query answers from the pre-write snapshot.
-                ...this.ctxDbTuning(),
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
-                inTransaction: () => this.isInTransaction(),
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+            const writer = this.adminWriter();
 
             const rows: ExportRow[] = [];
 
@@ -814,24 +793,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         protected override async runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                // Admin and maintenance writes go through the SAME reactive-cache hooks as
-                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
-                // import, a CDC apply or a data-migration backfill writes without
-                // invalidating, and the next query answers from the pre-write snapshot.
-                ...this.ctxDbTuning(),
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
-                inTransaction: () => this.isInTransaction(),
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+            const writer = this.adminWriter();
 
             // `importShardRows` inserts with `allowExplicitId`, so a source
             // database's `_id`s carry across verbatim and every foreign key
@@ -842,24 +804,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         protected override async runShardRankBefore(args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                // Admin and maintenance writes go through the SAME reactive-cache hooks as
-                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
-                // import, a CDC apply or a data-migration backfill writes without
-                // invalidating, and the next query answers from the pre-write snapshot.
-                ...this.ctxDbTuning(),
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
-                inTransaction: () => this.isInTransaction(),
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+            const writer = this.adminWriter();
 
             // `rankBefore` is optional on `DatabaseWriterLike` (the D1 twin omits it),
             // but the shard writer from `createShardCtxDb` always defines it.
@@ -877,24 +822,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         protected override async runShardRankPage(args: RunShardRankPageArgs): Promise<ShardRankPageResult> {
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                // Admin and maintenance writes go through the SAME reactive-cache hooks as
-                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
-                // import, a CDC apply or a data-migration backfill writes without
-                // invalidating, and the next query answers from the pre-write snapshot.
-                ...this.ctxDbTuning(),
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
-                inTransaction: () => this.isInTransaction(),
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+            const writer = this.adminWriter();
 
             // `rankPageRows` is optional on `DatabaseWriterLike` (the D1 twin omits it),
             // but the shard writer from `createShardCtxDb` always defines it. The sort
@@ -915,24 +843,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         protected override async runShardApplyCdc(args: RunShardApplyCdcArgs): Promise<{ applied: number }> {
             this.ensureMigrated();
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const writer = createShardCtxDb({
-                // Admin and maintenance writes go through the SAME reactive-cache hooks as
-                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
-                // import, a CDC apply or a data-migration backfill writes without
-                // invalidating, and the next query answers from the pre-write snapshot.
-                ...this.ctxDbTuning(),
-                broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
-                },
-                cdc: config.cdc ?? false,
-                // Live predicate, same as the user-facing ctx — see `databaseOptions`.
-                inTransaction: () => this.isInTransaction(),
-                scheduler,
-                schema: schema as unknown as SchemaLike,
-                sql: this.sql as SqlExec,
-            });
+            const writer = this.adminWriter();
 
             await applyCdcChanges(writer, args.changes);
 

@@ -10,7 +10,7 @@ import { decodeDocument, decodeWire, encodeWire, isPlainObject } from "../../../
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
 import useMirroredRef from "../../../hooks/use-mirrored-ref";
-import type { BulkDeleteResult, BulkPatchResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
+import type { BulkRowOpResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
 import type { DataView } from "../../../lib/saved-queries";
@@ -164,6 +164,22 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
     return fields;
 };
 
+/**
+ * Identity of a bulk request, for parking its resume cursor.
+ *
+ * `encodeWire` rather than a bare `JSON.stringify`: a `v.bigint()` / `v.bytes()`
+ * value in the patch document is exactly what the dialog's `decodeWire` produces,
+ * and `JSON.stringify` THROWS on a BigInt. That throw used to happen before the
+ * drain's `try`, so `fireAndForget` swallowed it and the whole op became a silent
+ * no-op — no request, no error, no notice.
+ *
+ * The shard is part of the key because it travels out-of-band in `callOptions`,
+ * not in `args`: without it, a cursor parked against shard A would be replayed
+ * against shard B's identical request and skip every row sorting below it.
+ */
+const bulkResumeKey = (reference: FunctionReference, args: Record<string, unknown>, shardKey: string): string =>
+    JSON.stringify([reference.__lunoraRef, shardKey, encodeWire(args)]);
+
 /** Everything {@link useDataBrowser} exposes to the `DataBrowser` render. */
 interface DataBrowserModel {
     addRow: () => void;
@@ -313,18 +329,28 @@ const editableColumn = (column: string): boolean => !META_COLUMNS.has(column);
  */
 type BulkDrainOutcome = "cap-hit" | "completed";
 
-/**
- * The union of what the three bulk ops answer with. Only `cursor` and `hasMore`
- * drive the loop; the count arrives under the name each op's wire contract uses,
- * so both are optional here and exactly one is present per response.
- */
-type BulkOpResult = Partial<Pick<BulkDeleteResult, "deleted">> & Partial<Pick<BulkPatchResult, "cursor" | "patched">> & { hasMore: boolean };
-
 /** Shown when a delete drain hits its batch bound. Re-running always makes progress: the removed rows no longer match. */
 const DELETE_TRUNCATED = `Stopped after ${MAX_BULK_BATCHES.toString()} batches — rows still match. Run it again to remove the rest.`;
 
 /** Shown when a patch drain hits its batch bound. Re-running resumes from the parked cursor rather than rescanning. */
 const PATCH_TRUNCATED = `Stopped after ${MAX_BULK_BATCHES.toString()} batches — rows still match. Run it again to set the rest.`;
+
+/**
+ * How a bulk drain reports itself: the verb for the outcome banner, the notice
+ * shown when the batch bound is hit, and whether the op resumes.
+ *
+ * `resumable` is what decides whether a cursor is sent at all. A delete does not
+ * need one — its own writes remove rows from the predicate — and ordering its scan
+ * would cost the server a sequential table scan (see `selectMatchingIds`).
+ */
+interface BulkDrainSpec {
+    readonly resumable: boolean;
+    readonly truncated: string;
+    readonly verb: string;
+}
+
+const DELETE_DRAIN: BulkDrainSpec = { resumable: false, truncated: DELETE_TRUNCATED, verb: "deleted" };
+const PATCH_DRAIN: BulkDrainSpec = { resumable: true, truncated: PATCH_TRUNCATED, verb: "written" };
 
 const useDataBrowser = ({
     initialFilters,
@@ -553,6 +579,13 @@ const useDataBrowser = ({
         stagedEdits.clear();
         setEditingCell(null);
         setOffset(0);
+        // Every bulk-op banner describes the view being left behind — "500 rows
+        // written." over a different table reads as if it just happened — and a
+        // parked resume cursor belongs to the old table/shard, where replaying it
+        // against the new one would skip every row sorting below it.
+        setWriteError(null);
+        setWriteNotice(null);
+        bulkResume.current = null;
     } else if (incomingViewKey !== seededViewKey) {
         // Not a re-seed (`isReseed` is false here, and `isReseed` is
         // `isTableSwitch || isSameTableViewApply` — so BOTH are false too: this
@@ -945,7 +978,7 @@ const useDataBrowser = ({
     // first `MAX_BULK_BATCHES × 500` rows, and hit the cap again forever. So the
     // cursor the server hands back on a cap-hit is parked here, keyed by the exact
     // request, and the next identical run picks up where this one stopped.
-    const drainBulk = async (reference: FunctionReference, args: Record<string, unknown>, truncatedMessage: string): Promise<number> => {
+    const drainBulk = async (reference: FunctionReference, args: Record<string, unknown>, spec: BulkDrainSpec): Promise<number> => {
         if (selectedTable === null) {
             return 0;
         }
@@ -953,21 +986,28 @@ const useDataBrowser = ({
         setWriteError(null);
         setWriteNotice(null);
 
-        const resumeKey = JSON.stringify([reference.__lunoraRef, args]);
-        let after = bulkResume.current?.key === resumeKey ? bulkResume.current.after : undefined;
+        // The cursor is owned HERE and never travels in `args`. It used to be seeded
+        // by the caller putting `after: ""` in the args bag, which the loop's own
+        // `{ ...args, after }` then silently overwrote with `undefined` on the first
+        // batch — an unordered scan whose returned cursor is an arbitrary id, which
+        // the next batch used as a keyset boundary and skipped every row below it.
+        // One owner, so the two cannot disagree.
+        const resumeKey = bulkResumeKey(reference, args, debouncedShard);
+        const parked = bulkResume.current?.key === resumeKey ? bulkResume.current.after : undefined;
+        // A resumable op ALWAYS opens with a cursor — the parked one when this exact
+        // request was capped before, otherwise `""`, which sorts below every real id.
+        // A non-resumable one sends none, which is what keeps its scan unordered.
+        let after = spec.resumable ? (parked ?? "") : undefined;
         let written = 0;
 
         try {
             let outcome: BulkDrainOutcome = "cap-hit";
 
             for (let batch = 0; batch < MAX_BULK_BATCHES; batch += 1) {
-                // Only the two fields every bulk op's result actually shares are read
-                // here; each op's own count field is named differently and is summed
-                // through `written` instead.
                 // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each call reflects the prior batch's writes)
-                const result = (await client.query(reference, { ...args, after }, callOptions(debouncedShard))) as BulkOpResult;
+                const result = (await client.query(reference, { ...args, after }, callOptions(debouncedShard))) as BulkRowOpResult;
 
-                written += result.deleted ?? result.patched ?? 0;
+                written += result.count;
                 after = result.cursor;
 
                 if (!result.hasMore) {
@@ -981,24 +1021,25 @@ const useDataBrowser = ({
             bulkResume.current = outcome === "cap-hit" && after !== undefined ? { after, key: resumeKey } : null;
 
             if (outcome === "cap-hit") {
-                setWriteError(truncatedMessage);
+                setWriteError(spec.truncated);
             }
 
-            setWriteNotice(`${written.toString()} ${written === 1 ? "row" : "rows"} written.`);
+            setWriteNotice(`${written.toString()} ${written === 1 ? "row" : "rows"} ${spec.verb}.`);
 
             return written;
         } catch (error) {
-            // Name the partial write. The rows before the failing one are already
-            // committed, so "it failed" on its own is misleading.
-            setWriteError(`${(error as Error).message} (${written.toString()} of the matching rows were already written)`);
+            // `written` counts only batches that RETURNED, so the failing batch's own
+            // committed rows are not in it — hence "at least". The rows before the
+            // failure are already on disk, so silence here would be the worse lie.
+            setWriteError(`${(error as Error).message} (at least ${written.toString()} rows were already ${spec.verb})`);
 
-            // Rows written before the failing one are already committed server-side,
-            // so the grid must refresh here too — reporting an error over a page that
-            // still shows the pre-write values is the worse of the two lies.
             bulkResume.current = null;
 
             return written;
         } finally {
+            // Also on the failure path: a partial batch is committed server-side, so
+            // reporting an error over a grid still showing pre-write values is worse
+            // than refreshing under the message.
             setOffset(0);
             pageQuery.refetch();
         }
@@ -1061,24 +1102,19 @@ const useDataBrowser = ({
     };
 
     const bulkDelete = (): void => {
-        fireAndForget(drainBulk(DELETE_ROWS, { filters: toFilterClauses(filters), search, table: selectedTable }, DELETE_TRUNCATED));
+        fireAndForget(drainBulk(DELETE_ROWS, { filters: toFilterClauses(filters), search, table: selectedTable }, DELETE_DRAIN));
     };
 
     const emptyTable = (): void => {
-        fireAndForget(drainBulk(CLEAR_TABLE, { table: selectedTable }, DELETE_TRUNCATED));
+        fireAndForget(drainBulk(CLEAR_TABLE, { table: selectedTable }, DELETE_DRAIN));
     };
 
     // Shallow-merge `doc` into every row matching the ACTIVE view — the same
     // predicate "delete matching" removes by, so the count the button shows is
     // the set that gets written. Routed through the writer server-side, which is
     // why this exists at all: the SQL console refuses a raw `UPDATE`.
-    //
-    // Opens the drain at `after: ""`, which sorts below every real id: its PRESENCE
-    // is what puts the server's id scan into ordered, resumable mode, so the first
-    // batch's cursor is a valid keyset boundary rather than the last id of an
-    // arbitrary scan.
     const bulkPatch = (document_: Record<string, unknown>): void => {
-        fireAndForget(drainBulk(PATCH_ROWS, { after: "", doc: document_, filters: toFilterClauses(filters), search, table: selectedTable }, PATCH_TRUNCATED));
+        fireAndForget(drainBulk(PATCH_ROWS, { doc: document_, filters: toFilterClauses(filters), search, table: selectedTable }, PATCH_DRAIN));
     };
 
     const onFilterChange = (event: React.ChangeEvent<HTMLInputElement>): void => {

@@ -1439,6 +1439,7 @@ const MESSAGE_IDS = [
     "Column",
     'Enter a JSON value — for example true, 0, null, or "done".',
     "Set on {total} rows",
+    "Set column on {total} matching",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

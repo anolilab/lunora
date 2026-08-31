@@ -3288,9 +3288,9 @@ describe("shardDO admin bulk delete", () => {
 
         expect(response.status).toBe(200);
 
-        const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
+        const body = await response.json<{ result: { count: number; hasMore: boolean } }>();
 
-        expect(body.result).toEqual({ deleted: 3, hasMore: false });
+        expect(body.result).toEqual({ count: 3, hasMore: false });
         // p1's three rows are gone; p2's two survive.
         expect(rowCount()).toBe(2);
         await expect(seed.count("todos", { projectId: "p2" })).resolves.toBe(2);
@@ -3335,9 +3335,9 @@ describe("shardDO admin bulk delete", () => {
         const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { limit: 2, table: "todos" }));
-        const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
+        const body = await response.json<{ result: { count: number; hasMore: boolean } }>();
 
-        expect(body.result.deleted).toBe(2);
+        expect(body.result.count).toBe(2);
         expect(body.result.hasMore).toBe(true);
         // Only the capped batch was removed; the rest remain for the next loop.
         expect(rowCount()).toBe(3);
@@ -3354,9 +3354,9 @@ describe("shardDO admin bulk delete", () => {
         const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.clearTable, { table: "todos" }));
-        const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
+        const body = await response.json<{ result: { count: number; hasMore: boolean } }>();
 
-        expect(body.result).toEqual({ deleted: 5, hasMore: false });
+        expect(body.result).toEqual({ count: 5, hasMore: false });
         expect(rowCount()).toBe(0);
         // The counter shadow table dropped to zero for both projects.
         await expect(seed.count("todos", { projectId: "p1" })).resolves.toBe(0);
@@ -3432,9 +3432,9 @@ describe("shardDO admin bulk delete", () => {
 
             expect(response.status).toBe(200);
 
-            const body = await response.json<{ result: { cursor?: string; hasMore: boolean; patched: number } }>();
+            const body = await response.json<{ result: { count: number; cursor?: string; hasMore: boolean } }>();
 
-            expect(body.result).toMatchObject({ hasMore: false, patched: 3 });
+            expect(body.result).toMatchObject({ count: 3, hasMore: false });
             // p1's three rows flipped; p2's two are untouched.
             expect([doneCount("p1"), doneCount("p2")]).toStrictEqual([3, 0]);
         });
@@ -3471,7 +3471,7 @@ describe("shardDO admin bulk delete", () => {
                 );
 
                 // eslint-disable-next-line no-await-in-loop -- see above
-                const body = await response.json<{ result: { cursor?: string; hasMore: boolean; patched: number } }>();
+                const body = await response.json<{ result: { count: number; cursor?: string; hasMore: boolean } }>();
 
                 after = body.result.cursor;
                 calls += 1;
@@ -3570,29 +3570,29 @@ describe("shardDO admin bulk delete", () => {
         });
     });
 
-    describe("selectMatchingIds ordering", () => {
-        it("leaves the uncursored (delete) scan unordered", () => {
-            expect.assertions(2);
+    it("withholds a cursor from an unordered scan, so no caller can resume from a meaningless boundary", async () => {
+        expect.assertions(2);
 
-            // The ordering rides with the cursor and only with it. An unconditional
-            // `ORDER BY id` would swap the filtered delete's sequential table scan for
-            // an `id`-index walk plus a row seek per candidate, because the predicate
-            // reads `__doc__`, which that index does not cover — a regression on a path
-            // this feature never needed to touch.
-            const plan = (after?: string): string =>
-                database
-                    .raw(
-                        `EXPLAIN QUERY PLAN ${
-                            after === undefined
-                                ? `SELECT id FROM "todos" WHERE (json_extract("__doc__", '$.projectId') = ?) LIMIT ?`
-                                : `SELECT id FROM "todos" WHERE (json_extract("__doc__", '$.projectId') = ?) AND id > ? ORDER BY id LIMIT ?`
-                        }`,
-                    )
-                    .map((row) => String(row["detail"]))
-                    .join(" | ");
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
 
-            expect(plan()).not.toContain("INDEX");
-            expect(plan("m1")).toContain("INDEX");
+        await seedProject(seed, "p1", 3);
+
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // `deleteRows` sends no cursor, so its scan is unordered and the last id it
+        // saw is an arbitrary point in id space. Handing that back would invite a
+        // caller to resume from it and skip every matching row sorting below.
+        const unordered = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { limit: 2, table: "todos" }));
+
+        await expect(unordered.json<{ result: { cursor?: string } }>()).resolves.toStrictEqual({
+            result: { count: 2, hasMore: true },
         });
+
+        // `patchRows` opens with `after: ""`, so its scan IS ordered and a cursor
+        // comes back.
+        const ordered = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.patchRows, { after: "", doc: { done: true }, limit: 2, table: "todos" }));
+        const body = await ordered.json<{ result: { cursor?: string } }>();
+
+        expect(body.result.cursor).toBeDefined();
     });
 });

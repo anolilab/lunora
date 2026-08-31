@@ -133,12 +133,6 @@ interface RunShardWriteResult {
  * The `clearTable` op is the same path with no predicate (it matches every row).
  */
 interface RunShardBulkRowArgs {
-    /**
-     * Keyset cursor forwarded to `selectMatchingIds`. Its PRESENCE switches the id
-     * scan into ordered, resumable mode, so only an op that needs to resume sends
-     * it — see {@link RunShardBulkPatchArgs}.
-     */
-    after?: string;
     filters?: FilterClause[];
     /** Per-call row cap; clamped server-side to `[1, SHARD_BULK_ROW_CAP]`. */
     limit?: number;
@@ -147,25 +141,26 @@ interface RunShardBulkRowArgs {
 }
 
 /**
- * What the shared bulk-row engine reports: rows the per-row applier actually
- * reached, the keyset cursor to resume from, and whether matches remain. Each
- * dispatch arm renames `count` to the field its wire contract promises
- * (`deleted` / `patched`).
+ * What every writer-routed bulk row op reports, engine-internal and on the wire
+ * alike — one shape for `deleteRows`, `clearTable` and `patchRows`.
+ *
+ * `count` is deliberately not renamed to `deleted`/`patched` per op. The verb
+ * belongs in the audit record, where a human reads it; on the wire a per-op name
+ * would force every client to carry a union of shapes and to guess which field
+ * holds the number.
  */
 interface RunShardBulkRowResult {
     /** Rows the applier reached in this call. */
     count: number;
-    /** Last id scanned — the `after` for the next call. Absent when the batch was empty. */
+
+    /**
+     * Last id scanned — the `after` for the next call. Present ONLY when this call
+     * itself ran a keyset (ordered) scan: the last id of an UNORDERED scan is an
+     * arbitrary point in id space, and resuming from it would skip every matching
+     * row sorting below it.
+     */
     cursor?: string;
     /** `true` when matching rows remain beyond this batch. */
-    hasMore: boolean;
-}
-
-/** Outcome of a bulk delete on the wire. */
-interface RunShardBulkDeleteResult {
-    /** Rows removed through the writer in this call. */
-    deleted: number;
-    /** `true` when matching rows remain beyond this batch — loop the call to drain them. */
     hasMore: boolean;
 }
 
@@ -176,29 +171,26 @@ interface RunShardBulkDeleteResult {
  * writer (validators, FTS / aggregate / rank shadow tables, reactive
  * invalidation), never as a raw `UPDATE`.
  *
- * Bounded like the bulk delete, but it is the one row op that SENDS `after`,
+ * Bounded like the bulk delete, but it is the ONLY row op that carries `after`,
  * resuming from an explicit cursor rather than relying on the write shrinking its
- * own match set: a patch
- * that leaves the row still matching (`priority = 1` → `seen = true` while the
- * filter is on `priority`) would otherwise re-read the same first batch on every
- * loop and never finish.
+ * own match set: a patch that leaves the row still matching (`priority = 1` →
+ * `seen = true` while the filter is on `priority`) would otherwise re-read the
+ * same first batch on every loop and never finish.
+ *
+ * `after` lives HERE and not on {@link RunShardBulkRowArgs} on purpose. The delete
+ * ops must not resume — ordering their scan would cost them a sequential table
+ * scan (see `selectMatchingIds`) — and a shared optional field that two of three
+ * parsers silently decline to populate is an invariant held by omission. On this
+ * type it is held by the type system.
  */
 interface RunShardBulkPatchArgs extends RunShardBulkRowArgs {
+    /**
+     * Keyset cursor. Open a drain with `""` (which sorts below every real id) — its
+     * PRESENCE is what puts the scan into ordered, resumable mode.
+     */
+    after?: string;
     /** Fields to shallow-merge into each matching row. Must be a non-empty object. */
     doc: Record<string, unknown>;
-}
-
-/** Outcome of a {@link RunShardBulkPatchArgs} operation. */
-interface RunShardBulkPatchResult {
-    /**
-     * Resume key for the next call — the last id this batch patched. Absent when
-     * the batch was empty (the scan reached the end). Always paired with `hasMore`.
-     */
-    cursor?: string;
-    /** `true` when matching rows remain beyond this batch — loop the call with `cursor` to drain them. */
-    hasMore: boolean;
-    /** Rows patched through the writer in this call. */
-    patched: number;
 }
 
 /**
@@ -1363,9 +1355,7 @@ export type {
     RunAsArgs,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
-    RunShardBulkDeleteResult,
     RunShardBulkPatchArgs,
-    RunShardBulkPatchResult,
     RunShardBulkRowArgs,
     RunShardBulkRowResult,
     RunShardCdcSyncArgs,

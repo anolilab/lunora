@@ -33,19 +33,22 @@ const PLAIN = `
 
 describe("emitShard — runShardWrite alarm headroom (plan 207)", () => {
     it("threads an optional headroom parameter through to the writer, falling back to the per-dispatch meter", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const shard = emitShard({ schema: discover(PLAIN) });
 
         // The signature accepts an explicit BY-VALUE override (the TTL sweep's
         // fresh per-pass tracker) ...
         expect(shard).toContain("protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker)");
-        // ... which the writer uses when supplied, and otherwise falls back to
-        // `this.transactionHeadroom()` — which for an ADMIN rpc is `undefined`,
-        // since `handleAdminRpc` answers before `beginDispatch`.
-        expect(shard).toContain("headroom: headroom ?? this.transactionHeadroom()");
-        // Every by-id op pins its table, so a row that vanished between an admin
-        // read and this write cannot fall through to the `.global()` D1 twin.
+        // ... which it forwards to the single generated `adminWriter` builder,
+        // falling back to `this.transactionHeadroom()` — which for an ADMIN rpc is
+        // `undefined`, since `handleAdminRpc` answers before `beginDispatch`.
+        expect(shard).toContain("const writer = this.adminWriter(headroom ?? this.transactionHeadroom());");
+        // Every other admin entry point shares that one builder, unmetered.
+        expect(shard).toContain("const writer = this.adminWriter();");
+        // Every by-id op pins its table, so an id belonging to a different table
+        // cannot be located and mutated through this one (`locateRowById` probes
+        // every non-global table when unpinned).
         expect(shard).toContain('await writer.delete(args.id ?? "", args.table);');
         // `TransactionHeadroomTracker` is a TYPE-only reference here — it must
         // already be in the generated file's import list (buildDoTypeImports),
