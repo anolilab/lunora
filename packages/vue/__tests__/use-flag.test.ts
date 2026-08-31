@@ -49,7 +49,7 @@ describe(useFlag, () => {
         const scope = effectScope();
         const flag = scope.run(() => fake.provide(() => useFlag("hero", "control")))!;
 
-        expect(fake.subscribeCalls[0]?.args).toStrictEqual({ context: undefined, default: "control", key: "hero", type: "string" });
+        expect(fake.subscribeCalls[0]?.args).toStrictEqual({ default: "control", key: "hero", type: "string" });
 
         fake.subscribeCalls[0]?.callback("variant-b");
 

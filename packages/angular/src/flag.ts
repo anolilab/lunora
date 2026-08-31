@@ -2,7 +2,7 @@ import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
 import type { LunoraClient, Unsubscribe } from "@lunora/client";
 
-import type { FlagContext as SharedFlagContext, FlagValue as SharedFlagValue } from "../../../shared/flag-subscription";
+import type { FlagValue as SharedFlagValue } from "../../../shared/flag-subscription";
 import { subscribeFlag } from "../../../shared/flag-subscription";
 import { resolveLunoraClient } from "./client";
 import { shouldOpenSubscription } from "./platform";
@@ -14,24 +14,12 @@ import { shouldOpenSubscription } from "./platform";
 type FlagValue = SharedFlagValue;
 
 /**
- * Targeting context bag forwarded to the OpenFeature provider.
- * @experimental
- */
-type FlagContext = SharedFlagContext;
-
-/**
  * `FlagOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
  * @experimental
  */
 export interface FlagOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
-
-    /**
-     * Per-call targeting context merged on top of the app's default `identify`
-     * targeting key.
-     */
-    context?: FlagContext;
 
     /** `DestroyRef` whose `onDestroy` tears down the subscription. Defaults to `inject(DestroyRef)`. */
     destroyRef?: DestroyRef;
@@ -44,6 +32,12 @@ export interface FlagOptions {
  * the server's resolved value — re-pushed whenever the provider re-evaluates.
  * The flag's kind is inferred from `defaultValue`'s runtime type, so
  * `flag("dark", false)` reads a boolean and `flag("hero", "control")` a string.
+ *
+ * The reactive channel is public, so the server evaluates every flag under the
+ * socket's own verified identity — the targeting key your `defineFlags({
+ * identify })` derives — and accepts no client-supplied targeting context. For
+ * evaluation under a context you compute, call `ctx.flags.*` inside a query,
+ * mutation, or action and return the resolved value.
  *
  * Evaluation runs through whatever OpenFeature provider the app wired in
  * `lunora/flags.ts`; the read never throws — a provider error resolves the
@@ -76,7 +70,7 @@ export const flag = <T extends FlagValue>(key: string, defaultValue: T, options:
     // `subscribeFlag` owns the fail-open contract (attach throw and
     // server-pushed provider error both resolve the default).
     destroyRef.onDestroy(
-        subscribeFlag<T>(client, { context: options.context, default: defaultValue, key }, (next) => {
+        subscribeFlag<T>(client, { default: defaultValue, key }, (next) => {
             value.set(next);
         }),
     );
@@ -92,12 +86,6 @@ export interface FlagsOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
 
-    /**
-     * Targeting context shared by every flag in the set, merged on top of the
-     * app's default `identify` targeting key.
-     */
-    context?: FlagContext;
-
     /** `DestroyRef` whose `onDestroy` tears down the subscriptions. Defaults to `inject(DestroyRef)`. */
     destroyRef?: DestroyRef;
 }
@@ -107,7 +95,8 @@ export interface FlagsOptions {
  *
  * Pass a record of `key → defaultValue`; each flag's kind is inferred from its
  * default, and the returned signal holds the same-shaped record with resolved
- * values (the defaults until each evaluation lands).
+ * values (the defaults until each evaluation lands). Like {@link flag} it
+ * evaluates under the socket's server-verified identity only.
  *
  * Call from an injection context:
  * ```ts
@@ -131,7 +120,7 @@ export const flags = <T extends Record<string, FlagValue>>(flagDefaults: T, opti
 
     for (const [key, defaultValue] of Object.entries(flagDefaults)) {
         unsubscribes.push(
-            subscribeFlag(client, { context: options.context, default: defaultValue, key }, (next) => {
+            subscribeFlag(client, { default: defaultValue, key }, (next) => {
                 values.set({ ...values(), [key]: next });
             }),
         );
@@ -146,4 +135,4 @@ export const flags = <T extends Record<string, FlagValue>>(flagDefaults: T, opti
     return values.asReadonly();
 };
 
-export type { FlagContext, FlagValue };
+export type { FlagValue };

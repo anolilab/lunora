@@ -37,8 +37,10 @@ const RELATION_FUNCTION_PREFIX = "__lunora_relation__:";
  * channel as a user query; `ShardDO` intercepts it before user dispatch and
  * serves it from the codegen-overridden flag-subscription read hook, which
  * evaluates the flag through the app's OpenFeature provider under the socket's
- * verified identity. Like the other reserved prefixes it is NOT admin-gated (a
- * flag read is public, scoped to the subscriber's own targeting context), and
+ * verified identity — the wire args carry the key, its kind and the fallback,
+ * never a client-supplied targeting context. Like the other reserved prefixes it
+ * is NOT admin-gated (a flag read is public, evaluated for the socket's own
+ * identity and restricted to statically-discovered keys), and
  * the `__lunora_` namespace is reserved so a real `<file>:<function>` can't
  * collide. Re-evaluated on every write-flush so values stay live within a
  * session (provider-side flips with no intervening write surface on reconnect).

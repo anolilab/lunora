@@ -20,7 +20,7 @@ export { createAgentToolEvents } from "./create-agent-tool-events";
 export type { UseAuthResult } from "./create-auth";
 export { Authenticated, AuthLoading, createAuth, Unauthenticated } from "./create-auth";
 export { default as createConnectionStatus } from "./create-connection-status";
-export type { FlagContext, FlagValue } from "./create-flag";
+export type { FlagValue } from "./create-flag";
 export { createFlag, createFlags } from "./create-flag";
 export type { MutationClient, MutationHandle } from "./create-mutation";
 export { createMutation, createMutationForClient } from "./create-mutation";
