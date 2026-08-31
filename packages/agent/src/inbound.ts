@@ -26,8 +26,9 @@
  *   fixed generic reason, so the sender's bounce never reflects internal error
  *   detail. Cloudflare gives an inbound worker no way to signal "try later": an
  *   uncaught throw is also permanent, just opaque, so there is nothing to gain
- *   by rethrowing. The two permanent failures below reject themselves so their
- *   real reason reaches the server log.
+ *   by rethrowing. This handler wires no `retain` sink, so a transient dispatch
+ *   failure bounces too; the two permanent failures below reject themselves so
+ *   their real reason reaches the server log.
  */
 /* eslint-enable jsdoc/check-indentation, jsdoc/no-multi-asterisks */
 import type { ForwardableEmailMessageLike } from "@lunora/mail/inbound";
@@ -68,14 +69,16 @@ const GENERIC_REJECT_REASON = "message could not be processed";
 /**
  * Bounce the message permanently, logging the real reason server-side.
  *
- * `@lunora/mail`'s handler rethrows a `dispatch` failure so the platform can
- * redeliver, because a transport error there (a shard 502, a briefly-absent
- * admin token) is transient and bouncing it would lose a legitimate email. The
- * two failures below are not that: a missing Workflow binding is a
- * misconfigured deployment and a reserved branch-marker key is malformed
- * untrusted input, and both fail identically on every redelivery. Only the
- * dispatch implementation knows which of its own errors are permanent, so it
- * rejects those itself rather than letting them retry forever.
+ * A `dispatch` that THROWS is treated as possibly-transient by
+ * `@lunora/mail`'s handler: a transport error there (a shard 502, a
+ * briefly-absent admin token) clears on its own, so the handler hands the
+ * message to a durable `retain` sink when one is configured rather than losing a
+ * legitimate email. The two failures below are not that: a missing Workflow
+ * binding is a misconfigured deployment and a reserved branch-marker key is
+ * malformed untrusted input, and both fail identically however often they are
+ * retried. Only the dispatch implementation knows which of its own errors are
+ * permanent, so it rejects those itself and returns — never throwing — so they
+ * bounce instead of being queued for a retry that can never succeed.
  */
 const rejectPermanently = (context: { message: { setReject: (reason: string) => void } }, detail: string): void => {
     // eslint-disable-next-line no-console -- server-side log of the real reason before bouncing with a generic, non-reflecting one

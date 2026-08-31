@@ -55,13 +55,14 @@ describe("createInboundEmailHandler", () => {
     it("rejects a dispatch failure with a controlled reason rather than rethrowing", async () => {
         expect.assertions(3);
 
-        // This was briefly a rethrow, on the premise that throwing lets the
-        // platform redeliver. It does not: Cloudflare documents no inbound
-        // redelivery, the email lifecycle has no branch for a worker that threw,
-        // and an uncaught throw reaches the sender as an opaque
-        // `521 Upstream error`. Both outcomes are permanent, so the controlled
-        // one wins — and the reason must never carry internal error text, since
-        // it is reflected to an untrusted sender.
+        // Default behaviour with NO `retain` sink configured: bounce, exactly as
+        // before the durable hand-off existed. This was briefly a rethrow, on the
+        // premise that throwing lets the platform redeliver. It does not:
+        // Cloudflare documents no inbound redelivery, the email lifecycle has no
+        // branch for a worker that threw, and an uncaught throw reaches the
+        // sender as an opaque `521 Upstream error`. Both outcomes are permanent,
+        // so the controlled one wins — and the reason must never carry internal
+        // error text, since it is reflected to an untrusted sender.
         const message = fakeMessage();
         const handler = createInboundEmailHandler({
             dispatch: async () => {
@@ -73,6 +74,82 @@ describe("createInboundEmailHandler", () => {
         await expect(handler(message, {}, undefined)).resolves.toBeUndefined();
         expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
         expect(message.setReject).not.toHaveBeenCalledWith(expect.stringContaining("shard 502"));
+    });
+
+    it("hands a failed dispatch to a durable `retain` sink and ACCEPTS the message instead of bouncing", async () => {
+        expect.assertions(4);
+
+        // Regression: a transient dispatch failure (a two-second shard 502) used
+        // to permanently bounce a legitimate email. Cloudflare has no
+        // transient-reject API and no inbound redelivery, so the retry has to be
+        // absorbed in-worker: hand the message to something durable and ACCEPT
+        // the SMTP session, because the message is now owned rather than lost.
+        const failure = new Error("shard 502");
+        const retained: { email: InboundEmail; error: unknown }[] = [];
+        const message = fakeMessage();
+        const handler = createInboundEmailHandler({
+            dispatch: async () => {
+                throw failure;
+            },
+            parse: async () => fixture,
+            retain: (email, _context, error) => {
+                retained.push({ email, error });
+            },
+        });
+
+        await expect(handler(message, {}, undefined)).resolves.toBeUndefined();
+        expect(message.setReject).not.toHaveBeenCalled();
+        expect(retained).toHaveLength(1);
+        expect(retained[0]).toStrictEqual({ email: fixture, error: failure });
+    });
+
+    it("bounces with the generic reason when the durable hand-off itself fails", async () => {
+        expect.assertions(4);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const message = fakeMessage();
+        const handler = createInboundEmailHandler({
+            dispatch: async () => {
+                throw new Error("shard 502");
+            },
+            parse: async () => fixture,
+            retain: async () => {
+                throw new Error("queue binding is undefined");
+            },
+        });
+
+        // Nothing durable owns the message, so we are back to a permanent bounce
+        // — with a reason that reflects nothing, and both real errors in the log.
+        await expect(handler(message, {}, undefined)).resolves.toBeUndefined();
+        expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+        expect(message.setReject).not.toHaveBeenCalledWith(expect.stringContaining("queue binding"));
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("retain failed to take ownership"), expect.any(Error));
+
+        consoleError.mockRestore();
+    });
+
+    it("does not hand a self-rejected (permanent) dispatch failure to `retain`", async () => {
+        expect.assertions(2);
+
+        // A dispatch that knows one of its own failures is permanent — a missing
+        // Workflow binding, malformed input — rejects and returns rather than
+        // throwing, so it must still bounce even with a durable sink configured.
+        // Otherwise every undeliverable message is silently swallowed into a
+        // queue that will never succeed.
+        const retain = vi.fn<() => void>();
+        const message = fakeMessage();
+        const handler = createInboundEmailHandler({
+            dispatch: async (_email, context) => {
+                context.message.setReject("message could not be processed");
+            },
+            parse: async () => fixture,
+            retain,
+        });
+
+        await handler(message, {}, undefined);
+
+        expect(retain).not.toHaveBeenCalled();
+        expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
     });
 
     it("rejects a parse failure with a generic reason (not internal error text)", async () => {
@@ -380,11 +457,11 @@ describe("dispatchToLunoraFunction", () => {
             parse: async () => fixture,
         });
 
-        // A shard fault IS transient, and this still bounces — because Cloudflare
-        // gives an inbound worker no way to say "try later". Both a throw and a
-        // `setReject` are permanent to the sender, so the handler picks the one
-        // whose reason it controls. Absorbing the retry inside the worker is the
-        // real fix and is deliberately out of scope; see the handler's note.
+        // A shard fault IS transient, but this app wired no `retain` sink, and
+        // Cloudflare gives an inbound worker no way to say "try later" — both a
+        // throw and a `setReject` are permanent to the sender, so the handler
+        // picks the one whose reason it controls. Configure `retain` to absorb
+        // the retry in-worker instead; see the handler's note.
         await expect(handler(message, { LUNORA_ADMIN_TOKEN: "secret" }, undefined)).resolves.toBeUndefined();
         expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
         expect(message.setReject).not.toHaveBeenCalledWith(expect.stringContaining("returned an error"));

@@ -159,9 +159,30 @@ Failures split by whether a redelivery could ever succeed. A **parse or verify**
 failure is permanent — the same bytes fail the same way — so the handler calls
 `message.setReject(reason)` and Cloudflare bounces the mail to the sender;
 override `onError` to log/forward/swallow instead. A **dispatch** failure (a
-shard 502, a missing `LUNORA_ADMIN_TOKEN`) is transient, so the handler rethrows
-and lets the platform redeliver — rejecting it would hand the sender an
-unrecoverable NDR for a message that had nowhere to be replayed from.
+shard 502, a briefly-absent `LUNORA_ADMIN_TOKEN`) is usually transient, but
+Cloudflare gives an inbound worker no way to say "try later": `setReject` is a
+permanent SMTP error and an uncaught throw is permanent too, just opaque
+(`521 Upstream error`). There is no inbound redelivery to fall back on. By
+default the handler therefore bounces with the same fixed generic reason.
+
+To stop a two-second blip losing a legitimate email, absorb the retry inside the
+worker: pass `retain` and the handler hands the parsed message to it and
+**accepts** the SMTP session, because the message is now owned rather than lost.
+The sink is yours — a queue, a Durable Object, an alarm:
+
+```ts
+export const email = createInboundEmailHandler({
+    parse: parseInboundEmail,
+    dispatch: dispatchToLunoraFunction({ shard: env.SHARD, functionPath: "inbound:onEmail" }),
+    retain: async (parsed, { env }) => env.INBOUND_RETRY.send(parsed),
+});
+```
+
+If `retain` itself throws there is nowhere durable to put the message, so it
+falls back to the generic bounce (the real reason is logged server-side, never
+reflected to the sender). A `dispatch` that knows one of its own failures is
+permanent should call `context.message.setReject(...)` and return instead of
+throwing, so it bounces without being queued for a retry that can never succeed.
 
 <Callout type="warn">
     Inbound mail is untrusted and dispatch is privileged. Cloudflare Email Routing authenticates only the recipient domain, not the sender (`email.from` and the
