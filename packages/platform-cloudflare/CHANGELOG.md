@@ -1,3 +1,14 @@
+## @lunora/platform-cloudflare [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.26...@lunora/platform-cloudflare@1.0.0-alpha.27) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.22
+
 ## @lunora/platform-cloudflare [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.25...@lunora/platform-cloudflare@1.0.0-alpha.26) (2026-08-29)
 
 ### ⚠ BREAKING CHANGES
