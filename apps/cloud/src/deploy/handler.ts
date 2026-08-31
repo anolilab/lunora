@@ -143,6 +143,17 @@ const normalizeBindings = (requested: TenantBindingSpec | undefined): TenantBind
 
 const json = (status: number, data: unknown): Response => Response.json(data, { headers: { "content-type": "application/json" }, status });
 
+/**
+ * Deploy kinds ordered by privilege, least to most.
+ *
+ * `production` is the only one that can move a project's stable URL, so it sits
+ * at the top; a key scoped to a lower rung may deploy at or below its own.
+ */
+const DEPLOY_RANK: Record<string, number> = { dev: 0, preview: 1, production: 2 };
+
+/** Whether a requested deploy kind is within the key's own scope. */
+const deployKindWithin = (requested: string, allowed: string): boolean => (DEPLOY_RANK[requested] ?? 0) <= (DEPLOY_RANK[allowed] ?? 0);
+
 /** Decode the base64 bundle payload into the ArrayBuffer the provisioner uploads, or `null` if malformed. */
 const decodeBundle = (encoded: string): ArrayBuffer | null => {
     try {
@@ -257,6 +268,17 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
     }
 
     const kind = body.kind ?? target.type;
+
+    // The key's `type` is a CEILING, not just a default.
+    //
+    // It was only ever used to default `kind`, so `body.kind` overrode it freely
+    // and a key issued — and shown in the UI — as `dev` or `preview` could deploy
+    // `production`: activating the project's stable-URL pointer and superseding the
+    // live release. Operators hand out "preview-only" keys on the reasonable
+    // assumption that the scope is enforced somewhere, and it was not.
+    if (!deployKindWithin(kind, target.type)) {
+        return json(403, { error: `this deploy key is scoped to ${target.type}; it cannot deploy ${kind}` });
+    }
     const { branch, projectId, scriptName } = body;
     // Tenant cron expressions to fan out (§2.4). Defensive: only strings, capped.
     const cronSpecs = Array.isArray(body.cronSpecs) ? body.cronSpecs.filter((cron): cron is string => typeof cron === "string").slice(0, 50) : undefined;

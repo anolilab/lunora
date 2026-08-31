@@ -149,6 +149,82 @@ export const rename = mutation
     });
 
 /**
+ * Project-scoped tables erased when a project is removed.
+ *
+ * Deliberately the project's OWN rows only. Org-scoped tables (`members`,
+ * `deployKeys`, `auditLog`, billing) survive — deleting a project is not
+ * deleting the org, and `organizations.purgeDeleted` is the operation that does
+ * that.
+ *
+ * `deployments` is absent for the same reason it is absent there: they are
+ * transitioned to `destroyed` below so the teardown sweep can still reach the
+ * live dispatch script, tenant D1 and R2. Deleting the row first orphans all
+ * three, which is a resource leak with a monthly bill attached.
+ */
+const PROJECT_SCOPED_TABLES = ["aliasOwnership", "buildLogs", "builds", "domains", "secrets"] as const;
+
+/**
+ * Delete a project and everything scoped to it (owners/admins).
+ *
+ * Projects could be created and renamed but never removed — the only way out was
+ * deleting the whole organization, which is a far larger and slower action than
+ * "I made this by mistake" warrants.
+ *
+ * Immediate rather than a retention window, unlike org deletion: an org holds
+ * billing history and member identities that a regulator or an accountant may
+ * need, while a project holds the tenant's own build artefacts. What it shares
+ * with org deletion is the teardown contract — deployments go to `destroyed` and
+ * the existing sweep reclaims the real Cloudflare resources — so this reuses that
+ * path rather than inventing a second one.
+ *
+ * Audited, because it is destructive and irreversible.
+ */
+export const remove = mutation
+    .use(rateLimit("sensitive"))
+    .input({ id: v.id("projects"), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ destroyed: number }> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, id, organizationId, "project");
+
+        const { now } = context;
+
+        for (const table of PROJECT_SCOPED_TABLES) {
+            // The per-table facades don't unify, so the generic sweep goes through a
+            // minimal structural cast — same shape `organizations.purgeDeleted` uses.
+            const facade = context.db[table] as unknown as { findMany: (q: { where: Record<string, unknown> }) => Promise<{ page: unknown[] }> };
+            // eslint-disable-next-line no-await-in-loop -- sequential per-table purge keeps the writer simple
+            const { page: rows } = await facade.findMany({ where: { projectId: id } });
+
+            for (const row of rows as { _id: string }[]) {
+                // eslint-disable-next-line no-await-in-loop -- sequential deletes; a project's volumes are small
+                await context.db.delete(row._id as never);
+            }
+        }
+
+        // Deployments transition rather than vanish, so the teardown sweep still
+        // has something to tear down.
+        const { page: deployments } = await context.db.deployments.findMany({ where: { projectId: id } });
+        const live = (deployments as unknown as { _id: string; status: string }[]).filter((row) => row.status !== "destroyed");
+
+        for (const deployment of live) {
+            // eslint-disable-next-line no-await-in-loop -- sequential patches; a project's volumes are small
+            await context.db.patch(deployment._id as never, { destroyedAt: now, status: "destroyed", updatedAt: now });
+        }
+
+        await context.db.delete(id);
+        await context.db.insert("auditLog", {
+            action: "project.delete",
+            actorUserId: member.userId,
+            createdAt: now,
+            organizationId,
+            target: id,
+        });
+
+        return { destroyed: live.length };
+    });
+
+/**
  * Turn deployment protection on or off for a project's PREVIEW deployments.
  *
  * A preview URL is publicly addressable the moment it exists — that is what

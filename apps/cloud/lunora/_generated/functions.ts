@@ -139,6 +139,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "github_installations:list": lunora_github_installations_11.list as unknown as RegisteredLunoraFunction,
     "github_installations:record": lunora_github_installations_11.record as unknown as RegisteredLunoraFunction,
     "github_installations:remove": lunora_github_installations_11.remove as unknown as RegisteredLunoraFunction,
+    "github_installations:unclaim": lunora_github_installations_11.unclaim as unknown as RegisteredLunoraFunction,
     "incidents:investigate": lunora_incidents_12.investigate as unknown as RegisteredLunoraFunction,
     "incidents:list": lunora_incidents_12.list as unknown as RegisteredLunoraFunction,
     "incidents:setStatus": lunora_incidents_12.setStatus as unknown as RegisteredLunoraFunction,
@@ -174,6 +175,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "projects:byGithubRepo": lunora_projects_20.byGithubRepo as unknown as RegisteredLunoraFunction,
     "projects:create": lunora_projects_20.create as unknown as RegisteredLunoraFunction,
     "projects:listByOrg": lunora_projects_20.listByOrg as unknown as RegisteredLunoraFunction,
+    "projects:remove": lunora_projects_20.remove as unknown as RegisteredLunoraFunction,
     "projects:rename": lunora_projects_20.rename as unknown as RegisteredLunoraFunction,
     "projects:setPreviewProtection": lunora_projects_20.setPreviewProtection as unknown as RegisteredLunoraFunction,
     "projects:verifyPreviewPassword": lunora_projects_20.verifyPreviewPassword as unknown as RegisteredLunoraFunction,
@@ -467,6 +469,13 @@ if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(
 if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
 return { "installationId": source["installationId"] };
 });
+installCompiledValidatorMap(lunora_github_installations_11.unclaim.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "installationId": source["installationId"], "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_incidents_12.investigate.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -589,6 +598,13 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_projects_20.remove.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_secrets_21.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -830,6 +846,7 @@ export interface Caller {
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; organizationId?: Id<"organizations"> }[]>;
         record: (args: { accountLogin: string; installationId: number }) => Promise<Id<"githubInstallations">>;
         remove: (args: { installationId: number }) => Promise<void>;
+        unclaim: (args: { installationId: number; organizationId: Id<"organizations"> }) => Promise<void>;
     };
     incidents: {
         investigate: (args: { id: Id<"incidents">; organizationId: Id<"organizations"> }) => Promise<{ by: "deterministic" | "llm"; confidence: "high" | "low" | "medium"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
@@ -883,6 +900,7 @@ export interface Caller {
         byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
         listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string; }; slug: string }[]>;
+        remove: (args: { id: Id<"projects">; organizationId: Id<"organizations"> }) => Promise<{ destroyed: number; }>;
         rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         setPreviewProtection: (args: { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }) => Promise<{ protected: boolean; }>;
         verifyPreviewPassword: (args: { password: unknown; scriptName: unknown }) => Promise<{ ok: boolean; }>;
@@ -1031,6 +1049,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         list: (args) => callRegistered(context, "github_installations:list", args),
         record: (args) => callRegistered(context, "github_installations:record", args),
         remove: (args) => callRegistered(context, "github_installations:remove", args),
+        unclaim: (args) => callRegistered(context, "github_installations:unclaim", args),
     },
     incidents: {
         investigate: (args) => callRegistered(context, "incidents:investigate", args),
@@ -1084,6 +1103,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         byGithubRepo: (args) => callRegistered(context, "projects:byGithubRepo", args),
         create: (args) => callRegistered(context, "projects:create", args),
         listByOrg: (args) => callRegistered(context, "projects:listByOrg", args),
+        remove: (args) => callRegistered(context, "projects:remove", args),
         rename: (args) => callRegistered(context, "projects:rename", args),
         setPreviewProtection: (args) => callRegistered(context, "projects:setPreviewProtection", args),
         verifyPreviewPassword: (args) => callRegistered(context, "projects:verifyPreviewPassword", args),

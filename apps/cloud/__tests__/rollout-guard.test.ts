@@ -152,7 +152,17 @@ describe(runRolloutGuard, () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const database = fakeControlPlaneDb(
             {
-                alertRules: [{ _id: "rule1", channel: "slack", destination: "https://hooks.slack.com/x", enabled: true, name: "Releases", target: "deploy" }],
+                alertRules: [
+                    {
+                        _id: "rule1",
+                        channel: "slack",
+                        destination: "https://hooks.slack.com/x",
+                        enabled: true,
+                        name: "Releases",
+                        organizationId: "org1",
+                        target: "deploy",
+                    },
+                ],
                 projects: [projectRow],
             },
             { insert, patch },

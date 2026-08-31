@@ -54,8 +54,6 @@ interface FiringAlertRow {
 export interface AlertDrainResult {
     /** Alerts to deliver + stamp, oldest first. */
     deliveries: AlertDelivery[];
-    /** Rows that were still inside the grace window and were left for the next tick. */
-    skipped: number;
 }
 
 /** Collect the `firing` alerts that are past the grace window. */
@@ -66,23 +64,17 @@ export const runAlertDrain = async (database: ControlPlaneDatabase, options: { n
     // to rescue, could starve behind them indefinitely while `skipped` counted a
     // number nobody reads. `uptime.prune` and `organizations.purgeDeleted` push
     // both into the query for exactly this reason.
-    const cutoff = options.now - ALERT_DRAIN_GRACE_MS;
     const { page } = await database.findMany("alerts", {
         limit: ALERT_DRAIN_MAX,
+        // Oldest first: the drain is bounded per tick, so under a backlog the
+        // alert that has waited longest must be the one that goes next.
         orderBy: [{ createdAt: "asc" }],
-        where: { createdAt: { lte: cutoff }, status: "firing" },
+        where: { createdAt: { lte: options.now - ALERT_DRAIN_GRACE_MS }, status: "firing" },
     });
-    const rows = page as FiringAlertRow[];
-    const ready = rows.filter((row) => row.createdAt <= cutoff);
 
     return {
-        // Oldest first: under a backlog the drain is bounded per tick, and the
-        // alert that has been waiting longest is the one to send next.
-        deliveries: ready
-            .toSorted((a, b) => a.createdAt - b.createdAt)
-            .map((row) => {
-                return { body: row.body, channel: row.channel, destination: row.destination, id: row._id, subject: row.subject };
-            }),
-        skipped: rows.length - ready.length,
+        deliveries: (page as FiringAlertRow[]).map((row) => {
+            return { body: row.body, channel: row.channel, destination: row.destination, id: row._id, subject: row.subject };
+        }),
     };
 };

@@ -14,6 +14,10 @@ const window = (total: number, errors: number): MetricObservation[] =>
             durationMs: 10,
             kind: "worker" as const,
             level: index < errors ? ("error" as const) : ("info" as const),
+            // Scoped to the org whose rule is under test. Without it the sweep's
+            // `where: { organizationId }` matches nothing — which the old fake hid
+            // by returning every row for every query.
+            organizationId: "org1",
             startedAt: now - 60_000,
         };
     });

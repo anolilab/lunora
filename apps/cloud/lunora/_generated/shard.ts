@@ -3451,6 +3451,24 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public write emits no structured event"
     },
     {
+        "cacheKey": "procedure_without_structured_event:github-installations:unclaim",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public mutation `unclaim` (github-installations) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "unclaim",
+            "file": "github-installations",
+            "kind": "mutation"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
         "cacheKey": "procedure_without_structured_event:incidents:setStatus",
         "categories": [
             "SCHEMA"
@@ -3785,6 +3803,24 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "level": "INFO",
         "metadata": {
             "exportName": "rename",
+            "file": "projects",
+            "kind": "mutation"
+        },
+        "name": "procedure_without_structured_event",
+        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
+        "title": "Public write emits no structured event"
+    },
+    {
+        "cacheKey": "procedure_without_structured_event:projects:remove",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
+        "detail": "Public mutation `remove` (projects) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "exportName": "remove",
             "file": "projects",
             "kind": "mutation"
         },
@@ -5617,6 +5653,31 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "unclaim",
+        "file": "github-installations",
+        "hasEmailArg": false,
+        "kind": "mutation",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
         "usesRateLimit": false,
         "usesRls": false,
         "analyzableBody": true,
@@ -6546,6 +6607,31 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "rename",
+        "file": "projects",
+        "hasEmailArg": false,
+        "kind": "mutation",
+        "visibility": "public"
+    },
+    {
+        "callsMail": false,
+        "emitsEvent": false,
+        "fanOut": false,
+        "handlesErrors": false,
+        "reachesOutbound": false,
+        "runsAiGeneration": false,
+        "throwsBareError": false,
+        "unboundedAiGeneration": false,
+        "usesInsertManyUnsafe": false,
+        "writesUserTable": false,
+        "exempt": false,
+        "exemptReason": "",
+        "usesCaptcha": false,
+        "usesEmailGate": false,
+        "usesMask": false,
+        "usesRateLimit": true,
+        "usesRls": false,
+        "analyzableBody": true,
+        "exportName": "remove",
         "file": "projects",
         "hasEmailArg": false,
         "kind": "mutation",

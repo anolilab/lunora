@@ -69,6 +69,15 @@ export const issue = mutation
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"deployKeys">; key: string }> => {
         await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
+        // A project-scoped key must name one of THIS org's projects. Without the
+        // check the key is minted against a foreign project id — not an
+        // escalation, since `authorizeDeployKey` compares the scope against the
+        // target, but it produces a key that silently authorizes nothing and an
+        // operator with no way to see why.
+        if (arguments_.projectId !== undefined) {
+            await assertRowInOrg(context, arguments_.projectId, arguments_.organizationId, "project");
+        }
+
         const key = formatDeployKey({
             organizationId: arguments_.organizationId,
             ...(arguments_.projectId ? { projectId: arguments_.projectId } : {}), // secret-scanner:allow -- domain field name

@@ -4,17 +4,7 @@ import type { ControlPlaneDatabase } from "../src/store";
 import type { UptimeProbe } from "../src/uptime/probe";
 import { nextConsecutiveFailures, probeDeployment, summarizeUptime } from "../src/uptime/probe";
 import { runUptimeSweep } from "../src/uptime/sweep";
-
-/** A fake ControlPlaneDatabase answering findMany per-table, mirroring sweeps.test.ts. */
-const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDatabase> = {}): ControlPlaneDatabase => {
-    return {
-        delete: () => Promise.resolve(undefined),
-        findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
-        insert: () => Promise.resolve("alert_id"),
-        patch: () => Promise.resolve(undefined),
-        ...spies,
-    };
-};
+import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 
 /** A clock that advances 5ms per read, so probe latency is a deterministic 5. */
 const stepClock = (): (() => number) => {
@@ -83,7 +73,7 @@ describe(summarizeUptime, () => {
 const sweepFixture = (probe: UptimeProbe, overrides: { rules?: unknown[]; state?: unknown[] } = {}) => {
     const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
     const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-    const database = fakeDb(
+    const database = fakeControlPlaneDb(
         {
             alertRules: overrides.rules ?? [
                 {
@@ -157,7 +147,7 @@ describe(runUptimeSweep, () => {
     it("skips an SSRF-unsafe deployment URL — never probes or records it", async () => {
         const probe = vi.fn<(url: string) => Promise<UptimeProbe>>(() => Promise.resolve({ latencyMs: 1, ok: false }));
         const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
-        const database = fakeDb(
+        const database = fakeControlPlaneDb(
             {
                 alertRules: [
                     {
@@ -189,7 +179,7 @@ describe(runUptimeSweep, () => {
     });
 
     it("skips deployments without a URL and never fires for a disabled rule", async () => {
-        const database = fakeDb({
+        const database = fakeControlPlaneDb({
             alertRules: [
                 {
                     _id: "r1",

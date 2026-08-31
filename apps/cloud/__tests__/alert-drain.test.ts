@@ -14,9 +14,8 @@ const fakeDb = (rows: unknown[]): ControlPlaneDatabase => fakeControlPlaneDb({ a
 
 describe(runAlertDrain, () => {
     it("delivers a firing alert once it is past the grace window", async () => {
-        const { deliveries, skipped } = await runAlertDrain(fakeDb([firingRow("a1", now - ALERT_DRAIN_GRACE_MS - 1)]), { now });
+        const { deliveries } = await runAlertDrain(fakeDb([firingRow("a1", now - ALERT_DRAIN_GRACE_MS - 1)]), { now });
 
-        expect(skipped).toBe(0);
         expect(deliveries).toStrictEqual([{ body: "it broke", channel: "webhook", destination: "https://hook.example", id: "a1", subject: "[Lunora] a1" }]);
     });
 
@@ -24,10 +23,11 @@ describe(runAlertDrain, () => {
         // This is the whole reason the grace exists: the ingest and sweep paths
         // insert and send inside one request. Draining a row they are still working
         // on would page the same person twice for one event.
-        const { deliveries, skipped } = await runAlertDrain(fakeDb([firingRow("a1", now - 1000)]), { now });
+        // The cutoff lives in the query now, so a fresh row is never returned at
+        // all rather than returned and discarded.
+        const { deliveries } = await runAlertDrain(fakeDb([firingRow("a1", now - 1000)]), { now });
 
         expect(deliveries).toStrictEqual([]);
-        expect(skipped).toBe(1);
     });
 
     it("sends the oldest backlog first", async () => {

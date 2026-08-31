@@ -78,6 +78,49 @@ export const claim = mutation
     });
 
 /**
+ * Release a claimed installation back to unclaimed (owner/admin).
+ *
+ * The inverse of {@link claim}, which had none: an installation claimed by the
+ * wrong org — a plausible mistake, since claiming is a one-click action keyed on
+ * an id the operator does not choose — could never be released from the
+ * dashboard. The only removal was {@link remove}, driven by GitHub's own
+ * `installation deleted` webhook, so the recovery was "uninstall the App from
+ * GitHub entirely and reinstall it", which also detaches every other org
+ * legitimately using it.
+ *
+ * The row is UNCLAIMED rather than deleted, so the staged installation is still
+ * there for the right org to claim. Deleting it would require the App to be
+ * reinstalled to re-stage, which is the same trap by a different route.
+ *
+ * Audited on both sides: `claim` records who linked it, and this records who let
+ * it go.
+ */
+export const unclaim = mutation
+    .use(rateLimit("sensitive"))
+    .input({ installationId: v.number(), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { installationId, organizationId } }): Promise<void> => {
+        const { userId } = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
+        const installation = (page as unknown as InstallationRow[])[0];
+
+        // Only the CLAIMING org may release it — otherwise this is a way to detach
+        // another tenant's integration by guessing a numeric id.
+        if (installation?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "installation not found in this organization");
+        }
+
+        await context.db.patch(installation._id, { claimedAt: undefined, organizationId: undefined });
+        await context.db.insert("auditLog", {
+            action: "github.installation.unclaim",
+            actorUserId: userId,
+            createdAt: context.now,
+            organizationId,
+            target: `${installation.accountLogin}#${String(installationId)}`,
+        });
+    });
+
+/**
  * Remove an installation (webhook `installation deleted` — GitHub-driven).
  * `internal` — only the HMAC-verified webhook handler invokes it, so a public
  * RPC client can no longer unlink an arbitrary org's installation by id.

@@ -120,6 +120,53 @@ interface TelemetryBody extends OtlpTracePayload {
 
 const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
 
+/** Thrown by {@link requireContext}; caught by {@link withContext} at the route boundary. */
+class MissingContextError extends Error {
+    public constructor() {
+        super("lunora context unavailable");
+        this.name = "MissingContextError";
+    }
+}
+
+/**
+ * The Lunora action context every handler needs, read once.
+ *
+ * Twenty-one handlers opened with the same four-line null check, which is sixty
+ * lines of noise that pushed each handler's actual logic below the fold. The
+ * context is installed by the worker before any route runs, so its absence is a
+ * wiring bug rather than a request condition — {@link withContext} converts it
+ * into the same 500 the copies produced, once, at the dispatch boundary.
+ */
+const requireContext = (environment: RouterEnv): NonNullable<RouterEnv["__lunoraCtx"]> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        throw new MissingContextError();
+    }
+
+    return context;
+};
+
+/**
+ * Wrap a handler so a missing context answers 500 instead of throwing.
+ *
+ * Applied at the route table rather than inside each handler, which is what lets
+ * every handler read the context as a plain non-null value.
+ */
+const withContext =
+    (handler: (request: Request, environment: RouterEnv) => Promise<Response>) =>
+    async (request: Request, environment: RouterEnv): Promise<Response> => {
+        try {
+            return await handler(request, environment);
+        } catch (error) {
+            if (error instanceof MissingContextError) {
+                return jsonError(500, error.message);
+            }
+
+            throw error;
+        }
+    };
+
 /**
  * Map a thrown error from a control-plane mutation onto the right HTTP status for a
  * machine caller.
@@ -194,11 +241,7 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
 
 /** `POST /v1/admin` — hosted-studio admin proxy to a tenant deployment (§3). */
 const handleAdminRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const adminBody = (await request.json().catch(() => null)) as AdminBody | null;
 
@@ -249,11 +292,7 @@ const handleAdminRoute = async (request: Request, environment: RouterEnv): Promi
  * the verification + store write happen where `ctx.payments` exists.
  */
 const handleBillingWebhookRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const body = await request.text();
     const signature = request.headers.get("creem-signature") ?? "";
@@ -268,11 +307,7 @@ const handleBillingWebhookRoute = async (request: Request, environment: RouterEn
  * requests/CPU/storage here.
  */
 const handleUsageRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const usage = (await request.json().catch(() => null)) as UsageBody | null;
 
@@ -303,11 +338,7 @@ const handleUsageRoute = async (request: Request, environment: RouterEnv): Promi
  * which is therefore never exposed to the browser.
  */
 const handleInviteRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const invite = (await request.json().catch(() => null)) as InviteBody | null;
 
@@ -337,11 +368,7 @@ const handleInviteRoute = async (request: Request, environment: RouterEnv): Prom
  * owner/admin `assertMember` gate applies).
  */
 const handleSecretRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     if (!environment.SECRET_ENCRYPTION_KEY) {
         return jsonError(500, "SECRET_ENCRYPTION_KEY not configured");
@@ -394,11 +421,7 @@ const handleSecretRoute = async (request: Request, environment: RouterEnv): Prom
  * caller's session (so its owner/admin `assertMember` gate applies).
  */
 const handleCloudflareBillingRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     if (!environment.SECRET_ENCRYPTION_KEY) {
         return jsonError(500, "SECRET_ENCRYPTION_KEY not configured");
@@ -436,6 +459,19 @@ const handleCloudflareBillingRoute = async (request: Request, environment: Route
 };
 
 /**
+ * Extract a bearer from an `Authorization` header, requiring the scheme.
+ *
+ * The counterpart to {@link otlpBearer}: everything that is not a third-party
+ * exporter endpoint speaks to our own clients, which always send the prefix, so
+ * accepting a bare token there would only widen what authenticates.
+ */
+const strictBearer = (request: Request): string => {
+    const header = request.headers.get("authorization") ?? "";
+
+    return header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+};
+
+/**
  * Bearer-gate a platform-internal `/v1/tenants/*` route with `LUNORA_ADMIN_TOKEN`,
  * returning the 401 response when it fails and `undefined` when it passes.
  *
@@ -448,8 +484,7 @@ const handleCloudflareBillingRoute = async (request: Request, environment: Route
  * these routes rather than opening them.
  */
 const requireAdminToken = (request: Request, environment: RouterEnv): Response | undefined => {
-    const authorization = request.headers.get("authorization") ?? "";
-    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+    const token = strictBearer(request);
 
     if (!environment.LUNORA_ADMIN_TOKEN || !constantTimeEqual(token, environment.LUNORA_ADMIN_TOKEN)) {
         return jsonError(401, "unauthorized");
@@ -464,11 +499,7 @@ const requireAdminToken = (request: Request, environment: RouterEnv): Response |
  * `LUNORA_ADMIN_TOKEN` (the dispatcher is a trusted account-level Worker).
  */
 const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const unauthorized = requireAdminToken(request, environment);
 
@@ -506,11 +537,7 @@ interface PreviewAuthBody {
  * this only as the body of a request the dispatcher makes on their behalf.
  */
 const handlePreviewAuthRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     // The check this route's own docblock claimed and did not perform. Without it
     // this was an unauthenticated password oracle: anyone who could reach the
@@ -543,11 +570,7 @@ const handlePreviewAuthRoute = async (request: Request, environment: RouterEnv):
  * Bearer-gated with `LUNORA_ADMIN_TOKEN`, same trust model as the plan lookup.
  */
 const handleTenantRouteRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const unauthorized = requireAdminToken(request, environment);
 
@@ -595,11 +618,7 @@ interface LogsBody {
  * mutation, which validates each line's full structured shape.
  */
 const handleLogsIngestRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const body = (await request.json().catch(() => null)) as LogsBody | null;
 
@@ -641,11 +660,7 @@ interface TailBody {
  * release the tail lags behind) are dropped, not errored.
  */
 const handleLogsTailRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const secret = environment.LUNORA_TAIL_SECRET;
 
@@ -702,11 +717,7 @@ const handleLogsTailRoute = async (request: Request, environment: RouterEnv): Pr
  * side-effects that never block or fail the ingest.
  */
 const handleTelemetryRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const body = (await request.json().catch(() => null)) as TelemetryBody | null;
 
@@ -768,8 +779,17 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
     }
 };
 
-/** Extract the deploy key from a standard OTLP `Authorization` header (`Bearer &lt;key>` or a bare token). */
-const bearerToken = (request: Request): string | undefined => {
+/**
+ * Extract the deploy key from a standard OTLP `Authorization` header.
+ *
+ * DELIBERATELY LENIENT — it accepts a bare token as well as `Bearer &lt;key>`,
+ * because these routes serve stock OpenTelemetry exporters and some send the
+ * former. That is an interop decision, not an oversight, which is worth naming:
+ * the strict form lives in {@link strictBearer} and the two used to be four
+ * anonymous copies that disagreed, so the same token authenticated on
+ * `/v1/traces` and was rejected on `/v1/tenants/plan` with nothing explaining why.
+ */
+const otlpBearer = (request: Request): string | undefined => {
     const header = request.headers.get("authorization");
 
     if (header === null || header === "") {
@@ -803,13 +823,9 @@ interface EjectBody {
  * the upgrade if real snapshots outgrow it.
  */
 const handleEjectRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
+    const context = requireContext(environment);
 
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
-
-    const key = bearerToken(request);
+    const key = otlpBearer(request);
 
     if (key === undefined) {
         return jsonError(401, "missing Authorization: Bearer <deploy key>");
@@ -955,7 +971,7 @@ interface OtlpAuth {
  * per-org scoping is enforced by the ingest mutation via `authorizeTelemetryKey`.
  */
 const otlpAuthorize = async (request: Request, context: LunoraActionContext): Promise<OtlpAuth | Response> => {
-    const key = bearerToken(request);
+    const key = otlpBearer(request);
 
     if (key === undefined) {
         return jsonError(401, "missing Authorization: Bearer <ingest key>");
@@ -1001,11 +1017,7 @@ const withOtlpIngest = async (
     rejectedField: "rejectedDataPoints" | "rejectedLogRecords" | "rejectedSpans",
     ingest: (payload: unknown, auth: OtlpAuth, context: LunoraActionContext) => Promise<number>,
 ): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const auth = await otlpAuthorize(request, context);
 
@@ -1154,11 +1166,7 @@ interface DomainRowLike {
  * (GAPS.md B1). Returns the `_lunora.&lt;host>` TXT record the user must create.
  */
 const handleDomainAddRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const body = (await request.json().catch(() => null)) as DomainBody | null;
 
@@ -1187,11 +1195,7 @@ const handleDomainAddRoute = async (request: Request, environment: RouterEnv): P
  * the caller's session; the DNS lookups use DNS-over-HTTPS at the edge.
  */
 const handleDomainVerifyRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const body = (await request.json().catch(() => null)) as DomainBody | null;
 
@@ -1227,11 +1231,7 @@ const handleDomainVerifyRoute = async (request: Request, environment: RouterEnv)
  * dispatcher (GAPS.md B1). Bearer-gated with `LUNORA_ADMIN_TOKEN`.
  */
 const handleTenantCustomDomainRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     const unauthorized = requireAdminToken(request, environment);
 
@@ -1259,11 +1259,7 @@ const handleTenantCustomDomainRoute = async (request: Request, environment: Rout
  * route is the only path in — a tenant can't inject cells over public RPC.
  */
 const handleCellRegisterRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return jsonError(500, "lunora context unavailable");
-    }
+    const context = requireContext(environment);
 
     // Through the shared helper, like its five siblings. `requireAdminToken` was
     // extracted precisely because the check had been copied per route and one copy
@@ -1445,14 +1441,9 @@ export const createDeployRouter = (): HttpRouterLike => {
     // release (GAPS.md A1). Deploy-key bearer authorized; body carries the
     // target deployment + org.
     const handleRollbackRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-        const context = environment.__lunoraCtx;
+        const context = requireContext(environment);
 
-        if (!context) {
-            return jsonError(500, "lunora context unavailable");
-        }
-
-        const authorization = request.headers.get("authorization") ?? "";
-        const key = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+        const key = strictBearer(request);
 
         if (!key) {
             return jsonError(401, "missing bearer deploy key");
@@ -1549,8 +1540,11 @@ export const createDeployRouter = (): HttpRouterLike => {
     // Boot scanner: throws here (at construction) if a route is unclassified.
     assertRoutesClassified(routes);
 
-    const postRoutes = new Map(routes.filter((route) => route.method === "POST").map((route) => [route.path, route.handler]));
-    const getRoutes = new Map(routes.filter((route) => route.method === "GET").map((route) => [route.path, route.handler]));
+    // `withContext` at the table, once, rather than a null check opening every
+    // handler — see `requireContext`. Wrapping here also means a new route cannot
+    // forget it.
+    const postRoutes = new Map(routes.filter((route) => route.method === "POST").map((route) => [route.path, withContext(route.handler)]));
+    const getRoutes = new Map(routes.filter((route) => route.method === "GET").map((route) => [route.path, withContext(route.handler)]));
     /** The route table for a request method, or `undefined` for a method this router serves no routes for. */
     const methodTable = (method: string): typeof getRoutes | undefined => {
         if (method === "GET") {
@@ -1589,7 +1583,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         } else if (telemetryPaths.has(pathname)) {
             const ipVerdict = await limiter.limit("telemetryIp", { key: ip });
 
-            verdict = ipVerdict.ok ? await limiter.limit("telemetry", { key: bearerToken(request) ?? ip }) : ipVerdict;
+            verdict = ipVerdict.ok ? await limiter.limit("telemetry", { key: otlpBearer(request) ?? ip }) : ipVerdict;
         } else {
             verdict = await limiter.limit("api", { key: ip });
         }
