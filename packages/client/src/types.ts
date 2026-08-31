@@ -350,8 +350,6 @@ export interface LunoraClientOptions {
      */
     connectTimeoutMs?: number;
 
-    /* eslint-disable jsdoc/check-indentation -- intentional bullet list enumerating which surfaces a follower is served */
-
     /**
      * When `true`, tabs sharing the same origin (and the same signed-in identity)
      * coordinate via BroadcastChannel so only one tab — the "leader" — opens
@@ -362,17 +360,20 @@ export interface LunoraClientOptions {
      * **The channel is one-directional: leader → follower.** The leader
      * broadcasts the values, errors, checkpoints and connection status of the
      * subscriptions *it* holds; there is no frame with which a follower can ask
-     * the leader for anything. So:
+     * the leader for anything.
      *
-     * - `subscribe` WORKS on a follower, and is how the relay delivers: the
-     *   registration is what the leader's broadcast key is matched against. The
-     *   follower sees a value only while the leader independently holds the same
-     *   `(fn, args, shardKey)`.
-     * - `subscribeShape`, `whisper`, `whisperSubscribe`, `setConnectionContext`,
-     *   `acquireConnectionContext`, `stream` — never served, because the leader
-     *   broadcasts nothing for them and a follower cannot ask.
+     * `subscribe` works on a follower and is how the relay delivers: the
+     * registration is what the leader's broadcast key is matched against, so a
+     * follower sees a value while the leader independently holds the same
+     * `(fn, args, shardKey)`.
      *
-     * Calling one of that second group on a tab that is a follower of a live leader throws
+     * Nothing else is served, because the leader broadcasts nothing for it and a
+     * follower cannot ask. `subscribeShape` and `acquireConnectionContext` are
+     * inert on a follower — framework code (`@lunora/db`'s shape sync, every
+     * `usePresence` adapter) calls them from an effect the app cannot opt out
+     * of, so throwing would unwind the tab rather than degrade one feature.
+     * `whisper`, `whisperSubscribe`, `setConnectionContext` and `stream` are
+     * only ever called by app code, which can handle a failure, so those throw
      * `NOT_IMPLEMENTED` rather than returning a handle that never fires. (The
      * brief window every tab spends claiming leadership at startup is not a
      * follower state: a lone tab self-promotes and its registered subscriptions
@@ -384,7 +385,6 @@ export interface LunoraClientOptions {
      * use shapes, whispers, streams, or connection context.
      */
     crossTabSync?: boolean;
-    /* eslint-enable jsdoc/check-indentation */
     fetch?: typeof fetch;
 
     /**

@@ -70,10 +70,6 @@ const listLunoraSourceFiles = (directory: string, accumulator: string[] = [], ro
  * gets to see, so it takes `src/server` as a whole directory — the entry
  * routinely splits `createBrowser`/`createPayment` wiring into helpers beside
  * itself, and a lint that missed those would report clean on a real defect.
- *
- * The overlap is why they look alike; if a new entry convention is added to
- * either, check whether the other wants it too. They are not kept in sync
- * mechanically because equal lists would be wrong for one of the two jobs.
  */
 const WORKER_ENTRY_ROOTS = ["src/server", "src/index.ts", "src/worker.ts"] as const;
 

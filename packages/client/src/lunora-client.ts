@@ -455,17 +455,15 @@ interface ShardConnection {
      * Armed on `open`; resets the reconnect backoff if the socket is STILL open
      * when it fires. Cleared on disconnect/close.
      *
-     * The backoff is not reset on `open` (an upgrade is accepted before the
-     * credential is read) and cannot be reset on the first inbound frame alone:
-     * the server sends no ack for the `connect` envelope, and the keepalive pong
-     * is a plain string answered by the runtime without waking the DO — so a
-     * client with no active subscription may legitimately receive no JSON frame
-     * at all. Without this, every blip on such a socket doubled the delay with
-     * nothing ever resetting it, parking a healthy connection at the 30s cap.
+     * `open` is not proof — the upgrade is accepted before the credential is
+     * read. The first inbound frame is not proof either for every client: the
+     * server sends no ack for the `connect` envelope, and the keepalive pong is
+     * a plain string answered by the runtime without waking the DO, so a client
+     * with no active subscription may receive no JSON frame at all.
      *
-     * Surviving this window IS the proof: a rejected credential arrives as a
-     * `TOKEN_EXPIRED` frame and a 4001 close immediately after the upgrade, well
-     * inside it, and that path clears this timer before it can fire.
+     * Surviving this window is the proof. A rejected credential arrives as a
+     * `TOKEN_EXPIRED` frame and a 4001 close within a round trip, well inside
+     * it, and that path clears this timer before it can fire.
      */
     stableTimer: ReturnType<typeof setTimeout> | undefined;
     wasEverConnected: boolean;
@@ -1556,7 +1554,18 @@ class LunoraClient {
      * a double release can't drop a different holder).
      */
     public acquireConnectionContext(context: Record<string, unknown>, options: { shardKey?: string } = {}): Unsubscribe {
-        this.assertLeaderOwnedSurface("acquireConnectionContext");
+        // Inert on a follower, NOT a throw. Every `usePresence` /
+        // `createPresence` / `presence` adapter in the repo calls this from a
+        // component effect the app cannot opt out of, so throwing unwinds the
+        // whole tab (a React error boundary, a failed Svelte/Solid/Vue setup)
+        // rather than degrading presence. The call could never reach the server
+        // from a follower anyway — the cross-tab channel is leader-to-follower
+        // only — so an inert release is the honest result. `whisper*` and
+        // `setConnectionContext` still throw: those are only ever called by app
+        // code, which can handle it.
+        if (this.followsAnotherTab()) {
+            return () => undefined;
+        }
 
         const key = connectionKey(options.shardKey);
         const holder = { context };
@@ -3494,7 +3503,15 @@ class LunoraClient {
         options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         this.assertOpen();
-        this.assertLeaderOwnedSurface("subscribeShape");
+
+        // Inert on a follower, for the same reason as
+        // `acquireConnectionContext`: `@lunora/db`'s shape-backed
+        // `createCollection` calls this from its sync path, so a throw takes out
+        // the collection rather than degrading it. The leader broadcasts nothing
+        // for shapes, so a follower's handle can only ever be inert.
+        if (this.followsAnotherTab()) {
+            return () => undefined;
+        }
 
         this.nextShapeId += 1;
         const id = `shape_${this.nextShapeId.toString()}`;
@@ -3830,9 +3847,10 @@ class LunoraClient {
      * `(fn, args, shardKey)` — that is the documented shape of the option, not a
      * defect.
      *
-     * Failing here is the same choice `stream()` already made for the same
-     * reason. See {@link LunoraClientOptions.crossTabSync} for what the option
-     * does and does not cover.
+     * `stream()` reaches the same outcome by a different route: it fails the
+     * handle it returns rather than throwing at the call. See
+     * {@link LunoraClientOptions.crossTabSync} for what the option does and does
+     * not cover.
      */
     private assertLeaderOwnedSurface(surface: string): void {
         if (!this.followsAnotherTab()) {
@@ -3845,6 +3863,25 @@ class LunoraClient {
                 `The \`crossTabSync\` channel only carries data from the leader tab outward, so this call could never reach the server. ` +
                 `Turn off \`crossTabSync\`, or keep \`${surface}\` on the leader tab.`,
         );
+    }
+
+    /**
+     * Clear every timer a {@link ShardConnection} can have armed.
+     *
+     * One function because both teardown paths must clear all three and a fourth
+     * timer would otherwise have to be remembered in two places — which is how a
+     * leak gets added rather than written.
+     */
+    // eslint-disable-next-line class-methods-use-this -- cohesive connection helper; pairs with the teardown paths that call it
+    private clearConnectionTimers(conn: ShardConnection): void {
+        /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place, as its callers do */
+        clearTimeout(conn.reconnectTimer);
+        clearTimeout(conn.connectTimer);
+        clearTimeout(conn.stableTimer);
+        conn.reconnectTimer = undefined;
+        conn.connectTimer = undefined;
+        conn.stableTimer = undefined;
+        /* eslint-enable no-param-reassign */
     }
 
     /**
@@ -3884,21 +3921,7 @@ class LunoraClient {
         // subscriptions when it closes, so there is nothing left to tell it.
         conn.pendingStreams = undefined;
         conn.pendingUnsubscribes = [];
-        if (conn.reconnectTimer !== undefined) {
-            clearTimeout(conn.reconnectTimer);
-            conn.reconnectTimer = undefined;
-        }
-
-        if (conn.connectTimer !== undefined) {
-            clearTimeout(conn.connectTimer);
-            conn.connectTimer = undefined;
-        }
-
-        if (conn.stableTimer !== undefined) {
-            clearTimeout(conn.stableTimer);
-            conn.stableTimer = undefined;
-        }
-
+        this.clearConnectionTimers(conn);
         this.stopHeartbeat(conn);
 
         if (conn.socket) {
@@ -5222,11 +5245,11 @@ class LunoraClient {
                 conn.wsState = "open";
                 conn.wasEverConnected = true;
 
-                // See `ShardConnection.stableTimer`: staying open past this
-                // window is the only proof of acceptance available to a socket
-                // that never receives a JSON frame.
+                // See `ShardConnection.stableTimer` for why `open` is not proof.
                 clearTimeout(conn.stableTimer);
                 conn.stableTimer = setTimeout(() => {
+                    // Belt-and-braces: every transition out of `"open"` clears
+                    // this timer first, so this cannot currently be false.
                     if (conn.wsState === "open") {
                         conn.reconnect.reset();
                     }
@@ -5371,19 +5394,12 @@ class LunoraClient {
         /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
         this.stopHeartbeat(conn);
 
-        // Cancel the fail-fast connect timer: a `close`/`error` reached us before
-        // (or because of) the timeout, so the reconnect path below owns recovery.
-        if (conn.connectTimer !== undefined) {
-            clearTimeout(conn.connectTimer);
-            conn.connectTimer = undefined;
-        }
-
-        // The socket did not survive its stability window, so it never earned a
-        // backoff reset — this is the storm case the delay exists to damp.
-        if (conn.stableTimer !== undefined) {
-            clearTimeout(conn.stableTimer);
-            conn.stableTimer = undefined;
-        }
+        // The connect timer's deadline has been overtaken by this close, and the
+        // socket did not survive its stability window so it never earned a
+        // backoff reset — that non-reset is the storm case the delay damps.
+        // `reconnectTimer` is cleared here too and re-armed unconditionally at
+        // the end of this method.
+        this.clearConnectionTimers(conn);
 
         conn.socket = undefined;
         conn.wsState = "idle";

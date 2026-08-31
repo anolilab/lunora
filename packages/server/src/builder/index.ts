@@ -57,11 +57,10 @@ interface BuilderState {
  *   (`@lunora/auth`'s Turnstile and email-gate middlewares both read a field
  *   out of it). Without this a `.use()` step is blind to what it is guarding.
  *
- * Every builder procedure now gets this clone, not only the ones that declared
- * `.meta()` — `ctx` identity inside a handler is therefore no longer the dispatch
- * context object itself. Harmless for the generated context (a plain object
- * literal of own data properties), but a host that ever puts a getter or a
- * non-enumerable property on it would not see it survive the spread.
+ * Every builder procedure gets this clone, so `ctx` inside a handler is a spread
+ * copy rather than the dispatch context object. Harmless for the generated
+ * context (own enumerable data properties only); a host that put a getter or a
+ * non-enumerable property on it would not see that survive the spread.
  *
  * `args` is the **validated** result of {@link validateArgs}, never the raw wire
  * object: middleware — including security middleware — must not be handed input

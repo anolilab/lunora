@@ -120,10 +120,15 @@ const assertAllowedTarget = (url: string): string => {
     }
 
     if (!ALLOWED_RENDER_HOSTS.has(parsed.hostname.toLowerCase())) {
-        throw new LunoraError(
-            "FORBIDDEN",
-            `@lunora/browser registry item: host \`${parsed.hostname}\` is not in ALLOWED_RENDER_HOSTS — add it there, and to \`createBrowser({ allowedHosts })\` in your Worker entry.`,
+        // The reason is logged, not returned: echoing the rejected host back to
+        // an authenticated caller lets them probe ALLOWED_RENDER_HOSTS one guess
+        // at a time. The developer needs the detail; the caller does not.
+        // eslint-disable-next-line no-console -- server-side detail for a deliberately generic client-facing message
+        console.warn(
+            `@lunora/browser registry item: refused \`${parsed.hostname}\` — not in ALLOWED_RENDER_HOSTS. Add it there, and to \`createBrowser({ allowedHosts })\` in your Worker entry.`,
         );
+
+        throw new LunoraError("FORBIDDEN", "@lunora/browser registry item: that host may not be rendered.");
     }
 
     return parsed.toString();

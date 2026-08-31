@@ -300,7 +300,7 @@ export interface ShardDOConfig {
     relationExistsPushDown?: "always" | "auto" | "never";
     /** Optional telemetry sink. When supplied, each `ctx.log.*` call is forwarded to `sink.onLog`. Pass the SAME sink you give `createWorker({ observability })` (which drives `onRpc`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
-    /** Deliberately `unknown`, and the `as SchedulerLike` at each use below is the cost. `@lunora/scheduler`'s public `Scheduler.runAfter`/`runAt` are generic with a REQUIRED `args`, while `SchedulerLike` takes it optional, so the real installed scheduler is not assignable to it — typing this field `SchedulerLike` fails every app that calls `createScheduler` directly. Reconciling those two signatures is the fix; until then the compiler cannot guard this seam, which is how the return type drifted from `Promise<string>` across four gates without anything failing. */
+    /** `unknown` because `@lunora/scheduler`'s `Scheduler` is not assignable to `SchedulerLike`; the shard casts it. */
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
 }

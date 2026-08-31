@@ -40,11 +40,17 @@ let authReady: Promise<ReturnType<typeof buildAuth>> | null = null;
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
         authReady ??= (async () => {
-            const instance = buildAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB });
-
             try {
+                const instance = buildAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB });
+
                 // Create tables via the raw-D1 Kysely migrator (the runtime adapter issues no DDL).
                 await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB }));
+
+                // Published only once the tables exist, so `resolveIdentity` below can
+                // never observe a half-initialized instance.
+                authInstance = instance;
+
+                return instance;
             } catch (error) {
                 // Memoising the PROMISE means a rejection is memoised too: without
                 // this, one failed cold-start migration (a D1 blip) would be
@@ -56,12 +62,6 @@ export default {
 
                 throw error;
             }
-
-            // Published only once the tables exist, so `resolveIdentity` below can
-            // never observe a half-initialized instance.
-            authInstance = instance;
-
-            return instance;
         })();
 
         const readyAuth = await authReady;

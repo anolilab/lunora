@@ -56,16 +56,21 @@ ALL=(python go ruby rust swift java kotlin dart)
 # CI matrix in `.github/workflows/test.yml` — so a ninth SDK missed in any one of
 # them is silently never checked by that gate. Reconcile against what is actually
 # on disk, which is the only copy that cannot be forgotten.
+# Everything under sdks/ is a port unless it is listed here. An explicit ignore
+# list rather than a marker-file heuristic: a marker SKIPS what it does not
+# match, so a new port that forgot the marker is absent from both this list and
+# ALL — no drift, silently never checked. This way a directory that is not a port
+# costs one deliberate line, and anything else fails loudly.
+IGNORED=(smoke)
+
 DISCOVERED=()
 for sdk_dir in "$ROOT"/sdks/*/; do
     sdk_name="$(basename "$sdk_dir")"
-    # `smoke/` holds the per-language consumer programs, not a port of its own.
-    [ "$sdk_name" = "smoke" ] && continue
-    # Every port ships a README; a build/tool directory that appears here
-    # (`node_modules`, `.venv`, a future shared-fixtures dir) does not. Without
-    # this, any such directory makes BOTH drift gates fail permanently on a
-    # difference that is not a missing port.
-    [ -f "$sdk_dir/README.md" ] || continue
+    skip=""
+    for ignored in "${IGNORED[@]}"; do
+        [ "$sdk_name" = "$ignored" ] && skip=1 && break
+    done
+    [ -n "$skip" ] && continue
     DISCOVERED+=("$sdk_name")
 done
 

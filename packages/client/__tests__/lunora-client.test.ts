@@ -110,8 +110,7 @@ const createMockWebSocket = (): typeof WebSocket => {
             this.readyState = 3;
 
             setTimeout(() => {
-                this.onclose?.();
-                this.dispatch("close");
+                this.triggerClose();
             }, 0);
         }
 
@@ -4764,8 +4763,6 @@ describe("lunoraClient", () => {
                 crossTabSync: true,
                 fetch: async () => jsonResponse({ result: {} }),
                 url: "https://app.example",
-                // Deferred close: a browser dispatches `close` on a later turn, and
-                // the synchronous default hides this bug entirely.
                 WebSocket: createMockWebSocket(),
             });
 

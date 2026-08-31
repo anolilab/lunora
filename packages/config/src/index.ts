@@ -68,7 +68,7 @@ export {
     removeDevVariableLine,
     upsertDevVariableLine,
 } from "./dev-variables-format";
-export { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "./driver-registry";
+export { DEFAULT_DEPLOY_TARGET, deployTargetIds, isRunnableTarget, resolveDeployDriver, runnableTargetIds } from "./driver-registry";
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
@@ -87,13 +87,11 @@ export { runPostCodegenHook } from "./post-codegen-hook";
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
 export {
     interpretRemote,
-    isRunnableTarget,
     LUNORA_CONFIG_FILE,
     readProjectRemotePreference,
     readProjectTarget,
     resolveProjectTarget,
     resolveTargetOrThrow,
-    runnableTargetIds,
 } from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";

@@ -17,7 +17,7 @@ import { readProjectTarget as readCodegenProjectTarget } from "@lunora/codegen";
 import type { ParseError } from "jsonc-parser";
 import { parse as parseJsonc } from "jsonc-parser";
 
-import { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "./driver-registry";
+import { DEFAULT_DEPLOY_TARGET, resolveDeployDriver } from "./driver-registry";
 import join from "./path";
 
 /** The canonical project-config filename probed at the project root. */
@@ -150,40 +150,5 @@ const resolveTargetOrThrow = (projectRoot: string, explicit?: string): string =>
     return target;
 };
 
-/**
- * The registered targets that can actually be built, served and deployed —
- * those whose driver ships a `toolchain`.
- *
- * A driver without one is still a legitimate codegen target: it tailors the
- * emitted `ctx.*` surface, and `lunora codegen --target <id>` is meaningful for
- * it. What it has no answer for is "run this", because there is no command
- * line to run. `node` is the live example.
- * @returns the deployable/runnable target ids, in registry order.
- */
-const runnableTargetIds = (): string[] => deployTargetIds().filter((id) => resolveDeployDriver(id).toolchain !== undefined);
-
-/**
- * Whether {@link runnableTargetIds} contains `target`.
- *
- * The single predicate behind every "can this tool actually run that target?"
- * check. It is one function rather than one per caller because the CLI
- * (`deploy`, `dev`) and the Vite plugin (`build`, `dev`) must refuse exactly
- * the same set — two copies would drift, and the failure mode is silent: the
- * tool that forgot goes on to run the WRONG pipeline for the target rather
- * than rejecting it.
- * @param target A resolved target id.
- * @returns `true` when the target's driver ships a toolchain.
- */
-const isRunnableTarget = (target: string): boolean => resolveDeployDriver(target).toolchain !== undefined;
-
 export type { LunoraProjectConfig, RemotePreference };
-export {
-    interpretRemote,
-    isRunnableTarget,
-    LUNORA_CONFIG_FILE,
-    readProjectRemotePreference,
-    readProjectTarget,
-    resolveProjectTarget,
-    resolveTargetOrThrow,
-    runnableTargetIds,
-};
+export { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };

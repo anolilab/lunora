@@ -1507,7 +1507,7 @@ const runScriptCommand: (manager: PackageManager, script: string) => string;
 ### `runnableTargetIds` (const)
 
 ```ts
-const runnableTargetIds: () => string[];
+const runnableTargetIds: () => ReadonlyArray<string>;
 ```
 
 ### `scaffoldPolicyFile` (const)

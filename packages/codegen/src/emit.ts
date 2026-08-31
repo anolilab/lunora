@@ -5198,6 +5198,16 @@ ${schema.tables
 `
         : "";
 
+    // The emitted `scheduler?:` field on the shard config below is `unknown`, and
+    // the `as SchedulerLike` at each of its four use sites is the cost of that.
+    // It is not laziness: `@lunora/scheduler`'s public `Scheduler.runAfter`/`runAt`
+    // are generic with a REQUIRED `args` where `SchedulerLike` takes it optional,
+    // so a function needing three parameters is not assignable to one callable
+    // with two — typing the field `SchedulerLike` fails to compile in every app
+    // that calls `createScheduler` directly. Reconciling those two signatures is
+    // the real fix and is legal on a pre-release branch; until then the compiler
+    // cannot guard this install, which is how the return type drifted from
+    // `Promise<string>` across four gates without anything failing.
     // `ctx.kv` / `ctx.analytics` ride EVERY ctx: their builds run inline before
     // the ctx object literal and their props are spliced into it (like `ctx.ai`).
     // `ctx.secrets` is a CORE built-in — always present on every ctx (a lazy
@@ -5299,7 +5309,7 @@ export interface ShardDOConfig {
     relationExistsPushDown?: "always" | "auto" | "never";
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
-    /** Deliberately \`unknown\`, and the \`as SchedulerLike\` at each use below is the cost. \`@lunora/scheduler\`'s public \`Scheduler.runAfter\`/\`runAt\` are generic with a REQUIRED \`args\`, while \`SchedulerLike\` takes it optional, so the real installed scheduler is not assignable to it — typing this field \`SchedulerLike\` fails every app that calls \`createScheduler\` directly. Reconciling those two signatures is the fix; until then the compiler cannot guard this seam, which is how the return type drifted from \`Promise<string>\` across four gates without anything failing. */
+    /** \`unknown\` because \`@lunora/scheduler\`'s \`Scheduler\` is not assignable to \`SchedulerLike\`; the shard casts it. */
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${x402ConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}
 }
