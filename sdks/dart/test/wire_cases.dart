@@ -19,7 +19,12 @@ void caseWireCodecRoundTrip() {
   for (final testCase in cases) {
     final encoded = testCase['encoded'];
 
-    equals(canonical(encodeWire(decodeWire(encoded))), canonical(encoded), 'round-trip mismatch for ${testCase['name']}');
+    // A handful of shapes are legitimately not fixed points — a bare [tag]
+    // array is escaped on the way out, an undefined object field is dropped —
+    // and carry the expected re-encoding.
+    final expected = testCase.containsKey('reencoded') ? testCase['reencoded'] : encoded;
+
+    equals(canonical(encodeWire(decodeWire(encoded))), canonical(expected), 'round-trip mismatch for ${testCase['name']}');
   }
 }
 
@@ -46,15 +51,53 @@ void caseOverLongBigIntRejected() {
   equals(decodeWire(<Object?>[wireTag, 'bigint', '-42']), BigInt.from(-42), 'a legitimate bigint must decode');
 }
 
-void caseMalformedBytesRejected() {
-  covers('malformed_bytes_rejected');
+/// Walks the shared rejection list.
+///
+/// The list is data (`protocol/fixtures/wire-codec.json`), not a per-suite
+/// invention: a rejection each port hard-codes for itself is a rejection only
+/// some ports have, which is how one of them ended up accepting a truncated
+/// base64 payload as valid short bytes.
+void caseMalformedValuesRejected() {
+  covers('malformed_values_rejected');
 
-  throws(() => decodeWire(<Object?>[wireTag, 'bytes', 'not@@base64!!']), 'malformed base64 in a bytes tag must be rejected');
+  final rejected = objectList(fixture('wire-codec.json')['rejected']);
+
+  check(rejected.isNotEmpty, 'the fixture must carry a rejection list');
+
+  for (final testCase in rejected) {
+    throws(() => decodeWire(testCase['encoded']), '${testCase['name']} must be rejected');
+  }
 
   final decoded = decodeWire(<Object?>[wireTag, 'bytes', 'AQID']);
 
   check(
       decoded is List<int> && decoded.length == 3 && decoded[0] == 1 && decoded[1] == 2 && decoded[2] == 3, 'well-formed bytes must still decode to [1, 2, 3]');
+
+  // A bare [tag] is NOT malformed: it is the forward-compat shape, and the
+  // reference hands it back as an ordinary array.
+  final passthrough = decodeWire(<Object?>[wireTag]);
+
+  check(passthrough is List && passthrough.length == 1, 'a bare tag array must decode as an ordinary array');
+}
+
+/// An integer a float64 cannot hold exactly must not silently become a
+/// different integer on the wire. Dart's `int` is 64-bit, so passing one through
+/// left the SERVER's own `JSON.parse` to round it.
+void caseExactIntegerRangeEnforced() {
+  covers('exact_integer_range_enforced');
+
+  equals(encodeWire(wireMaxExactInteger), wireMaxExactInteger, 'the largest exact integer must encode');
+  equals(encodeWire(-wireMaxExactInteger), -wireMaxExactInteger, 'the smallest exact integer must encode');
+
+  throws(() => encodeWire(wireMaxExactInteger + 1), 'an integer past the exact float64 range must be refused, not rounded');
+  throws(() => encodeWire(-wireMaxExactInteger - 1), 'an integer past the exact float64 range must be refused, not rounded');
+
+  // BigInt is the way across, and it keeps every digit.
+  equals(
+    canonical(encodeWire(BigInt.parse('9007199254740992'))),
+    canonical(<Object?>[wireTag, 'bigint', '9007199254740992']),
+    'BigInt carries the value the number range refuses',
+  );
 }
 
 void caseDepthCapEnforced() {

@@ -115,9 +115,19 @@ stableWireKey(v) = stableStringify(encodeWire(v))
 ```
 
 `stableStringify` is a canonical JSON encoding: **object keys sorted at every
-depth** (code-point order), arrays keep order, `null` fields are kept, and
-`undefined` object fields are dropped. Two structurally-equal arg records with
-different key insertion order collapse to one key.
+depth** (UTF-16 **code-unit** order), arrays keep order, `null` fields are kept,
+and `undefined` object fields are dropped. Two structurally-equal arg records
+with different key insertion order collapse to one key.
+
+Code-unit order, not code-point order: the reference implementation is
+`Object.keys(record).sort()`, whose default comparator compares UTF-16 code
+units. The two orders disagree for any key that starts with a surrogate — an
+emoji key sorts **before** a U+E000..U+FFFF key under code units and **after**
+it under code points. A port must therefore not use its language's natural
+string ordering if that ordering is by code point (Python `sorted`, Go
+`sort.Strings`, Rust `str` `Ord`): re-key on the UTF-16 code units first. The
+`key-order-surrogate-vs-pua` golden case below is the one that catches this;
+every other ordering case is ASCII, where the two orders agree.
 
 Golden cases: [`fixtures/stable-wire-key.json`](./fixtures/stable-wire-key.json).
 

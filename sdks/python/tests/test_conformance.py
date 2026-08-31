@@ -36,7 +36,10 @@ class TestWireCodecFixtures(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case["name"]):
                 encoded = case["encoded"]
-                self.assertEqual(encode_wire(decode_wire(encoded)), encoded)
+                # A handful of shapes are legitimately not fixed points — a bare
+                # [TAG] array is escaped on the way out, an `undefined` object
+                # field is dropped — and carry the expected re-encoding.
+                self.assertEqual(encode_wire(decode_wire(encoded)), case.get("reencoded", encoded))
 
 
 class TestStableKeyFixtures(unittest.TestCase):
@@ -55,6 +58,32 @@ class TestStableKeyFixtures(unittest.TestCase):
         for case in data["typed"]:
             with self.subTest(case=case["name"]):
                 self.assertEqual(stable_wire_key(decode_wire(case["wireArgs"])), case["key"])
+
+
+class TestShardKey(unittest.TestCase):
+    def test_empty_shard_key_is_omitted(self):
+        covers("empty_shard_key_is_omitted")
+
+        # `""` is ABSENT on the wire, not "the shard named empty string". The
+        # runtime takes any string as a named shard and gives `""` its own
+        # Durable Object, while this client treats `""` and None as one shard
+        # everywhere it matches a subscription or drains the queue. A port that
+        # sent it replayed a single queued write to one Durable Object and a
+        # BATCHED replay of that same write to another, with the optimistic
+        # overlay tracking neither.
+        for absent in (None, ""):
+            with self.subTest(shard_key=absent):
+                self.assertNotIn("shardKey", build_rpc_body("messages:list", {}, absent))
+
+        self.assertEqual(build_rpc_body("messages:list", {}, "tenant_a")["shardKey"], "tenant_a")
+
+        client = LunoraClient("https://app.example")
+
+        for absent in (None, ""):
+            with self.subTest(ws_shard_key=absent):
+                self.assertNotIn("shard=", client.ws_url_for(absent, None))
+
+        self.assertIn("shard=tenant_a", client.ws_url_for("tenant_a", None))
 
 
 class TestRpcFixtures(unittest.TestCase):

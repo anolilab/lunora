@@ -109,11 +109,29 @@ func TestOverLongBigIntRejected(t *testing.T) {
 	}
 }
 
-func TestMalformedBytesRejected(t *testing.T) {
-	covers("malformed_bytes_rejected")
+// TestMalformedValuesRejected walks the shared rejection list.
+//
+// The list is data (protocol/fixtures/wire-codec.json), not a per-suite
+// invention: a rejection each port hard-codes for itself is a rejection only
+// some ports have, which is how one of them ended up accepting a truncated
+// base64 payload as valid short bytes.
+func TestMalformedValuesRejected(t *testing.T) {
+	covers("malformed_values_rejected")
 
-	if _, err := DecodeWire([]any{Tag, "bytes", "not@@base64!!"}); err == nil {
-		t.Error("malformed base64 in a bytes tag must be rejected")
+	rejected, ok := loadFixture(t, "wire-codec.json")["rejected"].([]any)
+	if !ok || len(rejected) == 0 {
+		t.Fatal("wire-codec.json carries no rejected list")
+	}
+
+	for _, entry := range rejected {
+		testCase, _ := entry.(map[string]any)
+		name, _ := testCase["name"].(string)
+
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecodeWire(testCase["encoded"]); err == nil {
+				t.Errorf("%s must be rejected", name)
+			}
+		})
 	}
 
 	decoded, err := DecodeWire([]any{Tag, "bytes", "AQID"})
@@ -123,6 +141,45 @@ func TestMalformedBytesRejected(t *testing.T) {
 
 	if data, ok := decoded.([]byte); !ok || string(data) != "\x01\x02\x03" {
 		t.Errorf("decoded = %#v, want []byte{1,2,3}", decoded)
+	}
+
+	// A bare [Tag] is NOT malformed: it is the forward-compat shape, and the
+	// reference hands it back as an ordinary array.
+	if _, err := DecodeWire([]any{Tag}); err != nil {
+		t.Errorf("a bare tag array must decode as an ordinary array, got %v", err)
+	}
+}
+
+// TestExactIntegerRangeEnforced is the documented rule the other ports were
+// aligned onto: an integer a float64 cannot hold exactly does not silently
+// become a different integer on the wire.
+func TestExactIntegerRangeEnforced(t *testing.T) {
+	covers("exact_integer_range_enforced")
+
+	if _, err := EncodeWire(int64(maxExactInteger)); err != nil {
+		t.Errorf("the largest exact integer must encode: %v", err)
+	}
+
+	if _, err := EncodeWire(int64(-maxExactInteger)); err != nil {
+		t.Errorf("the smallest exact integer must encode: %v", err)
+	}
+
+	if _, err := EncodeWire(int64(maxExactInteger) + 1); err == nil {
+		t.Error("an integer past the exact float64 range must be refused, not rounded")
+	}
+
+	if _, err := EncodeWire(int64(-maxExactInteger) - 1); err == nil {
+		t.Error("an integer past the exact float64 range must be refused, not rounded")
+	}
+
+	// BigInt is the way across, and it keeps every digit.
+	encoded, err := EncodeWire(BigInt{Value: new(big.Int).SetInt64(int64(maxExactInteger) + 1)})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	if got, want := canonical(t, encoded), canonical(t, []any{Tag, "bigint", "9007199254740992"}); got != want {
+		t.Errorf("encoded = %s, want %s", got, want)
 	}
 }
 

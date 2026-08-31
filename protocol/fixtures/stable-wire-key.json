@@ -1,5 +1,5 @@
 {
-    "$comment": "Golden fixtures for the stable subscription/dedup key (shared/wire-key.ts: stableWireKey = stableStringify(encodeWire(value))). `cases` take pure-JSON `args` and assert stable_wire_key(args) == key. `typed` cases give `wireArgs` (already wire-encoded) and assert stable_wire_key(decode(wireArgs)) == key, covering bigint/date/bytes args. Object keys are sorted at every depth (code-point order); arrays keep order; null fields are kept, undefined object fields are dropped.",
+    "$comment": "Golden fixtures for the stable subscription/dedup key (shared/wire-key.ts: stableWireKey = stableStringify(encodeWire(value))). `cases` take pure-JSON `args` and assert stable_wire_key(args) == key. `typed` cases give `wireArgs` (already wire-encoded) and assert stable_wire_key(decode(wireArgs)) == key, covering bigint/date/bytes args. Object keys are sorted at every depth in UTF-16 CODE-UNIT order (the reference impl is `Object.keys(o).sort()`, whose default comparator compares code units) - NOT code-point order; the two disagree for any key starting with a surrogate, which `key-order-surrogate-vs-pua` pins. A port whose natural string ordering is by code point (Python `sorted`, Go `sort.Strings`, Rust `str` Ord) must re-key on the UTF-16 code units first. Arrays keep order; null fields are kept, undefined object fields are dropped.",
     "cases": [
         { "name": "empty", "args": {}, "key": "{}" },
         { "name": "sorted-top-level", "args": { "b": 2, "a": 1 }, "key": "{\"a\":1,\"b\":2}" },
@@ -7,6 +7,12 @@
         { "name": "arrays-keep-order", "args": { "list": [3, 1, 2] }, "key": "{\"list\":[3,1,2]}" },
         { "name": "null-field-kept", "args": { "a": null, "b": 1 }, "key": "{\"a\":null,\"b\":1}" },
         { "name": "codepoint-order", "args": { "b": "x", "A": "y" }, "key": "{\"A\":\"y\",\"b\":\"x\"}" },
+        {
+            "$comment": "The ONLY case that separates UTF-16 code-unit order from code-point order. U+1F600 is the surrogate pair D83D DE00, so its first code unit (0xD83D) sorts BEFORE U+E000; by code point (0x1F600) it would sort AFTER. A port that sorts by code point produces \"{\\\"z\\\":3,\\\"\\ue000\\\":2,\\\"\\ud83d\\ude00\\\":1}\" here and a different stableWireKey than the TS client for every args record with such a key.",
+            "name": "key-order-surrogate-vs-pua",
+            "args": { "\ud83d\ude00": 1, "\ue000": 2, "z": 3 },
+            "key": "{\"z\":3,\"\ud83d\ude00\":1,\"\ue000\":2}"
+        },
         { "name": "nested-array-of-objects", "args": { "rows": [{ "b": 1, "a": 2 }] }, "key": "{\"rows\":[{\"a\":2,\"b\":1}]}" },
         { "name": "string-with-quote", "args": { "s": "a\"b" }, "key": "{\"s\":\"a\\\"b\"}" }
     ],

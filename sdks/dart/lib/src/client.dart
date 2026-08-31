@@ -129,7 +129,7 @@ class LunoraClient {
       LunoraTransport.buildRpcBody(functionPath, args, shardKey: shardKey);
 
   /// Decodes one RPC response — see [LunoraTransport.parseRpcResponse].
-  static Object? parseRpcResponse(Map<String, Object?> body, {int status = 200}) => LunoraTransport.parseRpcResponse(body, status: status);
+  static Object? parseRpcResponse(Map<String, Object?> body, {required int status}) => LunoraTransport.parseRpcResponse(body, status: status);
 
   /// The identity a queued write is stamped with — see
   /// [LunoraTransport.identityFingerprint].

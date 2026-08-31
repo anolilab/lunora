@@ -442,7 +442,22 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     return new Date(decodeWire(value[2], depth + 1) as number);
                 }
                 case "map": {
-                    return new Map((value[2] as [unknown, unknown][]).map(([k, v]) => [decodeWire(k, depth + 1), decodeWire(v, depth + 1)]));
+                    const entries = value[2] as unknown[];
+
+                    return new Map(
+                        entries.map((entry) => {
+                            // A conforming encoder always emits a 2-element entry.
+                            // Destructuring a shorter one would silently invent an
+                            // `undefined` value from malformed wire input — the exact
+                            // silent corruption this codec promises not to do — so a
+                            // malformed entry is refused instead.
+                            if (!Array.isArray(entry) || entry.length !== 2) {
+                                throw new TypeError("wire-codec: malformed map entry — expected a [key, value] pair");
+                            }
+
+                            return [decodeWire(entry[0], depth + 1), decodeWire(entry[1], depth + 1)] as [unknown, unknown];
+                        }),
+                    );
                 }
                 case "set": {
                     return new Set((value[2] as unknown[]).map((item) => decodeWire(item, depth + 1)));

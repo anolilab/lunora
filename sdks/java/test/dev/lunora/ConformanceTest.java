@@ -37,12 +37,14 @@ public final class ConformanceTest {
         wireCodecRoundTrip();
         undefinedIsDistinctFromNull();
         overLongBigIntRejected();
-        malformedBytesRejected();
+        malformedValuesRejected();
         depthCapEnforced();
+        exactIntegerRangeEnforced();
         stableWireKeyFixtures();
         formatNumberMatchesEcmaScript();
         keyOrderMatchesUtf16();
         stringEscapingMatchesJsonStringify();
+        emptyShardKeyIsOmitted();
         rpcRequestBodies();
         rpcResponses();
         non2xxWithoutEnvelopeThrows();
@@ -155,9 +157,14 @@ public final class ConformanceTest {
             Map<String, Object> testCase = (Map<String, Object>) entry;
             Object encoded = testCase.get("encoded");
             Object roundTripped = Wire.encode(Wire.decode(encoded));
+            // A handful of shapes are legitimately not fixed points — a bare
+            // [TAG] array is escaped on the way out, an UNDEFINED object field
+            // is dropped — and carry the expected re-encoding.
+            Object expected =
+                    testCase.containsKey("reencoded") ? testCase.get("reencoded") : encoded;
 
             check(
-                    canonical(roundTripped).equals(canonical(encoded)),
+                    canonical(roundTripped).equals(canonical(expected)),
                     "round-trip mismatch for " + testCase.get("name"));
         }
     }
@@ -211,18 +218,38 @@ public final class ConformanceTest {
      * Wire.decode} throw out of the frame dispatcher would crash whatever thread runs the caller's
      * socket read loop instead of surfacing a recoverable error.
      */
-    private static void malformedBytesRejected() throws IOException {
-        covers("malformed_bytes_rejected");
+    @SuppressWarnings("unchecked")
+    private static void malformedValuesRejected() throws IOException {
+        covers("malformed_values_rejected");
 
-        check(
-                throwsWireError(List.of(Wire.TAG, "bytes", "not@@base64!!")),
-                "malformed base64 in a bytes tag must be rejected");
+        // The list is data (protocol/fixtures/wire-codec.json), not a per-suite
+        // invention: a rejection each port hard-codes for itself is a rejection
+        // only some ports have, which is how one of them ended up accepting a
+        // truncated base64 payload as valid short bytes.
+        List<Object> rejected = (List<Object>) fixture("wire-codec.json").get("rejected");
+
+        check(rejected != null && !rejected.isEmpty(), "the fixture must carry a rejection list");
+
+        for (Object entry : rejected) {
+            Map<String, Object> testCase = (Map<String, Object>) entry;
+
+            check(
+                    throwsWireError(testCase.get("encoded")),
+                    testCase.get("name") + " must be rejected");
+        }
 
         Object decoded = Wire.decode(List.of(Wire.TAG, "bytes", "AQID"));
 
         check(
                 decoded instanceof byte[] bytes && bytes.length == 3,
                 "well-formed bytes must still decode");
+
+        // A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
+        // reference hands it back as an ordinary array.
+        check(
+                Wire.decode(List.of(Wire.TAG)) instanceof List<?> passthrough
+                        && passthrough.size() == 1,
+                "a bare tag array must decode as an ordinary array");
 
         Client client = new Client("https://app.example", null);
 
@@ -246,17 +273,112 @@ public final class ConformanceTest {
         check(errors.size() == 1, "a malformed value must surface via onError");
     }
 
+    /**
+     * Only {@link Wire.WireFormatException} counts as a rejection.
+     *
+     * <p>This used to catch {@link RuntimeException}, which hid that the codec let the JDK's own
+     * unwrapped {@code IllegalArgumentException}, {@code IndexOutOfBoundsException} and {@code
+     * ClassCastException} escape {@code Wire.decode} — so a caller catching the codec's own error
+     * type caught none of them.
+     */
     private static boolean throwsWireError(Object value) {
         try {
             Wire.decode(value);
 
             return false;
-        } catch (RuntimeException error) {
-            // Wire.decode's own bounds (bigint length, depth) throw its typed
-            // WireFormatException; a nested decoder (Base64 on a malformed bytes
-            // tag) throws its own unwrapped RuntimeException. Both are a rejection.
+        } catch (Wire.WireFormatException error) {
             return true;
         }
+    }
+
+    /**
+     * An integer a {@code double} cannot hold exactly must not silently become a different integer
+     * on the wire. A Java {@code long} holds integers a {@code double} does not, so narrowing one
+     * here changed its value with neither end able to tell.
+     */
+    private static void exactIntegerRangeEnforced() {
+        covers("exact_integer_range_enforced");
+
+        check(
+                Double.valueOf(9007199254740991.0).equals(Wire.encode(Wire.MAX_EXACT_INTEGER)),
+                "the largest exact integer must encode");
+        check(
+                throwsOnEncode(Wire.MAX_EXACT_INTEGER + 1),
+                "an integer past the exact range must be refused");
+        check(
+                throwsOnEncode(-Wire.MAX_EXACT_INTEGER - 1),
+                "an integer past the exact range must be refused");
+        check(
+                throwsOnEncode(
+                        java.math.BigInteger.valueOf(Wire.MAX_EXACT_INTEGER)
+                                .add(java.math.BigInteger.ONE)),
+                "a BigInteger past the exact range must be refused too");
+
+        // WireBigInt is the way across, and it keeps every digit.
+        check(
+                canonical(
+                                Wire.encode(
+                                        new Wire.WireBigInt(
+                                                new java.math.BigInteger("9007199254740992"))))
+                        .equals(canonical(List.of(Wire.TAG, "bigint", "9007199254740992"))),
+                "WireBigInt carries the value the number range refuses");
+    }
+
+    private static boolean throwsOnEncode(Object value) {
+        try {
+            Wire.encode(value);
+
+            return false;
+        } catch (Wire.WireFormatException error) {
+            return true;
+        }
+    }
+
+    /**
+     * An EMPTY shard key is absent, not the shard named {@code ""}.
+     *
+     * <p>The runtime takes any string as a named shard and gives {@code ""} its own Durable Object,
+     * while this client treats {@code ""} and null as one shard wherever it matches a subscription
+     * or drains the queue. Sending it split those two views: a single-call replay of a queued write
+     * landed on one Durable Object and a BATCHED replay of that same write on another, with the
+     * optimistic overlay tracking neither. Both builders that carry a shard key are asserted,
+     * because normalising one and not the other is the same split.
+     */
+    private static void emptyShardKeyIsOmitted() {
+        covers("empty_shard_key_is_omitted");
+
+        for (String absent : new String[] {null, ""}) {
+            check(
+                    !Client.buildRpcBody(
+                                    "messages:send", new LinkedHashMap<String, Object>(), absent)
+                            .containsKey("shardKey"),
+                    "an empty or absent shard key must not reach the RPC body");
+        }
+
+        check(
+                "room-1"
+                        .equals(
+                                Client.buildRpcBody(
+                                                "messages:send",
+                                                new LinkedHashMap<String, Object>(),
+                                                "room-1")
+                                        .get("shardKey")),
+                "a real shard key still rides the body");
+
+        Client client = new Client("https://app.example", null);
+
+        for (String absent : new String[] {null, ""}) {
+            check(
+                    !client.wsUrl(absent, null).contains("shard="),
+                    "an empty or absent shard key must not name a shard on the socket");
+        }
+
+        check(
+                client.wsUrl("", null).equals(client.wsUrl(null, null)),
+                "an empty shard key is byte-identical to sending none");
+        check(
+                client.wsUrl("room-1", null).contains("shard="),
+                "a real shard key still rides the socket URL");
     }
 
     private static void depthCapEnforced() {

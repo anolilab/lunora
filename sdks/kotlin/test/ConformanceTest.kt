@@ -85,8 +85,12 @@ private fun wireCodecRoundTrip() {
         val testCase = entry as Map<*, *>
         val encoded = testCase["encoded"]
         val roundTripped = Wire.encode(Wire.decode(encoded))
+        // A handful of shapes are legitimately not fixed points — a bare [TAG]
+        // array is escaped on the way out, an Undefined object field is dropped
+        // — and carry the expected re-encoding.
+        val expected = if (testCase.containsKey("reencoded")) testCase["reencoded"] else encoded
 
-        check(canonical(roundTripped) == canonical(encoded), "round-trip mismatch for ${testCase["name"]}")
+        check(canonical(roundTripped) == canonical(expected), "round-trip mismatch for ${testCase["name"]}")
     }
 }
 
@@ -126,10 +130,26 @@ private fun rejects(value: Any?): Boolean = try {
     true
 }
 
-private fun malformedBytesRejected() {
-    covers("malformed_bytes_rejected")
+/**
+ * Walks the shared rejection list.
+ *
+ * The list is data (`protocol/fixtures/wire-codec.json`), not a per-suite
+ * invention: a rejection each port hard-codes for itself is a rejection only
+ * some ports have, which is how one of them ended up accepting a truncated
+ * base64 payload as valid short bytes.
+ */
+private fun malformedValuesRejected() {
+    covers("malformed_values_rejected")
 
-    check(rejects(listOf(Wire.TAG, "bytes", "not@@base64!!")), "malformed base64 in a bytes tag must be rejected")
+    val rejected = fixture("wire-codec.json")["rejected"] as? List<*>
+
+    check(!rejected.isNullOrEmpty(), "the fixture must carry a rejection list")
+
+    for (entry in rejected.orEmpty()) {
+        val testCase = entry as Map<*, *>
+
+        check(rejects(testCase["encoded"]), "${testCase["name"]} must be rejected")
+    }
 
     val decoded = Wire.decode(listOf(Wire.TAG, "bytes", "AQID"))
 
@@ -137,6 +157,71 @@ private fun malformedBytesRejected() {
         decoded is WireValue.Bytes && decoded.data.contentEquals(byteArrayOf(1, 2, 3)),
         "well-formed bytes must still decode",
     )
+
+    // A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
+    // reference hands it back as an ordinary array.
+    check(Wire.decode(listOf(Wire.TAG)) == WireValue.Arr(listOf(WireValue.Text(Wire.TAG))), "a bare tag array decodes as an array")
+}
+
+/**
+ * An integer a `Double` cannot hold exactly must not silently become a
+ * different integer on the wire.
+ *
+ * [WireValue.Num] IS a `Double`, so this port cannot carry such an integer
+ * through the codec at all — the exposure is the decode side, where a JSON
+ * parser could hand over a `Long`. That is refused rather than narrowed.
+ */
+private fun exactIntegerRangeEnforced() {
+    covers("exact_integer_range_enforced")
+
+    val maximum = 9007199254740991L
+
+    check(Wire.encode(WireValue.Num(maximum.toDouble())) == maximum.toDouble(), "the largest exact integer encodes")
+    check(rejects(maximum + 1), "a Long past the exact Double range must be refused, not narrowed")
+    check(rejects(-maximum - 1), "a Long past the exact Double range must be refused, not narrowed")
+
+    // BigInt is the way across, and it keeps every digit.
+    check(
+        canonical(Wire.encode(WireValue.BigInt(BigInteger("9007199254740992")))) ==
+            canonical(listOf(Wire.TAG, "bigint", "9007199254740992")),
+        "BigInt carries the value the number range refuses",
+    )
+}
+
+/**
+ * An EMPTY shard key is absent, not the shard named `""`.
+ *
+ * The runtime takes any string as a named shard and gives `""` its own Durable
+ * Object, while this client treats `""` and null as one shard wherever it
+ * matches a subscription or drains the queue. Sending it split those two views:
+ * a single-call replay of a queued write landed on one Durable Object and a
+ * BATCHED replay of that same write on another, with the optimistic overlay
+ * tracking neither. Both builders that carry a shard key are asserted, because
+ * normalising one and not the other is the same split.
+ */
+private fun emptyShardKeyIsOmitted() {
+    covers("empty_shard_key_is_omitted")
+
+    for (absent in listOf(null, "")) {
+        check(
+            !Client.buildRpcBody("messages:send", WireValue.Obj(emptyList()), absent).containsKey("shardKey"),
+            "shard key $absent must not reach the RPC body",
+        )
+    }
+
+    check(
+        Client.buildRpcBody("messages:send", WireValue.Obj(emptyList()), "room-1")["shardKey"] == "room-1",
+        "a real shard key still rides the body",
+    )
+
+    val client = Client("https://app.example", null)
+
+    for (absent in listOf(null, "")) {
+        check(!client.wsUrl(absent, null).contains("shard="), "shard key $absent must not name a shard on the socket")
+    }
+
+    check(client.wsUrl("", null) == client.wsUrl(null, null), "an empty shard key is byte-identical to sending none")
+    check(client.wsUrl("room-1", null).contains("shard="), "a real shard key still rides the socket URL")
 }
 
 private fun depthCapEnforced() {
@@ -544,12 +629,14 @@ fun main() {
     wireCodecRoundTrip()
     undefinedIsDistinctFromNull()
     overLongBigIntRejected()
-    malformedBytesRejected()
+    malformedValuesRejected()
     depthCapEnforced()
+    exactIntegerRangeEnforced()
     stableWireKeyFixtures()
     formatNumberMatchesEcmaScript()
     keyOrderMatchesUtf16()
     stringEscapingMatchesJsonStringify()
+    emptyShardKeyIsOmitted()
     rpcRequestBodies()
     rpcResponses()
     non2xxWithoutEnvelopeThrows()

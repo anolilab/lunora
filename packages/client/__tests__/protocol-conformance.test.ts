@@ -32,14 +32,34 @@ const jsonResponse = (body: unknown, init: ResponseInit = {}): Response =>
 // --- Wire value codec -------------------------------------------------------
 
 describe("wire-codec fixtures", () => {
-    const { cases } = readFixture("wire-codec.json") as { cases: { encoded: unknown; name: string }[] };
+    const { cases, rejected } = readFixture("wire-codec.json") as {
+        cases: { encoded: unknown; name: string; reencoded?: unknown }[];
+        rejected: { encoded: unknown; name: string }[];
+    };
 
-    it.each(cases.map((testCase) => [testCase.name, testCase.encoded] as const))("round-trips %s", (_name, encoded) => {
+    it.each(cases.map((testCase) => [testCase.name, testCase] as const))("round-trips %s", (_name, testCase) => {
         expect.hasAssertions();
 
         // encode(decode(encoded)) === encoded proves both the decode of tagged
         // tokens and their canonical re-encode match the golden wire form.
-        expect(encodeWire(decodeWire(encoded))).toStrictEqual(encoded);
+        //
+        // A few shapes are legitimately NOT fixed points of that identity — a
+        // bare `[TAG]` array is escaped on the way back out, and an object field
+        // holding the `undefined` tag is dropped, matching `JSON.stringify`.
+        // Those carry an explicit `reencoded`; see the fixture's `$comment`.
+        const expected = "reencoded" in testCase ? testCase.reencoded : testCase.encoded;
+
+        expect(encodeWire(decodeWire(testCase.encoded))).toStrictEqual(expected);
+    });
+
+    // The other half of the fixture: wire values a conforming codec MUST refuse.
+    // These drive all eight SDK suites, and the reference implementation is the
+    // normative one — holding the ports to a rejection list the reference is
+    // never checked against is exactly backwards.
+    it.each(rejected.map((testCase) => [testCase.name, testCase.encoded] as const))("rejects %s", (_name, encoded) => {
+        expect.hasAssertions();
+
+        expect(() => decodeWire(encoded)).toThrow();
     });
 });
 

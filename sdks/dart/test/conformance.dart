@@ -40,13 +40,15 @@ Future<void> main() async {
   await run(caseWireCodecRoundTrip);
   await run(caseUndefinedIsDistinctFromNull);
   await run(caseOverLongBigIntRejected);
-  await run(caseMalformedBytesRejected);
+  await run(caseMalformedValuesRejected);
   await run(caseDepthCapEnforced);
+  await run(caseExactIntegerRangeEnforced);
   await run(caseStableWireKeyFixtures);
   await run(caseFormatNumberMatchesEcmaScript);
   await run(caseKeyOrderMatchesUtf16);
   await run(caseStringEscapingMatchesJsonStringify);
   await run(caseErrorCauseRoundTrips);
+  await run(caseEmptyShardKeyIsOmitted);
   await run(caseRpcRequestBodies);
   await run(caseRpcResponses);
   await run(caseNon2xxWithoutErrorEnvelopeFails);

@@ -45,6 +45,28 @@ if [ ! -f "$CLI" ]; then
 fi
 
 ALL=(python go ruby rust swift java kotlin dart)
+
+# ALL is hardcoded here, again in `lint-all.sh`, and a third time as the CI matrix
+# in `.github/workflows/test.yml` — so a ninth SDK missed in any one of them is
+# silently never checked by that gate. Reconcile against what is actually on disk,
+# which is the only copy that cannot be forgotten. Same block as lint-all.sh, on
+# purpose: three copies of one list need one reconciliation idiom, not three.
+DISCOVERED=()
+for sdk_dir in "$ROOT"/sdks/*/; do
+    sdk_name="$(basename "$sdk_dir")"
+    # `smoke/` holds the per-language consumer programs this script RUNS, not a
+    # port of its own — excluded here for the same reason lint-all.sh excludes it.
+    [ "$sdk_name" = "smoke" ] && continue
+    DISCOVERED+=("$sdk_name")
+done
+
+sdk_drift="$(comm -3 <(printf '%s\n' "${ALL[@]}" | sort) <(printf '%s\n' "${DISCOVERED[@]}" | sort))"
+if [ -n "$sdk_drift" ]; then
+    printf 'sdks/generated-check.sh ALL and sdks/ disagree (left column: listed but absent; right: present but unlisted):\n%s\n' "$sdk_drift" >&2
+    printf 'Update ALL here, ALL in sdks/lint-all.sh, and the sdk-conformance matrix in .github/workflows/test.yml.\n' >&2
+    exit 2
+fi
+
 LANGS=("$@")
 if [ ${#LANGS[@]} -eq 0 ]; then
     LANGS=("${ALL[@]}")

@@ -11,8 +11,15 @@
  * only in emitted output, never in source. One source of truth, zero deps.
  *
  * Semantics — a stable, sorted JSON encoding of `value` for use as a cache /
- * dedup / query key. Object keys are visited in code-point order at every depth
- * so `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` encode identically. Arrays preserve
+ * dedup / query key. Object keys are visited in UTF-16 **code-unit** order at
+ * every depth so `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` encode identically —
+ * `Array.prototype.sort`'s default comparator, which is what every JS engine
+ * gives you. NOT code-point order: the two differ for any key starting with a
+ * surrogate, so an emoji key sorts BEFORE a U+E000..U+FFFF key here and after it
+ * under code point. A port must sort by UTF-16 code unit (Python `sorted` on the
+ * raw `str`, Go `sort.Strings`, and Rust `str` `Ord` all compare code points and
+ * are therefore WRONG); `protocol/fixtures/stable-wire-key.json`'s
+ * `key-order-surrogate-vs-pua` case is the one that separates them. Arrays preserve
  * order (the index IS the key). `undefined` is skipped at the object level so
  * `{ a: undefined }` collides with `{}` — matching Convex behavior and avoiding
  * spurious cache misses on optional args — while inside an array it encodes as

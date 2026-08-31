@@ -21,6 +21,7 @@ loop uses the ``websockets`` package when present.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import threading
@@ -42,7 +43,7 @@ from .submit import (
     hydrate_queue,
     submit_write,
 )
-from .wire import decode_wire, encode_wire, stable_wire_key
+from .wire import WireFormatError, decode_wire, encode_wire, stable_wire_key
 
 RPC_PATH = "/_lunora/rpc"
 RPC_BATCH_PATH = "/_lunora/rpc-batch"
@@ -689,7 +690,18 @@ class LunoraClient:
         # mutation-delta into the server base; a wholesale replace is a correct
         # fallback and keeps the SDK dependency-free).
         has_data = "data" in frame and frame["data"] is not None
-        value = decode_wire(frame["data"]) if has_data else decode_wire(frame.get("delta"))
+        try:
+            value = decode_wire(frame["data"]) if has_data else decode_wire(frame.get("delta"))
+        except WireFormatError as error:
+            # A malformed payload belongs on the subscription's error callback,
+            # not on the socket read loop's stack. Letting it escape here ended
+            # the loop — and with it every OTHER subscription on this client —
+            # over one bad frame, where the reference and the Java port both
+            # surface it and keep reading.
+            reported = SubscriptionError(str(error), "INVALID_FRAME")
+            if sub is not None:
+                deferred.extend(partial(cb, reported) for cb in sub.error_callbacks)
+            return {"kind": "error", "id": frame.get("id"), "error": reported}
         displayed = value
         if sub is not None:
             sub.server_base = value
@@ -832,7 +844,14 @@ class LunoraClient:
                         frame = json.loads(raw)
                     except (ValueError, TypeError):
                         continue
-                    self.handle_frame(frame)
+                    # `_handle_data` already routes a codec rejection to the
+                    # subscription that owns it. This is the backstop for
+                    # everything else — a frame shape no branch expects, or a
+                    # user callback that raises — because an exception out of
+                    # here terminates the read loop and silently stops every
+                    # subscription on the client.
+                    with contextlib.suppress(Exception):
+                        self.handle_frame(frame)
                     await flush()
             finally:
                 # Writes submitted after this point queue instead of failing.

@@ -25,8 +25,12 @@ class TestWireCodec < Minitest::Test
     cases.each do |entry|
       encoded = entry["encoded"]
       round_tripped = Lunora.encode_wire(Lunora.decode_wire(encoded))
+      # A handful of shapes are legitimately not fixed points — a bare [TAG]
+      # array is escaped on the way out, an undefined object field is dropped —
+      # and carry the expected re-encoding.
+      expected = entry.key?("reencoded") ? entry["reencoded"] : encoded
 
-      assert_equal canonical(encoded), canonical(round_tripped), "round-trip mismatch for #{entry["name"]}"
+      assert_equal canonical(expected), canonical(round_tripped), "round-trip mismatch for #{entry["name"]}"
     end
   end
 end
@@ -50,6 +54,32 @@ class TestStableKey < Minitest::Test
 
       assert_equal entry["key"], Lunora.stable_wire_key(decoded), entry["name"]
     end
+  end
+end
+
+class TestShardKey < Minitest::Test
+  # "" is ABSENT on the wire, not "the shard named empty string". The runtime
+  # takes any string as a named shard and gives "" its own Durable Object, while
+  # this client treats "" and nil as one shard everywhere it matches a
+  # subscription or drains the queue. A port that sent it replayed a single
+  # queued write to one Durable Object and a BATCHED replay of that same write
+  # to another, with the optimistic overlay tracking neither.
+  def test_empty_shard_key_is_omitted
+    ConformanceManifest.covers("empty_shard_key_is_omitted")
+
+    [nil, ""].each do |absent|
+      refute Lunora.build_rpc_body("messages:list", {}, absent).key?("shardKey"), "shard key #{absent.inspect}"
+    end
+
+    assert_equal "tenant_a", Lunora.build_rpc_body("messages:list", {}, "tenant_a")["shardKey"]
+
+    client = Lunora::Client.new("https://app.example")
+
+    [nil, ""].each do |absent|
+      refute_includes client.send(:ws_url, absent), "shard=", "ws shard key #{absent.inspect}"
+    end
+
+    assert_includes client.send(:ws_url, "tenant_a"), "shard=tenant_a"
   end
 end
 
