@@ -269,7 +269,10 @@ const blockedReason = (uncovered: ReadonlyArray<DriftChange>, unresolvedMigratio
     fixLines.push(remediationFlagLines(command));
 
     return [
-        `deploy blocked: ${String(uncovered.length)} breaking schema change(s) since the last blessed schema baseline are not covered by a new migration:`,
+        // NOT "…not covered by a new migration": only a `"backfill"` change ever
+        // could be, so that phrasing would misdescribe why a dropped index or a
+        // shard-mode flip is in this list. Each summary states its own fix.
+        `deploy blocked: ${String(uncovered.length)} unresolved breaking schema change(s) since the last blessed schema baseline:`,
         summarize(uncovered),
         "",
         `To fix:\n${fixLines.join("")}Docs: https://lunora.dev/docs/migrations`,
@@ -291,8 +294,11 @@ const blockedReason = (uncovered: ReadonlyArray<DriftChange>, unresolvedMigratio
  * stranded-rows detector (see `shared/schema-snapshot.ts`), and that claim only
  * holds if an unrelated migration cannot wave it through.
  *
- * A `"rehome"` change is never coverable: its rows move to another Durable
- * Object or region, which no per-shard transform can do.
+ * Only a `"backfill"` change is coverable at all. A `"rehome"` change moves rows
+ * to another Durable Object or region and a `"code"` change breaks a call site;
+ * rewriting rows fixes neither, so a migration must not excuse them however well
+ * its table matches. Those are cleared by fixing the code or accepting the new
+ * shape (`--allow-schema-drift` / `--update-schema-baseline`).
  */
 const evaluateSchemaDrift = (options: {
     allowDrift?: boolean;
@@ -330,9 +336,14 @@ const evaluateSchemaDrift = (options: {
         return decide(false, `schema drift detected (all additive/safe):\n${summarize(drift.changes)}`);
     }
 
-    // `"rehome"` is excluded here, not just from the scaffold: no migration on any
-    // table can move rows between Durable Objects or regions.
-    const uncovered = breaking.filter((change) => change.remediation === "rehome" || change.table === undefined || !coveredTables.has(change.table));
+    // Only a `"backfill"` change is coverable, and only by a migration on its own
+    // table. `"rehome"` rows move to another Durable Object or region, which no
+    // per-shard transform reaches; a `"code"` change breaks a CALL SITE (a query
+    // that named a dropped index or relation), which rewriting rows cannot repair
+    // either — letting a same-table migration excuse one would ship a deploy whose
+    // callers still fail at runtime. Both are resolved by fixing the code or
+    // accepting the shape, which is what the message says.
+    const uncovered = breaking.filter((change) => !isBackfillable(change) || !coveredTables.has(change.table));
 
     if (uncovered.length === 0) {
         // Name the migrations that actually covered something, not every new id —

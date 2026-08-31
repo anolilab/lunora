@@ -40,7 +40,7 @@ change existing rows cannot satisfy blocks the deploy, names the field, and
 prints the command that scaffolds the migration it wants:
 
 ```text
-deploy blocked: 1 breaking schema change(s) since the last blessed schema baseline are not covered by a new migration:
+deploy blocked: 1 unresolved breaking schema change(s) since the last blessed schema baseline:
   - added required field users.displayName — existing rows have no value; add a data migration to backfill it
 
 To fix:

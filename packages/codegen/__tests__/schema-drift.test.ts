@@ -257,7 +257,7 @@ describe("schema-drift", () => {
             const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "backfill-messages", table: "messages" }] });
 
             expect(decision.blocked).toBe(true);
-            expect(decision.reason).toContain("not covered by a new migration");
+            expect(decision.reason).toContain("unresolved breaking schema change");
         });
 
         it("blocks a migration whose table codegen could not lift to a literal, and says so", () => {
@@ -288,6 +288,20 @@ describe("schema-drift", () => {
             // scaffold line nor as the bullet above it.
             expect(decision.reason).not.toContain("lunora migrate create");
             expect(decision.reason).not.toContain("defineMigration");
+        });
+
+        it("a dropped index stays blocked even with a migration on that very table", () => {
+            // Rewriting rows cannot repair a query that named the index. Letting a
+            // same-table migration excuse it would ship a deploy whose callers
+            // still fail at runtime — the flags are the honest escape.
+            expect.assertions(2);
+
+            const indexed = buildSchemaSnapshot(schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []);
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), ["touch-users"]);
+            const decision = evaluateSchemaDrift({ baseline: indexed, current, migrations: [{ id: "touch-users", table: "users" }] });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("removed index byName");
         });
 
         it("offers no migration for a dropped index — that is a code change, not a backfill", () => {

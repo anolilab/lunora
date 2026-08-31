@@ -173,7 +173,7 @@ describe("schema-drift gate", () => {
             expect(result.code).not.toBe(0);
             // wrangler was never reached.
             expect(calls).toHaveLength(0);
-            expect(errors.find((line) => line.includes("deploy blocked")) ?? "").toContain("not covered by a new migration");
+            expect(errors.find((line) => line.includes("deploy blocked")) ?? "").toContain("unresolved breaking schema change");
         });
 
         it("passes a blocked deploy when --allow-schema-drift is set", async () => {
