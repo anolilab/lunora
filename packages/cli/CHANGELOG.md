@@ -1,3 +1,15 @@
+## @lunora/cli [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.211...@lunora/cli@1.0.0-alpha.212) (2026-08-31)
+
+### Bug Fixes
+
+* **codegen:** carry each drift change's remediation on the change union ([#535](https://github.com/anolilab/lunora/issues/535)) ([07b4db6](https://github.com/anolilab/lunora/commit/07b4db603b96ed5c8c675f6c39867da6f7ef8a88))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.145
+* **@lunora/config:** upgraded to 1.0.0-alpha.179
+
 ## @lunora/cli [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.210...@lunora/cli@1.0.0-alpha.211) (2026-08-31)
 
 ### Bug Fixes
