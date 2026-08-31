@@ -1265,3 +1265,44 @@ describe("lunoraClient — identity-change coordinator restart promotes immediat
         }
     });
 });
+
+describe("lunoraClient — a follower fails loudly on the surfaces the leader cannot relay", () => {
+    it("throws from every socket-backed entry point once another tab is the known leader", async () => {
+        expect.assertions(8);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL });
+
+        try {
+            // Startup claim window: no leader is known yet, so this tab is on its
+            // way to self-promoting. That defer is legitimate and self-healing
+            // (`onBecomeLeader` replays every registered subscription), so it must
+            // NOT throw — a naive `!isLeader()` guard would break every single-tab
+            // `crossTabSync` app for the first `leaderTimeout` of its life.
+            expect(() => { client.subscribe(fnRef("q:list"), {}, () => undefined)(); }).not.toThrow();
+
+            const leader = new BroadcastChannel(clientChannel(client));
+
+            leader.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
+            await delay(30);
+
+            // Now another tab demonstrably owns the sockets. The cross-tab channel
+            // is leader→follower only (see `WsFollowerMessage`), so none of these
+            // could ever reach the server; each used to return a handle that looked
+            // live, fired nothing, and raised nothing.
+            expect(() => client.subscribe(fnRef("q:list"), {}, () => undefined)).toThrow(/cross-tab follower/);
+            expect(() => client.subscribeShape({ name: "todos" }, () => undefined)).toThrow(/cross-tab follower/);
+            expect(() => client.whisperSubscribe("typing", () => undefined)).toThrow(/cross-tab follower/);
+            expect(() => { client.whisper("typing", { at: 1 }); }).toThrow(/cross-tab follower/);
+            expect(() => { client.setConnectionContext({ roomId: "r" }); }).toThrow(/cross-tab follower/);
+            expect(() => client.acquireConnectionContext({ roomId: "r" })).toThrow(/cross-tab follower/);
+
+            // The HTTP surfaces are unaffected on every tab.
+            await expect(client.query(fnRef("q:list"), {})).resolves.toStrictEqual({});
+
+            leader.close();
+        } finally {
+            client.close();
+        }
+    });
+});

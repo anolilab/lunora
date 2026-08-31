@@ -351,13 +351,34 @@ export interface LunoraClientOptions {
     connectTimeoutMs?: number;
 
     /**
-     * When `true`, tabs sharing the same origin coordinate via BroadcastChannel
-     * so only one tab (the "leader") opens WebSocket connections to the server.
-     * Follower tabs receive subscription data through the channel instead.
+     * When `true`, tabs sharing the same origin (and the same signed-in identity)
+     * coordinate via BroadcastChannel so only one tab — the "leader" — opens
+     * WebSocket connections to the server. Reduces simultaneous WS connections,
+     * bandwidth, and cross-tab state drift. Requires `BroadcastChannel`
+     * (browser-only); silently ignored otherwise. Defaults to `false`.
      *
-     * Reduces simultaneous WS connections, bandwidth, and cross-tab state drift.
-     * Requires `BroadcastChannel` (browser-only); silently ignored otherwise.
-     * Defaults to `false`.
+     * **The channel is one-directional: leader → follower.** The leader
+     * broadcasts the values, errors, checkpoints and connection status of the
+     * subscriptions *it* holds; there is no frame with which a follower can ask
+     * the leader for anything. A follower therefore only ever sees a query the
+     * leader is independently subscribed to, and the socket-backed surfaces
+     * below are unavailable to it entirely:
+     *
+     * - `subscribe` — served only when the leader holds the same
+     *   `(fn, args, shardKey)`;
+     * - `subscribeShape`, `whisper`, `whisperSubscribe`, `setConnectionContext`,
+     *   `acquireConnectionContext`, `stream` — never served.
+     *
+     * Calling one of those on a tab that is a follower of a live leader throws
+     * `NOT_IMPLEMENTED` rather than returning a handle that never fires. (The
+     * brief window every tab spends claiming leadership at startup is not a
+     * follower state: a lone tab self-promotes and its registered subscriptions
+     * are sent then.) HTTP surfaces — `query`, `mutation`, `action`, the offline
+     * queue's replay — are unaffected on every tab.
+     *
+     * So: enable this when your tabs run the SAME app views over plain
+     * `subscribe`, and leave it off if tabs can sit on different routes or you
+     * use shapes, whispers, streams, or connection context.
      */
     crossTabSync?: boolean;
     fetch?: typeof fetch;

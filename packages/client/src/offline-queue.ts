@@ -19,8 +19,14 @@ interface QueuedMutation<T = unknown> {
     /**
      * Issuing identity fingerprint carried through to durable storage (`null` =
      * signed out). Absent on hydrated legacy records, which replay ambiently.
+     *
+     * Mutable so {@link OfflineQueue.restampIdentity} can relabel a still-queued
+     * write when the identity's LABEL changes but the credential does not (the
+     * `setAuthToken(token, userId)` case where the subject resolves a tick after
+     * the token). The value is re-persisted alongside, so the new label survives
+     * a reload and a requeue.
      */
-    readonly identity?: string | null;
+    identity?: string | null;
 
     /**
      * `true` when a live caller is still awaiting this write's `mutation()`
@@ -281,6 +287,58 @@ class OfflineQueue {
         }
 
         return [...shardKeys];
+    }
+
+    /**
+     * Relabel every queued write stamped `from` to `to`, in memory AND in durable
+     * storage.
+     *
+     * Used when the auth identity's LABEL changes while the credential does not —
+     * `setAuthToken(token, userId)` where the user id resolves a tick after the
+     * token was set. `setAuthToken` documents that this re-stamps in-flight
+     * queued writes rather than dropping them, and that promise only held for the
+     * caller's live in-memory stamp map, which is consumed and deleted on the
+     * first flush attempt. Everything durable still carried the old token hash,
+     * so a reload — or a transient-failure requeue after the token had since been
+     * refreshed — fell back to it, failed the replay identity gate, and rejected
+     * the SAME user's offline write with `OFFLINE_IDENTITY_CHANGED`.
+     *
+     * The durable rewrite is remove-then-append because `PersistenceAdapter.append`
+     * is an insert (the IndexedDB adapter's store has a unique index on `id`), not
+     * an upsert. Best-effort, like every other persistence call here: a failure
+     * leaves the record under its old stamp, which is exactly today's behaviour.
+     */
+    public restampIdentity(from: string | null, to: string | null): void {
+        for (const item of this.items) {
+            if (item.identity !== from) {
+                continue;
+            }
+
+            item.identity = to;
+
+            const { id } = item;
+
+            if (!this.persistence || id === undefined) {
+                continue;
+            }
+
+            const record: PersistedMutation = {
+                args: item.args,
+                clientId: item.clientId,
+                functionPath: item.functionPath,
+                id,
+                identity: to,
+                shardKey: item.shardKey,
+                ...(this.version === undefined ? {} : { version: this.version }),
+            };
+
+            this.persistence
+                .remove(id)
+                .then(async () => this.persistence?.append(record))
+                .catch((error: unknown) => {
+                    reportPersistenceError(this.onPersistenceError, "append", error, id);
+                });
+        }
     }
 
     /**

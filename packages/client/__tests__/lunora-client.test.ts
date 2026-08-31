@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { decodeWire } from "../../../shared/wire-codec";
+import { createClientQuery } from "../src/client-query-store";
 import { isConflictError } from "../src/errors";
 import type { OptimisticUpdate } from "../src/local-store";
 import { LunoraClient } from "../src/lunora-client";
@@ -4486,6 +4487,500 @@ describe("lunoraClient", () => {
 
             expect(result.rows).toEqual([]);
             expect(result.nextCursor).toBeUndefined();
+        });
+    });
+
+    // --- Audit regressions ------------------------------------------------------
+
+    describe("lunoraClient — reconnect backoff resets on proof of life, not on `open`", () => {
+        it("backs off across repeated open→TOKEN_EXPIRED→close cycles instead of retrying at the initial delay forever", async () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: {} }),
+                reconnect: { initialDelayMs: 100, jitter: false },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                client.subscribe(fnRef("q:list"), {}, () => undefined);
+
+                expect(sockets).toHaveLength(1);
+
+                // What an expired credential actually looks like: the server accepts
+                // the UPGRADE, then rejects the first frame and closes with 4001.
+                const expire = (): void => {
+                    const socket = latestSocket();
+
+                    socket.open();
+                    socket.receive({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" });
+                    socket.triggerClose();
+                };
+
+                expire();
+                await vi.advanceTimersByTimeAsync(100);
+
+                expect(sockets).toHaveLength(2);
+
+                expire();
+                // The second attempt owes 200ms. Resetting on `open` made every
+                // attempt owe the initial 100ms forever — a ~4-8 upgrades/sec storm.
+                await vi.advanceTimersByTimeAsync(100);
+
+                expect(sockets).toHaveLength(2);
+
+                await vi.advanceTimersByTimeAsync(100);
+
+                expect(sockets).toHaveLength(3);
+            } finally {
+                client.close();
+                vi.useRealTimers();
+            }
+        });
+
+        it("does reset the backoff once a non-error frame proves the socket is live", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: {} }),
+                reconnect: { initialDelayMs: 100, jitter: false },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                client.subscribe(fnRef("q:list"), {}, () => undefined);
+                latestSocket().open();
+                latestSocket().triggerClose();
+
+                await vi.advanceTimersByTimeAsync(100);
+
+                expect(sockets).toHaveLength(2);
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ id: firstSub(socket).id as string, type: "ack" });
+                socket.triggerClose();
+
+                // The ack proved the socket usable, so the backoff restarts at the
+                // initial delay rather than doubling to 200ms.
+                await vi.advanceTimersByTimeAsync(100);
+
+                expect(sockets).toHaveLength(3);
+            } finally {
+                client.close();
+                vi.useRealTimers();
+            }
+        });
+    });
+
+    describe("lunoraClient — the read cache is stamped with the delivering socket's identity", () => {
+        it("does not write the previous user's rows under the new user's identity after a switch", async () => {
+            expect.assertions(2);
+
+            const cache = createInMemoryQueryCache();
+            const puts: CachedQuery[] = [];
+            const recording: QueryCacheAdapter = {
+                clear: cache.clear,
+                load: cache.load,
+                put: async (key, entry) => {
+                    puts.push(entry);
+
+                    return cache.put(key, entry);
+                },
+                remove: cache.remove,
+            };
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: {} }),
+                queryCache: recording,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.setAuthToken("token-a", "user-a");
+
+            const identityA = client.currentIdentity();
+
+            client.subscribe(fnRef("q:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const subId = firstSub(socket).id as string;
+
+            // The user switches. Nothing closes user A's socket — the WS credential
+            // is pinned in the upgrade URL and only `setWsToken` bounces it.
+            client.setAuthToken("token-b", "user-b");
+
+            expect(client.currentIdentity()).not.toBe(identityA);
+
+            // ...and it keeps delivering user A's rows.
+            socket.receive({ cursor: 1, data: ["a-row"], id: subId, type: "data" });
+
+            // `close()` flushes the debounced cache writes.
+            client.close();
+            await flushMicrotasks();
+
+            expect(puts.map((entry) => entry.identity)).toStrictEqual([identityA]);
+        });
+    });
+
+    describe("lunoraClient — a re-stamped offline write keeps its new identity durably", () => {
+        it("rewrites the persisted record when a subject resolves on an unchanged token", async () => {
+            expect.assertions(3);
+
+            const persistence = createInMemoryPersistence();
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: {} }),
+                offlineQueue: { queueBeforeFirstConnect: true },
+                persistence,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                client.setAuthToken("token-1");
+
+                const tokenIdentity = client.currentIdentity();
+
+                // Queued while offline, stamped with the token hash (no subject yet).
+                client.mutation(fnRef("m:add"), { n: 1 }).catch(() => undefined);
+                await flushMicrotasks();
+
+                const before = await persistence.load();
+
+                expect(before.map((record) => record.identity)).toStrictEqual([tokenIdentity]);
+
+                // The user id resolves a tick later on the SAME credential — the
+                // sticky-`subject` re-stamp `setAuthToken` documents.
+                client.setAuthToken("token-1", "user-1");
+                await flushMicrotasks();
+
+                const subjectIdentity = client.currentIdentity();
+
+                expect(subjectIdentity).not.toBe(tokenIdentity);
+
+                const after = await persistence.load();
+
+                // Without the durable half of the re-stamp this record still carried
+                // the old token hash, so a reload (or a requeue after the token had
+                // since refreshed) rejected the same user's write as
+                // OFFLINE_IDENTITY_CHANGED.
+                expect(after.map((record) => record.identity)).toStrictEqual([subjectIdentity]);
+            } finally {
+                client.close();
+            }
+        });
+    });
+
+    describe("lunoraClient — a torn-down connection settles the streams it was carrying", () => {
+        /**
+         * A WebSocket double whose `close()` fires the `close` event on a LATER
+         * turn, the way a real browser socket does. The shared double above fires
+         * it synchronously, which accidentally hides this bug: `teardownConnection`
+         * clears `conn.socket` right AFTER calling `close()`, so a synchronous
+         * close still finds the identity guard satisfied and reaches
+         * `handleDisconnect`. With the real (deferred) ordering the guard has
+         * already tripped and nothing settles the stream.
+         */
+        const createDeferredCloseWebSocket = (): typeof WebSocket => {
+            class WS {
+                public readonly url: string;
+
+                public readyState = 0;
+
+                private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
+
+                public constructor(url: string) {
+                    this.url = url;
+                    deferredSockets.push(this);
+                }
+
+                public addEventListener(type: string, listener: (event?: unknown) => void): void {
+                    const existing = this.listeners.get(type) ?? [];
+
+                    existing.push(listener);
+                    this.listeners.set(type, existing);
+                }
+
+                public open(): void {
+                    this.readyState = 1;
+                    this.dispatch("open");
+                }
+
+                // eslint-disable-next-line class-methods-use-this -- test double: never actually sends
+                public send(): void {}
+
+                public close(): void {
+                    this.readyState = 3;
+                    setTimeout(() => {
+                        this.dispatch("close");
+                    }, 0);
+                }
+
+                private dispatch(type: string, event?: unknown): void {
+                    for (const listener of this.listeners.get(type) ?? []) {
+                        listener(event);
+                    }
+                }
+            }
+
+            return WS as unknown as typeof WebSocket;
+        };
+
+        const deferredSockets: { open: () => void }[] = [];
+
+        it("fails an in-flight stream when cross-tab leadership is lost instead of hanging its consumer", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+            deferredSockets.length = 0;
+
+            const client = new LunoraClient({
+                crossTabSync: true,
+                fetch: async () => jsonResponse({ result: {} }),
+                url: "https://app.example",
+                WebSocket: createDeferredCloseWebSocket(),
+            });
+
+            try {
+                client.subscribe(fnRef("q:list"), {}, () => undefined);
+
+                // Solo self-promotion (default 3s leaderTimeout) opens the socket.
+                await vi.advanceTimersByTimeAsync(3100);
+
+                expect(deferredSockets).toHaveLength(1);
+
+                deferredSockets[0]?.open();
+
+                const iterable = client.stream(fnRef("s:tail") as FunctionReference<"stream">, {});
+
+                let outcome = "pending";
+                const consumer = (async () => {
+                    for await (const _chunk of iterable) {
+                        /* drain */
+                    }
+                })().then(
+                    () => {
+                        outcome = "completed";
+                    },
+                    (error: unknown) => {
+                        outcome = (error as Error).message;
+                    },
+                );
+
+                // An identity change stops the coordinator, and a leader that stops
+                // fires `onStopBeingLeader` → `teardownConnection`. That clears
+                // `conn.socket` before the real `close` event lands, so the close
+                // listener trips its identity guard and `handleDisconnect` — the only
+                // other place that settles a shard's streams — never runs.
+                client.setAuthToken("token-1", "user-1");
+                await vi.advanceTimersByTimeAsync(10);
+
+                expect(outcome).toContain("torn down");
+
+                await consumer;
+            } finally {
+                client.close();
+                vi.useRealTimers();
+            }
+        });
+    });
+
+    describe("lunoraClient — close() stops the scheduled-jobs admin socket", () => {
+        it("closes the socket and stops its reconnect loop", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: {} }),
+                reconnect: { initialDelayMs: 50, jitter: false },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                client.subscribeScheduledJobs(() => undefined);
+
+                expect(sockets).toHaveLength(1);
+
+                const socket = latestSocket();
+
+                socket.open();
+                client.close();
+
+                // Its `closed` flag is closure-local, so nothing outside the returned
+                // unsubscribe used to reach it: the socket stayed open and its backoff
+                // loop kept reconnecting (re-minting a `WsTokenProvider` sub-token on
+                // every attempt) after the client was dead.
+                expect(socket.readyState).toBe(3);
+
+                await vi.advanceTimersByTimeAsync(500);
+
+                expect(sockets).toHaveLength(1);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+    });
+
+    describe("lunoraClient — a fresh write waits behind the post-reconnect replay", () => {
+        it("does not let a mutation issued during the flush overtake the queued write it must follow", async () => {
+            expect.assertions(5);
+
+            vi.useFakeTimers();
+
+            const deferreds: ((value: Response) => void)[] = [];
+            const fetchMock = vi.fn<typeof fetch>(
+                async () =>
+                    new Promise<Response>((resolve) => {
+                        deferreds.push(resolve);
+                    }),
+            );
+            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            try {
+                client.subscribe(fnRef("q:list"), {}, () => undefined);
+
+                const first = latestSocket();
+
+                first.open();
+                first.triggerClose();
+
+                client.mutation(fnRef("m:edit"), { v: 1 }).catch(() => undefined);
+                await vi.advanceTimersByTimeAsync(0);
+
+                expect(fetchMock).toHaveBeenCalledTimes(0);
+
+                await vi.advanceTimersByTimeAsync(600);
+
+                expect(sockets).toHaveLength(2);
+
+                latestSocket().open();
+                await vi.advanceTimersByTimeAsync(0);
+
+                // The queued write is replaying.
+                expect(fetchMock).toHaveBeenCalledTimes(1);
+
+                // `onOpen` flips `wsState` to "open" before it starts the flush, so
+                // this write's offline gate is already false — it used to race the
+                // replay straight to /rpc, and if it landed first the older write
+                // overwrote it.
+                client.mutation(fnRef("m:edit"), { v: 2 }).catch(() => undefined);
+                await vi.advanceTimersByTimeAsync(0);
+
+                expect(fetchMock).toHaveBeenCalledTimes(1);
+
+                deferreds[0]?.(jsonResponse({ commitCursor: 1, result: { ok: true } }));
+                await vi.advanceTimersByTimeAsync(1);
+
+                expect(fetchMock).toHaveBeenCalledTimes(2);
+            } finally {
+                client.close();
+                vi.useRealTimers();
+            }
+        });
+    });
+
+    describe("lunoraClient — close() releases the registries its comment claims", () => {
+        it("drops subscriptions, client-query subscribers and the hydrated read cache", async () => {
+            expect.assertions(4);
+
+            const cache = createInMemoryQueryCache();
+
+            await cache.put(queryCacheKey("q:seeded", "{}"), { identity: null, ts: Date.now(), value: ["seed"] });
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: {} }),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.whenReady();
+
+            const slot = createClientQuery("counter", 0);
+
+            client.subscribe(fnRef("q:list"), {}, () => undefined);
+            client.subscribeClientQuery(slot, () => undefined);
+
+            // No public surface reports retained closures, so read the registries a
+            // React state setter would otherwise be pinned in.
+            const internals = client as unknown as {
+                clientQueryStore: { subscribe: (reference: unknown, callback: unknown) => () => void };
+                hydratedQueryCache: Map<string, unknown>;
+                subscriptions: { all: () => unknown[] };
+            };
+            const {subscribers} = (client as unknown as { clientQueryStore: { subscribers: Map<string, Set<unknown>> } }).clientQueryStore;
+
+            expect(internals.subscriptions.all()).toHaveLength(1);
+            expect(subscribers.size).toBe(1);
+
+            client.close();
+
+            expect(internals.subscriptions.all()).toHaveLength(0);
+            expect(internals.hydratedQueryCache.size).toBe(0);
+        });
+    });
+
+    describe("lunoraClient — the settled watermark is monotonic", () => {
+        it("ignores a lower lastMutationId after the server's watermark row resets", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: {} }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                const checkpoints: { mutationId?: number }[] = [];
+
+                client.subscribe(fnRef("q:list"), {}, () => undefined, { onCheckpoint: (watermark) => checkpoints.push(watermark) });
+
+                const socket = latestSocket();
+
+                socket.open();
+
+                const subId = firstSub(socket).id as string;
+
+                socket.receive({ cursor: 1, id: subId, lastMutationId: 5, type: "settled" });
+                // A recycled DO / PITR restore restarts the watermark row lower.
+                socket.receive({ cursor: 2, id: subId, lastMutationId: 3, type: "settled" });
+
+                expect(checkpoints.map((watermark) => watermark.mutationId)).toStrictEqual([5, 5]);
+            } finally {
+                client.close();
+            }
+        });
+    });
+
+    describe("lunoraClient — deleteStorageObject defaults to failure", () => {
+        it("reports `deleted: false` when the worker omits the field", async () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ key: "a.txt" }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                // Every sibling admin verb defaults an absent field to failure; the
+                // studio renders this value as the row's outcome.
+                await expect(client.deleteStorageObject("a.txt")).resolves.toStrictEqual({ deleted: false, key: "a.txt" });
+            } finally {
+                client.close();
+            }
         });
     });
 });
