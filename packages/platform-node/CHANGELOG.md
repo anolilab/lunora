@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.38...@lunora/platform-node@1.0.0-alpha.39) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.99
+* **@lunora/platform:** upgraded to 1.0.0-alpha.22
+* **@lunora/queue:** upgraded to 1.0.0-alpha.39
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.101
+* **@lunora/do:** upgraded to 1.0.0-alpha.110
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.27
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.84
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.48
+* **@lunora/storage:** upgraded to 1.0.0-alpha.44
+
 ## @lunora/platform-node [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.37...@lunora/platform-node@1.0.0-alpha.38) (2026-08-30)
 
 
