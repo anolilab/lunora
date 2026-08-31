@@ -1,3 +1,22 @@
+## @lunora/cli [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.210...@lunora/cli@1.0.0-alpha.211) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.101
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.43
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.144
+* **@lunora/config:** upgraded to 1.0.0-alpha.178
+* **@lunora/d1:** upgraded to 1.0.0-alpha.99
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.101
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.84
+* **@lunora/seed:** upgraded to 1.0.0-alpha.96
+* **@lunora/testing:** upgraded to 1.0.0-alpha.136
+
 ## @lunora/cli [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.209...@lunora/cli@1.0.0-alpha.210) (2026-08-30)
 
 ### Bug Fixes
