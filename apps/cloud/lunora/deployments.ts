@@ -381,7 +381,7 @@ export const activate = mutation
         // A new release ends any rollout in progress: the loop above supersedes the
         // previously-live releases, which includes a rollout candidate, and leaving
         // the rollout set would keep routing traffic to a script just retired.
-        await context.db.patch(deployment.projectId, { activeDeploymentId: id, activeScriptName: deployment.scriptName, rollout: undefined });
+        await context.db.patch(deployment.projectId, { activeDeploymentId: id, activeScriptName: deployment.scriptName, rollout: null });
         // `activate` is the CI path — the most frequent pointer swap on the
         // platform — and it was the only one of the five that wrote no audit row.
         // "Who moved this project's stable URL, and when" was answerable for a
@@ -441,7 +441,7 @@ export const rollback = mutation
         // release — leaving it set would swap the pointer, report success, and keep
         // serving the candidate to its share of traffic. Rollback and Abort being
         // separate buttons is not a reason for Rollback to half-work.
-        await context.db.patch(target.projectId, { activeDeploymentId: id, activeScriptName: target.scriptName, rollout: undefined });
+        await context.db.patch(target.projectId, { activeDeploymentId: id, activeScriptName: target.scriptName, rollout: null });
         await context.db.insert("auditLog", {
             action: "deployment.rollback",
             actorUserId: deployKey ? "deploy-key" : (context.auth.userId ?? "unknown"),

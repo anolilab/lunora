@@ -92,7 +92,7 @@ describe(overageFleetPorts, () => {
 
         await ports.onRecovered?.("org_over");
 
-        expect(patch).toHaveBeenCalledWith("org_over", { suspendedAt: undefined, suspendedReason: undefined }, "organizations");
+        expect(patch).toHaveBeenCalledWith("org_over", { suspendedAt: null, suspendedReason: null }, "organizations");
 
         patch.mockClear();
         await ports.onRecovered?.("org_dun"); // dunning suspension must stay

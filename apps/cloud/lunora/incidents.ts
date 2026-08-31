@@ -72,7 +72,7 @@ export const setStatus = mutation
 
         const { now } = context;
 
-        await context.db.patch(id, status === "resolved" ? { closedAt: now, status, updatedAt: now } : { closedAt: undefined, status, updatedAt: now });
+        await context.db.patch(id, status === "resolved" ? { closedAt: now, status, updatedAt: now } : { closedAt: null, status, updatedAt: now });
 
         return id;
     });

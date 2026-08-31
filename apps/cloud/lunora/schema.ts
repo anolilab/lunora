@@ -914,14 +914,29 @@ export default defineSchema({
         .index("by_provider_event", ["provider", "providerEventId"], { unique: true }),
 
     paymentSessions: defineTable({
-        amountMinor: v.bigint(),
-        capturedMinor: v.bigint(),
+        // Minor units as `v.number()`, not `v.bigint()`.
+        //
+        // `defineSchema` REFUSES a bigint on a `.global()` table, and refuses it
+        // for a good reason: a global table stores one as decimal TEXT, which SQL
+        // compares lexicographically — "100" sorts before "25" — so `orderBy`, a
+        // range filter or an aggregate on the column silently returns wrong
+        // answers. Every table in this schema is `.global()`, so this was not a
+        // billing-only defect: the schema failed to construct and the control
+        // plane could not boot at all.
+        //
+        // A double holds minor units exactly to 2^53 — about ninety trillion
+        // dollars — so the precision a bigint was reaching for is not in question
+        // at any amount this will ever see. The alternative the error message
+        // offers, `v.string()`, buys equality only and would break the ordering
+        // these columns are read with.
+        amountMinor: v.number(),
+        capturedMinor: v.number(),
         createdAt: v.number(),
         currency: v.string(),
         provider: v.string(),
         providerSessionId: v.string(),
         referenceId: v.string(),
-        refundedMinor: v.bigint(),
+        refundedMinor: v.number(),
         state: v.string(),
         updatedAt: v.number(),
     })

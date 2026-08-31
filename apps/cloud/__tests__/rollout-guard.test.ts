@@ -182,7 +182,7 @@ describe(runRolloutGuard, () => {
         expect(result.aborted).toHaveLength(1);
 
         // All traffic returns to the active release.
-        expect(patch).toHaveBeenCalledWith("proj1", { rollout: undefined }, "projects");
+        expect(patch).toHaveBeenCalledWith("proj1", { rollout: null }, "projects");
         // Distinguishable from a human abort in the audit trail.
         expect(insert).toHaveBeenCalledWith(
             "auditLog",

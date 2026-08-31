@@ -104,7 +104,7 @@ describe("deployments.activate", () => {
 
         expect(patch).toMatchObject({ activeDeploymentId: "dep_new", activeScriptName: "app-v2" });
         // The property this file exists for: a new release ends any rollout.
-        expect(patch).toHaveProperty("rollout", undefined);
+        expect(patch).toHaveProperty("rollout", null);
     });
 
     it("supersedes the previously-live release of the same kind", async () => {
@@ -130,6 +130,6 @@ describe("deployments.rollback", () => {
         expect(patch).toMatchObject({ activeScriptName: "app-v1" });
         // The worse half of the original bug: rolling back a bad release while
         // leaving its canary serving a share of traffic, and reporting success.
-        expect(patch).toHaveProperty("rollout", undefined);
+        expect(patch).toHaveProperty("rollout", null);
     });
 });

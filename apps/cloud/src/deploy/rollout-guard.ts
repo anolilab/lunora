@@ -263,7 +263,7 @@ export const runRolloutGuard = async (database: ControlPlaneDatabase, options: {
 
         applied.push(abort);
         // eslint-disable-next-line no-await-in-loop -- at most a handful of rollouts abort in one tick
-        await database.patch(rollout.projectId, { rollout: undefined }, "projects");
+        await database.patch(rollout.projectId, { rollout: null }, "projects");
         // eslint-disable-next-line no-await-in-loop -- see above
         await database.insert("auditLog", {
             action: "deployment.rollout.auto_abort",

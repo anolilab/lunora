@@ -213,7 +213,7 @@ export const cancelDeletion = mutation
         const member = await assertMember(context, organizationId, ["owner"]);
         const { now } = context;
 
-        await context.db.patch(organizationId, { deletionRequestedAt: undefined });
+        await context.db.patch(organizationId, { deletionRequestedAt: null });
         await context.db.insert("auditLog", { action: "organization.deletion.cancel", actorUserId: member.userId, createdAt: now, organizationId });
     });
 

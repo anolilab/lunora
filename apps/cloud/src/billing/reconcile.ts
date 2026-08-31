@@ -150,7 +150,7 @@ export const overageFleetPorts = (
                 return;
             }
 
-            await database.patch(organizationId, { suspendedAt: undefined, suspendedReason: undefined }, "organizations");
+            await database.patch(organizationId, { suspendedAt: null, suspendedReason: null }, "organizations");
             await database.insert("auditLog", {
                 action: "organization.unsuspend",
                 actorUserId: "system:overage",

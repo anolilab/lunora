@@ -303,7 +303,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         } else if (!decision.suspend && organization.suspendedAt != null && organization.suspendedReason === "spend-cap") {
             // Only lift our own suspensions — dunning/support ones stay (GAPS.md C2).
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: undefined, suspendedReason: undefined });
+            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: null, suspendedReason: null });
             unsuspended += 1;
         }
     }

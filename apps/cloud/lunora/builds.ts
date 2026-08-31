@@ -195,8 +195,8 @@ export const complete = internalMutation
         await context.db.patch(buildId, {
             bundleHash,
             ...(deploymentId === undefined ? {} : { deploymentId }),
-            processingBy: undefined,
-            processingStartedAt: undefined,
+            processingBy: null,
+            processingStartedAt: null,
             status: "successful",
             successfulAt: now,
             updatedAt: now,
@@ -225,8 +225,8 @@ export const fail = internalMutation
         await context.db.patch(buildId, {
             error,
             failedAt: now,
-            processingBy: undefined,
-            processingStartedAt: undefined,
+            processingBy: null,
+            processingStartedAt: null,
             status: "failed",
             updatedAt: now,
         });
@@ -349,8 +349,8 @@ export const expireStale = internalMutation.mutation(async ({ ctx: context }): P
         await context.db.patch(build._id, {
             error: build.status === "pending" ? "no build runner picked this up within 24h" : "build lease expired without completion",
             failedAt: now,
-            processingBy: undefined,
-            processingStartedAt: undefined,
+            processingBy: null,
+            processingStartedAt: null,
             status: "failed",
             updatedAt: now,
         });

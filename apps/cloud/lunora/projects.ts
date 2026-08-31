@@ -253,7 +253,7 @@ export const setPreviewProtection = mutation
         await assertRowInOrg(context, id, organizationId, "project");
 
         if (password === null) {
-            await context.db.patch(id, { previewPasswordHash: undefined, previewPasswordSalt: undefined });
+            await context.db.patch(id, { previewPasswordHash: null, previewPasswordSalt: null });
             await context.db.insert("auditLog", {
                 action: "project.preview_protection.disable",
                 actorUserId: member.userId,

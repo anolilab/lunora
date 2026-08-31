@@ -216,7 +216,7 @@ describe("usage.enforceSpendCaps", () => {
 
         await enforceSpendCaps.handler(ctx, {});
 
-        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "org_1", patch: { suspendedAt: undefined, suspendedReason: undefined } });
+        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "org_1", patch: { suspendedAt: null, suspendedReason: null } });
     });
 });
 

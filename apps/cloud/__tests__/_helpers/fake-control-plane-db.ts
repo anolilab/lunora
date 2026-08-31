@@ -25,6 +25,28 @@ import type { ControlPlaneDatabase } from "../../src/store";
  * arguments rather than results.
  */
 
+/**
+ * The real store REFUSES a patch that sets a key to `undefined`.
+ *
+ * The shard-engine guard throws
+ * "use null to clear a nullable field, or omit the key to leave it unchanged",
+ * because an explicitly-undefined key used to write SQL NULL silently. Every
+ * fake here recorded the patch and returned, so fourteen call sites across the
+ * control plane — the build-queue lease, spend-cap recovery, preview-protection
+ * disable, org un-deletion, incident reopen and every rollout clear — were live
+ * 500s that the whole suite reported as passing.
+ *
+ * Modelling the refusal is what makes that a failing test rather than a failing
+ * deploy.
+ */
+const assertNoExplicitUndefined = (patch: Record<string, unknown>): void => {
+    for (const field of Object.keys(patch)) {
+        if (patch[field] === undefined) {
+            throw new Error(`Cannot patch field '${field}' to undefined — use null to clear a nullable field, or omit the key to leave it unchanged.`);
+        }
+    }
+};
+
 /** The real store's page cap. A drain bug only reproduces if the fake enforces it. */
 const FAKE_PAGE_SIZE = 1000;
 
@@ -112,7 +134,11 @@ const fakeControlPlaneDb = (
             return Promise.resolve({ continueCursor: isDone ? null : String(next), isDone, page });
         },
         insert: () => Promise.resolve("row_id"),
-        patch: () => Promise.resolve(undefined),
+        patch: (_id, patch) => {
+            assertNoExplicitUndefined(patch);
+
+            return Promise.resolve(undefined);
+        },
         ...spies,
     };
 };

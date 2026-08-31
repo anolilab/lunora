@@ -110,7 +110,7 @@ export const unclaim = mutation
             throw new LunoraError("NOT_FOUND", "installation not found in this organization");
         }
 
-        await context.db.patch(installation._id, { claimedAt: undefined, organizationId: undefined });
+        await context.db.patch(installation._id, { claimedAt: null, organizationId: null });
         await context.db.insert("auditLog", {
             action: "github.installation.unclaim",
             actorUserId: userId,

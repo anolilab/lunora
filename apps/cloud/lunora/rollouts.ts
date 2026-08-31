@@ -170,7 +170,7 @@ export const promoteRollout = mutation
         await context.db.patch(projectId, {
             activeDeploymentId: candidateId,
             activeScriptName: candidate.scriptName,
-            rollout: undefined,
+            rollout: null,
         });
         await context.db.insert("auditLog", {
             action: "deployment.rollout.promote",
@@ -202,7 +202,7 @@ export const abortRollout = mutation
             throw new LunoraError("CONFLICT", "no rollout in progress");
         }
 
-        await context.db.patch(projectId, { rollout: undefined });
+        await context.db.patch(projectId, { rollout: null });
         await context.db.insert("auditLog", {
             action: "deployment.rollout.abort",
             actorUserId: member.userId,
