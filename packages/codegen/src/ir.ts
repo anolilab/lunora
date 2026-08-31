@@ -351,8 +351,10 @@ export interface FunctionIR {
 /**
  * A `defineMigration({...})` declaration discovered in the user's lunora
  * sources. The emitted `LUNORA_MIGRATIONS` registry keys on {@link MigrationIR.id}; the
- * import wiring needs {@link MigrationIR.exportName}/{@link MigrationIR.filePath}. {@link MigrationIR.table} is
- * informational (the runtime object carries the authoritative value).
+ * import wiring needs {@link MigrationIR.exportName}/{@link MigrationIR.filePath}. The runtime object
+ * carries the authoritative {@link MigrationIR.table}, but the lifted value is
+ * load-bearing at build time: the schema-drift gate matches it against the
+ * tables with breaking drift, so a migration left at `""` covers nothing.
  */
 export interface MigrationIR {
     /** Export binding name, used to reference the module member in generated imports. */

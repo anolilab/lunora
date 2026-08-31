@@ -98,15 +98,40 @@ interface SchemaSnapshot {
  */
 type DriftScope = "schema" | "table";
 
+/**
+ * What actually fixes a change, so a consumer can name the right tool.
+ *
+ * - `"backfill"` — a `defineMigration` transform rewrites the affected rows.
+ *   The ONLY value for which a data migration is the answer.
+ * - `"rehome"` — the rows' physical storage moves (a different Durable Object,
+ *   or a different region). The per-shard runner only ever replaces a row inside
+ *   the shard it was handed, so no transform reaches these; the fix is an
+ *   export/import round trip, or a revert.
+ * - `"code"` — nothing happens to stored data; a query or a call site has to
+ *   change (a dropped index, a dropped relation).
+ * - `"none"` — additive, nothing to do.
+ *
+ * This lives HERE, next to the change union, for the same reason {@link DriftScope}
+ * does: a hand-maintained set of type names in the consumer gives zero
+ * compile-time pressure, so a new variant would silently default to whatever the
+ * set omits. The deploy gate uses this to decide both what a data migration may
+ * excuse and which tables it offers to scaffold one for — a wrong default there
+ * sends the operator to a tool that cannot work.
+ */
+type DriftRemediation = "backfill" | "code" | "none" | "rehome";
+
 /** One classified structural change between two snapshots. */
 interface DriftChange {
+    /** What fixes this change — see {@link DriftRemediation}. `"none"` for every `safe` change. */
+    remediation: DriftRemediation;
+
     /**
      * `"table"` means this table's own DDL moved (fields, indexes, shard mode) —
      * a relation whose foreign key lives on the OTHER table stays `"schema"`, so
      * the "changed" signal keeps meaning "this table's shape moved".
      */
     scope: DriftScope;
-    /** `"breaking"` changes need a data migration; `"safe"` changes are additive. */
+    /** `"breaking"` changes need attention before deploy; `"safe"` changes are additive. */
     severity: "breaking" | "safe";
     /** Human-readable, actionable description (used in the gate message). */
     summary: string;
@@ -272,6 +297,7 @@ const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, 
 
     if (old.kind !== field.kind) {
         changes.push({
+            remediation: "backfill",
             severity: "breaking",
             summary: `field ${tableName}.${name} changed type: ${old.kind} → ${field.kind} — add a data migration to convert existing values`,
             table: tableName,
@@ -282,6 +308,7 @@ const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, 
 
     if (old.optional && !field.optional) {
         changes.push({
+            remediation: "backfill",
             severity: "breaking",
             summary: `field ${tableName}.${name} became required — rows missing it would be invalid; add a data migration to backfill it`,
             table: tableName,
@@ -290,6 +317,7 @@ const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, 
         });
     } else if (!old.optional && field.optional) {
         changes.push({
+            remediation: "none",
             scope: "table",
             severity: "safe",
             summary: `field ${tableName}.${name} became optional`,
@@ -304,8 +332,16 @@ const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, 
 /** Classify a field present only in the CURRENT snapshot: optional ⇒ safe, required ⇒ needs a backfill. */
 const addedFieldChange = (tableName: string, name: string, field: FieldSnapshot): DriftChange =>
     field.optional
-        ? { scope: "table", severity: "safe", summary: `added optional field ${tableName}.${name}`, table: tableName, type: "addedOptionalField" }
+        ? {
+              remediation: "none",
+              scope: "table",
+              severity: "safe",
+              summary: `added optional field ${tableName}.${name}`,
+              table: tableName,
+              type: "addedOptionalField",
+          }
         : {
+              remediation: "backfill",
               severity: "breaking",
               summary: `added required field ${tableName}.${name} — existing rows have no value; add a data migration to backfill it`,
               table: tableName,
@@ -328,6 +364,7 @@ const diffFields = (tableName: string, baseline: TableSnapshot, current: TableSn
     for (const name of Object.keys(baseline.fields)) {
         if (current.fields[name] === undefined) {
             changes.push({
+                remediation: "backfill",
                 severity: "breaking",
                 summary: `removed field ${tableName}.${name} — add a data migration if stored data must be cleaned up`,
                 table: tableName,
@@ -344,13 +381,21 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
         const old = baseline.indexes[name];
 
         if (old === undefined) {
-            changes.push({ scope: "table", severity: "safe", summary: `added index ${name} on ${tableName}`, table: tableName, type: "addedIndex" });
+            changes.push({
+                remediation: "none",
+                scope: "table",
+                severity: "safe",
+                summary: `added index ${name} on ${tableName}`,
+                table: tableName,
+                type: "addedIndex",
+            });
 
             continue;
         }
 
         if (!indexesEqual(old, index)) {
             changes.push({
+                remediation: "code",
                 severity: "breaking",
                 summary: `index ${name} on ${tableName} changed shape — a query may have relied on the old index`,
                 table: tableName,
@@ -363,6 +408,7 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
     for (const name of Object.keys(baseline.indexes)) {
         if (current.indexes[name] === undefined) {
             changes.push({
+                remediation: "code",
                 severity: "breaking",
                 summary: `removed index ${name} on ${tableName} — a query that used \`.withIndex("${name}")\` would break`,
                 table: tableName,
@@ -377,13 +423,21 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
 const diffRelations = (tableName: string, baseline: TableSnapshot, current: TableSnapshot, changes: DriftChange[]): void => {
     for (const name of Object.keys(current.relations)) {
         if (baseline.relations[name] === undefined) {
-            changes.push({ scope: "schema", severity: "safe", summary: `added relation ${tableName}.${name}`, table: tableName, type: "addedRelation" });
+            changes.push({
+                remediation: "none",
+                scope: "schema",
+                severity: "safe",
+                summary: `added relation ${tableName}.${name}`,
+                table: tableName,
+                type: "addedRelation",
+            });
         }
     }
 
     for (const name of Object.keys(baseline.relations)) {
         if (current.relations[name] === undefined) {
             changes.push({
+                remediation: "code",
                 scope: "schema",
                 severity: "breaking",
                 summary: `removed relation ${tableName}.${name}`,
@@ -405,12 +459,13 @@ const diffExistingTable = (tableName: string, baseline: TableSnapshot, current: 
             // TODO(stranded-rows) in
             // `packages/studio/src/features/advisors/derive-insights.ts`. Soften
             // this severity and that detector becomes owed.
+            // Deliberately NOT `"backfill"`: `defineMigration` runs inside one
+            // shard and can only `replace` the row it was handed, so it cannot
+            // move a row between shards. Naming it here sends the operator to the
+            // one tool guaranteed not to work, at the exact moment the gate has
+            // their attention.
+            remediation: "rehome",
             severity: "breaking",
-            // Deliberately NOT "add a data migration": `defineMigration` runs
-            // inside one shard and can only `replace` the row it was handed, so
-            // it cannot move a row between shards. Naming it here sends the
-            // operator to the one tool guaranteed not to work, at the exact
-            // moment the gate has their attention.
             summary: `table ${tableName} changed shard mode: ${baseline.shardMode} → ${current.shardMode} — its physical storage moves, and existing rows do NOT follow the schema; re-home them with an export/import round trip (https://lunora.sh/docs/concepts/sharding#migrating-a-populated-table)`,
             table: tableName,
             scope: "table",
@@ -437,7 +492,7 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
         const old = baselineTables[tableName];
 
         if (old === undefined) {
-            changes.push({ scope: "table", severity: "safe", summary: `added table ${tableName}`, table: tableName, type: "addedTable" });
+            changes.push({ remediation: "none", scope: "table", severity: "safe", summary: `added table ${tableName}`, table: tableName, type: "addedTable" });
 
             continue;
         }
@@ -448,9 +503,16 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
     for (const tableName of Object.keys(baselineTables)) {
         if (current.tables[tableName] === undefined) {
             changes.push({
+                // NOT `"backfill"`, though this summary used to name one: a
+                // transform returns a document that replaces the SAME row in the
+                // SAME table, and its reader is read-only, so it can neither
+                // delete the rows nor copy them anywhere. The table is also gone
+                // from the schema by now, so the migration's target would not
+                // resolve. Export the shard if the data is wanted.
+                remediation: "rehome",
                 scope: "table",
                 severity: "breaking",
-                summary: `removed table ${tableName} — add a data migration if its data must be archived/cleaned up`,
+                summary: `removed table ${tableName} — its rows stay in each shard's SQLite, unreachable through the schema; export the shard first if the data must be kept`,
                 table: tableName,
                 type: "removedTable",
             });
@@ -467,6 +529,7 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
         const to = current.jurisdiction ?? "(none)";
 
         changes.push({
+            remediation: "rehome",
             scope: "schema",
             severity: "breaking",
             summary: `Durable Object jurisdiction changed from ${from} to ${to} — this re-homes every DO and strands all existing shard, scheduler, and session-DO data in the old region (no in-place migration; export then import to move it). Revert the change, or override the gate to proceed intentionally.`,
@@ -478,4 +541,15 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
 };
 
 export { diffSchemaSnapshots, hashSchemaSnapshot, isValidTableSnapshot, parseSnapshotJson, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot, sortKeys };
-export type { DriftChange, DriftScope, FieldSnapshot, IndexSnapshot, RelationSnapshot, SchemaDrift, SchemaSnapshot, SnapshotParseOutcome, TableSnapshot };
+export type {
+    DriftChange,
+    DriftRemediation,
+    DriftScope,
+    FieldSnapshot,
+    IndexSnapshot,
+    RelationSnapshot,
+    SchemaDrift,
+    SchemaSnapshot,
+    SnapshotParseOutcome,
+    TableSnapshot,
+};

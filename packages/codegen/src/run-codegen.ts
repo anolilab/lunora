@@ -1051,6 +1051,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             vectors: vectorsContent,
             workflows: workflowsContent,
         },
+        migrations,
         outputDirectory,
         platformDiagnostics: platformGate.diagnostics,
         queues,
@@ -1226,6 +1227,14 @@ export interface CodegenResult {
         /** WorkflowEntrypoint classes (`_generated/workflows.ts`); `""` (and not written) when no workflows are declared. */
         workflows: string;
     };
+
+    /**
+     * Data migrations discovered from `defineMigration` exports under `lunora/`,
+     * each with the table it iterates. The drift gate matches a NEW id against
+     * its table so a backfill only excuses breaking drift on the table it
+     * actually visits. Empty when the project declares none.
+     */
+    migrations: ReadonlyArray<MigrationIR>;
     outputDirectory: string;
 
     /**

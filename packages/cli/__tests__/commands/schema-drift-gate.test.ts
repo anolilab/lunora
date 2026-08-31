@@ -63,12 +63,12 @@ const introduceBreakingDrift = (): void => {
 };
 
 /** Append a `defineMigration` to `lunora/schema.ts` so a NEW migration id is discovered. */
-const addMigration = (id: string): void => {
+const addMigration = (id: string, table = "users"): void => {
     const migrationsPath = join(workdir, "lunora", "migrations.ts");
 
     writeFileSync(
         migrationsPath,
-        `import { defineMigration } from "@lunora/server";\n\nexport const fix = defineMigration({\n    id: "${id}",\n    table: "users",\n    up: (doc) => doc,\n});\n`,
+        `import { defineMigration } from "@lunora/server";\n\nexport const fix = defineMigration({\n    id: "${id}",\n    table: "${table}",\n    up: (doc) => doc,\n});\n`,
         "utf8",
     );
 };
@@ -153,6 +153,27 @@ describe("schema-drift gate", () => {
             expect(result.code).toBe(0);
             // Deploy proceeded — wrangler was spawned.
             expect(calls.length).toBeGreaterThan(0);
+        });
+
+        it("still blocks when the new migration iterates a DIFFERENT table", async () => {
+            // Pins the wiring, not just the rule: `runCodegen` must hand its
+            // discovered `migrations` to the gate. Drop that argument and the gate
+            // falls back to counting ids, and this deploy would sail through.
+            expect.assertions(3);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            introduceBreakingDrift();
+            addMigration("backfill-messages", "messages");
+
+            const { errors, logger } = silentLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).not.toBe(0);
+            // wrangler was never reached.
+            expect(calls).toHaveLength(0);
+            expect(errors.find((line) => line.includes("deploy blocked")) ?? "").toContain("unresolved breaking schema change");
         });
 
         it("passes a blocked deploy when --allow-schema-drift is set", async () => {

@@ -30,6 +30,54 @@ inside each shard's DO in resumable batches.
     backfills.
 </Callout>
 
+## The deploy gate tells you when you need one
+
+You do not have to work out which schema edits need a backfill. `lunora deploy`
+(and `prepare` / `verify`) diffs your schema against the committed baseline in
+`lunora/.lunora-schema.json` and classifies every change. Additive edits — a new
+optional field, a new table, an added index — are reported and let through. A
+change existing rows cannot satisfy blocks the deploy, names the field, and
+prints the command that scaffolds the migration it wants:
+
+```text
+deploy blocked: 1 unresolved breaking schema change(s) since the last blessed schema baseline:
+  - added required field users.displayName — existing rows have no value; add a data migration to backfill it
+
+To fix:
+  • Add a `defineMigration({ id, table, up })` in lunora/ for each affected table, then re-run this command — the baseline is re-blessed on a successful deploy, not by `lunora migrate` itself.
+
+    Scaffold the missing migration(s) — the generated `up` is an identity placeholder you must fill in:
+      lunora migrate create backfill_users --table users
+
+  • For backward-compatible changes (e.g. adding an optional field): pass `--allow-schema-drift` to skip the block.
+  • To accept the new shape without a migration (you know data is compatible): pass `--update-schema-baseline`.
+Docs: https://lunora.dev/docs/migrations
+```
+
+<Callout type="warn">
+    The scaffolded `up` is `(document) => document` — an identity transform. It satisfies the gate immediately, so a scaffold you forget to fill in ships the schema
+    change with no backfill behind it.
+</Callout>
+
+A migration only clears the drift on **the table it iterates**, so a backfill on
+`messages` will not wave through a required field added to `users`.
+
+Nor is a migration offered for every breaking change — only for the ones a
+per-document transform can actually fix (a new required field, a type change, an
+optional field made required, a dropped field). The rest name their own fix
+instead:
+
+| Change                                                                 | What clears it                                                                    |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Dropped index, changed index, dropped relation                         | Change the queries that used them, then accept the new shape                      |
+| Dropped table                                                          | Its rows stay in each shard's SQLite, unreachable — export the shard to keep them |
+| [Shard-mode flip](/docs/concepts/sharding#migrating-a-populated-table) | An export/import round trip; a per-shard transform cannot move rows between DOs   |
+| [Jurisdiction change](/docs/concepts/data-residency)                   | Export then import into the new region, or revert                                 |
+
+If you know the stored data is already compatible, `--allow-schema-drift` skips
+the block for one run and `lunora prepare --update-schema-baseline` accepts the
+new shape permanently.
+
 ## Schema migrations (global tables)
 
 `lunora migrate generate` parses `lunora/schema.ts`, filters to `.global()`

@@ -107,6 +107,7 @@ interface CodegenResult {
         vectors: string;
         workflows: string;
     };
+    migrations: ReadonlyArray<MigrationIR>;
     outputDirectory: string;
     platformDiagnostics: ReadonlyArray<PlatformDiagnostic>;
     queues: ReadonlyArray<QueueIR>;
@@ -188,12 +189,19 @@ const DEFAULT_TARGET = "cloudflare";
 
 ```ts
 interface DriftChange {
+    remediation: DriftRemediation;
     scope: DriftScope;
     severity: "breaking" | "safe";
     summary: string;
     table?: string;
     type: "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedFieldKind" | "changedIndex" | "changedJurisdiction" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "removedField" | "removedIndex" | "removedRelation" | "removedTable";
 }
+```
+
+### `DriftRemediation` (type)
+
+```ts
+type DriftRemediation = "backfill" | "code" | "none" | "rehome";
 ```
 
 ### `DriftScope` (type)
@@ -1276,6 +1284,7 @@ const evaluateSchemaDrift: (options: {
     baseline: SchemaSnapshot | undefined;
     command?: string;
     current: SchemaSnapshot;
+    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "table">>;
 }) => SchemaDriftDecision;
 ```
 
