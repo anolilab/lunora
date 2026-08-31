@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.144...@lunora/codegen@1.0.0-alpha.145) (2026-08-31)
+
+### Bug Fixes
+
+* **codegen:** carry each drift change's remediation on the change union ([#535](https://github.com/anolilab/lunora/issues/535)) ([07b4db6](https://github.com/anolilab/lunora/commit/07b4db603b96ed5c8c675f6c39867da6f7ef8a88))
+
 ## @lunora/codegen [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.143...@lunora/codegen@1.0.0-alpha.144) (2026-08-31)
 
 ### Bug Fixes
