@@ -1,3 +1,15 @@
+## @lunora/shard-engine [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.47...@lunora/shard-engine@1.0.0-alpha.48) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.22
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.43
+
 ## @lunora/shard-engine [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.46...@lunora/shard-engine@1.0.0-alpha.47) (2026-08-29)
 
 ### ⚠ BREAKING CHANGES
