@@ -1121,6 +1121,61 @@ describe("lunoraClient", () => {
             client.close();
         });
 
+        it("resets the reconnect backoff on a socket that stays open but receives no JSON frame", () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+            sockets.length = 0;
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                heartbeatIntervalMs: 0,
+                reconnect: { initialDelayMs: 1000, jitter: false },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                client.subscribe(fnRef("messages:list"), {}, () => undefined);
+                latestSocket().open();
+
+                // First drop: one initial-delay reconnect.
+                latestSocket().triggerClose();
+                vi.advanceTimersByTime(1000);
+
+                expect(sockets).toHaveLength(2);
+
+                // This socket is accepted but the server sends nothing — no ack for
+                // `connect`, and the keepalive pong is a plain string the JSON parse
+                // rejects. Staying open past the stability window is the only proof
+                // of acceptance it will ever have.
+                latestSocket().open();
+                vi.advanceTimersByTime(5000);
+                latestSocket().triggerClose();
+
+                // Backoff was reset, so this drop reconnects at the INITIAL delay
+                // again. Without the reset it had doubled to 2000ms and nothing
+                // would appear yet — every blip compounding to the 30s cap on a
+                // connection that was healthy throughout.
+                vi.advanceTimersByTime(1000);
+
+                expect(sockets).toHaveLength(3);
+
+                // A socket that does NOT survive the window earns no reset: the
+                // credential-rejection storm this backoff exists to damp closes
+                // well inside it.
+                latestSocket().open();
+                vi.advanceTimersByTime(100);
+                latestSocket().triggerClose();
+                vi.advanceTimersByTime(1000);
+
+                expect(sockets).toHaveLength(3);
+            } finally {
+                client.close();
+                vi.useRealTimers();
+            }
+        });
+
         it("keys reactive page subscriptions by their (lower, upper] cursor range", () => {
             expect.assertions(3);
 

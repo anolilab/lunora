@@ -149,6 +149,16 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const QUERY_CACHE_DEBOUNCE_MS = 250;
 
 /**
+ * How long a socket must stay open before its reconnect backoff is reset.
+ *
+ * Comfortably longer than a credential rejection takes: the server accepts the
+ * upgrade, reads the credential on the first frame, then sends `TOKEN_EXPIRED`
+ * and closes 4001 — all within a round trip. Anything still open after this has
+ * demonstrably been accepted.
+ */
+const SOCKET_STABLE_MS = 5000;
+
+/**
  * Maximum number of stream-start frames queued per connection while the
  * socket is (re)connecting. Past this cap, the oldest queued stream is
  * evicted (its consumer is failed with `STREAM_QUEUE_OVERFLOW`) so a stuck
@@ -256,6 +266,7 @@ interface ClientDebugShard {
     hasSocket: boolean;
     /** `undefined` for the default (unsharded) connection. */
     shardKey: string | undefined;
+
     /** Whether this shard's socket has ever completed a handshake — gates offline queueing. */
     wasEverConnected: boolean;
     wsState: WSState;
@@ -439,6 +450,24 @@ interface ShardConnection {
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
     socket: undefined | WebSocket;
+
+    /**
+     * Armed on `open`; resets the reconnect backoff if the socket is STILL open
+     * when it fires. Cleared on disconnect/close.
+     *
+     * The backoff is not reset on `open` (an upgrade is accepted before the
+     * credential is read) and cannot be reset on the first inbound frame alone:
+     * the server sends no ack for the `connect` envelope, and the keepalive pong
+     * is a plain string answered by the runtime without waking the DO — so a
+     * client with no active subscription may legitimately receive no JSON frame
+     * at all. Without this, every blip on such a socket doubled the delay with
+     * nothing ever resetting it, parking a healthy connection at the 30s cap.
+     *
+     * Surviving this window IS the proof: a rejected credential arrives as a
+     * `TOKEN_EXPIRED` frame and a 4001 close immediately after the upgrade, well
+     * inside it, and that path clears this timer before it can fire.
+     */
+    stableTimer: ReturnType<typeof setTimeout> | undefined;
     wasEverConnected: boolean;
     wsState: WSState;
 }
@@ -3355,8 +3384,15 @@ class LunoraClient {
         options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         this.assertOpen();
-        this.assertLeaderOwnedSurface("subscribe");
 
+        // NOT guarded by `assertLeaderOwnedSurface`, unlike the other
+        // socket-backed surfaces: a follower's `subscribe` is exactly how the
+        // cross-tab relay works. The registration below is what puts a
+        // `SubscriptionState` in `this.subscriptions`, and `onSubscriptionData`
+        // drops any broadcast whose key it cannot find there — so refusing a
+        // follower's `subscribe` would not merely fail that call, it would make
+        // the leader's entire broadcast path dead code and break every
+        // `useQuery` in every non-leader tab.
         const argsRecord = (args ?? {}) as Record<string, unknown>;
         const key = SubscriptionRegistry.key(function_.__lunoraRef, argsRecord, options.shardKey);
 
@@ -3780,13 +3816,19 @@ class LunoraClient {
      * `subscription-data` / `-error` / `-settled` / `connection-status` to
      * followers, and a follower has no frame with which to tell the leader what
      * it needs (see `cross-tab.ts`'s `WsFollowerMessage`, which is exactly
-     * heartbeat / claim-leadership / yield-leadership). So a follower's
-     * `subscribe` reached the server only when the LEADER happened to hold the
-     * same `(fn, args, shardKey)`, and `subscribeShape` / `whisper*` /
-     * `setConnectionContext` — none of which the leader broadcasts at all —
-     * never worked on a follower under any circumstances. All of them returned a
-     * handle that looked live, fired no callback, raised no error, and reported
-     * `connectionStatus() === "connected"` (mirrored from the leader).
+     * heartbeat / claim-leadership / yield-leadership). `subscribeShape` /
+     * `whisper*` / `setConnectionContext` / `acquireConnectionContext` — none of
+     * which the leader broadcasts at all — therefore never worked on a follower
+     * under any circumstances: each returned a handle that looked live, fired no
+     * callback, raised no error, and reported `connectionStatus() ===
+     * "connected"` (mirrored from the leader).
+     *
+     * `subscribe` is deliberately NOT in that set. A follower's `subscribe`
+     * registers the key the leader's broadcast is matched against, so it is the
+     * mechanism the relay is built on rather than a surface that silently fails.
+     * A follower sees a query only while the leader holds the same
+     * `(fn, args, shardKey)` — that is the documented shape of the option, not a
+     * defect.
      *
      * Failing here is the same choice `stream()` already made for the same
      * reason. See {@link LunoraClientOptions.crossTabSync} for what the option
@@ -3850,6 +3892,11 @@ class LunoraClient {
         if (conn.connectTimer !== undefined) {
             clearTimeout(conn.connectTimer);
             conn.connectTimer = undefined;
+        }
+
+        if (conn.stableTimer !== undefined) {
+            clearTimeout(conn.stableTimer);
+            conn.stableTimer = undefined;
         }
 
         this.stopHeartbeat(conn);
@@ -4586,6 +4633,7 @@ class LunoraClient {
                 reconnectTimer: undefined,
                 shardKey,
                 socket: undefined,
+                stableTimer: undefined,
                 wasEverConnected: false,
                 wsState: "idle",
             };
@@ -5173,6 +5221,16 @@ class LunoraClient {
                 /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
                 conn.wsState = "open";
                 conn.wasEverConnected = true;
+
+                // See `ShardConnection.stableTimer`: staying open past this
+                // window is the only proof of acceptance available to a socket
+                // that never receives a JSON frame.
+                clearTimeout(conn.stableTimer);
+                conn.stableTimer = setTimeout(() => {
+                    if (conn.wsState === "open") {
+                        conn.reconnect.reset();
+                    }
+                }, SOCKET_STABLE_MS);
                 /* eslint-enable no-param-reassign */
                 // NOT `conn.reconnect.reset()` — an upgrade is not proof of a
                 // usable connection. The server accepts the upgrade before it
@@ -5318,6 +5376,13 @@ class LunoraClient {
         if (conn.connectTimer !== undefined) {
             clearTimeout(conn.connectTimer);
             conn.connectTimer = undefined;
+        }
+
+        // The socket did not survive its stability window, so it never earned a
+        // backoff reset — this is the storm case the delay exists to damp.
+        if (conn.stableTimer !== undefined) {
+            clearTimeout(conn.stableTimer);
+            conn.stableTimer = undefined;
         }
 
         conn.socket = undefined;

@@ -144,6 +144,22 @@ const app = defineApp<Env>()
                 shardKey: ROOT_SHARD_KEY,
             }),
             parse: parseInboundEmail,
+            // SECURITY: Cloudflare Email Routing authenticates the RECIPIENT
+            // domain, never the sender, and this dispatch reaches
+            // `inbound:onEmail` over the root shard's ADMIN RPC — a Lunora
+            // function running with the admin bearer and RLS disabled. Without
+            // this gate anyone who can send mail to the routed address reaches
+            // that, choosing `from` freely.
+            //
+            // Fails closed on purpose: a `null` verdict means the receiving MX
+            // stamped no `Authentication-Results` header, which is "unknown",
+            // not "fine". DMARC passing is sufficient (it subsumes an aligned
+            // SPF or DKIM); otherwise both SPF and DKIM must pass on their own.
+            verify: (email) => {
+                const { dkim, dmarc, spf } = email.authentication;
+
+                return dmarc === "pass" || (spf === "pass" && dkim === "pass");
+            },
         });
 
         await handler(message as ForwardableEmailMessageLike, env, context);

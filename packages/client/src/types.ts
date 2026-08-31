@@ -362,16 +362,17 @@ export interface LunoraClientOptions {
      * **The channel is one-directional: leader → follower.** The leader
      * broadcasts the values, errors, checkpoints and connection status of the
      * subscriptions *it* holds; there is no frame with which a follower can ask
-     * the leader for anything. A follower therefore only ever sees a query the
-     * leader is independently subscribed to, and the socket-backed surfaces
-     * below are unavailable to it entirely:
+     * the leader for anything. So:
      *
-     * - `subscribe` — served only when the leader holds the same
-     *   `(fn, args, shardKey)`;
+     * - `subscribe` WORKS on a follower, and is how the relay delivers: the
+     *   registration is what the leader's broadcast key is matched against. The
+     *   follower sees a value only while the leader independently holds the same
+     *   `(fn, args, shardKey)`.
      * - `subscribeShape`, `whisper`, `whisperSubscribe`, `setConnectionContext`,
-     *   `acquireConnectionContext`, `stream` — never served.
+     *   `acquireConnectionContext`, `stream` — never served, because the leader
+     *   broadcasts nothing for them and a follower cannot ask.
      *
-     * Calling one of those on a tab that is a follower of a live leader throws
+     * Calling one of that second group on a tab that is a follower of a live leader throws
      * `NOT_IMPLEMENTED` rather than returning a handle that never fires. (The
      * brief window every tab spends claiming leadership at startup is not a
      * follower state: a lone tab self-promotes and its registered subscriptions
