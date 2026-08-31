@@ -387,6 +387,32 @@ class CachingShard extends ShardDO {
         hook(table, idOrScan);
     }
 
+    /**
+     * Test-only: make a NESTED `runCachedQuery` from inside an in-flight one —
+     * the shape a hand-written subclass produces when it wraps its own dispatch
+     * under the base one. Pass `outer` to thread the scope this dispatch was
+     * handed; omit it to reproduce what happens when a subclass forgets.
+     */
+    public nestedQuery(functionPath: string, args: Record<string, unknown>, outer?: QueryReadScope): Promise<unknown> {
+        return this.runCachedQuery(
+            functionPath,
+            args,
+            async (scope) => {
+                const handler = this.handlers.get(functionPath);
+
+                if (!handler) {
+                    throw new Error(`no handler for ${functionPath}`);
+                }
+
+                this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
+
+                return handler(args, scope);
+            },
+            undefined,
+            outer,
+        );
+    }
+
     /** Test-only: expose the protected `reactiveCache` field for assertions. */
     public cacheRef(): typeof this.reactiveCache {
         return this.reactiveCache;
@@ -1033,5 +1059,73 @@ describe("shardDO + reactiveCache: base dispatch wiring", () => {
         // Unset knobs are ABSENT, not `undefined` — spreading the slice must not
         // clobber an engine default with an explicit undefined.
         expect(bare.tuning()).toStrictEqual({});
+    });
+});
+
+describe("runCachedQuery nested dispatch", () => {
+    let state: ReturnType<typeof createFakeState>;
+    let shard: CachingShard;
+
+    beforeEach(() => {
+        state = createFakeState();
+        shard = new CachingShard(state, {}, { reactiveCache: {} });
+    });
+
+    // `runCachedQuery`'s `outer` parameter is the threaded successor to the old
+    // instance-field re-entry guard. Nothing in this repo passes it — the emitted
+    // shard deliberately never wraps `handleRpc`, and `ctx.runQuery` dispatches the
+    // handler directly — so without these two tests it is an untested claim about
+    // a hazard, which is the exact shape this cache shipped in for a year.
+    it("threads the outer scope so a nested query's reads land in the outer dep set", async () => {
+        expect.assertions(3);
+
+        shard.handlers.set("inner:list", async (_args, scope) => {
+            shard.stampRead(scope, "inner", "*scan");
+
+            return [{ id: "i1" }];
+        });
+        // The outer reads NOTHING directly — its result is entirely the inner's.
+        shard.handlers.set("outer:list", async (_args, scope) => shard.nestedQuery("inner:list", {}, scope));
+
+        await shard.handleRpc("outer:list", {});
+
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+
+        // The inner's table is the outer entry's only dependency, so writing it
+        // must evict the outer entry.
+        shard.cacheRef()?.invalidateTable("inner");
+
+        expect(shard.cacheRef()?.size().entries).toBe(0);
+
+        await shard.handleRpc("outer:list", {});
+
+        expect(shard.execCount.get("outer:list")).toBe(2);
+    });
+
+    it("without the outer scope the entry is stored dep-less and never invalidates — the hazard the parameter exists for", async () => {
+        expect.assertions(2);
+
+        shard.handlers.set("inner:list", async (_args, scope) => {
+            shard.stampRead(scope, "inner", "*scan");
+
+            return [{ id: "i1" }];
+        });
+        // A subclass that forgets to thread the scope: the nested call mints its
+        // own, so every read lands in the INNER dep set and the outer entry is
+        // stored depending on nothing at all.
+        shard.handlers.set("outer:list", async () => shard.nestedQuery("inner:list", {}));
+
+        await shard.handleRpc("outer:list", {});
+
+        shard.cacheRef()?.invalidateTable("inner");
+
+        // The outer entry survives a write to the only table its result derives
+        // from — permanently un-invalidatable stale data.
+        const outerStillCached = shard.execCount.get("outer:list");
+
+        await shard.handleRpc("outer:list", {});
+
+        expect(shard.execCount.get("outer:list")).toBe(outerStillCached);
+        expect(shard.cacheRef()?.size().entries).toBeGreaterThan(0);
     });
 });
