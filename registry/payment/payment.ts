@@ -11,10 +11,17 @@
  * wired in `createShardDO({ payment: (env) => ({ adapter: ..., ... }) })`.
  *
  * Stripe is the first-class adapter (via `@lunora/payment/stripe`) — see that
- * subpath for `createStripeAdapter(client, webhookSecret)`; Polar and other
- * providers are supported via the `PaymentAdapter` contract.
+ * subpath for `createStripeAdapter({ client, webhookSecret })`, which takes a
+ * single options object; Polar and other providers are supported via the
+ * `PaymentAdapter` contract.
  *
  * **Post-add wiring** (see `docs` in registry.json):
+ *   0. **Declare the payment tables in your own `lunora/schema.ts`.** Copy the
+ *      block from `lunora/payment/schema.ts` (shipped by this item) into your
+ *      `defineSchema({ … })` call. Codegen parses that file as an AST, so a
+ *      spread (`defineSchema({ ...paymentTables })`) is silently skipped, and a
+ *      `.extend(...)` merge would prefix the names the store reads. Skip this
+ *      and the first `ctx.payments.*` call fails with `UNKNOWN_TABLE`.
  *   1. Wire `payment: (env) => ({ adapter: ..., ... })` in your worker entry
  *      `createShardDO({ ... })` call — the adapter reads `STRIPE_SECRET_KEY`
  *      and `STRIPE_WEBHOOK_SECRET` from env.
@@ -28,10 +35,34 @@
  *      }));
  *      ```
  *   3. Run `lunora codegen` to wire `ctx.payments` onto ActionCtx.
- *   4. Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in `.dev.vars`
- *      (locally) and push to production with `wrangler secret put`.
+ *   4. Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `APP_BASE_URL` in
+ *      `.dev.vars` (locally) and push the secrets to production with
+ *      `wrangler secret put`.
  */
+import { env } from "cloudflare:workers";
+
 import { action, internalAction, query, v } from "#lunora/_generated/server.js";
+
+import { SUBSCRIPTIONS_TABLE } from "./schema.js";
+
+/**
+ * Public origin of this deployment, used to build the checkout return URLs and
+ * the billing-portal return URL. Read from env rather than the request: a Lunora
+ * context carries no `Request` (a mutation can be replayed, a query re-run from
+ * a live subscription), so there is nothing to derive an origin from at handler
+ * time. Set `APP_BASE_URL` in `.dev.vars` and in production.
+ */
+const appOrigin = (): string => {
+    const value = env["APP_BASE_URL"];
+
+    if (typeof value !== "string" || value === "") {
+        throw new Error(
+            "@lunora/payment registry item: missing env var `APP_BASE_URL` — set it in .dev.vars (and for production) so checkout/portal return URLs can be built.",
+        );
+    }
+
+    return new URL(value).origin;
+};
 
 /**
  * Start a checkout session and hand the client the redirect URL.
@@ -49,11 +80,11 @@ export const checkout = action
         }
 
         const result = await ctx.payments.createCheckout({
-            cancelUrl: `${new URL(ctx.request.url).origin}/payment/cancel`,
+            cancelUrl: `${appOrigin()}/payment/cancel`,
             mode: "subscription",
             priceId,
             referenceId,
-            successUrl: `${new URL(ctx.request.url).origin}/payment/success`,
+            successUrl: `${appOrigin()}/payment/success`,
         });
 
         return { url: result.url };
@@ -104,7 +135,7 @@ export const portal = action.action(async ({ ctx }): Promise<{ url: string }> =>
         throw new Error("@lunora/payment: portal requires an authenticated user");
     }
 
-    return ctx.payments.createPortalSession(referenceId, `${new URL(ctx.request.url).origin}/account`);
+    return ctx.payments.createPortalSession(referenceId, `${appOrigin()}/account`);
 });
 
 interface SubscriptionRow {
@@ -113,7 +144,19 @@ interface SubscriptionRow {
     state: string;
 }
 
-/** Reactive read of the webhook-synced subscriptions for the authenticated user. */
+/**
+ * Reactive read of the webhook-synced subscriptions for the authenticated user.
+ *
+ * A `query` rather than an action because this is the one payment read that
+ * should stay live — `ctx.payments` is ActionCtx-only, so it reads the
+ * `subscriptions` table directly. That table has to exist: declare it in your
+ * `lunora/schema.ts` from `lunora/payment/schema.ts` (see the file header).
+ *
+ * The `by_reference` index is given its `.eq()` predicate, so the scan is bounded
+ * to this caller's rows. Without it `withIndex("by_reference")` collects EVERY
+ * subscription row in the shard and filters in JS — a full-table read that grows
+ * with the customer base, on a path every signed-in page subscribes to.
+ */
 export const mySubscriptions = query.query(async ({ ctx }): Promise<SubscriptionRow[]> => {
     const referenceId = ctx.auth.userId;
 
@@ -121,9 +164,16 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
         throw new Error("@lunora/payment: mySubscriptions requires an authenticated user");
     }
 
-    const rows = await ctx.db.query("subscriptions").withIndex("by_reference").collect();
+    const rows = await ctx.db
+        .query(SUBSCRIPTIONS_TABLE)
+        .withIndex("by_reference", (q) => q.eq("referenceId", referenceId))
+        .collect();
 
-    return rows.filter((subscription) => subscription.referenceId === referenceId);
+    return rows.map((row) => ({
+        providerSubscriptionId: row["providerSubscriptionId"] as string,
+        referenceId: row["referenceId"] as string,
+        state: row["state"] as string,
+    }));
 });
 
 /**

@@ -29,33 +29,35 @@ Codegen discovers the `defineFlags()` call in `lunora/flags.ts` by AST and wires
 
 ```ts
 export default defineFlags({
-    provider: memoryProvider({
-        dark_mode: { defaultValue: false, type: "boolean" },
-        page_size: { defaultValue: 25, type: "number" },
-        beta_features: { defaultValue: false, type: "boolean" },
-    }),
     identify: (auth) => auth.userId ?? undefined,
+    provider: memoryProvider({
+        beta_features: false,
+        dark_mode: false,
+        page_size: 25,
+    }),
 });
 ```
 
 - **`provider`** — the OpenFeature provider that returns flag values. The shipped config uses `memoryProvider` (plain static values, no network calls). For production, swap to `flagshipProvider({ binding: "FLAGS" })`.
 - **`identify`** — a function that derives the OpenFeature targeting key from `auth` (the current request's authentication context). Used for gradual rollouts and targeted flag overrides.
 
+`memoryProvider` takes a plain **`key → value`** map: the value _is_ the flag's value. Do not wrap it in a descriptor object — `dark_mode: { defaultValue: false, type: "boolean" }` registers that object as the flag's value, so every typed read fails to match and silently falls back to its call-site default forever.
+
 ### Reading flags
 
-`ctx.flags` exposes typed readers matching OpenFeature's standard API:
+`ctx.flags` exposes typed readers matching OpenFeature's standard API. The fallback is **positional**, not an options object:
 
 ```ts
 const darkMode = await ctx.flags.boolean("dark_mode", false);
-const pageSize = await ctx.flags.number("page_size", { defaultValue: 25 });
-const greeting = await ctx.flags.string("greeting", { defaultValue: "Hello" });
-const config = await ctx.flags.object("feature_config", { defaultValue: {} });
+const pageSize = await ctx.flags.number("page_size", 25);
+const greeting = await ctx.flags.string("greeting", "Hello");
+const config = await ctx.flags.object("feature_config", {});
 ```
 
-Each reader returns the evaluated value, optionally merged with `details` (the OpenFeature `EvaluationDetails` with reason, variant, etc.):
+Each reader takes an optional third `EvaluationContext` argument. For the OpenFeature `EvaluationDetails` (reason, variant, …) instead of the bare value, use the parallel `details` namespace:
 
 ```ts
-const { value, variant, reason } = await ctx.flags.boolean("dark_mode", false, { details: true });
+const { value, variant, reason } = await ctx.flags.details.boolean("dark_mode", false);
 ```
 
 ### Client-side hooks
@@ -85,14 +87,16 @@ For a managed flag evaluation service with gradual rollouts, A/B testing, and a 
     }
     ```
 
-3. Swap the provider in `lunora/flags.ts`:
+3. Add `@cloudflare/flagship-binding` to your `package.json` — this item does not declare it, because the shipped in-memory provider needs no binding.
+
+4. Swap the provider in `lunora/flags.ts`:
 
     ```ts
     import { flagshipProvider } from "@lunora/flags/providers/flagship";
 
     export default defineFlags({
-        provider: flagshipProvider({ binding: "FLAGS" }),
         identify: (auth) => auth.userId ?? undefined,
+        provider: flagshipProvider({ binding: "FLAGS" }),
     });
     ```
 

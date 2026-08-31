@@ -2,8 +2,8 @@
     "$schema": "../schema/registry-item.schema.json",
     "name": "hyperdrive",
     "title": "Hyperdrive",
-    "description": "Bring-your-own Postgres or MySQL to Lunora actions via Cloudflare Hyperdrive — ctx.sql over postgres.js, node-postgres, or mysql2. Includes createHyperdrive() binding reader and adapter helpers.",
-    "docs": "Wire the adapter in your action handler: import { createHyperdrive, fromPostgresJs } from \"@lunora/hyperdrive\"; import postgres from \"postgres\"; then const { connectionString } = createHyperdrive(env.HYPERDRIVE); const sql = fromPostgresJs(postgres(connectionString)); const rows = await sql`select ...`; (see the source file header for a full example).",
+    "description": "Bring-your-own Postgres or MySQL to Lunora actions via Cloudflare Hyperdrive — a SqlClient over postgres.js, node-postgres, or mysql2. Includes createHyperdrive() binding reader and adapter helpers, plus a parameterised internalAction to copy.",
+    "docs": "Wire the adapter in your action handler: import { createHyperdrive, fromPostgresJs } from \"@lunora/hyperdrive\"; import postgres from \"postgres\"; then const { connectionString } = createHyperdrive(env.HYPERDRIVE); const sql = fromPostgresJs(postgres(connectionString)); const rows = await sql.query(\"select id from users where org = $1\", [orgId]); — the adapters return a SqlClient whose only method is query(text, params); it is NOT a tagged template. Values always go in params behind positional placeholders. The scaffolded queryUsers is an internalAction (server-only) on purpose: an action is public RPC, so a client-callable database read is an identity oracle. Deliberately no runQuery(sql) helper ships — see the source file header.",
     "requires": [],
     "deps": {
         "@lunora/hyperdrive": "workspace:*",
@@ -13,8 +13,18 @@
     "bindings": [
         {
             "path": ["hyperdrive"],
-            "value": [{ "binding": "HYPERDRIVE" }]
+            "value": [
+                {
+                    "binding": "HYPERDRIVE"
+                }
+            ]
         }
     ],
-    "files": [{ "from": "hyperdrive.ts", "to": "lunora/hyperdrive/index.ts", "merge": "create-or-skip" }]
+    "files": [
+        {
+            "from": "hyperdrive.ts",
+            "to": "lunora/hyperdrive/index.ts",
+            "merge": "create-or-skip"
+        }
+    ]
 }

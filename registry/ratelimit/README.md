@@ -13,7 +13,7 @@ lunora registry add ratelimit
 This:
 
 1. Adds `@lunora/ratelimit` and `@lunora/server` to your `package.json` (run `pnpm install` afterwards).
-2. Copies `lunora/ratelimit/schema.ts` (the limiter config + the `buckets` table + the plugin) and `lunora/ratelimit/index.ts` (the `consume` / `check` / `reset` functions) into your project — these are **yours** to edit.
+2. Copies `lunora/ratelimit/schema.ts` (the limiter config + the `buckets` table + the plugin) and `lunora/ratelimit/index.ts` (the server-only `consume` / `check` / `reset` functions) into your project — these are **yours** to edit.
 3. Splices a managed `.extend(ratelimit.extension)` into `lunora/schema.ts`, merging the `buckets` table in as **`ratelimit_buckets`** (extension tables are auto-prefixed with the plugin key).
 
 Then regenerate types:
@@ -37,21 +37,25 @@ export const limits = {
 
 ### Expose the functions
 
-Re-export from your `lunora/` entry so codegen discovers them (they emit as `ratelimit/consume`, `ratelimit/check`, `ratelimit/reset`):
+Re-export from your `lunora/` entry so codegen discovers them. They are `internal*` procedures, so they emit into the **`internal`** namespace as `internal.ratelimit.consume` / `.check` / `.reset` — reachable from your own server handlers, never from a client:
 
 ```ts
 // lunora/index.ts (or wherever you aggregate functions)
 export { check, consume, reset } from "./ratelimit/index.js";
 ```
 
-Call from a client:
+Call from a server handler that has already decided which key the caller may touch:
 
 ```ts
-const status = await client.mutation("ratelimit/consume", { name: "login", key: userId });
+const status = await ctx.runMutation(internal.ratelimit.consume, { name: "login", key: ctx.auth.userId ?? ctx.ip ?? "anon" });
 if (!status.ok) {
     throw new Error(`rate limited; retry in ${status.retryAfter}ms`);
 }
 ```
+
+#### Why these are server-only
+
+Every one of these takes the bucket `key` from its caller. As public RPC, `reset` lets anyone clear any bucket — which nullifies every limit the app enforces — and `consume` lets anyone burn a known victim's bucket (their user id, their IP) to lock them out; `check` is a free oracle over the same key space. A guard on the management endpoints does not help, because such a guard is keyed by the _caller_ while the damage lands on _another_ key. Limit real traffic with the middleware below instead, where the key is derived server-side.
 
 ### Or guard a procedure with the middleware
 

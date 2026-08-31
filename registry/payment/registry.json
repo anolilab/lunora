@@ -2,8 +2,8 @@
     "$schema": "../schema/registry-item.schema.json",
     "name": "payment",
     "title": "Payment",
-    "description": "Provider-agnostic payments for Lunora — Stripe-first checkout, metered usage tracking, entitlement checks, billing portal, and subscription queries built on @lunora/payment. Scaffolds the checkout / track / check / portal / subscriptions / webhook functions. The provider adapter is wired into createShardDO (see docs).",
-    "docs": "Wire the payment adapter into your Worker entry's createShardDO({ payment: (env) => ({ adapter: createStripeAdapter({ client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }), webhookSecret: env.STRIPE_WEBHOOK_SECRET }), authorize: (ref) => ref === ctx.auth.userId, entitlements: { plans: { pro: { features: ['export'], limits: { api_calls: 1000 }, priceIds: ['price_xxx'] } } } }) }) — the adapter reads STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET from env. Then add the POST /payment/webhook HTTP route (see the generated file header for the snippet), run `lunora codegen`, and set the secrets in .dev.vars (locally) and wrangler secret put for production.",
+    "description": "Provider-agnostic payments for Lunora — Stripe-first checkout, metered usage tracking, entitlement checks, billing portal, and subscription queries built on @lunora/payment. Scaffolds the checkout / track / check / portal / subscriptions / webhook functions plus the payment tables to declare in your schema. The provider adapter is wired into createShardDO (see docs).",
+    "docs": "FIRST: declare the payment tables in your own lunora/schema.ts by copying the block from the scaffolded lunora/payment/schema.ts (customers, events, paymentSessions, subscriptions, usageEvents). They must be declared INLINE and UNPREFIXED — codegen parses lunora/schema.ts as an AST so defineSchema({ ...paymentTables }) is silently skipped, and a .extend() merge would prefix the names @lunora/payment's store reads. Skip this step and the first ctx.payments.* call fails with UNKNOWN_TABLE. THEN wire the adapter into your Worker entry's createShardDO({ payment: (env) => ({ adapter: createStripeAdapter({ client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }), webhookSecret: env.STRIPE_WEBHOOK_SECRET }), authorize: (ref) => ref === ctx.auth.userId, entitlements: { plans: { pro: { features: ['export'], limits: { api_calls: 1000 }, priceIds: ['price_xxx'] } } } }) }) — createStripeAdapter takes a single options object. Then add the POST /payment/webhook HTTP route (see the generated file header for the snippet), run `lunora codegen`, and set APP_BASE_URL, STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in .dev.vars (wrangler secret put for the two secrets in production).",
     "requires": [],
     "deps": {
         "@lunora/payment": "workspace:*",
@@ -11,6 +11,12 @@
         "stripe": "^22.0.0"
     },
     "envVars": [
+        {
+            "name": "APP_BASE_URL",
+            "description": "Public origin of this deployment (e.g. https://app.example.com). Used to build the checkout success/cancel and billing-portal return URLs — a Lunora context carries no Request to derive an origin from.",
+            "value": "http://localhost:8787",
+            "secret": false
+        },
         {
             "name": "STRIPE_SECRET_KEY",
             "description": "Stripe secret key (test mode: sk_test_...). Obtain from the Stripe dashboard.",
@@ -22,5 +28,16 @@
             "secret": true
         }
     ],
-    "files": [{ "from": "payment.ts", "to": "lunora/payment/index.ts", "merge": "create-or-skip" }]
+    "files": [
+        {
+            "from": "schema.ts",
+            "to": "lunora/payment/schema.ts",
+            "merge": "create-or-skip"
+        },
+        {
+            "from": "payment.ts",
+            "to": "lunora/payment/index.ts",
+            "merge": "create-or-skip"
+        }
+    ]
 }
