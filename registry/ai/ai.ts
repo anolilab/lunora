@@ -12,6 +12,7 @@
  * control). Widen the bounds deliberately; don't remove them.
  */
 import { generateText } from "@lunora/ai";
+import { LunoraError } from "@lunora/errors";
 import { RateLimiter, createMemoryStore, rateLimit } from "@lunora/ratelimit";
 
 import { action, v } from "#lunora/_generated/server.js";
@@ -36,7 +37,10 @@ const limiter = new RateLimiter({
 /** The caller's id, or a clear failure — metered inference is never anonymous here. */
 const requireUser = (userId: string | null): string => {
     if (userId === null || userId === undefined) {
-        throw new Error(
+        // Coded, not a bare `Error`: an uncoded throw is redacted to a generic
+        // 500, so the caller sees a server fault instead of "sign in first".
+        throw new LunoraError(
+            "UNAUTHORIZED",
             "@lunora/ai registry item: this endpoint requires an authenticated user — Workers AI is metered. Pass `resolveIdentity` to `createWorker` (see the auth registry item) before exposing it.",
         );
     }

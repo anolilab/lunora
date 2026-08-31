@@ -2,13 +2,14 @@
     "$schema": "../schema/registry-item.schema.json",
     "name": "browser",
     "title": "Browser rendering",
-    "description": "Cloudflare Browser Rendering for Lunora — headless browser screenshots, PDFs, and HTML scraping via ctx.browser in actions. Powered by @cloudflare/playwright over the BROWSER binding.",
+    "description": "Cloudflare Browser Rendering for Lunora \u2014 headless browser screenshots, PDFs, and HTML scraping via ctx.browser in actions. Powered by @cloudflare/playwright over the BROWSER binding.",
     "requires": [],
     "deps": {
-        "@lunora/browser": "workspace:*",
-        "@lunora/server": "workspace:*",
         "@cloudflare/playwright": ">=1.0.0",
-        "@lunora/ratelimit": "workspace:*"
+        "@lunora/browser": "workspace:*",
+        "@lunora/errors": "workspace:*",
+        "@lunora/ratelimit": "workspace:*",
+        "@lunora/server": "workspace:*"
     },
     "bindings": [
         {
@@ -25,5 +26,5 @@
             "merge": "create-or-skip"
         }
     ],
-    "docs": "Rendering a caller-supplied URL is an SSRF sink on a metered service, so the scaffolded screenshot/pdf actions fail closed: they require an authenticated caller, accept only https: URLs whose host is listed in ALLOWED_RENDER_HOSTS (which ships EMPTY — add your hosts), and rate-limit per caller. Pin the same allowlist on the browser itself in your Worker entry: createShardDO({ browser: (env) => createBrowser({ allowedHosts: [\"example.com\"], binding: env.BROWSER, launch }) }) with import { launch } from \"@cloudflare/playwright\" — that is the hard guarantee (it also covers subresource requests) and is what satisfies the browser_user_url_without_allowlist advisor lint. Never set allowPrivateTargets: true."
+    "docs": "Rendering a caller-supplied URL is an SSRF sink on a metered service, so the scaffolded screenshot/pdf actions fail closed: they require an authenticated caller, accept only https: URLs whose host is listed in ALLOWED_RENDER_HOSTS (which ships EMPTY \u2014 add your hosts), and rate-limit per caller. Pin the same allowlist on the browser itself in your Worker entry: createShardDO({ browser: (env) => createBrowser({ allowedHosts: [\"example.com\"], binding: env.BROWSER, launch }) }) with import { launch } from \"@cloudflare/playwright\" \u2014 that is the hard guarantee (it also covers subresource requests) and is what satisfies the browser_user_url_without_allowlist advisor lint. Never set allowPrivateTargets: true."
 }

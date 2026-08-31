@@ -270,8 +270,16 @@ const encodeLogRecord = (log: ContainerLogInput, nowMs: number): unknown => {
  * const telemetry = createContainerTelemetry(); // reads LUNORA_OTLP_ENDPOINT / _TOKEN
  * await telemetry.trace("transcode", () => transcode(job), { jobId: job.id });
  * telemetry.emitLog({ level: "info", message: "done", attributes: { jobId: job.id } });
- * await telemetry.flush(); // before the process exits
+ * await telemetry.flush(); // REQUIRED before the process exits — see below
  * ```
+ *
+ * `flush()` is mandatory, not an optimisation. Spans and log records are
+ * BATCHED: nothing leaves the process until the batcher's timer elapses or
+ * `flush()` drains it, so a job that finishes and exits inside that window
+ * reports NOTHING without it. (Each emit used to be its own immediate POST,
+ * which is why an older caller could get away with omitting it.) A long job
+ * between flushes can also reach the batcher's item cap, which drops the OLDEST
+ * buffered records — flush at checkpoints, not only at exit.
  *
  * With no endpoint resolvable the returned exporter is disabled (`enabled ===
  * false`): `emitSpan`/`emitLog` no-op and `trace` still runs its work but records

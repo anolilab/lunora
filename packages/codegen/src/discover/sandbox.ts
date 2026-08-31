@@ -88,7 +88,7 @@ const discoverSandboxUsage = (project: Project, lunoraDirectory: string): Sandbo
             }
         }
 
-        if (usage.usesSandboxBrowser && usage.usesSandboxContainer && usage.usesSandboxFs) {
+        if (Object.values(TOOL_FLAGS).every((flag) => usage[flag])) {
             break;
         }
     }

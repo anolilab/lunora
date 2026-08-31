@@ -345,7 +345,8 @@ export interface ShardDOConfig {
     relationExistsPushDown?: "always" | "auto" | "never";
     /** Optional telemetry sink. When supplied, each `ctx.log.*` call is forwarded to `sink.onLog`. Pass the SAME sink you give `createWorker({ observability })` (which drives `onRpc`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
-    scheduler?: (env: Record<string, unknown>) => unknown;
+    /** Typed as `SchedulerLike`, not `unknown`: an `unknown` here forced an `as` at every use, which is exactly why the return type drifted from `Promise<string>` across four gates without anything failing. */
+    scheduler?: (env: Record<string, unknown>) => SchedulerLike;
     storage?: (env: Record<string, unknown>) => unknown;
 }
 
@@ -683,7 +684,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             }
 
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const scheduler = config.scheduler?.(env) ?? schedulerStub;
             const writer = createShardCtxDb({
                 // Admin and maintenance writes go through the SAME reactive-cache hooks as
                 // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
@@ -733,7 +734,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const scheduler = config.scheduler?.(env) ?? schedulerStub;
             const writer = createShardCtxDb({
                 // Admin and maintenance writes go through the SAME reactive-cache hooks as
                 // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
@@ -794,7 +795,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const scheduler = config.scheduler?.(env) ?? schedulerStub;
             const writer = createShardCtxDb({
                 // Admin and maintenance writes go through the SAME reactive-cache hooks as
                 // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
@@ -828,7 +829,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const scheduler = config.scheduler?.(env) ?? schedulerStub;
             const writer = createShardCtxDb({
                 // Admin and maintenance writes go through the SAME reactive-cache hooks as
                 // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
@@ -868,7 +869,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const scheduler = config.scheduler?.(env) ?? schedulerStub;
             const writer = createShardCtxDb({
                 // Admin and maintenance writes go through the SAME reactive-cache hooks as
                 // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
@@ -901,7 +902,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const scheduler = config.scheduler?.(env) ?? schedulerStub;
             const writer = createShardCtxDb({
                 // Admin and maintenance writes go through the SAME reactive-cache hooks as
                 // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
@@ -936,7 +937,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const scheduler = config.scheduler?.(env) ?? schedulerStub;
             const writer = createShardCtxDb({
                 // Admin and maintenance writes go through the SAME reactive-cache hooks as
                 // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
@@ -974,7 +975,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const scheduler = config.scheduler?.(env) ?? schedulerStub;
             const writer = createShardCtxDb({
                 // Admin and maintenance writes go through the SAME reactive-cache hooks as
                 // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
@@ -1022,7 +1023,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // reaches through, and pending jobs live in the SchedulerDO — nothing the
             // CDC changelog records — so reading them must forfeit a delta resume.
             // The scheduler's own `runAfter`/`runAt`/`cancel` are writes and stay unstamped.
-            const scheduler = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
+            const scheduler = markUnvouchableReads(config.scheduler?.(env) ?? schedulerStub, options.onRead, ["get", "list"]);
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally

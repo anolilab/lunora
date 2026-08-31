@@ -61,6 +61,11 @@ for sdk_dir in "$ROOT"/sdks/*/; do
     sdk_name="$(basename "$sdk_dir")"
     # `smoke/` holds the per-language consumer programs, not a port of its own.
     [ "$sdk_name" = "smoke" ] && continue
+    # Every port ships a README; a build/tool directory that appears here
+    # (`node_modules`, `.venv`, a future shared-fixtures dir) does not. Without
+    # this, any such directory makes BOTH drift gates fail permanently on a
+    # difference that is not a missing port.
+    [ -f "$sdk_dir/README.md" ] || continue
     DISCOVERED+=("$sdk_name")
 done
 

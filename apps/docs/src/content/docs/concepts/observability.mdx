@@ -631,7 +631,8 @@ const result = await telemetry.trace("transcode", () => transcode(job), { jobId:
 
 telemetry.emitLog({ level: "info", message: "done", attributes: { jobId: job.id } });
 
-// Before the process exits, flush any in-flight sends.
+// REQUIRED before the process exits. Spans and logs are batched, so nothing has
+// necessarily been sent yet — a job that exits without this reports nothing at all.
 await telemetry.flush();
 ```
 

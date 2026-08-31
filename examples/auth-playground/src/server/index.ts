@@ -42,8 +42,20 @@ export default {
         authReady ??= (async () => {
             const instance = buildAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB });
 
-            // Create tables via the raw-D1 Kysely migrator (the runtime adapter issues no DDL).
-            await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB }));
+            try {
+                // Create tables via the raw-D1 Kysely migrator (the runtime adapter issues no DDL).
+                await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB }));
+            } catch (error) {
+                // Memoising the PROMISE means a rejection is memoised too: without
+                // this, one failed cold-start migration (a D1 blip) would be
+                // replayed to every later request for the isolate's whole life,
+                // with no path back to a working state. Drop it so the next
+                // request retries.
+                // eslint-disable-next-line unicorn/no-null -- matches the declared `Promise<Auth> | null`; `??=` re-runs on either nullish value
+                authReady = null;
+
+                throw error;
+            }
 
             // Published only once the tables exist, so `resolveIdentity` below can
             // never observe a half-initialized instance.

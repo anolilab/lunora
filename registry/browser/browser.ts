@@ -44,6 +44,7 @@
  * `browser_user_url_without_allowlist` advisor lint); the check in this file is
  * the fail-closed default for the window before you have configured it.
  */
+import { LunoraError } from "@lunora/errors";
 import { RateLimiter, createMemoryStore, rateLimit } from "@lunora/ratelimit";
 
 import { action, v } from "#lunora/_generated/server.js";
@@ -86,7 +87,11 @@ const limiter = new RateLimiter({
  */
 const requireUser = (userId: string | null): string => {
     if (userId === null || userId === undefined) {
-        throw new Error(
+        // Coded, not a bare `Error`: an uncoded throw is redacted to a generic
+        // 500 on the way out, so the caller sees a server fault where the truth
+        // is "you are not signed in".
+        throw new LunoraError(
+            "UNAUTHORIZED",
             "@lunora/browser registry item: this endpoint requires an authenticated user. Pass `resolveIdentity` to `createWorker` (see the auth registry item), or add a deliberate public path with its own allowlist.",
         );
     }
@@ -107,15 +112,16 @@ const assertAllowedTarget = (url: string): string => {
     try {
         parsed = new URL(url);
     } catch {
-        throw new Error(`@lunora/browser registry item: \`${url}\` is not a valid URL.`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/browser registry item: \`${url}\` is not a valid URL.`);
     }
 
     if (parsed.protocol !== "https:") {
-        throw new Error(`@lunora/browser registry item: only https: URLs may be rendered (got \`${parsed.protocol}\`).`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/browser registry item: only https: URLs may be rendered (got \`${parsed.protocol}\`).`);
     }
 
     if (!ALLOWED_RENDER_HOSTS.has(parsed.hostname.toLowerCase())) {
-        throw new Error(
+        throw new LunoraError(
+            "FORBIDDEN",
             `@lunora/browser registry item: host \`${parsed.hostname}\` is not in ALLOWED_RENDER_HOSTS — add it there, and to \`createBrowser({ allowedHosts })\` in your Worker entry.`,
         );
     }

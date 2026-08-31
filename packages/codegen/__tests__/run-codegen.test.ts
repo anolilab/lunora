@@ -4377,7 +4377,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             // The scheduler is resolved once, typed for the ctx-db options surface.
             expect(output).toContain("SchedulerLike");
-            expect(output).toContain("const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;");
+            // No `as SchedulerLike`: the emitted config field is typed `=> SchedulerLike`,
+            // so the compiler checks the install rather than being told to trust it.
+            expect(output).toContain("const scheduler = config.scheduler?.(env) ?? schedulerStub;");
 
             // It is passed into the ORM writer (so DO triggers get ctx.scheduler) and reused on ctx via shorthand.
             // Sliced to the call's own closing `});` rather than a fixed byte window:

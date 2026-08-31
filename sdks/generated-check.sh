@@ -57,6 +57,9 @@ for sdk_dir in "$ROOT"/sdks/*/; do
     # `smoke/` holds the per-language consumer programs this script RUNS, not a
     # port of its own — excluded here for the same reason lint-all.sh excludes it.
     [ "$sdk_name" = "smoke" ] && continue
+    # Every port ships a README; a build/tool directory that appears here
+    # (`node_modules`, `.venv`, a future shared-fixtures dir) does not.
+    [ -f "$sdk_dir/README.md" ] || continue
     DISCOVERED+=("$sdk_name")
 done
 
