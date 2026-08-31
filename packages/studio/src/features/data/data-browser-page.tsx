@@ -116,8 +116,17 @@ const DataBrowserViewControls = ({
                         {`Delete ${total.toString()} matching`}
                     </ConfirmButton>
                 )}
-                {/* No `ConfirmButton`: the dialog IS the confirmation step — it names the row count and cannot be submitted without a parsed value. */}
-                {editable && total > 0 && (
+                {/*
+                 * Gated on an active predicate exactly like "Delete N matching", so the
+                 * label's "matching" is always true. Deliberately NOT offered unfiltered:
+                 * the whole-table equivalent is `clearTable`'s territory, which the
+                 * codebase already decided needs its own confirmed action rather than
+                 * riding on a predicate button.
+                 *
+                 * No `ConfirmButton` on top: the dialog is the confirmation step — it
+                 * names the row count and cannot be submitted without a parsed value.
+                 */}
+                {editable && total > 0 && (filter !== "" || filters.length > 0) && (
                     <button className={CONTROL_TOGGLE_BTN} data-testid="db-bulk-patch" onClick={onBulkPatch} type="button">
                         {`Set column on ${total.toString()} matching`}
                     </button>
@@ -289,6 +298,12 @@ const DataBrowserPage = ({
             {browser.writeError !== null && (
                 <p className="text-sm text-destructive" data-testid="db-write-error" role="alert">
                     {browser.writeError}
+                </p>
+            )}
+
+            {browser.writeNotice !== null && (
+                <p className="text-sm text-muted-foreground" data-testid="db-write-notice" role="status">
+                    {browser.writeNotice}
                 </p>
             )}
         </div>

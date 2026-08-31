@@ -2281,11 +2281,11 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `RunShardBulkDeleteArgs` (interface)
+### `RunShardBulkDeleteResult` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `RunShardBulkDeleteResult` (interface)
+### `RunShardBulkRowArgs` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 

@@ -849,12 +849,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
-                // `runShardBulkDelete` (a normal `/rpc` dispatch) calls this with no
-                // explicit `headroom`, so it falls back to `this.transactionHeadroom()`
-                // — the SAME per-dispatch meter every other write goes through, mirroring
-                // `buildCtx`'s `options.headroom ?? this.transactionHeadroom()`. The TTL
-                // sweep (an alarm work item, no dispatch in flight) passes its own
-                // by-value tracker explicitly instead.
+                // `runShardBulkRowOp` (a normal `/rpc` dispatch) calls this with no
+                // explicit `headroom`, so it falls back to `this.transactionHeadroom()`.
+                // For an ADMIN rpc that fallback resolves to `undefined`:
+                // `handleAdminRpc` answers before `beginDispatch`, so no per-dispatch
+                // meter is in flight and the bulk loop is bounded by its per-call row
+                // cap alone. The TTL sweep (an alarm work item, no dispatch in flight)
+                // passes its own by-value tracker explicitly instead.
                 headroom: headroom ?? this.transactionHeadroom(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
@@ -863,7 +864,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             // Routes through the writer (not raw SQL) so FTS / aggregate / rank
             // shadow tables stay in sync and `onDelete` cascades fire — the
-            // bounded loop lives in the base `runShardBulkDelete`.
+            // bounded loop lives in the base `runShardBulkRowOp`.
             await writer.delete(id);
         }
 

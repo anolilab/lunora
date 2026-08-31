@@ -1548,7 +1548,9 @@ describe("dataBrowser — structured filters and bulk delete", () => {
 
         const bulk = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.patchRows);
 
-        expect(bulk.length).toBeGreaterThanOrEqual(2);
+        // Exactly two: call one patches m1 and reports hasMore, call two patches m2
+        // and reports done. A third would mean the loop re-asked after the drain.
+        expect(bulk).toHaveLength(2);
         expect(bulk[0]?.[1]).toMatchObject({ doc: { text: "seen" }, filters: [{ column: "status", operator: "eq", value: "active" }] });
         // The second call resumes from the first call's cursor rather than
         // re-reading from the top.
@@ -2018,20 +2020,24 @@ describe("dataBrowser — table switch reset (STUDIO-01)", () => {
     });
 });
 
-// Mirrors `MAX_BULK_DELETE_BATCHES` in `use-data-browser.tsx` (not exported —
-// this test drives the client-side loop-exhaustion path directly).
-const MAX_BULK_DELETE_BATCHES = 200;
+// Mirrors `MAX_BULK_BATCHES` in `use-data-browser.tsx` (not exported — this test
+// drives the client-side loop-exhaustion path directly).
+const MAX_BULK_BATCHES = 200;
 
 /**
  * A `messages` table pre-loaded with more matching rows than
- * `MAX_BULK_DELETE_BATCHES × bulkCap` can drain in one bulk-delete run, so the
+ * `MAX_BULK_BATCHES × bulkCap` can drain in one bulk-delete run, so the
  * client's own batch loop runs out before the server ever reports
  * `hasMore: false` — exercising the STUDIO-02 truncation path, distinct from
  * `createFilterableClient`'s ordinary (server-completes) multi-batch drain.
  */
 const createCapExhaustingClient = (rowCount: number, bulkCap: number): MockClientHooks => {
     let rows = Array.from({ length: rowCount }, (_, index) => {
-        return { __id__: `m${index.toString()}`, status: "active", text: `row-${index.toString()}` };
+        // Zero-padded: the patch arm below resumes by a LEXICAL `id > after`, exactly
+        // as SQLite does, and `m10 < m9` would silently break the keyset walk.
+        const id = `m${index.toString().padStart(4, "0")}`;
+
+        return { __id__: id, status: "active", text: `row-${index.toString()}` };
     });
 
     return createMockClient({
@@ -2049,6 +2055,20 @@ const createCapExhaustingClient = (rowCount: number, bulkCap: number): MockClien
                 return { deleted: batch.length, hasMore: rows.length > 0 };
             }
 
+            if (reference === ADMIN_FUNCTIONS.patchRows) {
+                // Keyset, and the patch does NOT remove rows from the match set — the
+                // shape that makes the cursor load-bearing. Ids sort lexically, so the
+                // fixture pads them to a fixed width.
+                const { after = "", doc = {} } = args as { after?: string; doc?: Record<string, unknown> };
+                const remaining = rows.filter((row) => row["__id__"] > after);
+                const batch = remaining.slice(0, bulkCap);
+                const touched = new Set(batch.map((row) => row["__id__"]));
+
+                rows = rows.map((row) => (touched.has(row["__id__"]) ? { ...row, ...doc } : row));
+
+                return { cursor: batch.at(-1)?.["__id__"], hasMore: remaining.length > bulkCap, patched: batch.length };
+            }
+
             const { limit = 50, offset = 0, table } = args as { limit?: number; offset?: number; table: string };
 
             if (table !== "messages") {
@@ -2060,13 +2080,87 @@ const createCapExhaustingClient = (rowCount: number, bulkCap: number): MockClien
     });
 };
 
+describe("dataBrowser — bulk patch cap exhaustion and resume", () => {
+    /** Filter to the active rows and open the bulk-patch dialog on `text`. */
+    const patchTextTo = async (json: string): Promise<void> => {
+        fireEvent.click(screen.getByTestId("db-bulk-patch"));
+        fireEvent.change(await screen.findByTestId("bulk-patch-column"), { target: { value: "text" } });
+        fireEvent.change(screen.getByTestId("bulk-patch-value"), { target: { value: json } });
+        fireEvent.click(screen.getByTestId("bulk-patch-apply"));
+    };
+
+    const openFilteredTable = async (mock: MockClientHooks): Promise<void> => {
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "active" } });
+
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length === 0) {
+                throw new Error("filter not applied yet");
+            }
+        });
+    };
+
+    it("resumes from where the capped run stopped instead of rescanning from the top", async () => {
+        expect.assertions(3);
+
+        // 205 matching rows, 1 per call → the client stops itself at 200. The patch
+        // writes `text` while the filter is on `status`, so every patched row STILL
+        // matches: a re-run that restarted from the top would rewrite rows 1..200
+        // again and never reach the last five. This is the case the parked cursor
+        // exists for, and it is unreachable through the UI without it.
+        const mock = createCapExhaustingClient(MAX_BULK_BATCHES + 5, 1);
+
+        await openFilteredTable(mock);
+        await patchTextTo('"seen"');
+
+        await screen.findByTestId("db-write-error");
+
+        const firstRun = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.patchRows);
+
+        expect(firstRun).toHaveLength(MAX_BULK_BATCHES);
+
+        // Second, identical run: it must open at the cursor the first run parked,
+        // not at the empty-string cursor a fresh drain opens with.
+        await patchTextTo('"seen"');
+
+        await waitFor(() => {
+            const calls = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.patchRows);
+
+            if (calls.length <= MAX_BULK_BATCHES) {
+                throw new Error("second run has not started");
+            }
+        });
+
+        const secondRunFirstCall = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.patchRows)[MAX_BULK_BATCHES];
+
+        // 200 calls at one row each consumed m0000..m0199, so that is where the
+        // parked cursor sits — NOT the "" a fresh drain opens with.
+        expect((secondRunFirstCall?.[1] as { after?: string }).after).toBe("m0199");
+
+        // The remaining five get written, and the run reports a clean finish.
+        await waitFor(() => {
+            if (screen.queryByTestId("db-write-error") !== null) {
+                throw new Error("still truncated");
+            }
+        });
+
+        expect(screen.getByTestId("db-write-notice").textContent).toBe("5 rows written.");
+    });
+});
+
 describe("dataBrowser — bulk delete cap exhaustion (STUDIO-02)", () => {
     it("surfaces a truncation message when the client's batch cap is hit before the server reports done", async () => {
         expect.assertions(3);
 
         // 205 matching rows, capped at 1 row/call → needs 205 round-trips to
         // finish; the client stops itself at 200.
-        const mock = createCapExhaustingClient(MAX_BULK_DELETE_BATCHES + 5, 1);
+        const mock = createCapExhaustingClient(MAX_BULK_BATCHES + 5, 1);
 
         render(renderBrowser(mock, { editable: true, pageSize: 10 }));
 
@@ -2088,11 +2182,11 @@ describe("dataBrowser — bulk delete cap exhaustion (STUDIO-02)", () => {
 
         const errorElement = await screen.findByTestId("db-write-error");
 
-        expect(errorElement.textContent).toBe("Stopped after 200 batches — rows still match this delete. Run it again to remove the rest.");
+        expect(errorElement.textContent).toBe("Stopped after 200 batches — rows still match. Run it again to remove the rest.");
 
         const bulk = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.deleteRows);
 
-        expect(bulk).toHaveLength(MAX_BULK_DELETE_BATCHES);
+        expect(bulk).toHaveLength(MAX_BULK_BATCHES);
 
         // 205 rows − 200×1 deleted = 5 left; the refetch this triggers shows them
         // rather than a page that quietly still looks "done".

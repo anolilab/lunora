@@ -5,18 +5,11 @@ import { useState } from "react";
 // codec the row editor decodes with, so a tagged value typed here means what it
 // means everywhere else in the browser.
 import { decodeWire } from "../../../../../shared/wire-codec";
+import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import { Label } from "../../components/ui/label";
 import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
-
-/** Shared control-button class for dialog actions. */
-const BTN =
-    "rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50";
-
-/** Primary action button class. */
-const BTN_PRIMARY =
-    "rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:bg-primary/90 disabled:pointer-events-none disabled:opacity-50";
-
-const FIELD = "rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus-visible:border-ring";
 
 /** Props for the bulk-patch dialog. */
 interface BulkPatchDialogProps {
@@ -26,8 +19,8 @@ interface BulkPatchDialogProps {
     /**
      * Apply the change: shallow-merge `doc` into every row matching the browser's
      * ACTIVE filters/search. The caller drains the bounded server op and surfaces
-     * failures on the shared write-error banner, so this returns nothing and the
-     * dialog closes straight after.
+     * both the written-row count and any failure on the shared banners, so this
+     * returns nothing and the dialog closes straight after.
      */
     readonly onApply: (document_: Record<string, unknown>) => void;
     readonly onClose: () => void;
@@ -66,12 +59,15 @@ const BulkPatchDialog = ({ columns, onApply, onClose, table, total }: BulkPatchD
         setValueText(event.target.value);
     };
 
+    // Three states, not two: PRISTINE (nothing typed yet) is a hint, not a
+    // failure. Collapsing it into `parseError` would open the dialog showing a
+    // red `role="alert"` before the operator has touched anything.
+    const pristine = valueText.trim() === "";
+
     let value: unknown;
     let parseError: string | undefined;
 
-    if (valueText.trim() === "") {
-        parseError = t('Enter a JSON value — for example true, 0, null, or "done".');
-    } else {
+    if (!pristine) {
         try {
             value = decodeWire(JSON.parse(valueText));
         } catch (error) {
@@ -79,7 +75,7 @@ const BulkPatchDialog = ({ columns, onApply, onClose, table, total }: BulkPatchD
         }
     }
 
-    const canApply = column !== "" && parseError === undefined;
+    const canApply = column !== "" && !pristine && parseError === undefined;
 
     const onConfirm = (): void => {
         if (!canApply) {
@@ -104,16 +100,14 @@ const BulkPatchDialog = ({ columns, onApply, onClose, table, total }: BulkPatchD
                         })}
                     </p>
                 </div>
-                <button className="text-xs text-muted-foreground hover:text-foreground" data-testid="bulk-patch-close" onClick={onClose} type="button">
+                <Button data-testid="bulk-patch-close" onClick={onClose} size="xs" variant="ghost">
                     {t("Close")}
-                </button>
+                </Button>
             </div>
 
             <div className="flex items-center gap-2">
-                <label className="text-xs font-medium text-foreground" htmlFor="bulk-patch-column">
-                    {t("Column")}
-                </label>
-                <select className={FIELD} data-testid="bulk-patch-column" id="bulk-patch-column" onChange={onColumnChange} value={column}>
+                <Label htmlFor="bulk-patch-column">{t("Column")}</Label>
+                <select aria-label={t("Column")} data-testid="bulk-patch-column" id="bulk-patch-column" onChange={onColumnChange} value={column}>
                     {columns.map((name) => (
                         <option key={name} value={name}>
                             {name}
@@ -121,11 +115,9 @@ const BulkPatchDialog = ({ columns, onApply, onClose, table, total }: BulkPatchD
                     ))}
                 </select>
 
-                <label className="text-xs font-medium text-foreground" htmlFor="bulk-patch-value">
-                    {t("Value")}
-                </label>
-                <input
-                    className={`${FIELD} flex-1 font-mono`}
+                <Label htmlFor="bulk-patch-value">{t("Value")}</Label>
+                <Input
+                    className="flex-1 font-mono"
                     data-testid="bulk-patch-value"
                     id="bulk-patch-value"
                     onChange={onValueChange}
@@ -134,23 +126,31 @@ const BulkPatchDialog = ({ columns, onApply, onClose, table, total }: BulkPatchD
                 />
             </div>
 
-            {parseError === undefined ? (
-                <p className="font-mono text-xs text-muted-foreground" data-testid="bulk-patch-preview">
-                    {`${column} = ${valueText.trim()}`}
-                </p>
-            ) : (
+            {parseError !== undefined && (
                 <p className="text-xs text-destructive" data-testid="bulk-patch-error" role="alert">
                     {parseError}
                 </p>
             )}
 
+            {pristine && (
+                <p className="text-xs text-muted-foreground" data-testid="bulk-patch-hint">
+                    {t('Enter a JSON value — for example true, 0, null, or "done".')}
+                </p>
+            )}
+
+            {canApply && (
+                <p className="font-mono text-xs text-muted-foreground" data-testid="bulk-patch-preview">
+                    {`${column} = ${valueText.trim()}`}
+                </p>
+            )}
+
             <div className="flex justify-end gap-2">
-                <button className={BTN} data-testid="bulk-patch-cancel" onClick={onClose} type="button">
+                <Button data-testid="bulk-patch-cancel" onClick={onClose} size="xs" variant="outline">
                     {t("Cancel")}
-                </button>
-                <button className={BTN_PRIMARY} data-testid="bulk-patch-apply" disabled={!canApply} onClick={onConfirm} type="button">
+                </Button>
+                <Button data-testid="bulk-patch-apply" disabled={!canApply} onClick={onConfirm} size="xs">
                     {t("Set on {total} rows", { total: total.toString() })}
-                </button>
+                </Button>
             </div>
         </ModalShell>
     );

@@ -120,27 +120,48 @@ interface RunShardWriteResult {
 }
 
 /**
- * The bulk delete the data browser's "delete matching" / "clear table" actions
- * issue. The matching rows are collected on the shard (via the same
+ * The predicate half of every writer-routed bulk row op — "delete matching",
+ * "clear table", "set column on matching". The matching rows are collected on the shard (via the same
  * `filters` + `search` predicate `readTablePage` previews), then removed one at
  * a time THROUGH the schema-aware writer — never raw `DELETE` — so the FTS /
  * aggregate / rank shadow tables and `onDelete` cascades stay in sync, exactly
  * like a user mutation would.
  *
- * Bounded by design: at most `SHARD_BULK_DELETE_CAP` rows are removed per
+ * Bounded by design: at most `SHARD_BULK_ROW_CAP` rows are removed per
  * call and the result reports `hasMore`, so the caller loops a single bounded
  * server round-trip rather than deleting an unbounded set in one transaction.
  * The `clearTable` op is the same path with no predicate (it matches every row).
  */
-interface RunShardBulkDeleteArgs {
+interface RunShardBulkRowArgs {
+    /**
+     * Keyset cursor forwarded to `selectMatchingIds`. Its PRESENCE switches the id
+     * scan into ordered, resumable mode, so only an op that needs to resume sends
+     * it — see {@link RunShardBulkPatchArgs}.
+     */
+    after?: string;
     filters?: FilterClause[];
-    /** Per-call row cap; clamped server-side to `[1, SHARD_BULK_DELETE_CAP]`. */
+    /** Per-call row cap; clamped server-side to `[1, SHARD_BULK_ROW_CAP]`. */
     limit?: number;
     search?: string;
     table: string;
 }
 
-/** Outcome of a {@link RunShardBulkDeleteArgs} operation. */
+/**
+ * What the shared bulk-row engine reports: rows the per-row applier actually
+ * reached, the keyset cursor to resume from, and whether matches remain. Each
+ * dispatch arm renames `count` to the field its wire contract promises
+ * (`deleted` / `patched`).
+ */
+interface RunShardBulkRowResult {
+    /** Rows the applier reached in this call. */
+    count: number;
+    /** Last id scanned — the `after` for the next call. Absent when the batch was empty. */
+    cursor?: string;
+    /** `true` when matching rows remain beyond this batch. */
+    hasMore: boolean;
+}
+
+/** Outcome of a bulk delete on the wire. */
 interface RunShardBulkDeleteResult {
     /** Rows removed through the writer in this call. */
     deleted: number;
@@ -155,22 +176,16 @@ interface RunShardBulkDeleteResult {
  * writer (validators, FTS / aggregate / rank shadow tables, reactive
  * invalidation), never as a raw `UPDATE`.
  *
- * Bounded like {@link RunShardBulkDeleteArgs}, but resumed by an explicit
- * `after` CURSOR rather than by the write shrinking its own match set: a patch
+ * Bounded like the bulk delete, but it is the one row op that SENDS `after`,
+ * resuming from an explicit cursor rather than relying on the write shrinking its
+ * own match set: a patch
  * that leaves the row still matching (`priority = 1` → `seen = true` while the
  * filter is on `priority`) would otherwise re-read the same first batch on every
  * loop and never finish.
  */
-interface RunShardBulkPatchArgs {
-    /** Keyset cursor — the `cursor` a previous call returned. Omit for the first batch. */
-    after?: string;
+interface RunShardBulkPatchArgs extends RunShardBulkRowArgs {
     /** Fields to shallow-merge into each matching row. Must be a non-empty object. */
     doc: Record<string, unknown>;
-    filters?: FilterClause[];
-    /** Per-call row cap; clamped server-side to `[1, SHARD_BULK_ROW_CAP]`. */
-    limit?: number;
-    search?: string;
-    table: string;
 }
 
 /** Outcome of a {@link RunShardBulkPatchArgs} operation. */
@@ -502,10 +517,10 @@ const parseTablePageOrderBy = (raw: unknown): OrderByClause | undefined => {
  * Validate the `__lunora_admin__:deleteRows` payload. `table` must be a
  * non-empty string; `filters`/`search` mirror `readTablePage`'s predicate args
  * (so "delete matching" removes exactly the previewed rows) and a numeric
- * `limit` passes through to be clamped against `SHARD_BULK_DELETE_CAP`.
+ * `limit` passes through to be clamped against `SHARD_BULK_ROW_CAP`.
  * Throws a 400 `LunoraError` on a missing table, keeping the error shape uniform.
  */
-const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkDeleteArgs => {
+const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkRowArgs => {
     const table = typeof args["table"] === "string" ? args["table"] : "";
 
     if (table.trim() === "") {
@@ -561,7 +576,7 @@ const parseBulkPatchArgs = (args: Record<string, unknown>): RunShardBulkPatchArg
  * matches every row); a numeric `limit` passes through for the per-call cap.
  * Throws a 400 `LunoraError` on a missing table.
  */
-const parseClearTableArgs = (args: Record<string, unknown>): RunShardBulkDeleteArgs => {
+const parseClearTableArgs = (args: Record<string, unknown>): RunShardBulkRowArgs => {
     const table = typeof args["table"] === "string" ? args["table"] : "";
 
     if (table.trim() === "") {
@@ -1348,10 +1363,11 @@ export type {
     RunAsArgs,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
-    RunShardBulkDeleteArgs,
     RunShardBulkDeleteResult,
     RunShardBulkPatchArgs,
     RunShardBulkPatchResult,
+    RunShardBulkRowArgs,
+    RunShardBulkRowResult,
     RunShardCdcSyncArgs,
     RunShardExportArgs,
     RunShardImportArgs,

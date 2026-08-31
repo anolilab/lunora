@@ -3174,7 +3174,7 @@ const todosSchema: SchemaLike = {
  * Drives the `__lunora_admin__:deleteRows` / `clearTable` / `patchRows` ops
  * through a real schema-aware writer, mirroring the codegen-generated subclass'
  * `deleteRowThroughWriter` and `runShardWrite` overrides. The base
- * `runShardBulkDelete` / `runShardBulkPatch` own the bounded id-collection loop;
+ * `runShardBulkRowOp` owns the bounded id-collection loop;
  * this only supplies the per-row writer call, so the FTS / aggregate / rank
  * shadow tables stay in sync exactly like a single `writeRow`.
  */
@@ -3206,6 +3206,33 @@ class BulkOpsShard extends ShardDO {
             schema: todosSchema,
             sql: this.sql as SqlExec,
         });
+    }
+}
+
+/**
+ * A {@link BulkOpsShard} whose patch throws once `failAfter` rows have landed —
+ * the partial-write shape a `.unique()` violation or an OCC conflict produces
+ * mid-batch, where the rows before the failure are already committed.
+ */
+class FailingPatchShard extends BulkOpsShard {
+    private applied = 0;
+
+    public constructor(
+        state: ShardDOState,
+        environment: Record<string, unknown>,
+        private readonly failAfter: number,
+    ) {
+        super(state, environment);
+    }
+
+    protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+        if (this.applied >= this.failAfter) {
+            throw new Error("row write failed");
+        }
+
+        this.applied += 1;
+
+        return super.runShardWrite(args);
     }
 }
 
@@ -3433,7 +3460,10 @@ describe("shardDO admin bulk delete", () => {
                 // eslint-disable-next-line no-await-in-loop -- draining the bounded op is inherently sequential, exactly as the studio's loop does it
                 const response = await shard.fetch(
                     bulkRequest(ADMIN_FUNCTIONS.patchRows, {
-                        after,
+                        // `""` on the first call: its PRESENCE is what puts the id scan
+                        // into ordered keyset mode, so the returned cursor is a real
+                        // boundary rather than the last id of an arbitrary scan.
+                        after: after ?? "",
                         doc: { done: true },
                         filters: [{ column: "projectId", operator: "eq", value: "p1" }],
                         limit: 2,
@@ -3498,6 +3528,72 @@ describe("shardDO admin bulk delete", () => {
             const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.patchRows, { doc: { done: true } }));
 
             expect(response.status).toBe(400);
+        });
+
+        it("re-runs live subscribers after a partially-applied batch fails", async () => {
+            expect.assertions(3);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedProject(seed, "p1", 3);
+
+            // A socket subscribed to the table the patch writes. `sent` captures the
+            // frames the flush pushes; the state below has no `waitUntil`, so the
+            // fan-out is awaited synchronously and is observable once `fetch` resolves.
+            const sent: string[] = [];
+            const socket = {
+                deserializeAttachment: () => {
+                    return { admin: true, subs: { "s-1": { args: { table: "todos" }, functionPath: ADMIN_FUNCTIONS.readTablePage, table: "todos" } } };
+                },
+                send: (data: string) => {
+                    sent.push(data);
+                },
+            } as unknown as WebSocket;
+
+            // Fail on the third row, after two have already committed — the writer
+            // commits per row. Without the flush in the engine's `finally` the tables
+            // those two rows touched stay un-drained, and this subscriber keeps serving
+            // pre-patch values until some unrelated later write happens to flush.
+            const shard = new FailingPatchShard({ ...state, getWebSockets: () => [socket] }, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, 2);
+            const response = await shard.fetch(
+                bulkRequest(ADMIN_FUNCTIONS.patchRows, {
+                    doc: { done: true },
+                    filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                    table: "todos",
+                }),
+            );
+
+            expect(response.status).toBe(500);
+            // The two rows before the failure are committed, not rolled back.
+            expect(doneCount("p1")).toBe(2);
+            // …and the subscriber was told, rather than being left on a stale read.
+            expect(sent.some((raw) => (JSON.parse(raw) as { type: string }).type === "data")).toBe(true);
+        });
+    });
+
+    describe("selectMatchingIds ordering", () => {
+        it("leaves the uncursored (delete) scan unordered", () => {
+            expect.assertions(2);
+
+            // The ordering rides with the cursor and only with it. An unconditional
+            // `ORDER BY id` would swap the filtered delete's sequential table scan for
+            // an `id`-index walk plus a row seek per candidate, because the predicate
+            // reads `__doc__`, which that index does not cover — a regression on a path
+            // this feature never needed to touch.
+            const plan = (after?: string): string =>
+                database
+                    .raw(
+                        `EXPLAIN QUERY PLAN ${
+                            after === undefined
+                                ? `SELECT id FROM "todos" WHERE (json_extract("__doc__", '$.projectId') = ?) LIMIT ?`
+                                : `SELECT id FROM "todos" WHERE (json_extract("__doc__", '$.projectId') = ?) AND id > ? ORDER BY id LIMIT ?`
+                        }`,
+                    )
+                    .map((row) => String(row["detail"]))
+                    .join(" | ");
+
+            expect(plan()).not.toContain("INDEX");
+            expect(plan("m1")).toContain("INDEX");
         });
     });
 });

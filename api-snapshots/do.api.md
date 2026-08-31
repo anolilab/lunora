@@ -123,23 +123,24 @@ interface RunShardApplyCdcResult {
 }
 ```
 
-### `RunShardBulkDeleteArgs` (interface)
-
-```ts
-interface RunShardBulkDeleteArgs {
-    filters?: FilterClause[];
-    limit?: number;
-    search?: string;
-    table: string;
-}
-```
-
 ### `RunShardBulkDeleteResult` (interface)
 
 ```ts
 interface RunShardBulkDeleteResult {
     deleted: number;
     hasMore: boolean;
+}
+```
+
+### `RunShardBulkRowArgs` (interface)
+
+```ts
+interface RunShardBulkRowArgs {
+    after?: string;
+    filters?: FilterClause[];
+    limit?: number;
+    search?: string;
+    table: string;
 }
 ```
 
@@ -343,8 +344,7 @@ abstract class ShardDO {
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult>;
     protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult>;
     protected deleteRowThroughWriter(_table: string, _id: string, _headroom?: TransactionHeadroomTracker): Promise<void>;
-    protected runShardBulkDelete(args: RunShardBulkDeleteArgs): Promise<RunShardBulkDeleteResult>;
-    protected runShardBulkPatch(args: RunShardBulkPatchArgs): Promise<RunShardBulkPatchResult>;
+    protected runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>): Promise<RunShardBulkRowResult>;
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{
         before: number;
         total: number;
