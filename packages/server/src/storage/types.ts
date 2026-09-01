@@ -37,6 +37,7 @@ export interface StorageRuleContext<Context = unknown> {
     readonly auth: {
         readonly can: (permission: Permission | string) => boolean;
         readonly identity?: Record<string, unknown> | null;
+        /** Role labels from the identity's `roles` claim (see `PolicyContext.auth.roles`). */
         readonly roles: ReadonlyArray<string>;
         readonly userId: null | string;
     };

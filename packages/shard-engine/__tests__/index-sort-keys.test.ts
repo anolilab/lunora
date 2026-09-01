@@ -28,6 +28,9 @@ const schema = {
 /** The read shape the store emits for `findFirst({ where: { channelId } })`. */
 const FILTERED_READ = `SELECT id, _creationTime, "__doc__" FROM "messages" WHERE json_extract(__doc__, '$.channelId') = ? ORDER BY _creationTime ASC, id ASC LIMIT 2`;
 
+/** The read shape `paginate()` / `findMany({ limit })` / `.first()` emit with no filter and no `orderBy` at all. */
+const DEFAULT_SORT_READ = `SELECT id, _creationTime, "__doc__" FROM "messages" ORDER BY _creationTime ASC, id ASC LIMIT 21`;
+
 const planOf = (harness: ReturnType<typeof createSqliteExec>, query: string, ...parameters: unknown[]): string =>
     harness
         .raw(`EXPLAIN QUERY PLAN ${query}`, ...parameters)
@@ -47,6 +50,30 @@ describe("declared index sort keys", () => {
         expect(plan).toContain("USING");
         // The whole point: sorting every match to return two rows is what this
         // index shape exists to avoid.
+        expect(plan).not.toContain("TEMP B-TREE");
+    });
+
+    it("indexes the default sort itself, so an UNFILTERED page is an index walk", () => {
+        expect.assertions(3);
+
+        // The row table declares only `id TEXT PRIMARY KEY`, so before this
+        // nothing indexed the order EVERY unfiltered read sorts by and SQLite
+        // read the whole table into a temp B-tree to return the first 21 rows:
+        // 1317.9us over 50k rows against 10.8us on the walk, and O(table) per
+        // page rather than O(page). Unlike the declared-index case there is no
+        // filter here for an index to be chosen FOR — the ordering is the only
+        // reason an index can be used at all.
+        const harness = createSqliteExec();
+
+        runShardMigrations(harness.sql, schema);
+
+        const [row] = harness.raw(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'messages__by_creation'`);
+
+        expect(String(row?.["sql"])).toMatch(/_creationTime.*,\s*id\b/su);
+
+        const plan = planOf(harness, DEFAULT_SORT_READ);
+
+        expect(plan).toContain("messages__by_creation");
         expect(plan).not.toContain("TEMP B-TREE");
     });
 

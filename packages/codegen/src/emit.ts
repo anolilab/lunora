@@ -4519,7 +4519,6 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
                 ctx,
                 identity: identity?.identity ?? null,
                 rlsRequired: (schema as unknown as { rlsMode?: string }).rlsMode === "required",
-                roles: (ctx as { auth?: { roles?: readonly string[] } }).auth?.roles ?? [],
                 shapeWhere,
                 table: shape.table,
                 tablePublic: (schema as unknown as { tables: Record<string, { isPublic?: boolean }> }).tables[shape.table]?.isPublic === true,

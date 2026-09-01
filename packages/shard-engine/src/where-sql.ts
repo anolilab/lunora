@@ -336,32 +336,60 @@ const compileNode = <T>(where: WhereInput, strategy: WhereSqlStrategy<T>, fragme
  */
 const WHERE_LIST_PARAM_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
 
-/** Count the `in` / `notIn` operators anywhere in the tree, so the budget above can be split evenly between them. */
-const countLists = (node: unknown): number => {
+/**
+ * What the tree spends: how many `in`/`notIn` lists it holds (so the budget above
+ * can be split between them) and how many placeholders everything ELSE binds.
+ *
+ * The scalar count is what stops the budget from being a fiction. It was a fixed
+ * half of the cap, which assumed the other half covered "the comparators, the
+ * cursor, the limit" — but a keyset seek is not a fixed cost. It binds `2k-1`
+ * placeholders for `k` sort columns and `paginateWhere` can AND two of them, so a
+ * page over a wide `orderBy` spends far more than a lists-only budget accounts
+ * for, and the two together overrun the per-statement cap.
+ *
+ * Deliberately approximate, and only ever in the direction that TIGHTENS the
+ * list budget: `isNull` binds nothing but is counted as one, and a
+ * `__relationExists` marker counts as one rather than recursing into the
+ * subquery it compiles to. An over-count narrows a list; an under-count would be
+ * the failure this exists to prevent.
+ */
+const countParams = (node: unknown): { lists: number; scalars: number } => {
+    let lists = 0;
+    let scalars = 0;
+
+    const absorb = (branch: unknown): void => {
+        const nested = countParams(branch);
+
+        lists += nested.lists;
+        scalars += nested.scalars;
+    };
+
     if (Array.isArray(node)) {
-        return node.reduce<number>((total, branch) => total + countLists(branch), 0);
+        for (const branch of node) {
+            absorb(branch);
+        }
+
+        return { lists, scalars };
     }
 
     if (node === null || typeof node !== "object") {
-        return 0;
+        return { lists, scalars };
     }
-
-    let total = 0;
 
     for (const [key, value] of Object.entries(node)) {
         if (key === "in" || key === "notIn") {
-            total += 1;
-        } else if (key === "AND" || key === "NOT" || key === "OR") {
-            total += countLists(value);
+            lists += 1;
         }
-        // Anything else is a field whose value is either an equality literal or
-        // an operator object; only the latter can hold a list.
-        else if (isOperatorObject(value)) {
-            total += countLists(value);
+        // A structural branch, or a field whose value is an operator object —
+        // both recurse. Anything else is a field bound to one literal.
+        else if (key === "AND" || key === "NOT" || key === "OR" || isOperatorObject(value)) {
+            absorb(value);
+        } else {
+            scalars += 1;
         }
     }
 
-    return total;
+    return { lists, scalars };
 };
 
 /**
@@ -379,7 +407,7 @@ export const compileWhereSql = <T = SQL>(
         return undefined;
     }
 
-    const listCount = countLists(where);
+    const { lists: listCount, scalars } = countParams(where);
 
     if (listCount === 0) {
         return compileNode(where, strategy, fragments);
@@ -391,7 +419,12 @@ export const compileWhereSql = <T = SQL>(
     // `where` from computing a 0-placeholder budget; past 50 lists the
     // one-placeholder floor per list is itself the ceiling, and `maxInValues` /
     // the procedure's own arg validation is what bounds that.
-    const perList = Math.max(1, Math.floor(WHERE_LIST_PARAM_BUDGET / listCount));
+    //
+    // `Math.min` against what the rest of the tree has NOT already spent: the
+    // half-cap is a ceiling, never a floor, so this only ever tightens. A page
+    // whose keyset seek is wide gets a correspondingly narrower list budget
+    // instead of the two overrunning the cap between them.
+    const perList = Math.max(1, Math.floor(Math.min(WHERE_LIST_PARAM_BUDGET, WORKERD_SQLITE_LIMITS.boundParams - scalars) / listCount));
 
     // Rebinding `inList` is how the per-list budget reaches the leaf. A strategy
     // that supplied its own hook keeps it (bound to the budget); one that did not

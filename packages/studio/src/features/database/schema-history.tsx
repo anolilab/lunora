@@ -127,21 +127,27 @@ type ChangeAction = "added" | "changed" | "removed";
  * the kind a fixed-width column, so the names line up as something you can scan.
  */
 const CHANGE_SHAPE: Readonly<Record<DriftChange["type"], { action: ChangeAction; kind: string }>> = {
+    addedFieldConstraint: { action: "added", kind: "constraint" },
     addedIndex: { action: "added", kind: "index" },
     addedOptionalField: { action: "added", kind: "field?" },
     addedRelation: { action: "added", kind: "relation" },
     addedRequiredField: { action: "added", kind: "field" },
     addedTable: { action: "added", kind: "table" },
     changedFieldKind: { action: "changed", kind: "field kind" },
+    changedFieldShape: { action: "changed", kind: "field shape" },
     changedIndex: { action: "changed", kind: "index" },
     changedJurisdiction: { action: "changed", kind: "jurisdiction" },
     changedShardMode: { action: "changed", kind: "shard mode" },
     fieldOptionalToRequired: { action: "changed", kind: "field → required" },
     fieldRequiredToOptional: { action: "changed", kind: "field → optional" },
+    // All three relaxations drop something the column used to promise — `.unique()`,
+    // NOT NULL, a `.check()` predicate — so "removed constraint" is the honest verb.
+    relaxedFieldConstraint: { action: "removed", kind: "constraint" },
     removedField: { action: "removed", kind: "field" },
     removedIndex: { action: "removed", kind: "index" },
     removedRelation: { action: "removed", kind: "relation" },
     removedTable: { action: "removed", kind: "table" },
+    widenedFieldShape: { action: "changed", kind: "field → wider" },
 };
 
 /**

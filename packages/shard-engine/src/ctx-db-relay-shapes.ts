@@ -30,14 +30,24 @@
  *
  * ## Cleanup
  *
- * Rows are dropped when their relay detaches (its last socket closed) and the
- * whole table is cleared when the relay set empties — see
- * `OwnerRelay.removeRelayFromSet`. That is the only reclamation, deliberately:
- * a row for a subscription that has gone away pins the retention floor at its
- * cursor, but every heuristic that would guess at staleness (an age cut-off, a
- * cursor that hasn't moved) trades a bounded leak for a silent delete of a live
- * subscriber's range. The leak is bounded by relay lifetime; the delete would
- * be unbounded and invisible.
+ * A PROXY row is dropped when its socket unsubscribes or closes (the relay
+ * sends `relay_shape_unsubscribe`, see `relay.ts`), when its relay detaches, and
+ * when the relay set empties. The per-socket signal is the load-bearing one:
+ * `connectionId` is minted fresh per upgrade, so tying reclamation to relay
+ * lifetime — as this table first did — leaks a permanent row per connection on
+ * a relay that stays up, and each one pins the op-log retention floor at its
+ * cursor (`OwnerRelay.minShapeCursor` is a min over the registry). A single
+ * orphan on a quiet table holds `__cdc_log` retention forever while the
+ * operator's retention setting appears to do nothing at all.
+ *
+ * COHORT rows have no socket to key on — one row serves the whole relay set —
+ * so they are still reclaimed only on detach / full drain. Their count is
+ * bounded by the app's distinct relayed shapes rather than by traffic, which is
+ * the bound the per-connection rows never had.
+ *
+ * No staleness heuristic is used for either: an age cut-off or a cursor that
+ * hasn't moved would trade a bounded leak for a silent delete of a live
+ * subscriber's range.
  *
  * Modelled line for line on `ctx-db-shape-poke-cursor.ts`, its local-path
  * sibling.
@@ -50,6 +60,7 @@ import { sql as dsql } from "drizzle-orm";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
+import { relayProxyKey } from "./relay";
 import type { SubscriptionIdentity } from "./types";
 
 const RELAY_SHAPES_TABLE = "__lunora_relay_shapes";
@@ -190,6 +201,19 @@ const writeRelayShapeCursor = (sql: SqlExec, key: string, cursor: number): void 
     runDrizzle(sql, dsql`UPDATE ${dsql.identifier(RELAY_SHAPES_TABLE)} SET cursor = ${cursor} WHERE key = ${key}`);
 };
 
+/**
+ * Drop the proxy rows one relay socket owns — `subId` scopes it to a single
+ * subscription, and omitting it covers every shape the connection held (its
+ * socket closed). The per-socket reclamation the table lacked: a relay that
+ * stays up across many short-lived sockets otherwise accumulates one permanent
+ * row per connection, each one pinning the op-log retention floor.
+ */
+const deleteRelayShapesForConnection = (sql: SqlExec, relayIndex: number, connectionId: string, subId?: string): void => {
+    const scope = subId === undefined ? dsql`` : dsql` AND key = ${relayProxyKey(relayIndex, connectionId, subId)}`;
+
+    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(RELAY_SHAPES_TABLE)} WHERE relay_idx = ${relayIndex} AND connection_id = ${connectionId}${scope}`);
+};
+
 /** Drop every proxy row belonging to one relay (on `relay_detach` — its last socket closed, so its per-socket proxies are dead). Cohort rows have no `relay_idx` and are untouched. */
 const deleteRelayShapesForRelay = (sql: SqlExec, relayIndex: number): void => {
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(RELAY_SHAPES_TABLE)} WHERE relay_idx = ${relayIndex}`);
@@ -201,4 +225,13 @@ const deleteAllRelayShapes = (sql: SqlExec): void => {
 };
 
 export type { RelayShapeRow };
-export { deleteAllRelayShapes, deleteRelayShapesForRelay, migrateRelayShapes, readRelayShapes, RELAY_SHAPES_TABLE, writeRelayShape, writeRelayShapeCursor };
+export {
+    deleteAllRelayShapes,
+    deleteRelayShapesForConnection,
+    deleteRelayShapesForRelay,
+    migrateRelayShapes,
+    readRelayShapes,
+    RELAY_SHAPES_TABLE,
+    writeRelayShape,
+    writeRelayShapeCursor,
+};

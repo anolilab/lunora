@@ -480,6 +480,10 @@ const ERROR_CATALOG: {
         readonly status: 421;
         readonly title: "Replica is read-only";
     };
+    readonly SEARCH_INDEX_BUILDING: {
+        readonly status: 503;
+        readonly title: "Search index is still building";
+    };
     readonly SERVICE_UNAVAILABLE: {
         readonly status: 503;
         readonly title: "Service unavailable";

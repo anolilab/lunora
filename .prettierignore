@@ -73,3 +73,8 @@ sdks/**/.dart_tool/
 # object, never from the file's bytes, so on-disk spacing cannot shift a
 # schema version's identity.)
 **/.lunora-schema.json
+
+# Netlify's build output for the docs site. Gitignored, so it only exists in a
+# checkout where `apps/docs` has been built — and then `lint:prettier` fails on
+# a bundle no one wrote and no one can usefully format.
+**/.netlify

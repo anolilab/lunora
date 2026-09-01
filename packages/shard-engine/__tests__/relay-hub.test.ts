@@ -299,6 +299,118 @@ describe("owner shape registry across an eviction", () => {
     });
 });
 
+describe("relay-shape registry reclamation per socket", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const unsubscribe = async (
+        owner: NonNullable<ReturnType<typeof createRelayLink>>,
+        body: { connectionId: string; relayIndex: number; subId?: string },
+    ): Promise<void> => {
+        await owner.handleControl(
+            new Request("https://owner.internal/_lunora/relay", {
+                body: JSON.stringify({ ...body, type: "relay_shape_unsubscribe" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+    };
+
+    it("drops a departed socket's proxy row, so it stops pinning the op-log retention floor", async () => {
+        expect.assertions(3);
+
+        const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+        const seed = { cursor: 5 };
+        const { owner } = ownerFor(database.sql, relays, seed);
+
+        await subscribe(owner, SCOPED_SHAPE, 0, "c-alice");
+
+        // A later socket on the SAME relay, seeded further along.
+        seed.cursor = 50;
+        await subscribe(owner, SCOPED_SHAPE, 0, "c-bob");
+
+        expect(owner.minShapeCursor()).toBe(5);
+
+        // Alice's socket goes away. `connectionId` is minted fresh per upgrade,
+        // so nothing will ever reclaim her registration on its own: the relay
+        // stays up (bob is still on it), and detach is the only reclamation the
+        // table had. One orphan on a quiet table holds `__cdc_log` retention at
+        // its cursor forever while the operator's retention setting appears to
+        // do nothing.
+        await unsubscribe(owner, { connectionId: "c-alice", relayIndex: 0 });
+
+        expect(owner.minShapeCursor()).toBe(50);
+        // Durable too, not just this instance's cache — an evicted owner
+        // rehydrates the registry from the table.
+        expect(ownerFor(database.sql, relays).owner.minShapeCursor()).toBe(50);
+    });
+
+    it("scopes the drop to one subscription when the frame names a subId", async () => {
+        expect.assertions(2);
+
+        const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+        const seed = { cursor: 5 };
+        const { owner } = ownerFor(database.sql, relays, seed);
+
+        await subscribe(owner, SCOPED_SHAPE, 0, "c-alice");
+        seed.cursor = 50;
+        await subscribe(owner, SCOPED_SHAPE, 0, "c-bob");
+
+        // A subId this connection never registered leaves its row alone.
+        await unsubscribe(owner, { connectionId: "c-alice", relayIndex: 0, subId: "s-other" });
+
+        expect(owner.minShapeCursor()).toBe(5);
+
+        await unsubscribe(owner, { connectionId: "c-alice", relayIndex: 0, subId: "s1" });
+
+        expect(owner.minShapeCursor()).toBe(50);
+    });
+
+    it("has the relay send the release for its socket, addressed by connection", async () => {
+        expect.assertions(2);
+
+        const posts: Record<string, unknown>[] = [];
+        const attachment: SocketAttachment = { connectionId: "c-alice", shapes: { s1: OPEN_SHAPE }, subs: {} };
+        const socket = { send: () => {} } as unknown as ShardSocketLike;
+        const ownerStub = {
+            fetch: (_url: string, init?: { body?: string }) => {
+                posts.push(JSON.parse(init?.body ?? "{}") as Record<string, unknown>);
+
+                return Promise.resolve(new Response(undefined, { status: 204 }));
+            },
+        };
+
+        const relay = createRelayLink({
+            doName: () => `${OWNER_KEY}::relay::2`,
+            env: () => {
+                return { SHARD: { get: () => ownerStub, getByName: () => ownerStub, idFromName: (id: string) => id } };
+            },
+            getWebSockets: () => [socket],
+            readAttachment: () => attachment,
+            shardBinding: () => "SHARD",
+        } as unknown as RelayHost);
+
+        // eslint-disable-next-line vitest/no-conditional-in-test -- fixture narrowing, not an assertion: `createRelayLink` is typed `RelayLink | undefined` and the rest of the test needs the link
+        if (relay === undefined) {
+            throw new Error("expected a relay link for a `::relay::` DO name");
+        }
+
+        // The socket-close shape: no subId, so the owner drops every shape this
+        // connection held.
+        await relay.releaseRelayShapes(socket);
+
+        expect(posts).toHaveLength(1);
+        expect(posts[0]).toStrictEqual({ connectionId: "c-alice", relayIndex: 2, type: "relay_shape_unsubscribe" });
+    });
+});
+
 describe("relay-side delivery gate", () => {
     /** A relay DO's collaborator, with one socket holding one shape subscription. */
     const relayFor = (seedCursor: number) => {

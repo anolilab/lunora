@@ -194,7 +194,7 @@ interface DriftChange {
     severity: "breaking" | "safe";
     summary: string;
     table?: string;
-    type: "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedFieldKind" | "changedIndex" | "changedJurisdiction" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "removedField" | "removedIndex" | "removedRelation" | "removedTable";
+    type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }
 ```
 
@@ -262,8 +262,17 @@ const FLAGS_FILENAME = "flags.ts";
 
 ```ts
 interface FieldSnapshot {
+    fields?: Record<string, FieldSnapshot>;
+    key?: FieldSnapshot;
     kind: string;
+    literal?: string;
+    members?: ReadonlyArray<FieldSnapshot>;
+    nullable?: boolean;
+    of?: FieldSnapshot;
     optional: boolean;
+    ref?: string;
+    refined?: boolean;
+    unique?: boolean;
 }
 ```
 

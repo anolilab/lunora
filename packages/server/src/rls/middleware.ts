@@ -44,6 +44,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { isRelationPredicate } from "../../../../shared/relation-operators";
 import type { Middleware } from "../builder/types";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
@@ -288,9 +289,33 @@ const assertBatchLimit = (count: number, limit: number | undefined, op: string):
     }
 };
 
-/** Roles list source on the context. Tolerant of older auth states. */
+/**
+ * The slice of `ctx.auth` the policy middlewares read.
+ *
+ * `roles` has TWO sources and the effective list is their union, because the two
+ * answer different questions and neither subsumes the other.
+ *
+ * The `roles` CLAIM on the resolved identity ({@link readIdentityRoles}) is what
+ * the identity provider asserted about the caller. `ctx.auth.roles`, set by an
+ * upstream middleware, is what a request-time mapping derived —
+ * `@lunora/cloudflare-access`'s `accessRoles()` is the shipped example: the
+ * Access envelope carries `groups`, never `roles`, and that middleware's entire
+ * job is to map verified groups onto role labels here.
+ *
+ * Reading only the claim silently drops the second, which does not fail loudly —
+ * a role-gated ALLOW branch stops firing and users lose access, and a role-gated
+ * DENY branch stops firing and rows LEAK. `accessRoles` declares its own context
+ * type, so there is no compile-time signal either way.
+ *
+ * What is deliberately absent is the same field on the TEST harness: see
+ * `TestIdentity` in `./testing`. A middleware setting `ctx.auth.roles` is a real
+ * request-path producer; a test setting it directly is a world with no producer
+ * at all, which is how role-gated policies passed their tests while evaluating
+ * against an empty list in production.
+ */
 type AuthLike = {
     getIdentity?: () => Promise<Record<string, unknown> | null>;
+    /** Role labels contributed by an upstream middleware, unioned with the identity's `roles` claim. */
     roles?: ReadonlyArray<string>;
     userId?: null | string;
 };
@@ -517,18 +542,6 @@ const isCombinatorKey = (key: string): key is "AND" | "NOT" | "OR" => key === "A
 const isOperatorBag = (value: unknown): value is Record<string, unknown> =>
     isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k));
 
-/** Prisma-style relation operators (mirrors `relation-predicates.ts` in `@lunora/do`). */
-const RELATION_OPERATOR_KEYS = ["every", "is", "isNot", "none", "some"] as const;
-
-/**
- * A value is a relation predicate when it is a plain object whose every key is a
- * known relation operator — the same "all keys known" disambiguation the
- * pre-resolver uses. Structural (no schema needed): the middleware closure has
- * no relation map, but a relation node is recognizable by shape alone.
- */
-const isRelationPredicateValue = (value: unknown): boolean =>
-    isPlainObject(value) && Object.keys(value).length > 0 && Object.keys(value).every((k) => (RELATION_OPERATOR_KEYS as ReadonlyArray<string>).includes(k));
-
 /**
  * Does `where` contain a relation-crossing predicate anywhere? The in-memory
  * {@link matchesWhere} evaluator has no `fetcher` and cannot resolve a relation
@@ -549,7 +562,7 @@ const containsRelationPredicate = (where: WhereInput): boolean =>
             return Array.isArray(value) && value.some((branch) => containsRelationPredicate((branch ?? {}) as WhereInput));
         }
 
-        return isRelationPredicateValue(value);
+        return isRelationPredicate(value);
     });
 
 /**
@@ -1552,16 +1565,33 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
     // guards). Re-bind the policy tables to route through the wrapped writer,
     // using the SAME `bindTableFacade` codegen emits so the two can't drift.
     //
-    // Only POLICY tables are re-bound: a non-policy table's entry needs no RLS,
-    // and (crucially) a `.global()` table's entry is bound to the D1 `globalDb`
-    // writer — re-binding it through the local wrapped writer would query the
-    // wrong backend. Leaving non-policy entries on their original binding keeps
-    // both backends correct. (RLS policies target shard-local tables.)
+    // EVERY facade entry is re-bound, not just the policy tables'.
+    //
+    // A non-policy table needs no RLS of its OWN, but every wrapped read threads
+    // `relationBaseWhere` — which is what applies a policy to `with`-hydrated
+    // CHILDREN. Left on its raw binding, `ctx.db.<nonPolicyTable>.findMany({
+    // with: { <policyTable>: true } })` reached the unwrapped writer with no
+    // relation filter and returned child rows the policy exists to hide. The
+    // flat `ctx.db.findMany("<nonPolicyTable>", …)` form was guarded the whole
+    // time, so only the idiomatic form leaked.
+    //
+    // The old exemption was justified on the grounds that a `.global()` table's
+    // entry is bound to the D1 `globalDb` writer and re-binding it would query
+    // the wrong backend. That premise is false: `packages/codegen/src/emit.ts`
+    // binds every table's facade through the one shard ctx-db, `.global()`
+    // included, precisely because `createShardCtxDb` routes global ops to D1
+    // internally and stamps the subscription hooks — binding a global facade
+    // straight to `globalDb` would skip both. There is no wrong backend here.
+    //
+    // Gated on there being any policy at all, so an `rls([])` chain still leaves
+    // the runtime's own bindings untouched.
     const writableFacade = wrapped as unknown as Record<string, unknown>;
 
-    for (const tableName of perTable.keys()) {
-        if (isFacadeEntry((base as unknown as Record<string, unknown>)[tableName])) {
-            writableFacade[tableName] = bindTableFacade(wrapped, tableName);
+    if (perTable.size > 0) {
+        for (const [tableName, entry] of Object.entries(base as unknown as Record<string, unknown>)) {
+            if (isFacadeEntry(entry)) {
+                writableFacade[tableName] = bindTableFacade(wrapped, tableName);
+            }
         }
     }
 
@@ -1617,13 +1647,86 @@ const resolveCan = (
 };
 
 /**
+ * The identity claim that carries a request's role labels.
+ *
+ * Roles have exactly ONE source: the `roles` claim on the identity that
+ * `WorkerOptions.resolveIdentity` returned (`@lunora/runtime`'s
+ * `ResolvedIdentity` forwards every non-`userId` key verbatim, and
+ * `defineIdentity(...)` validates them at the worker's trust boundary before
+ * they become `ctx.auth`). There is no second, context-level `roles` field to
+ * disagree with it — see {@link AuthLike}.
+ */
+
+/**
+ * The identity claims that carry role labels, in precedence order.
+ *
+ * Both, not just `roles`. `@lunora/auth` mirrors better-auth's `admin()` plugin,
+ * which stores a multi-role value comma-joined in a SINGULAR `role` column
+ * (`serializeRole`) — so an app forwarding its user record verbatim produces a
+ * `role` claim and no `roles` claim at all. Reading only the plural name meant
+ * the framework's own auth stack resolved to no roles, which is the shape of
+ * "documented feature nothing can reach".
+ */
+const IDENTITY_ROLES_CLAIMS = ["roles", "role"] as const;
+
+/**
+ * Read the request's role labels off the resolved identity claims.
+ *
+ * Reads {@link IDENTITY_ROLES_CLAIMS}, accepting the two shapes a resolver
+ * realistically produces: a string array, or a comma-separated string (the form
+ * better-auth's `admin()` plugin stores a multi-role value in — see
+ * `serializeRole` in `@lunora/auth`). Anything else — including an absent claim
+ * — is no roles, so `auth.can(...)` fails closed.
+ *
+ * SECURITY: this trusts the identity a resolver returns. Under `composeResolvers`
+ * that identity may have been minted by an adapter this app did not write, and
+ * `defineIdentity` forwards undeclared claims verbatim — so a resolver must not
+ * forward a `role`/`roles` field the END USER can edit (a profile column, say).
+ * That is privilege escalation, and it is the same hazard
+ * `@lunora/cloudflare-access` documents for the `groups` claim. Roles belong to
+ * a field only an administrator can write.
+ *
+ * Shared by the request path ({@link resolvePolicyAuth}), the shape path
+ * (`shape-read-base.ts`) and the test harness (`./testing`), so all three can
+ * only ever express a role set the runtime can actually produce.
+ */
+const readIdentityRoles = (identity: Record<string, unknown> | null | undefined): ReadonlyArray<string> => {
+    for (const name of IDENTITY_ROLES_CLAIMS) {
+        const claim = identity?.[name];
+
+        if (typeof claim === "string") {
+            const roles = claim
+                .split(",")
+                .map((role) => role.trim())
+                .filter((role) => role.length > 0);
+
+            if (roles.length > 0) {
+                return roles;
+            }
+        }
+
+        if (Array.isArray(claim)) {
+            const roles = claim.filter((role): role is string => typeof role === "string" && role.length > 0);
+
+            if (roles.length > 0) {
+                return roles;
+            }
+        }
+    }
+
+    return [];
+};
+
+/**
  * Resolve the request's `auth` view for a policy/mask/storage-rule context.
  * Identity is resolved once per protected procedure so policies can branch on
  * claims (`ctx.auth.identity.email` etc.) without each policy paying for its
  * own `getIdentity()` call; `null` covers both the anonymous case and the
- * no-resolver case (older auth states). Shared verbatim by the rls, mask and
- * storage-rules middlewares so the three resolve identity and grants
- * identically.
+ * no-resolver case (older auth states). `roles` is the UNION of the identity's
+ * `roles` claim ({@link readIdentityRoles}) and any `ctx.auth.roles` an upstream
+ * middleware contributed — see {@link AuthLike} for why both are needed. Shared
+ * verbatim by the rls, mask and storage-rules middlewares so the three resolve
+ * identity and grants identically.
  */
 const resolvePolicyAuth = async (
     auth: AuthLike,
@@ -1634,12 +1737,15 @@ const resolvePolicyAuth = async (
     roles: ReadonlyArray<string>;
     userId: null | string;
 }> => {
-    const roles = auth.roles ?? [];
+    // eslint-disable-next-line unicorn/no-null -- the public auth contexts carry `null` for the anonymous/no-resolver case
+    const identity = (await auth.getIdentity?.()) ?? null;
+    // Union, not either/or — see `AuthLike`. A Set dedups while preserving
+    // first-seen order, matching how `accessRoles` already merges its own input.
+    const roles: ReadonlyArray<string> = [...new Set<string>([...readIdentityRoles(identity), ...(auth.roles ?? [])])];
 
     return {
         can: resolveCan(roles, rolePermissions),
-        // eslint-disable-next-line unicorn/no-null -- the public auth contexts carry `null` for the anonymous/no-resolver case
-        identity: (await auth.getIdentity?.()) ?? null,
+        identity,
         roles,
         // eslint-disable-next-line unicorn/no-null -- the public auth contexts type userId as `null | string`
         userId: auth.userId ?? null,
@@ -1704,5 +1810,15 @@ export type { RlsDatabase };
  * package root does not re-export them.
  * @internal
  */
-export { computeReadBaseWhere, evaluateWrite, indexRolePermissions, isFacadeEntry, matchesWhere, permissionName, resolveCan, resolvePolicyAuth };
+export {
+    computeReadBaseWhere,
+    evaluateWrite,
+    indexRolePermissions,
+    isFacadeEntry,
+    matchesWhere,
+    permissionName,
+    readIdentityRoles,
+    resolveCan,
+    resolvePolicyAuth,
+};
 export type { AuthLike };

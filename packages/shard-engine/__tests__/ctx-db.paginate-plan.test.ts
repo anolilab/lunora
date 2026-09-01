@@ -16,17 +16,21 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * `notNull` — there is no null group to reach. Two schemas differing ONLY in
  * that declaration, over the same rows and the same declared index, isolate it.
  *
- * ## What this file does NOT claim
+ * The arm is not merely one extra probe. It is what costs the read its RANGE
+ * BOUND: `buildSeek` states the leading column's bound redundantly
+ * (`priority <= ?`) alongside the disjunction, and a bare comparator is
+ * something the planner can turn into a seek — but `(col < ? OR col IS NULL)`
+ * is a second disjunction, not a bound, so the seek collapses back to a walk of
+ * the whole index. The two plans differ in exactly that word:
  *
- * Not "seek instead of scan". This store never emits a bare `col < ?`: the
- * lexicographic seek is always `(col < ?) OR (col = ? AND …)`, and the OR is
- * what denies SQLite the range bound — measured on a plain 50k-row table with a
- * covering `(priority, id)` index, `priority < ?` alone plans
- * `SEARCH … (priority<?)` at 3.9us while the two-branch seek that this code
- * actually emits plans `SCAN` at 462us, arm or no arm. Dropping the arm takes
- * that to 828us -> 728us on the same fixture; it does not restore the bound.
- * Asserting a plan shape this emitter cannot produce would be a green gate that
- * guards nothing, so what is asserted here is the branch the fix removes.
+ * ```
+ * notNull   SEARCH entries USING INDEX entries_by_priority (<expr><?)
+ * nullable  SCAN   entries USING INDEX entries_by_priority
+ * ```
+ *
+ * Both are asserted, so a regression in either direction is loud: dropping the
+ * redundant bound loses the SEARCH, and emitting the arm unconditionally loses
+ * it on every descending page — the dominant "newest first" read shape.
  */
 const columnKind = (kind: string, notNull: boolean) => {
     return { _meta: { column: { notNull } }, kind };
@@ -99,9 +103,6 @@ const seekPlan = async (nullable: boolean): Promise<{ plan: string[]; sql: strin
     return { plan, sql: page.text };
 };
 
-/** Index probes in a plan — the rows the pivot's disjuncts each cost one of. */
-const indexProbes = (plan: string[]): string[] => plan.filter((detail) => detail.includes("USING INDEX") || detail.includes("USING COVERING INDEX"));
-
 describe("ctx-db paginate — seek plan over a non-nullable ordered column", () => {
     beforeEach(() => {
         harnesses = [];
@@ -113,26 +114,25 @@ describe("ctx-db paginate — seek plan over a non-nullable ordered column", () 
         }
     });
 
-    it("drops the NULL arm, and with it one index probe, when the column is declared notNull", async () => {
-        expect.assertions(5);
+    it("seeks a range on the declared index when the column is notNull, and walks it when it is not", async () => {
+        expect.assertions(6);
 
         const declared = await seekPlan(false);
         const nullable = await seekPlan(true);
 
         // The arm, in the emitted SQL. `notNull` says the null group is empty, so
-        // there is nothing for the arm to reach and it is removed outright.
+        // there is nothing for the arm to reach and it is removed outright — and
+        // the redundant leading bound rides the same gate.
         expect(declared.sql).not.toContain("IS NULL");
+        expect(declared.sql).toContain(`json_extract(__doc__, '$.priority') <= ?`);
         expect(nullable.sql).toContain("IS NULL");
+        expect(nullable.sql).not.toContain(`json_extract(__doc__, '$.priority') <= ?`);
 
-        // The arm, in the plan. Each disjunct of the pivot costs its own index
-        // probe under `MULTI-INDEX OR`; the arm is a whole extra one, on the
-        // dominant "newest first" read shape (`nonNullWanted` is false for every
-        // descending pivot of the forward seek, so the arm landed on all of them).
-        expect(indexProbes(nullable.plan)).toHaveLength(indexProbes(declared.plan).length + 1);
-
-        // Both still read through the declared index rather than the table — the
-        // fix removes a branch, it does not change which index answers the page.
-        expect(indexProbes(declared.plan).join(" ")).toContain("entries_by_priority");
-        expect(indexProbes(declared.plan)).not.toHaveLength(0);
+        // The plan. `(<expr><?)` is the range bound: the page reads only the
+        // slice of the index below the cursor instead of walking all of it.
+        expect(declared.plan.join(" | ")).toContain("SEARCH entries USING INDEX entries_by_priority (<expr><?)");
+        // Pinned so a revert is loud rather than slow: with the arm present the
+        // planner has no bound to seek on and falls back to the walk.
+        expect(nullable.plan.join(" | ")).toContain("SCAN entries USING INDEX entries_by_priority");
     }, 30_000);
 });

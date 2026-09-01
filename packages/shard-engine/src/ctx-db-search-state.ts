@@ -12,6 +12,17 @@
  * So progress is recorded explicitly, one row per companion, in a reserved
  * table alongside the other `__lunora_*` bookkeeping. The cursor is the last
  * `id` indexed; `done` flips when a page comes back short.
+ *
+ * `covered` is the fourth fact, and the one `done` cannot carry: whether the
+ * companion holds a row for EVERY document, regardless of which analyzer built
+ * it. A profile change clears `done` and sends the walk back to the top, so from
+ * its second page a rebuild's progress row is indistinguishable from a brand-new
+ * index's — same cursor, same `done: false`, same profile. The two need opposite
+ * answers on the read path (a new index covers a prefix and must refuse; a
+ * rebuild covers everything and must serve), so the distinction is recorded
+ * rather than inferred. It is sticky: this engine never empties a companion, and
+ * once a walk has reached the end of the table the write path keeps every later
+ * row in step.
  */
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts" (the established public module name). */
@@ -31,7 +42,7 @@ const SEARCH_STATE_TABLE = "__lunora_search_state";
 const migrateSearchState = (sql: SqlExec): void => {
     runDrizzle(
         sql,
-        dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")} TEXT PRIMARY KEY, ${dsql.identifier("cursor")} TEXT, ${dsql.identifier("done")} INTEGER NOT NULL DEFAULT 0, ${dsql.identifier("profile")} TEXT)`,
+        dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")} TEXT PRIMARY KEY, ${dsql.identifier("cursor")} TEXT, ${dsql.identifier("done")} INTEGER NOT NULL DEFAULT 0, ${dsql.identifier("profile")} TEXT, ${dsql.identifier("covered")} INTEGER NOT NULL DEFAULT 0)`,
     );
 
     // A table created by an earlier build has no `profile` column, and
@@ -42,10 +53,51 @@ const migrateSearchState = (sql: SqlExec): void => {
     } catch {
         // Already present (or the table was just created with it).
     }
+
+    try {
+        runDrizzle(sql, dsql`ALTER TABLE ${dsql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${dsql.identifier("covered")} INTEGER NOT NULL DEFAULT 0`);
+    } catch {
+        // Already present (or the table was just created with it).
+    }
+
+    // Backfill `covered` for rows that predate the column, in its OWN statement
+    // rather than inside the `ALTER` above.
+    //
+    // Sharing the ALTER's try meant this ran only on the single call that added
+    // the column: if the process stopped between the two — or the UPDATE itself
+    // failed — every later call took the ALTER's catch and skipped the backfill
+    // forever. An index completed before this build would then read as uncovered
+    // for good, and refuse every search for the length of its next rebuild.
+    //
+    // `done` already carries the answer for those rows: a companion recorded as
+    // finished has walked the whole table. `AND covered = 0` makes this a no-op
+    // write after the first successful pass, so paying for it on every migration
+    // call costs a matchless scan of a table with one row per index.
+    runDrizzle(
+        sql,
+        dsql`UPDATE ${dsql.identifier(SEARCH_STATE_TABLE)} SET ${dsql.identifier("covered")} = 1 WHERE ${dsql.identifier("done")} = 1 AND ${dsql.identifier("covered")} = 0`,
+    );
 };
 
-/** The persisted `done` flag, however this engine's driver spells a boolean. */
-const isDone = (value: unknown): boolean => value === 1 || value === true || value === "1";
+/** A persisted flag column (`done`, `covered`), however this engine's driver spells a boolean. */
+const isTrue = (value: unknown): boolean => value === 1 || value === true || value === "1";
+
+/**
+ * Does this companion hold a row for every document in its table?
+ *
+ * Read separately from {@link readSearchBackfillState} on purpose: the search
+ * read path asks it only once the shared plan has already said "not finished",
+ * which is the path that would otherwise refuse — so a complete index still
+ * costs the one primary-key lookup it did before.
+ */
+const readSearchIndexCoverage = (sql: SqlExec, companion: string): boolean => {
+    const rows = runDrizzle<{ covered: number }>(
+        sql,
+        dsql`SELECT ${dsql.identifier("covered")} FROM ${dsql.identifier(SEARCH_STATE_TABLE)} WHERE ${dsql.identifier("companion")} = ${companion}`,
+    ).toArray();
+
+    return isTrue(rows[0]?.covered);
+};
 
 /** Read a companion's progress. An unknown companion has done nothing yet. */
 const readSearchBackfillState = (sql: SqlExec, companion: string): SearchBackfillState => {
@@ -64,18 +116,27 @@ const readSearchBackfillState = (sql: SqlExec, companion: string): SearchBackfil
     // whether a boolean column comes back as 1, true or "1", and the two
     // readers decoding the shared state row differently is how they start
     // disagreeing about whether an index is finished.
-    return { cursor: row.cursor ?? undefined, done: isDone(row.done), profile: row.profile ?? undefined };
+    return { cursor: row.cursor ?? undefined, done: isTrue(row.done), profile: row.profile ?? undefined };
 };
 
-/** Record a page's outcome: how far it got, whether the table is done, and under which analysis. */
+/**
+ * Record a page's outcome: how far it got, whether the table is done, and under
+ * which analysis.
+ *
+ * `covered` is not a parameter: it is `done`, latched. A walk that reaches the
+ * end of the table has put every row in the companion, and nothing here ever
+ * takes rows back out (the analyzer rebuild rewrites them in place), so the flag
+ * only ever rises — which is what lets a rebuild that has cleared `done` still
+ * be told apart from a first walk.
+ */
 const writeSearchBackfillState = (sql: SqlExec, companion: string, cursor: string | undefined, done: boolean, profile: string): void => {
     // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
     const cursorValue = cursor ?? null;
 
     runDrizzle(
         sql,
-        dsql`INSERT INTO ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")}, ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}, ${profile}) ON CONFLICT (${dsql.identifier("companion")}) DO UPDATE SET ${dsql.identifier("cursor")} = excluded.${dsql.identifier("cursor")}, ${dsql.identifier("done")} = excluded.${dsql.identifier("done")}, ${dsql.identifier("profile")} = excluded.${dsql.identifier("profile")}`,
+        dsql`INSERT INTO ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")}, ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")}, ${dsql.identifier("covered")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}, ${profile}, ${done ? 1 : 0}) ON CONFLICT (${dsql.identifier("companion")}) DO UPDATE SET ${dsql.identifier("cursor")} = excluded.${dsql.identifier("cursor")}, ${dsql.identifier("done")} = excluded.${dsql.identifier("done")}, ${dsql.identifier("profile")} = excluded.${dsql.identifier("profile")}, ${dsql.identifier("covered")} = MAX(${dsql.identifier(SEARCH_STATE_TABLE)}.${dsql.identifier("covered")}, excluded.${dsql.identifier("covered")})`,
     );
 };
 
-export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState };
+export { migrateSearchState, readSearchBackfillState, readSearchIndexCoverage, SEARCH_STATE_TABLE, writeSearchBackfillState };

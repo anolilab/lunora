@@ -88,6 +88,13 @@ dependency_manifests:
 # `packages/codegen` is the emitter behind every example's committed
 # `lunora/_generated` tree — an emit change stales all 13 at once and matches none
 # of the manifest globs above, which is how they drifted unnoticed.
+#
+# `shared/**` for the same reason one level down: those files are not a package,
+# they are inlined into each consumer's bundle, so a `shared/` edit reaches the
+# emitted output without any `packages/codegen/**` path being touched. That is
+# not hypothetical — `shared/schema-snapshot.ts` decides the `LUNORA_SCHEMA_SNAPSHOT`
+# literal in every example's `shard.ts`, so a change confined to it stales all 13
+# while this job is skipped and its required check stays green.
 generated_files:
     - "**/package.json"
     - "**/project.json"
@@ -96,6 +103,7 @@ generated_files:
     - "scripts/generate-*.js"
     - "scripts/check-generated-files.mjs"
     - "packages/codegen/**"
+    - "shared/**"
     - "examples/**"
     # Self-listed, per the rule at the top of this file: the job's own workflow now
     # carries a `build:packages` step the codegen sweep cannot run without. A PR that

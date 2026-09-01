@@ -35,6 +35,23 @@ describe("spanBuffer", () => {
         expect(buffer.entries()).not.toBe(buffer.entries());
     });
 
+    it("counts evicted spans so a truncated waterfall reads as truncated", () => {
+        expect.assertions(3);
+
+        const buffer = new SpanBuffer(2);
+
+        for (let index = 0; index < 10; index += 1) {
+            buffer.push(span({ spanId: `s${String(index)}` }));
+        }
+
+        expect(buffer.size).toBe(2);
+        expect(buffer.dropped).toBe(8);
+
+        buffer.clear();
+
+        expect(buffer.dropped).toBe(0);
+    });
+
     it("empties on clear", () => {
         expect.assertions(2);
 

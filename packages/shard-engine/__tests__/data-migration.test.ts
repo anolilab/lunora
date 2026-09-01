@@ -663,12 +663,157 @@ describe("runDataMigration", () => {
 
             const row = stateRow("explode");
 
-            expect(row).toMatchObject({ changed: 2, error: "boom", id: "explode", processed: 3, status: "failed" });
+            // `processed` counts rows that were fully handled: the row whose
+            // transform threw is not one of them, and counting it made the resume
+            // below double-count it.
+            expect(row).toMatchObject({ changed: 2, error: "boom", id: "explode", processed: 2, status: "failed" });
 
             // Only the rows before the failure were rewritten.
             const snapshot = await allUsers(writer);
 
             expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 0, 0, 0]);
+        });
+
+        it("resumes after the last row it finished, not at the start of the failed batch", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            let explode = true;
+
+            /*
+             * The transform is NOT idempotent — `version + 1` is the shape the rest
+             * of this suite uses and the one the docs show. The failed batch
+             * persisted its page-START cursor, so the resume re-walked u1/u2, which
+             * it had already rewritten, and bumped them a second time.
+             */
+            const flaky: DataMigrationLike = {
+                id: "flaky",
+                table: "users",
+                up: (document) => {
+                    if (explode && document["_id"] === "u3") {
+                        explode = false;
+
+                        throw new Error("boom");
+                    }
+
+                    return { ...document, version: Number(document["version"] ?? 0) + 1 };
+                },
+            };
+
+            await expect(runDataMigration({ batchSize: 10, migration: flaky, sql: harness.sql, writer })).rejects.toThrow("boom");
+
+            const result = await runDataMigration({ batchSize: 10, migration: flaky, sql: harness.sql, writer });
+
+            expect(result).toMatchObject({ changed: 5, processed: 5, status: "completed" });
+
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+        });
+    });
+
+    describe("runDataMigration — resume across a cursor-format bump", () => {
+        it("resumes from a cursor minted under the previous cursor prefix", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            // Stop after one page so a real resume cursor is persisted.
+            const first = await runDataMigration({ batchSize: 2, maxBatches: 1, migration: bumpVersion, sql: harness.sql, writer });
+
+            expect(first).toMatchObject({ processed: 2, status: "in_progress" });
+
+            /*
+             * Age the stored cursor to the prefix builds before the bump minted.
+             * `decodeCursor` refuses it outright, so the resume threw `invalid
+             * cursor` and re-persisted `failed` carrying the same cursor —
+             * wedging every later run of this migration, with no reset. The
+             * payload itself is untouched: this runner's key list is fixed, so it
+             * is `[_creationTime, _id]` on both sides of the bump.
+             */
+            harness.raw(`UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET cursor = '~2' || substr(cursor, 3) WHERE id = ?`, "bump-version");
+
+            const second = await runDataMigration({ batchSize: 10, migration: bumpVersion, sql: harness.sql, writer });
+
+            expect(second).toMatchObject({ changed: 5, processed: 5, status: "completed" });
+
+            // Resumed rather than restarted: the first page's rows are bumped
+            // once, not twice.
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+        });
+    });
+
+    describe("runDataMigration — concurrent traffic", () => {
+        it("does not clobber a row a live mutation wrote after the page was read", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            /*
+             * One page holds all five rows, so by the time u3 is rewritten its copy
+             * is ~4 awaits stale. `writer.replace` only compare-and-swaps on the
+             * snapshot IT reads, so the page-read→write gap was unguarded and this
+             * patch was silently overwritten with the pre-patch score.
+             */
+            const patchesU3: DataMigrationLike = {
+                id: "patches-u3",
+                table: "users",
+                up: async (document) => {
+                    if (document["_id"] === "u1") {
+                        await writer.patch("u3", { score: 999 });
+                    }
+
+                    return { ...document, version: Number(document["version"] ?? 0) + 1 };
+                },
+            };
+
+            await runDataMigration({ batchSize: 10, migration: patchesU3, sql: harness.sql, writer });
+
+            const snapshot = await allUsers(writer);
+            const u3 = snapshot.find((document) => document["_id"] === "u3");
+
+            expect(u3?.["score"]).toBe(999);
+            // ...and the migration still ran on it.
+            expect(u3?.["version"]).toBe(1);
+        });
+
+        it("gives up on a row live traffic rewrites on every attempt", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            let bump = 0;
+
+            const alwaysContended: DataMigrationLike = {
+                id: "always-contended",
+                table: "users",
+                up: async (document) => {
+                    if (document["_id"] === "u2") {
+                        bump += 1;
+
+                        // Writes u2 again inside every attempt, so the re-read never
+                        // matches what the transform was handed.
+                        await writer.patch("u2", { score: 100 + bump });
+                    }
+
+                    return { ...document, version: Number(document["version"] ?? 0) + 1 };
+                },
+            };
+
+            await expect(runDataMigration({ batchSize: 10, migration: alwaysContended, sql: harness.sql, writer })).rejects.toThrow(
+                "modified by concurrent traffic",
+            );
         });
     });
 });

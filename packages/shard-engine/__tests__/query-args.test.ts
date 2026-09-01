@@ -32,10 +32,14 @@ const compile = (where: WhereInput): { params: unknown[]; sql: string } => rende
 
 describe("normalizeOrderKeys", () => {
     it("defaults to creation order when absent", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         expect(normalizeOrderKeys(undefined)).toEqual([{ direction: "asc", field: "_creationTime", nullable: false }]);
         expect(normalizeOrderKeys([])).toEqual([{ direction: "asc", field: "_creationTime", nullable: false }]);
+
+        // An id field is already a total order, so nothing is spliced after it —
+        // the extra key would only cost a cursor column and a seek disjunct.
+        expect(normalizeOrderKeys([{ _id: "asc" }])).toEqual([{ direction: "asc", field: "_id", nullable: false }]);
     });
 
     it("flattens the { field: dir }[] form, preserving order", () => {
@@ -49,6 +53,10 @@ describe("normalizeOrderKeys", () => {
         ).toEqual([
             { direction: "desc", field: "priority", nullable: false },
             { direction: "asc", field: "createdAt", nullable: false },
+            // Spliced in ahead of the `id` tiebreak, in the last key's direction:
+            // every declared index is built `(<fields>, _creationTime, id)`, and an
+            // ORDER BY that skips the middle column cannot be answered from it.
+            { direction: "asc", field: "_creationTime", nullable: false },
         ]);
     });
 
@@ -71,6 +79,7 @@ describe("normalizeOrderKeys", () => {
             { direction: "asc", field: "optional", nullable: true },
             { direction: "asc", field: "plain", nullable: false },
             { direction: "asc", field: "undeclared", nullable: true },
+            { direction: "asc", field: "_creationTime", nullable: false },
         ]);
     });
 });
@@ -196,7 +205,7 @@ describe("buildSeekWhere", () => {
         });
     });
 
-    it("omits the null arm entirely when the ordered column cannot hold NULL", () => {
+    it("omits the null arm entirely when the ordered column cannot hold NULL, and bounds the leading column", () => {
         expect.assertions(1);
 
         // Same shape as the descending test above with `nullable` cleared: a
@@ -205,11 +214,19 @@ describe("buildSeekWhere", () => {
         // is not answerable from the index range the comparator seeks, so SQLite
         // abandons the seek for a full scan (measured 9.3us -> 469us over 50k
         // rows; see `ctx-db.paginate-plan.test.ts`, which asserts the plan).
+        //
+        // The leading `createdAt <= ?` conjunct rides on the SAME gate. It is
+        // redundant — every disjunct below already constrains `createdAt` — but
+        // the planner cannot see that through an OR, so stating it is what turns
+        // the index WALK back into an index SEEK. It is emitted only when the
+        // pivot is a bare comparator: with the `OR ... IS NULL` arm present it is
+        // a second disjunction rather than a bound and buys nothing (measured
+        // 816us -> 478us, still `SCAN`), which is why the test above has none.
         const where = buildSeekWhere([{ direction: "desc", field: "createdAt", nullable: false }], [1700, "row_42"]);
 
         expect(compile(where)).toEqual({
-            params: [1700, 1700, "row_42"],
-            sql: `(${json("createdAt")} < ?) OR ((${json("createdAt")} = ?) AND (id < ?))`,
+            params: [1700, 1700, 1700, "row_42"],
+            sql: `(${json("createdAt")} <= ?) AND ((${json("createdAt")} < ?) OR ((${json("createdAt")} = ?) AND (id < ?)))`,
         });
     });
 
@@ -225,14 +242,20 @@ describe("buildSeekWhere", () => {
         );
         const compiled = compile(where);
 
-        // Balanced grouping (see `joinClauses`); same terms, same param order.
+        // NESTED, not flattened: the prefix equality on `a` is factored out and
+        // shared by everything below it, so `a` binds twice instead of once per
+        // disjunct. Distribute it and the flat form comes back term for term —
+        // the point is the parameter count, which goes from `k(k+1)/2` to `2k-1`
+        // and is what keeps a wide `orderBy` under Workerd's cap of 100.
+        //
         // `a` is ascending, so its NULLs sort BEFORE the cursor and the seek is
         // already past them — no null arm. `b` is descending, so its NULLs sort
-        // after and it gets one.
+        // after and it gets one. `a` is `nullable`, so it gets no leading bound
+        // either (see the notNull test above).
         expect(compiled.sql).toBe(
-            `(${json("a")} > ?) OR (((${json("a")} = ?) AND ((${json("b")} < ?) OR (${json("b")} IS NULL))) OR ((${json("a")} = ?) AND ((${json("b")} = ?) AND (id < ?))))`,
+            `(${json("a")} > ?) OR ((${json("a")} = ?) AND (((${json("b")} < ?) OR (${json("b")} IS NULL)) OR ((${json("b")} = ?) AND (id < ?))))`,
         );
-        expect(compiled.params).toEqual(["av", "av", "bv", "av", "bv", "row_1"]);
+        expect(compiled.params).toEqual(["av", "av", "bv", "bv", "row_1"]);
     });
 
     it("an explicit id sort key is used as the terminal column (no synthetic tiebreak)", () => {

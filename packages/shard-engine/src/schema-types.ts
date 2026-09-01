@@ -198,7 +198,37 @@ export interface ApplyOnDeleteOptions {
     tableName: string;
 }
 
+/**
+ * The remaining per-REQUEST budget for capped-relation fan-out reads, shared by
+ * every `with` level of one read.
+ *
+ * Mutable and passed by reference on purpose: the bound that matters is the
+ * TOTAL number of reads a single request issues, and each nested `with` level
+ * resolves inside its own `fetcher` call, so a per-level cap bounds nothing.
+ *
+ * Deliberately NOT a field on {@link QueryArgs}. It has to cross the injected
+ * `fetcher` boundary to reach the next level, but it is internal accounting, not
+ * a query anybody writes — as a public argument it would be a documented knob
+ * whose obvious value (`{ remaining: Infinity }`) disables the subrequest bound
+ * and turns a slow read into a failed one. It rides the args object under
+ * {@link FAN_OUT_BUDGET} instead, which no public type can name.
+ */
+export interface FanOutBudget {
+    remaining: number;
+}
+
+/**
+ * The key a {@link FanOutBudget} travels under on a `fetcher`'s args.
+ *
+ * `Symbol.for`, not `Symbol()`: a package can appear more than once in a
+ * dependency graph and `shared/` files are inlined per bundle, so a
+ * module-local symbol risks being written by one copy and read by another. The
+ * global registry makes them the same key whatever the bundling does.
+ */
+export const FAN_OUT_BUDGET = Symbol.for("lunora.relations.fanOutBudget");
+
 export interface ResolveWithOptions {
+    fanOutBudget?: FanOutBudget;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
     parents: Record<string, unknown>[];
@@ -223,7 +253,9 @@ export type OrderByInput = Record<string, SortDirection>;
 export interface QueryArgs {
     baseWhere?: WhereInput;
     cursor?: null | string;
+
     includeDeleted?: boolean;
+
     limit?: number;
 
     /**

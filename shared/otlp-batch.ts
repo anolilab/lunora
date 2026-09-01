@@ -154,6 +154,14 @@ export const createSignalBatcher = <T>(options: SignalBatcherOptions<T>): Signal
             // Drop-oldest above the cap. The alternative — drop the newest —
             // discards the span that just told you something changed, and an
             // unbounded buffer risks OOMing the isolate on a pathological loop.
+            //
+            // A backstop, not a routine path, and deliberately uncounted because
+            // of it: the `drain()` below fires at exactly `maxItems` and empties
+            // the buffer SYNCHRONOUSLY (it reassigns `buffer` before its first
+            // await), so nothing here is reachable while that holds. A change
+            // that empties the buffer later — after an await, or behind an
+            // in-flight guard — would start discarding telemetry silently, which
+            // is what `otlp-batch.test.ts` pins.
             while (buffer.length > maxItems) {
                 buffer.shift();
             }

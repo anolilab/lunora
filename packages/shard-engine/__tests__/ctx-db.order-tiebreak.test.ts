@@ -122,7 +122,7 @@ describe("implicit id tiebreak follows the sort direction", () => {
         // makes the two distinguishable at all.
         const page = await writer.findMany("events", { limit: 2, orderBy: [{ _creationTime: "desc" }] });
 
-        expect(page.continueCursor).toMatch(/^~2/u);
+        expect(page.continueCursor).toMatch(/^~3/u);
 
         const next: { page: Record<string, unknown>[] } = await writer.findMany("events", {
             cursor: page.continueCursor,
@@ -131,6 +131,65 @@ describe("implicit id tiebreak follows the sort direction", () => {
         });
 
         expect(next.page).toHaveLength(2);
+
+        harness.close();
+    });
+
+    it("returns tied rows in the same order from .collect() and .paginate(), on an index-walkable plan", async () => {
+        expect.assertions(3);
+
+        const { harness, writer } = await seeded(40);
+
+        // Two builders produce the sort for a `.withIndex()` read — the fluent
+        // `buildOrderClause` for `.collect()`, `paginateOrderKeys` +
+        // `compileOrderByText` for `.paginate()` — and they disagreed. The fluent
+        // one ordered `<fields>, _creationTime, id`; its sibling skipped
+        // `_creationTime`, so the two returned rows that tie on the indexed value
+        // in DIFFERENT orders, and neither could use the index (built
+        // `(<fields>, _creationTime, id)`) to sort.
+        //
+        // Every row here shares one `room` AND one `_creationTime`, so the whole
+        // ordering is decided by the part that differed.
+        const collected: Record<string, unknown>[] = await writer
+            .query("events")
+            .withIndex("by_room", (q) => q.eq("room", "r-1"))
+            .collect();
+
+        const paged: unknown[] = [];
+        let cursor: null | string | undefined;
+
+        for (let guard = 0; guard < 20; guard += 1) {
+            const request = writer
+                .query("events")
+                .withIndex("by_room", (q) => q.eq("room", "r-1"))
+                .paginate({ cursor, numItems: 7 });
+            // eslint-disable-next-line no-await-in-loop -- paging is inherently sequential: each page needs the previous page's cursor
+            const page: { continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] } = await request;
+
+            paged.push(...page.page.map((row) => row["_id"]));
+
+            if (page.isDone) {
+                break;
+            }
+
+            cursor = page.continueCursor;
+        }
+
+        expect(paged).toHaveLength(40);
+        expect(paged).toStrictEqual(collected.map((row) => row["_id"]));
+
+        // And the order they now agree on is one the declared index answers: an
+        // `.eq()`-pinned field is dropped from the clause, because SQLite will
+        // NOT treat an equality-pinned EXPRESSION as a no-op in an ORDER BY —
+        // leaving it in kept the temp B-tree even with the sort keys present.
+        expect(
+            harness
+                .raw(
+                    `EXPLAIN QUERY PLAN SELECT id, _creationTime, "__doc__" FROM "events" WHERE json_extract(__doc__, '$.room') = 'r-1' ORDER BY _creationTime ASC, id ASC LIMIT 8`,
+                )
+                .map((row) => String(row["detail"]))
+                .join(" | "),
+        ).not.toContain("TEMP B-TREE");
 
         harness.close();
     });
