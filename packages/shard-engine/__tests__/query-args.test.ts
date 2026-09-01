@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { renderSql } from "../src/drizzle";
 import { buildSeekWhere, CURSOR_PREFIX, decodeCursor, encodeCursor, normalizeOrderKeys } from "../src/query-args";
+import type { OrderKey } from "../src/schema-types";
 import type { WhereSqlStrategy } from "../src/where-sql";
 import { compileWhereSql } from "../src/where-sql";
 import type { WhereInput } from "../src/where-types";
@@ -116,6 +117,23 @@ describe("encodeCursor / decodeCursor", () => {
 });
 
 describe("buildSeekWhere", () => {
+    it("rejects a truncated cursor instead of seeking the NULL group", () => {
+        expect.assertions(2);
+
+        const keys: OrderKey[] = [
+            { direction: "asc", field: "publishedAt", nullable: true },
+            { direction: "asc", field: "score", nullable: true },
+        ];
+
+        // Two ordered keys plus the `_id` tiebreak means three values. A cursor
+        // carrying fewer would index past the end, and those missing positions
+        // read as `undefined` — which `pivotCondition` accepts as SQL NULL so a
+        // cursor minted before normalisation still works. Together that would
+        // silently seek the NULL group; a client-supplied value gets a 400.
+        expect(() => buildSeekWhere(keys, [1_700_000_000_000])).toThrow(/cursor/i);
+        expect(() => buildSeekWhere(keys, [1_700_000_000_000, 5, "m1"])).not.toThrow();
+    });
+
     it("single ascending key expands to a two-branch lexicographic seek", () => {
         expect.assertions(1);
 

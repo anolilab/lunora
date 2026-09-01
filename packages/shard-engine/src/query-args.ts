@@ -323,6 +323,16 @@ const buildSeek = (keys: OrderKey[], cursorValues: unknown[], wantLater: boolean
         : // `id` is minted by the store on every row, so the tiebreak is never nullable.
           [...keys, { direction: tiebreakDirectionFor(keys), field: TIEBREAK_FIELD, nullable: false }];
 
+    // Every position the loop below reads must exist. A truncated cursor would
+    // otherwise index past the end, and those missing positions read as
+    // `undefined` — which `pivotCondition` deliberately accepts as SQL NULL for
+    // pre-normalisation cursors. The two together would turn a malformed cursor
+    // into a silent seek against the NULL group rather than the typed 400 a
+    // client-supplied value deserves.
+    if (cursorValues.length < columns.length) {
+        throw invalidCursor();
+    }
+
     const branches: WhereInput[] = [];
 
     for (const [pivot, pivotColumn] of columns.entries()) {

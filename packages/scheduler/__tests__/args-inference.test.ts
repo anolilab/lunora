@@ -38,6 +38,27 @@ describe("argsOf", () => {
     });
 });
 
+describe("schedulable kinds", () => {
+    it("refuses a stream reference, which the function runner cannot execute", () => {
+        expect.assertions(1);
+
+        const typeChecks = (): void => {
+            // A scheduled job is dispatched as an ordinary `/rpc` call and the
+            // function runner does not execute stream functions, so accepting one
+            // compiles a job guaranteed to fail when its alarm fires — far from the
+            // call site that scheduled it.
+            const tail = { __lunoraRef: "messages:tail" } as FunctionReference<"stream", { channel: string }, void>;
+
+            // @ts-expect-error -- `stream` is not a schedulable kind
+            scheduler.runAfter(1000, tail, { channel: "general" }).catch(() => undefined);
+            // @ts-expect-error -- same for the workpool
+            workpool.enqueue(tail, { channel: "general" }).catch(() => undefined);
+        };
+
+        expect(typeChecks).toBeTypeOf("function");
+    });
+});
+
 describe("scheduling entry points", () => {
     it("type-check their args against the target function", () => {
         expect.assertions(1);

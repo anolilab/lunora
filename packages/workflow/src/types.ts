@@ -11,9 +11,6 @@ import type { InferValidatorMap, Validator, ValidatorMap } from "@lunora/values"
 
 import type { ArgsOf, FunctionReference } from "../../../shared/function-reference";
 
-// Re-exported so consumers keep naming these through this package.
-export type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/function-reference";
-
 // --- Structural mirror of the Cloudflare Workflows runtime ----------------
 
 /** A workflow instance's lifecycle status. Mirrors `WorkflowInstanceStatus`. */
@@ -535,3 +532,6 @@ export interface LunoraWorkflowsOptions {
      */
     bindings: Record<string, WorkflowBindingLike>;
 }
+
+// Re-exported so consumers keep naming these through this package.
+export type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/function-reference";

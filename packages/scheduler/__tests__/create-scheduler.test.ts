@@ -53,7 +53,10 @@ const fakeNamespace = (responses: Record<string, unknown> = DEFAULT_RESPONSES): 
     return { calls, namespace };
 };
 
-const fnRef: FunctionReference = { __lunoraRef: "messages.send" };
+// A mutation, not a bare `FunctionReference`: `stream` is not schedulable, so
+// the schedulable types are narrowed to exclude it and an unconstrained
+// reference no longer satisfies them.
+const fnRef: FunctionReference<"mutation"> = { __lunoraRef: "messages.send" };
 
 // The generated `agents.<name>` / `workflows.<name>` schedule target: a
 // WorkflowReference carrying the `AGENT_*`/`WORKFLOW_*` binding + stable name.

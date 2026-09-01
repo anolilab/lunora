@@ -56,7 +56,7 @@ type CronScheduleKind = "daily" | "hourly" | "interval" | "monthly" | "weekly";
 ### `CronTarget` (type)
 
 ```ts
-type CronTarget = FunctionReference | WorkflowReference;
+type CronTarget = SchedulableReference | WorkflowReference;
 ```
 
 ### `CronTriggerOptions` (interface)
@@ -297,7 +297,7 @@ interface QueueSendRequestLike<Body = unknown> {
 
 ```ts
 interface QueueWorkpool {
-    enqueue: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: QueueEnqueueOptions) => Promise<void>;
+    enqueue: <F extends SchedulableReference>(function_: F, args: ArgsOf<F>, options?: QueueEnqueueOptions) => Promise<void>;
     enqueueBatch: (jobs: ReadonlyArray<{
         args?: Record<string, unknown>;
         ref: FunctionReference;
@@ -482,7 +482,7 @@ interface Workpool {
     cancel: (id: string) => Promise<{
         cancelled: boolean;
     }>;
-    enqueue: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: EnqueueOptions) => Promise<{
+    enqueue: <F extends SchedulableReference>(function_: F, args: ArgsOf<F>, options?: EnqueueOptions) => Promise<{
         id: string;
         scheduledFor: number;
     }>;

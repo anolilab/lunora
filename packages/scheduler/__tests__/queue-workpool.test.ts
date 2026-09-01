@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "../src/queue-workpool";
 import type { FunctionReference, MessageBatchLike, QueueDispatch, QueueJob, QueueLike, QueueMessageLike, QueueSendOptionsLike } from "../src/types";
 
-const fnRef = (ref: string): FunctionReference => {
+const fnRef = (ref: string): FunctionReference<"mutation"> => {
     return { __lunoraRef: ref };
 };
 
