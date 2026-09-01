@@ -1,3 +1,13 @@
+## @lunora/scheduler [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.46...@lunora/scheduler@1.0.0-alpha.47) (2026-09-01)
+
+### ⚠ BREAKING CHANGES
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests (#541)
+
+### Bug Fixes
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests ([#541](https://github.com/anolilab/lunora/issues/541)) ([dfc2d4d](https://github.com/anolilab/lunora/commit/dfc2d4d07bf8f67214122dc7f14d83a9b1533d07))
+
 ## @lunora/scheduler [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.45...@lunora/scheduler@1.0.0-alpha.46) (2026-09-01)
 
 ### ⚠ BREAKING CHANGES

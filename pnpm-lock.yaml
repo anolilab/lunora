@@ -3385,7 +3385,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/observability':
-        specifier: 1.0.0-alpha.50
+        specifier: 1.0.0-alpha.51
         version: link:../observability
       '@lunora/platform-cloudflare':
         specifier: 1.0.0-alpha.28
@@ -3616,7 +3616,7 @@ importers:
         specifier: workspace:*
         version: link:../flags
       '@lunora/observability':
-        specifier: 1.0.0-alpha.50
+        specifier: 1.0.0-alpha.51
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
@@ -4953,7 +4953,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/observability':
-        specifier: 1.0.0-alpha.50
+        specifier: 1.0.0-alpha.51
         version: link:../observability
       '@types/node':
         specifier: catalog:types
