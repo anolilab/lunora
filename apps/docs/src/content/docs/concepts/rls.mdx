@@ -60,7 +60,9 @@ const documentPolicies = definePolicies([
 `when` receives a context with:
 
 - `auth.userId`: the resolved caller id (`null` when unauthenticated).
-- `auth.roles`: the request's role list (from better-auth claims today).
+- `auth.roles`: the request's role list, read from the `roles` claim on the
+  resolved identity (a `string[]`, or the comma-separated string better-auth's
+  `admin()` plugin emits). Empty when the claim is absent.
 - `auth.can(permission)`: whether any of those roles grants a named permission
   (see below). Fails closed for unknown roles.
 - `auth.identity`: the raw identity claims.
@@ -216,8 +218,11 @@ ada.can("insert", "docs", { ownerId: "ada" }); // true
 ada.cannot("insert", "docs", { ownerId: "x" }); // true  — write denied
 ```
 
-`.as(identity)` binds a caller (`userId` / `roles` / `identity`, all optional;
-an omitted identity is the anonymous caller). For `read`, `.can(...)` answers
+`.as(identity)` binds a caller (`userId` / `identity`, both optional; an omitted
+identity is the anonymous caller). There is no separate `roles` field — roles are
+derived from the identity's `roles` claim by the same code the middleware uses,
+so a role-branched policy is set up the way production produces it:
+`.as({ identity: { roles: ["admin"] }, userId: "u1" })`. For `read`, `.can(...)` answers
 "is this row visible?" (the effective read `baseWhere` matches it); for writes
 it answers allow/deny exactly as the middleware would, including default-DENY on
 a participating table with no policy for the op. Pass the `roles` registry via

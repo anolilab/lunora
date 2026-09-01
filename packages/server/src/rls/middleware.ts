@@ -288,10 +288,15 @@ const assertBatchLimit = (count: number, limit: number | undefined, op: string):
     }
 };
 
-/** Roles list source on the context. Tolerant of older auth states. */
+/**
+ * The slice of `ctx.auth` the policy middlewares read. Deliberately has NO
+ * `roles` field: role labels are a CLAIM on the resolved identity (see
+ * {@link readIdentityRoles}), not a separate context field — nothing in the
+ * generated runtime ever set one, so a `roles` here would be permanently empty
+ * and every `auth.can(...)`/`auth.roles` branch silently dead.
+ */
 type AuthLike = {
     getIdentity?: () => Promise<Record<string, unknown> | null>;
-    roles?: ReadonlyArray<string>;
     userId?: null | string;
 };
 
@@ -1617,13 +1622,55 @@ const resolveCan = (
 };
 
 /**
+ * The identity claim that carries a request's role labels.
+ *
+ * Roles have exactly ONE source: the `roles` claim on the identity that
+ * `WorkerOptions.resolveIdentity` returned (`@lunora/runtime`'s
+ * `ResolvedIdentity` forwards every non-`userId` key verbatim, and
+ * `defineIdentity(...)` validates them at the worker's trust boundary before
+ * they become `ctx.auth`). There is no second, context-level `roles` field to
+ * disagree with it — see {@link AuthLike}.
+ */
+const IDENTITY_ROLES_CLAIM = "roles";
+
+/**
+ * Read the request's role labels off the resolved identity claims.
+ *
+ * Accepts the two shapes a resolver realistically produces: a string array, or
+ * a comma-separated string (the form better-auth's `admin()` plugin stores a
+ * multi-role value in — see `serializeRole` in `@lunora/auth`). Anything else —
+ * including an absent claim — is no roles, so `auth.can(...)` fails closed.
+ *
+ * Shared by the request path ({@link resolvePolicyAuth}), the shape path
+ * (`shape-read-base.ts`) and the test harness (`./testing`), so all three can
+ * only ever express a role set the runtime can actually produce.
+ */
+const readIdentityRoles = (identity: Record<string, unknown> | null | undefined): ReadonlyArray<string> => {
+    const claim = identity?.[IDENTITY_ROLES_CLAIM];
+
+    if (typeof claim === "string") {
+        return claim
+            .split(",")
+            .map((role) => role.trim())
+            .filter((role) => role.length > 0);
+    }
+
+    if (Array.isArray(claim)) {
+        return claim.filter((role): role is string => typeof role === "string" && role.length > 0);
+    }
+
+    return [];
+};
+
+/**
  * Resolve the request's `auth` view for a policy/mask/storage-rule context.
  * Identity is resolved once per protected procedure so policies can branch on
  * claims (`ctx.auth.identity.email` etc.) without each policy paying for its
  * own `getIdentity()` call; `null` covers both the anonymous case and the
- * no-resolver case (older auth states). Shared verbatim by the rls, mask and
- * storage-rules middlewares so the three resolve identity and grants
- * identically.
+ * no-resolver case (older auth states). `roles` is derived from those same
+ * claims ({@link readIdentityRoles}) — it is NOT a separate ctx field. Shared
+ * verbatim by the rls, mask and storage-rules middlewares so the three resolve
+ * identity and grants identically.
  */
 const resolvePolicyAuth = async (
     auth: AuthLike,
@@ -1634,12 +1681,13 @@ const resolvePolicyAuth = async (
     roles: ReadonlyArray<string>;
     userId: null | string;
 }> => {
-    const roles = auth.roles ?? [];
+    // eslint-disable-next-line unicorn/no-null -- the public auth contexts carry `null` for the anonymous/no-resolver case
+    const identity = (await auth.getIdentity?.()) ?? null;
+    const roles = readIdentityRoles(identity);
 
     return {
         can: resolveCan(roles, rolePermissions),
-        // eslint-disable-next-line unicorn/no-null -- the public auth contexts carry `null` for the anonymous/no-resolver case
-        identity: (await auth.getIdentity?.()) ?? null,
+        identity,
         roles,
         // eslint-disable-next-line unicorn/no-null -- the public auth contexts type userId as `null | string`
         userId: auth.userId ?? null,
@@ -1704,5 +1752,15 @@ export type { RlsDatabase };
  * package root does not re-export them.
  * @internal
  */
-export { computeReadBaseWhere, evaluateWrite, indexRolePermissions, isFacadeEntry, matchesWhere, permissionName, resolveCan, resolvePolicyAuth };
+export {
+    computeReadBaseWhere,
+    evaluateWrite,
+    indexRolePermissions,
+    isFacadeEntry,
+    matchesWhere,
+    permissionName,
+    readIdentityRoles,
+    resolveCan,
+    resolvePolicyAuth,
+};
 export type { AuthLike };

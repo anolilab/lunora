@@ -365,13 +365,23 @@ const enableQueryReader = (
 const lunora = initLunora.dataModel<Record<string, never>>().create();
 
 interface TestContext {
-    auth: { roles?: ReadonlyArray<string>; userId: null | string };
+    auth: { getIdentity?: () => Promise<Record<string, unknown> | null>; userId: null | string };
     db: FakeDatabase["writer"];
 }
 
+/**
+ * Roles reach a policy the ONLY way production can produce them: as the `roles`
+ * claim on the resolved identity. There is no ctx-level `auth.roles` to set —
+ * see `readIdentityRoles` in `rls/middleware.ts`.
+ */
 const makeContext = (database: FakeDatabase, userId: null | string, roles: string[] = []): TestContext => {
     return {
-        auth: { roles, userId },
+        auth: {
+            getIdentity: async () => {
+                return { roles, userId };
+            },
+            userId,
+        },
         db: database.writer,
     };
 };
@@ -965,6 +975,112 @@ describe("mask — with-relation hops", () => {
     });
 });
 
+describe("mask — relation-depth value oracle fails closed (regression)", () => {
+    const SSN = "123-45-6789";
+    const AUTHOR = { _id: "u1", name: "Ada", ssn: SSN, table: "users" };
+    const POST = { _id: "p1", authorId: "u1", table: "posts" };
+
+    /**
+     * A writer whose relation loader HONOURS the per-hop `where` and masks the
+     * survivors — what `@lunora/shard-engine`'s `resolveWith` actually does.
+     *
+     * That behaviour is what makes these tests a real oracle rather than an
+     * output-shape assertion: with the depth guard removed, a right guess comes
+     * back with an `author` (whose `ssn` is dutifully `null`) and a wrong guess
+     * comes back with none, so the caller reads the hidden value out of the
+     * PRESENCE of the child row, in ~34 range-narrowing queries for a 9-digit
+     * value. The root table (`posts`) carries no mask at all, which is why the
+     * root-scoped guards never looked.
+     */
+    const oracleDatabase = (): FakeDatabase => {
+        const database = createFakeDatabase([POST, AUTHOR]);
+
+        database.writer.findMany = async (tableName, args) => {
+            database.calls.push({ args, method: "findMany", tableOrId: tableName });
+
+            const hop = (args as { with?: Record<string, { where?: Record<string, { eq?: unknown }> }> } | undefined)?.with?.["author"];
+            const predicate = hop?.where;
+            const matches =
+                predicate === undefined ||
+                Object.entries(predicate).every(([column, operators]) => (AUTHOR as Record<string, unknown>)[column] === operators.eq);
+            const children = matches ? [AUTHOR as Record<string, unknown>] : [];
+            const relationMask = (args as { relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[] } | undefined)
+                ?.relationMask;
+            const masked = relationMask ? relationMask("users", children) : children;
+
+            return { continueCursor: null, isDone: true, page: [{ ...POST, author: masked[0] ?? null }] };
+        };
+
+        return database;
+    };
+
+    it("refuses a `with` hop that filters an UNMASKED root by a masked relation column", async () => {
+        expect.assertions(1);
+
+        const database = oracleDatabase();
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("posts", { with: { author: { where: { ssn: { eq: SSN } } } } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("refuses the same filter nested one level deeper in `with`", async () => {
+        expect.assertions(1);
+
+        const database = oracleDatabase();
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(async ({ ctx }) =>
+            (ctx as unknown as TestContext).db.findMany("posts", {
+                with: { comments: { with: { author: { where: { ssn: { gte: "500-00-0000" } } } } } },
+            }),
+        );
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("refuses a relation PREDICATE in the root `where` that filters a masked column", async () => {
+        expect.assertions(1);
+
+        const database = oracleDatabase();
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("posts", { where: { author: { is: { ssn: { eq: SSN } } } } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("refuses a `with` hop that ORDERS by a masked relation column", async () => {
+        expect.assertions(1);
+
+        const database = oracleDatabase();
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("posts", { with: { author: { orderBy: [{ ssn: "asc" }] } } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("still serves a relation hop filtered by a NON-masked column", async () => {
+        expect.assertions(1);
+
+        const database = oracleDatabase();
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("posts", { with: { author: { where: { name: { eq: "Ada" } } } } }));
+
+        const result = (await handler.handler(makeContext(database, "u1"), {})) as Page;
+
+        // The guard is scoped to masked columns, not a blanket ban on relation
+        // filters — and the hydrated child is still masked on the way out.
+        expect((result.page[0] as { author?: Record<string, unknown> }).author).toMatchObject({ name: "Ada", ssn: null });
+    });
+});
+
 describe("mask — stacked middlewares", () => {
     it("resolves a stacked policy in the SAME order for relation rows as for top-level rows", async () => {
         expect.assertions(2);
@@ -1481,7 +1597,7 @@ describe("mask — value oracle via rank reads fails closed (plan 209)", () => {
 
         const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(({ ctx }) => typeof (ctx as unknown as TestContext).db.rankPageRows);
 
-        await expect(handler.handler({ auth: { roles: [], userId: "u1" }, db: guarded }, {})).resolves.toBe("undefined");
+        await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).resolves.toBe("undefined");
     });
 });
 
@@ -1992,7 +2108,7 @@ describe("mask — per-table facade (no mask bypass)", () => {
     const makeFacadeContext = (database: FakeDatabase, userId: null | string): Record<string, unknown> => {
         const db = withFacade(database);
 
-        return { auth: { roles: [], userId }, db };
+        return { auth: { userId }, db };
     };
 
     interface FacadeCtx {

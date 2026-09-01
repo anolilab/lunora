@@ -260,13 +260,20 @@ const enableRankPageRows = (database: FakeDatabase, rows: (Record<string, unknow
 const lunora = initLunora.dataModel<Record<string, never>>().create();
 
 interface TestContext {
-    auth: { roles?: ReadonlyArray<string>; userId: null | string };
+    auth: { getIdentity?: () => Promise<Record<string, unknown> | null>; userId: null | string };
     db: FakeDatabase["writer"];
 }
 
+// Roles reach a policy only as the `roles` claim on the resolved identity —
+// the same single source `resolvePolicyAuth` reads at request time.
 const makeContext = (database: FakeDatabase, userId: null | string, roles: string[] = []): TestContext => {
     return {
-        auth: { roles, userId },
+        auth: {
+            getIdentity: async () => {
+                return { roles, userId };
+            },
+            userId,
+        },
         db: database.writer,
     };
 };
@@ -402,6 +409,67 @@ describe("rls — read path", () => {
         const userCall = database.calls.at(-1);
 
         expect((userCall?.args as { baseWhere?: unknown }).baseWhere).toEqual({ ownerId: "u1" });
+    });
+
+    // SECURITY (regression): the mirror of the test above, and the reason a dead
+    // `auth.roles` is a vulnerability rather than a papercut. The generated
+    // context is `auth: { getIdentity, userId }` — there has never been a
+    // `ctx.auth.roles` for anything to populate — so a policy whose DENY branch
+    // is gated on a role read `[]`, never took the branch, and left a suspended
+    // caller with the same access as everyone else. Roles are now read off the
+    // resolved identity's `roles` claim, the one place the runtime produces them.
+    it("a role-gated DENY branch fires for a suspended caller", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => (auth.roles.includes("suspended") ? false : { ownerId: auth.userId }),
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
+
+        await handler.handler(makeContext(database, "u1", ["suspended"]), {});
+
+        // `{ OR: [] }` is the vacuously-false sentinel: zero rows survive.
+        expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toEqual({ OR: [] });
+
+        // …while an unsuspended caller keeps their own rows.
+        await handler.handler(makeContext(database, "u2", []), {});
+
+        expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toEqual({ ownerId: "u2" });
+    });
+
+    // better-auth's `admin()` plugin stores a multi-role value comma-joined, so a
+    // resolver forwarding that column verbatim must not silently resolve to no
+    // roles — that is the same fail-open the dead `auth.roles` produced.
+    it("reads a comma-separated `roles` claim as a role list", async () => {
+        expect.assertions(1);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => (auth.roles.includes("admin") ? true : { ownerId: auth.userId }),
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
+
+        await handler.handler(
+            {
+                auth: {
+                    getIdentity: async () => {
+                        return { roles: "user,admin" };
+                    },
+                    userId: "u1",
+                },
+                db: database.writer,
+            },
+            {},
+        );
+
+        expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
     });
 
     it("count() throws COUNT_RLS_UNSUPPORTED when a policy applies", async () => {
@@ -1632,7 +1700,7 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         const resolve = (table: string): Record<string, unknown> => db[table] as Record<string, unknown>;
 
         return {
-            auth: { roles: [], userId },
+            auth: { userId },
             db,
             orm: {
                 delete: (table: string, id: string) => (resolve(table)["delete"] as (id: string) => unknown)(id),

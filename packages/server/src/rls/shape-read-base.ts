@@ -22,7 +22,7 @@
  * `query` guarded by the same policies.
  */
 
-import { computeReadBaseWhere, indexRolePermissions, resolveCan } from "./middleware";
+import { computeReadBaseWhere, indexRolePermissions, readIdentityRoles, resolveCan } from "./middleware";
 import type { RlsTag } from "./policy-tag";
 import { readRlsTags } from "./policy-tag";
 import { deny } from "./predicates";
@@ -57,8 +57,6 @@ interface ShapeReadWhereRequest {
     readonly identity: Record<string, unknown> | null;
     /** `true` when the schema is `.rls("required")` — gates the fail-closed branch. */
     readonly rlsRequired: boolean;
-    /** Role labels the request carries (drives `auth.can(...)`). */
-    readonly roles: ReadonlyArray<string>;
     /** The shape's own predicate (`where(ctx, args)`). */
     readonly shapeWhere: WhereInput;
     /** Logical table the shape replicates. */
@@ -155,16 +153,22 @@ const andMerge = (injected: undefined | WhereInput, caller: WhereInput): WhereIn
  * roles — restricted to the grants of the rls() middleware that declared it, so
  * a permission registered on a different middleware can never satisfy it.
  */
-const evaluateGroupBaseWhere = (group: ScopedReadPolicies, request: ShapeReadWhereRequest): undefined | WhereInput =>
-    computeReadBaseWhere(group.policies, {
+const evaluateGroupBaseWhere = (group: ScopedReadPolicies, request: ShapeReadWhereRequest): undefined | WhereInput => {
+    // Same single source of roles as the request path: the `roles` claim on the
+    // socket's verified identity. The caller does not get to hand them in
+    // separately — that is how `auth.roles` came to be permanently `[]`.
+    const roles = readIdentityRoles(request.identity);
+
+    return computeReadBaseWhere(group.policies, {
         auth: {
-            can: resolveCan(request.roles, group.rolePermissions),
+            can: resolveCan(roles, group.rolePermissions),
             identity: request.identity,
-            roles: request.roles,
+            roles,
             userId: request.userId,
         },
         ctx: request.ctx,
     });
+};
 
 /** Resolve the table's read base-where (or the fail-closed sentinel), or `undefined` when unrestricted. */
 const resolveReadBaseWhere = (registry: RlsReadRegistry, request: ShapeReadWhereRequest): undefined | WhereInput => {
