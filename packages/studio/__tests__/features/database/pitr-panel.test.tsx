@@ -9,9 +9,9 @@ import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
-const renderPanel = (mock: MockClientHooks): ReactElement => (
+const renderPanel = (mock: MockClientHooks, initialShardKey?: string): ReactElement => (
     <LunoraProvider client={mock.asClient}>
-        <PitrPanel />
+        <PitrPanel initialShardKey={initialShardKey} />
     </LunoraProvider>
 );
 
@@ -97,6 +97,31 @@ describe("pitrPanel", () => {
         expect(restoreArgs).toStrictEqual({ bookmark: "bm-target" });
         expect(screen.getByTestId("pitr-undo-bookmark").textContent).toContain("bm-undo");
         expect(mock.mutation).toHaveBeenCalledTimes(1);
+    });
+
+    it("names the shard and the target in the restore confirmation", async () => {
+        expect.assertions(3);
+
+        // The most destructive action in the studio confirmed with a bare
+        // "Confirm restore" — naming neither which shard it would rewind nor to
+        // when. The Time Travel view is shard-scoped and the operator may have
+        // several open.
+        const mock = createMockClient({
+            query: (): unknown => ({ current: "bm-current" }) satisfies PitrBookmarkResult,
+        });
+
+        render(renderPanel(mock, "tenant-42"));
+
+        await screen.findByTestId("pitr-current");
+
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "2026-06-01T00:00:00.000Z" } });
+        fireEvent.click(screen.getByTestId("pitr-restore"));
+
+        const confirm = screen.getByTestId("pitr-restore-confirm");
+
+        expect(confirm.textContent).toContain("tenant-42");
+        expect(confirm.textContent).toContain("2026-06-01T00:00:00.000Z");
+        expect(confirm.textContent).not.toBe("Confirm restore");
     });
 
     it("surfaces a read failure as an error", async () => {

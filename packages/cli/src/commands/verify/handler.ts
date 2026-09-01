@@ -196,11 +196,10 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         // produced and dropping the one output that depends on the target left
         // `lunora verify`, the documented pre-deploy gate, green on an app whose
         // host cannot serve what codegen emitted.
-        const platformError = reportPlatformDiagnostics(codegen.platformDiagnostics, logger);
+        const platform = reportPlatformDiagnostics(codegen.platformDiagnostics, logger);
 
-        if (platformError !== undefined) {
-            errors.push(platformError);
-        }
+        errors.push(...platform.errors);
+        warnings.push(...platform.warnings);
 
         const gate = runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, command: "verify", logger, readOnly: true });
 

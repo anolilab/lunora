@@ -163,6 +163,68 @@ describe("lunora add — shadcn-parity features", () => {
         expect(printed).toContain("\texport const tabbed = 1;");
     });
 
+    it("a files-only item from a custom --from root still needs confirmation", async () => {
+        expect.assertions(3);
+
+        // No deps, no bindings — just files. `--from` is a registry root the user
+        // named, so those files are as attacker-influenceable as a `--source`
+        // fetch, and the confirmation only looked at `--source`.
+        writeItem({});
+
+        const { logger } = capturingLogger();
+        const prompts: string[] = [];
+        const result = await runAddCommand({
+            confirm: async (message) => {
+                prompts.push(message);
+
+                return false;
+            },
+            cwd: workdir,
+            from: registryRoot,
+            logger,
+            names: ["foo"],
+        });
+
+        expect(prompts).toHaveLength(1);
+        expect(result.code).toBe(1);
+        expect(existsSync(destination())).toBe(false);
+    });
+
+    it("strips BIDI overrides from the plan, from serialized values, and from errors", async () => {
+        expect.assertions(4);
+
+        // U+202E and friends are the terminal-spoofing vector the C0/C1 strip
+        // does not cover: they reorder a rendered line, so a plan can read as
+        // one thing and apply as another. `JSON.stringify` passes them through
+        // untouched, so the serialized binding/env values needed it too.
+        writeItem({
+            bindings: [{ path: ["vars", "FLAG"], value: "safe\u202Egnp.exe" }],
+            envVars: [{ name: "FOO", secret: false, value: "safe\u202Egnp.exe" }],
+            title: "Foo\u2066spoofed\u2069",
+        });
+
+        const { lines, logger } = capturingLogger();
+
+        await runAddCommand({ cwd: workdir, dryRun: true, from: registryRoot, logger, names: ["foo"], yes: true });
+
+        const printed = lines.join("\n");
+
+        expect(printed).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/u);
+        expect(printed).toContain("Foospoofed");
+        expect(printed).toContain("safegnp.exe");
+
+        // The caught-error path renders untrusted manifest text too: a rejected
+        // env-var name is echoed straight back into `add failed: …`.
+        rmSync(join(registryRoot, "foo"), { force: true, recursive: true });
+        writeItem({ envVars: [{ name: "BAD\u202E-NAME", value: "x" }] });
+
+        const failure = capturingLogger();
+
+        await runAddCommand({ cwd: workdir, from: registryRoot, logger: failure.logger, names: ["foo"], yes: true });
+
+        expect(failure.lines.join("\n")).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/u);
+    });
+
     it("registry build generates index.json and --check detects drift", async () => {
         expect.assertions(3);
 

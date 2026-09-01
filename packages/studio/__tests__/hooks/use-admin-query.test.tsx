@@ -309,4 +309,63 @@ describe("useAdminQuery", () => {
             expect(result.current.data).toStrictEqual({ rows: ["now-authorized"] });
         });
     });
+
+    it("re-subscribes the live bridge onto the new client after the admin token is swapped", async () => {
+        expect.hasAssertions();
+
+        // Same swap as the test above, but for the LIVE leg. The subscription
+        // effect closes over `client`, so a dependency list that omits it leaves
+        // the bridge bound to the CLOSED client for the life of the mount: the
+        // one-shot read re-fetches (its key carries `clientIdentifier()`) so the
+        // panel fills in and looks fixed, while it has silently stopped streaming
+        // and the old socket is never torn down.
+        const staleUnsubscribes: string[] = [];
+        const stale = createMockClient({
+            query: () => {
+                return { tick: 0 };
+            },
+        });
+
+        Object.assign(stale.asClient, { clientIdentifier: () => "client-stale-token" });
+        stale.subscribe.mockImplementation(() => () => {
+            staleUnsubscribes.push("stale");
+        });
+
+        const fresh = createMockClient({
+            query: () => {
+                return { tick: 0 };
+            },
+        });
+
+        Object.assign(fresh.asClient, { clientIdentifier: () => "client-valid-token" });
+
+        let active = stale;
+        const swapWrapper = ({ children }: PropsWithChildren): ReactElement => <LunoraProvider client={active.asClient}>{children}</LunoraProvider>;
+
+        const { rerender, result } = renderHook(() => useAdminQuery<{ tick: number }>("watchTicks", {}, { live: true }), { wrapper: swapWrapper });
+
+        await waitFor(() => {
+            expect(stale.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        // The operator pastes the right token: same mounted tree, new client.
+        active = fresh;
+        rerender();
+
+        await waitFor(() => {
+            expect(fresh.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        // The dead client's socket is torn down, not leaked.
+        expect(staleUnsubscribes).toStrictEqual(["stale"]);
+
+        // And a push on the NEW client reaches the panel.
+        act(() => {
+            fresh.emit("watchTicks", { tick: 42 });
+        });
+
+        await waitFor(() => {
+            expect(result.current.data).toStrictEqual({ tick: 42 });
+        });
+    });
 });

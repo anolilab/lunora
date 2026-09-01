@@ -318,16 +318,28 @@ describe("schema-drift gate", () => {
         });
 
         it("build accepts the --allow-schema-drift the blocked-drift message tells it to pass", async () => {
-            expect.assertions(3);
+            expect.assertions(6);
 
             await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
             const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
 
             introduceBreakingDrift();
 
-            const blocked = await runBuildCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            // Assert the MESSAGE, not just the exit code. The gate takes the
+            // command name from the caller, and `build` delegates through
+            // `runDeployCommand` — so a hardcoded "deploy" here told the operator
+            // a deploy was blocked when none was attempted, and recommended
+            // `--update-schema-baseline`, which `build` rejects with a raw
+            // `Found unknown option` stack trace. Both halves of its own advice
+            // failed, and an exit-code-only assertion could not see either.
+            const blockedLog = silentLogger();
+            const blocked = await runBuildCommand({ cwd: workdir, logger: blockedLog.logger, spawner: createRecordingSpawner().spawner });
+            const blockedText = blockedLog.errors.join("\n");
 
             expect(blocked.code).toBe(1);
+            expect(blockedText).toContain("build blocked");
+            expect(blockedText).not.toContain("deploy blocked");
+            expect(blockedText).not.toContain("pass `--update-schema-baseline`");
 
             const overridden = await runBuildCommand({
                 allowSchemaDrift: true,

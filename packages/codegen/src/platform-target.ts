@@ -329,6 +329,77 @@ interface PlatformGateResult {
     usage: FeatureUsage;
 }
 
+/** The app declares this feature and the target rates it `unsupported`. */
+const unsupportedSignalDiagnostic = (key: keyof PlatformSignals, matrix: PlatformCapabilities, target: string): PlatformDiagnostic => {
+    return {
+        level: "error",
+        message: `${matrix.name} does not support ${PLATFORM_SIGNAL_LABELS[key]}, which this app declares.`,
+        name: "platform_unsupported_feature",
+        remediation: `Remove the declaration, or deploy to a target whose capability matrix marks "${key}" as native or emulated.`,
+        target,
+    };
+};
+
+/** The app declares this feature and the target's matrix rates it not at all — the fail-closed arm. */
+const undeclaredSignalDiagnostic = (key: keyof PlatformSignals, matrix: PlatformCapabilities, target: string): PlatformDiagnostic => {
+    return {
+        level: "error",
+        message: `${matrix.name}'s capability matrix does not declare a support level for ${PLATFORM_SIGNAL_LABELS[key]}, which this app declares. Treated as unsupported.`,
+        name: "platform_undeclared_feature",
+        remediation: `Rate "${key}" in the ${matrix.name} capability matrix as "native", "emulated", or "unsupported" — an undeclared feature fails closed rather than letting the app deploy onto a primitive the host may not provide.`,
+        target,
+    };
+};
+
+/**
+ * The second gate pass: features an app DECLARES in its schema or a declaration
+ * file, which have no `ctx.*` capability row for the first pass to notice.
+ *
+ * Lifted out of `gateAgainstMatrix` so that function stays readable — the two
+ * passes answer different questions off different inputs, and only the shared
+ * `reported` set couples them.
+ */
+const gateSignalPass = (context: {
+    diagnostics: PlatformDiagnostic[];
+    gatedSignals: PlatformSignals;
+    matrix: PlatformCapabilities;
+    reported: Set<string>;
+    signals: PlatformSignals;
+    target: string;
+}): void => {
+    const { diagnostics, gatedSignals, matrix, reported, signals, target } = context;
+
+    for (const key of PLATFORM_SIGNAL_KEYS) {
+        if (signals[key] !== true) {
+            continue;
+        }
+
+        const level = matrix.features[key]?.level;
+
+        if (level !== "unsupported" && level !== undefined) {
+            continue;
+        }
+
+        // Reject FIRST, then decide whether to say so. `reported` suppresses a
+        // duplicate DIAGNOSTIC for a feature reachable both as a capability and
+        // as a signal — it must never suppress the rejection itself. Skipping
+        // the whole iteration left `gatedSignals[key]` at `true`, so an app that
+        // BOTH declares `.vectorize()` AND reads `ctx.vectors` had the surface
+        // emitted anyway: the capability pass reported it, the signal pass saw
+        // `reported.has(key)` and bailed before recording the rejection, and
+        // `hasVectors` read the stale `true`. That is the more common shape —
+        // you rarely declare a vector index without querying it — so the gate
+        // was off in exactly the case it exists for.
+        gatedSignals[key] = false;
+
+        if (reported.has(key)) {
+            continue;
+        }
+
+        diagnostics.push(level === "unsupported" ? unsupportedSignalDiagnostic(key, matrix, target) : undeclaredSignalDiagnostic(key, matrix, target));
+    }
+};
+
 /**
  * Gate `usage` against an explicit {@link PlatformCapabilities} matrix — the
  * core intersection {@link gatePlatformFeatures} runs once it has resolved the
@@ -400,33 +471,7 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
     // `.global()` table or a durable stream is the app's own declaration, not a
     // generated surface codegen can omit — so the diagnostic IS the whole
     // output. Same fail-closed treatment of an undeclared rating as above.
-    for (const key of PLATFORM_SIGNAL_KEYS) {
-        if (signals[key] !== true || reported.has(key)) {
-            continue;
-        }
-
-        const level = matrix.features[key]?.level;
-
-        if (level === "unsupported") {
-            gatedSignals[key] = false;
-            diagnostics.push({
-                level: "error",
-                message: `${matrix.name} does not support ${PLATFORM_SIGNAL_LABELS[key]}, which this app declares.`,
-                name: "platform_unsupported_feature",
-                remediation: `Remove the declaration, or deploy to a target whose capability matrix marks "${key}" as native or emulated.`,
-                target,
-            });
-        } else if (level === undefined) {
-            gatedSignals[key] = false;
-            diagnostics.push({
-                level: "error",
-                message: `${matrix.name}'s capability matrix does not declare a support level for ${PLATFORM_SIGNAL_LABELS[key]}, which this app declares. Treated as unsupported.`,
-                name: "platform_undeclared_feature",
-                remediation: `Rate "${key}" in the ${matrix.name} capability matrix as "native", "emulated", or "unsupported" — an undeclared feature fails closed rather than letting the app deploy onto a primitive the host may not provide.`,
-                target,
-            });
-        }
-    }
+    gateSignalPass({ diagnostics, gatedSignals, matrix, reported, signals, target });
 
     return { diagnostics, signals: gatedSignals, usage: gated };
 };

@@ -705,10 +705,10 @@ const MESSAGE_IDS = [
     "LUNORA_SECURITY_CSRF is off, so cross-origin state-changing cookie requests are not blocked. Re-enable it in production to keep mutations un-forgeable.",
     "LUNORA_SECURITY_HEADERS is off, so HSTS, CSP, nosniff, and frame-options are not applied. Re-enable the baseline headers in production.",
     // Advisors — missing-index apply action.
-    "Apply index",
-    "Apply index on {table}",
-    "Apply?",
+    "Copy index SQL for {table}",
+    "Copy?",
     "CREATE INDEX SQL copied to clipboard.",
+    "Could not reach the clipboard — copy this statement:",
     "LUNORA_WS_BEARER is unset, so the WebSocket upgrade gate is open: live admin subscriptions need no credential. Set it to gate them like the HTTP admin RPCs.",
     "This worker reports a development environment, so the request log stores raw args and identity. Confirm it isn't a mislabeled production deploy.",
     // Audit panel.
@@ -791,7 +791,8 @@ const MESSAGE_IDS = [
     "Or an explicit bookmark (wins over time)",
     "bookmark string",
     "Restart the shard now so recovery applies immediately",
-    "Confirm restore",
+    "Restore {shard} to {target}?",
+    "the given bookmark",
     "restarted now",
     "on next restart",
     "Restore armed",

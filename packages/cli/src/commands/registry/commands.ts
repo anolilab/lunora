@@ -11,26 +11,11 @@ import { detectPackageManager, installArgsFor } from "../../util/detect-package-
 import type { Logger } from "../../util/logger";
 import { confirmDepMutation, resolveDepRange } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
+import safe from "./display";
 import { readItemFile, reconcileItems } from "./reconcile";
 import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, sourceGateError } from "./resolve";
 import type { AddCommandOptions, AddCommandResult, RegistryManifest } from "./types";
 import { emptyResult } from "./types";
-
-/**
- * Strip C0/C1 control bytes — ESC (the lead-in for ANSI/OSC sequences), BEL, and
- * the rest — from remote text before it reaches the terminal. `registry list`
- * sanitized its catalog strings (see `catalog.ts`) while `add`'s plan/report and
- * `view` printed manifest fields and whole file bodies raw, and `view` is the
- * inspect-before-you-install command: every byte it renders is attacker-supplied
- * when `--source` points somewhere hostile.
- *
- * TAB is deliberately kept: it is real indentation in the source listing `view`
- * prints, and it spoofs nothing.
- */
-// eslint-disable-next-line no-control-regex -- the C0/C1 range minus TAB is exactly what must not reach the terminal
-const DISPLAY_CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/gu;
-
-const safe = (value: string): string => value.replaceAll(DISPLAY_CONTROL_CHARS, "");
 
 /** Render the human-readable plan for one item. */
 const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
@@ -77,14 +62,15 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
         // Render the concrete value so a reviewer can audit what gets written into
         // wrangler.jsonc (e.g. an attempt to set an exec/entrypoint key) before it
         // is applied — a bare key path hides the payload.
-        // `JSON.stringify` already escapes control bytes in the value, so only the key path needs it.
-        logger.info(`  bind  ${safe(binding.path.join("."))} = ${JSON.stringify(binding.value)}`);
+        // `JSON.stringify` escapes control bytes but NOT the BIDI overrides that
+        // reorder the rendered line, so the serialized value is sanitized too.
+        logger.info(`  bind  ${safe(binding.path.join("."))} = ${safe(JSON.stringify(binding.value))}`);
     }
 
     for (const variable of manifest.envVars ?? []) {
         // Show non-secret values; secrets are scaffolded as empty placeholders so
         // there is nothing to leak.
-        const valueSuffix = variable.secret ? " (secret)" : ` = ${JSON.stringify(variable.value ?? "")}`;
+        const valueSuffix = variable.secret ? " (secret)" : ` = ${safe(JSON.stringify(variable.value ?? ""))}`;
 
         logger.info(`  env   ${safe(variable.name)}${valueSuffix}`);
     }
@@ -201,7 +187,9 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 
         return empty;
     } catch (error) {
-        options.logger.error(`list failed: ${error instanceof Error ? error.message : String(error)}`);
+        // The message can quote the untrusted manifest back (a rejected env-var
+        // name, a bad path), so it is sanitized like every other render site.
+        options.logger.error(safe(`list failed: ${error instanceof Error ? error.message : String(error)}`));
 
         return { ...empty, code: 1 };
     } finally {
@@ -284,7 +272,9 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
 
         return { bindings, code: 0, deps, skipped, written };
     } catch (error) {
-        options.logger.error(`add failed: ${error instanceof Error ? error.message : String(error)}`);
+        // The message can quote the untrusted manifest back (a rejected env-var
+        // name, a bad path), so it is sanitized like every other render site.
+        options.logger.error(safe(`add failed: ${error instanceof Error ? error.message : String(error)}`));
 
         return { ...empty, code: 1 };
     } finally {
@@ -345,7 +335,9 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
 
         return empty;
     } catch (error) {
-        options.logger.error(`view failed: ${error instanceof Error ? error.message : String(error)}`);
+        // The message can quote the untrusted manifest back (a rejected env-var
+        // name, a bad path), so it is sanitized like every other render site.
+        options.logger.error(safe(`view failed: ${error instanceof Error ? error.message : String(error)}`));
 
         return { ...empty, code: 1 };
     } finally {

@@ -146,6 +146,16 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     // A restore needs an explicit bookmark or a time to aim at.
     const canRestore = bookmark.trim() !== "" || time.trim() !== "";
 
+    // Name what is about to happen. The most destructive action here used to
+    // confirm with a bare "Confirm restore", which said neither WHICH shard would
+    // be rewound — this view is shard-scoped and an operator may have several
+    // open — nor to WHEN. Mirrors `onConfirmRestore`'s own bookmark-wins-over-time
+    // precedence, so the label can't promise a different target than the one sent.
+    const confirmRestoreLabel = t("Restore {shard} to {target}?", {
+        shard: shardKey === "" ? t("root") : shardKey,
+        target: bookmark.trim() === "" ? time.trim() : t("the given bookmark"),
+    });
+
     const onConfirmRestore = (): void => {
         const args: { bookmark?: string; restart?: boolean; time?: string } = restart ? { restart: true } : {};
 
@@ -227,7 +237,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                 </Label>
 
                 <div>
-                    <ConfirmButton confirmLabel={t("Confirm restore")} disabled={busy || !canRestore} onConfirm={onConfirmRestore} testId="pitr-restore">
+                    <ConfirmButton confirmLabel={confirmRestoreLabel} disabled={busy || !canRestore} onConfirm={onConfirmRestore} testId="pitr-restore">
                         {t("Restore")}
                     </ConfirmButton>
                 </div>

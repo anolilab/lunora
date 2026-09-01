@@ -753,8 +753,8 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(send).toHaveBeenCalledTimes(1);
         });
 
-        it("build mode (no dev server) → no hot.send, returns undefined on failure", async () => {
-            expect.assertions(1);
+        it("vite build fails when codegen throws (does not proceed to bundle the previous run's _generated/)", async () => {
+            expect.assertions(2);
 
             mkdirSync(join(workdir, "lunora"), { recursive: true });
             writeFileSync(join(workdir, "lunora", "schema.ts"), `export const broken = true;`, "utf8");
@@ -762,6 +762,14 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             const plugin = codegenPlugin(makeOptions(workdir));
 
             // Do NOT call configureServer — simulates `vite build` where no dev server exists.
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+
+            const buildContext = {
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            };
+
             const errors: string[] = [];
             // eslint-disable-next-line no-console -- capturing to assert no overlay call
             const originalError = console.error;
@@ -769,14 +777,52 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             console.error = (message: string) => errors.push(message);
 
             try {
-                await (plugin.buildStart as (this: unknown) => Promise<void>).call(undefined);
+                // This test used to assert only that the build "doesn't crash and
+                // logs the error". That expectation was wrong: a codegen failure is
+                // the HARDEST signal the plugin has — the schema could not be parsed
+                // at all — and log-only meant Rollup went on to resolve whatever
+                // `_generated/*` the last good run left on disk. A schema typo in CI
+                // exited 0 and shipped types and routes for a schema that no longer
+                // exists, while the same hook already fails the build on the much
+                // SOFTER signal three lines below (an ERROR-level advisory, i.e. a
+                // call known to throw at runtime).
+                await expect((plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext)).rejects.toThrow(/codegen failed/u);
             } finally {
                 // eslint-disable-next-line no-console
                 console.error = originalError;
             }
 
-            // We just need to confirm the build doesn't crash and logs the error.
+            // Still logged on the way out, so the terminal names the real cause.
             expect(errors.some((message) => message.includes("codegen failed"))).toBe(true);
+        });
+
+        it("vite dev only logs the same codegen failure (never throws)", async () => {
+            expect.assertions(2);
+
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "schema.ts"), `export const broken = true;`, "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
+
+            const errors: string[] = [];
+            // eslint-disable-next-line no-console -- capturing console refs to restore after the test
+            const originalError = console.error;
+            // eslint-disable-next-line no-console
+            console.error = (message: string) => errors.push(message);
+
+            try {
+                // Dev stays log-only for the same reason it does for an ERROR-level
+                // advisory: the overlay already reported it and the next save is the
+                // chance to fix it.
+                await expect((plugin.buildStart as (this: unknown) => Promise<void>).call(undefined)).resolves.toBeUndefined();
+
+                expect(errors.some((message) => message.includes("codegen failed"))).toBe(true);
+            } finally {
+                // eslint-disable-next-line no-console
+                console.error = originalError;
+            }
         });
 
         it("missing schema.ts at buildStart warns but does not call overlay.onError (uninitialised project)", async () => {
@@ -1325,8 +1371,12 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             const onChange = changeListenerFor(server);
 
+            // Advance only past the debounce, NOT `runAllTimersAsync`: draining
+            // every pending timer also drains the settle recheck armed at the end
+            // of the run, which pushes the fake clock past HOOK_SETTLE_MS and puts
+            // the second event outside the window this test is about.
             onChange(join(workdir, "lunora", "messages.ts"));
-            await vi.runAllTimersAsync();
+            await vi.advanceTimersByTimeAsync(150);
 
             expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
 
@@ -1355,6 +1405,97 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
             expect(workerSend).not.toHaveBeenCalled();
+        });
+
+        it("regenerates a developer save that landed while `postcodegen` was running", async () => {
+            expect.assertions(3);
+
+            // A real `postcodegen` (prettier/eslint/tsc over the generated output)
+            // runs for seconds. Every save in that window used to be discarded
+            // outright — no log, no rerun — so `_generated/` stayed behind
+            // `schema.ts` until the developer happened to save again. The window
+            // exists to filter the HOOK's own writes; it must not eat the
+            // developer's, and the two are only distinguishable by content.
+            writeFixture(workdir);
+            vi.mocked(runPostCodegenHook).mockImplementation(async () => {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 900);
+                });
+
+                return { ran: true };
+            });
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChange = changeListenerFor(server);
+            const messagesPath = join(workdir, "lunora", "messages.ts");
+
+            onChange(messagesPath);
+
+            // Let the debounce fire so the hook is actually mid-run.
+            await vi.advanceTimersByTimeAsync(150);
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+
+            // The developer saves a new function while the hook is still running.
+            writeFileSync(
+                messagesPath,
+                `${MESSAGES_SOURCE}
+export const archive = mutation({
+    args: { channelId: v.id("channels") },
+    handler: async (_context, args) => {
+        return { channelId: args.channelId };
+    },
+});
+`,
+                "utf8",
+            );
+            onChange(messagesPath);
+
+            await vi.runAllTimersAsync();
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(2);
+            // …and the regeneration actually consumed the new source.
+            expect(readFileSync(join(workdir, "lunora", "_generated", "api.ts"), "utf8")).toContain("archive");
+        });
+
+        it("does not rerun when the hook only rewrote its own output", async () => {
+            expect.assertions(2);
+
+            // The other half of the same discrimination: a hook that touches
+            // nothing under the schema directory (or rewrites a file to identical
+            // bytes) leaves the sources' fingerprint unchanged, so the settle
+            // recheck must stay silent rather than trade the old spin loop for a
+            // new one.
+            writeFixture(workdir);
+            vi.mocked(runPostCodegenHook).mockImplementation(async () => {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 900);
+                });
+
+                return { ran: true };
+            });
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChange = changeListenerFor(server);
+
+            onChange(join(workdir, "lunora", "messages.ts"));
+            await vi.advanceTimersByTimeAsync(150);
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+
+            // Standing in for the hook's own write — same bytes on disk.
+            onChange(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
         });
 
         it("resumes regenerating once the settle window has passed", async () => {

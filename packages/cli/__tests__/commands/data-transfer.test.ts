@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -159,6 +159,34 @@ describe("lunora data-transfer", () => {
             // Yesterday's dump is still there, byte for byte.
             expect(existsSync(outPath)).toBe(true);
             expect(readFileSync(outPath, "utf8")).toBe(yesterday);
+        });
+
+        it("discards the staged dump when the commit rename fails", async () => {
+            expect.assertions(2);
+
+            // `--out` is an existing directory, so the stage → commit `rename`
+            // rejects after every row is on disk. The staged `.partial` holds the
+            // complete plaintext export; leaving it behind is the same disclosure
+            // the stage/commit was added to prevent.
+            const outPath = join(workDir, "already-a-directory");
+
+            mkdirSync(outPath, { recursive: true });
+
+            const fetchImpl: StreamingFetchLike = async () => {
+                return {
+                    body: stringStream(`${JSON.stringify({ doc: { _id: "u1", ssn: "000-00-0000" }, table: "users" })}\n`),
+                    json: async () => undefined,
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            };
+
+            await expect(runExportCommand({ fetchImpl, logger: silentLogger(), out: outPath, token: "t", url: "http://localhost:8787" })).rejects.toThrow(
+                /EISDIR/u,
+            );
+
+            expect(readdirSync(workDir).filter((entry) => entry.endsWith(".partial"))).toStrictEqual([]);
         });
 
         it("refuses to target localhost with --prod", async () => {

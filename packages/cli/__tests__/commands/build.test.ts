@@ -132,6 +132,34 @@ describe("lunora build", () => {
         expect(successes.join("\n")).toContain("binding manifest written to");
     });
 
+    it("--emit-bindings describes the crons provisioning added, and still leaves wrangler.jsonc untouched", async () => {
+        expect.assertions(3);
+
+        // The committed config declares no `triggers`; the app declares a nightly
+        // cron. Provisioning reconciles it into wrangler.jsonc — and the dry-run
+        // rollback used to put the original bytes back BEFORE the manifest was
+        // derived, so the document handed to Terraform/Pulumi said `"crons": []`
+        // for an app with a nightly job that would then never be provisioned.
+        writeFileSync(
+            join(workdir, "lunora", "crons.ts"),
+            `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
+            "utf8",
+        );
+
+        const { spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        const result = await runBuildCommand({ cwd: workdir, emitBindings: "bindings.json", logger, spawner });
+
+        expect(result.code).toBe(0);
+
+        const manifest = JSON.parse(readFileSync(join(workdir, "bindings.json"), "utf8")) as { crons: string[] };
+
+        expect(manifest.crons).toStrictEqual(["0 3 * * *"]);
+        // The build published nothing, so the committed config is byte-identical.
+        expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
+    });
+
     it("weighs the bundle it wrote, counting only what Cloudflare uploads", async () => {
         expect.assertions(4);
 

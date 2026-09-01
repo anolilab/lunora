@@ -813,6 +813,26 @@ export const backfillReadBy = defineMigration({
     });
 });
 
+/**
+ * A fetch double that records every URL it is handed and answers with an empty
+ * 200 — enough for the guard tests, which assert that NOTHING was requested.
+ */
+const recordingFetch =
+    (calls: string[]): StreamingFetchLike =>
+    async (input: string) => {
+        calls.push(input);
+
+        return {
+            body: null,
+            json: async () => {
+                return {};
+            },
+            ok: true,
+            status: 200,
+            text: async () => "",
+        };
+    };
+
 describe("lunora migrate d1-to-hyperdrive", () => {
     let dir: string;
 
@@ -926,21 +946,34 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         const errors: string[] = [];
         const logger: Logger = { error: (message: string) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} };
         const calls: string[] = [];
-        const fetchImpl: StreamingFetchLike = async (input: string) => {
-            calls.push(input);
-
-            return {
-                body: null,
-                json: async () => {
-                    return {};
-                },
-                ok: true,
-                status: 200,
-                text: async () => "",
-            };
-        };
+        const fetchImpl = recordingFetch(calls);
 
         const result = await runMigrateToHyperdriveCommand({ fetchImpl, logger, out: join(dir, "dump.ndjson"), yes: true });
+
+        expect(result.code).toBe(1);
+        expect(calls).toHaveLength(0);
+        expect(errors.join("\n")).toContain("same deployment");
+    });
+
+    it("refuses a self-migration that differs only by a trailing slash", async () => {
+        expect.assertions(3);
+
+        // `resolveAdminBaseUrl` strips the trailing slash, so both legs address
+        // the same worker — the guard compared the raw flags and let it through,
+        // then reported "counts match" over a one-database no-op.
+        const errors: string[] = [];
+        const logger: Logger = { error: (message: string) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} };
+        const calls: string[] = [];
+        const fetchImpl = recordingFetch(calls);
+
+        const result = await runMigrateToHyperdriveCommand({
+            fetchImpl,
+            fromUrl: "https://worker.example.com/",
+            logger,
+            out: join(dir, "dump.ndjson"),
+            toUrl: "https://worker.example.com",
+            yes: true,
+        });
 
         expect(result.code).toBe(1);
         expect(calls).toHaveLength(0);

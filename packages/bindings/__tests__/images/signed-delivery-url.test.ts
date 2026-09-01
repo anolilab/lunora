@@ -331,20 +331,42 @@ describe("parseSignedTransform", () => {
         expect(() => parseSignedTransform("wdith=256")).toThrow(/unknown transform key "wdith"/);
     });
 
-    it("keeps a literal '&' inside a value, splitting only where a known key starts", async () => {
+    it("keeps a literal '&' inside a value even when a transform key follows it", async () => {
         expect.assertions(2);
 
-        // The encoder does not escape values and `&` is its separator, so a draw
-        // overlay URL with two query params puts a `&` inside the JSON. The
-        // encoding is the signature canonical and cannot change; the split has
-        // to tolerate it.
-        const transform: TransformOptions = { draw: [{ url: "https://assets.acme.test/logo.png?v=2&w=64" }], width: 256 };
+        // `&` is the serializer's separator, so a draw overlay URL with two
+        // query params puts one inside the JSON. The second param is *named*
+        // after a real transform key here on purpose: any read-side attempt to
+        // guess where a value ends splits exactly there, truncating the JSON —
+        // `verifySignedImageUrl` then swallows the parse failure and reports
+        // `valid: true` with no `transformOptions`, so a Worker following the
+        // documented contract serves the untransformed original.
+        const transform: TransformOptions = { draw: [{ url: "https://assets.acme.test/logo.png?v=2&width=64" }], width: 256 };
 
         const url = await buildSignedImageUrl({ baseUrl: BASE, key: "a.png", secret: SECRET, transform });
         const result = await verifySignedImageUrl(url, SECRET);
 
         expect(result.valid).toBe(true);
         expect(result.transformOptions).toStrictEqual(transform);
+    });
+
+    it("does not let a transform value splice extra keys under the signature", async () => {
+        expect.assertions(3);
+
+        // The signature binds the serialized transform, so whatever the encoder
+        // emits is what the verifier authorises. A user-influenced value — a
+        // `background` colour, a `gravity`, a `draw` overlay — carrying the
+        // separators verbatim therefore mints a URL whose decoded transform is
+        // not the one that was signed: here a 10000px render nobody asked for,
+        // under a signature that verifies.
+        const transform: TransformOptions = { background: "blue&width=10000&fit=contain", height: 128 };
+
+        const url = await buildSignedImageUrl({ baseUrl: BASE, key: "a.png", secret: SECRET, transform });
+        const result = await verifySignedImageUrl(url, SECRET);
+
+        expect(result.valid).toBe(true);
+        expect(result.transformOptions).toStrictEqual(transform);
+        expect(result.transformOptions?.width).toBeUndefined();
     });
 
     it("leaves transformOptions undefined instead of throwing when a verified transform is unreadable", async () => {

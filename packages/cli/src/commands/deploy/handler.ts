@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { discoverMigrations, runCodegen } from "@lunora/codegen";
@@ -57,6 +57,7 @@ import { ensureVectorMetadataIndexes, metadataTypeFor } from "../../util/vectori
 import readWranglerName from "../../util/wrangler-name";
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
 import { listRemoteSecrets } from "../../util/wrangler-secrets";
+import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { MigrateDataCommandOptions } from "../migrate/handler";
 import { runMigrateDataCommand } from "../migrate/handler";
@@ -69,8 +70,16 @@ const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
 interface DeployCommandOptions {
     /** Override the schema-drift gate — deploy even with breaking drift and no new migration. */
     allowSchemaDrift?: boolean;
+
     /** Which API spec(s) codegen emits. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
+
+    /**
+     * The command the operator actually ran. `build` delegates here with
+     * `dryRun: true`; without this the gate names the wrong command in its
+     * blocked message and offers flags the real caller does not accept.
+     */
+    commandName?: PreDeployCommand;
     cwd?: string;
     /** Docker-availability probe injected in tests. Defaults to a real `docker info` check. */
     dockerAvailable?: DockerProbe;
@@ -979,10 +988,12 @@ const runCodegenStep = async (
         // match what the deploy target can actually serve — always blocking,
         // no opt-out, same as every other codegen caller
         // (`reportPlatformDiagnostics` is shared for exactly this reason).
-        const platformError = reportPlatformDiagnostics(result.platformDiagnostics, logger);
+        const platform = reportPlatformDiagnostics(result.platformDiagnostics, logger);
 
-        if (platformError !== undefined) {
-            return { error: platformError };
+        if (platform.errors.length > 0) {
+            // Every message was already logged above; the returned `error` is the
+            // single-string abort reason the deploy result carries.
+            return { error: platform.errors.join("; ") };
         }
 
         // ERROR-level schema advisories ("the call throws at runtime") gate on
@@ -1218,13 +1229,20 @@ const finalizeSuccessfulDeploy = async (
 };
 
 /**
- * Which command a shared gate is speaking for.
+ * The commands that run the pre-deploy pipeline, as the OPERATOR typed them.
  *
- * These checks are reached from both `lunora deploy` and `lunora prepare`, and a
- * blocked `prepare` naming a command the operator never ran reads as a bug in
- * the tool rather than a problem in the project.
+ * These checks are reached from `lunora deploy`, `lunora prepare` and
+ * `lunora build`, and a blocked run naming a command the operator never ran
+ * reads as a bug in the tool rather than a problem in the project.
+ *
+ * `build` is one of them: it delegates to `runDeployCommand({ dryRun: true })`.
+ * The name is threaded through rather than assumed, because the drift gate uses
+ * it for two operator-facing decisions — which override flags to offer, and what
+ * to call the thing that was blocked. Hardcoding `"deploy"` here meant `lunora
+ * build` reported "deploy blocked" for a deploy nobody attempted and recommended
+ * a flag `build` rejects with a raw stack trace.
  */
-type PreDeployCommand = "deploy" | "prepare";
+type PreDeployCommand = "build" | "deploy" | "prepare";
 
 /**
  * The read-only half of the pre-deploy gates: the D1-placeholder hard-block, the
@@ -1550,46 +1568,38 @@ const runPreDeployPipeline = async (
         reblessSchemaBaseline = gate.rebless;
     }
 
-    // A dry run publishes nothing, so it must not leave a diff in a committed,
-    // hand-maintained config — it used to reformat `wrangler.jsonc` and add
-    // whatever provisioning inferred. Provisioning still RUNS (the validation
-    // below has to see the config a real deploy would validate, or a dry run
-    // would report gaps the deploy itself fills); its writes are rolled back
-    // once validation has read them.
-    const wranglerPath = options.dryRun === true ? findWranglerFile(cwd) : undefined;
-    const wranglerBefore = wranglerPath === undefined ? undefined : readFileSync(wranglerPath, "utf8");
+    // Provisioning WRITES `wrangler.jsonc`. On a dry run those writes are rolled
+    // back — but not here: the caller owns that window, because the artifacts
+    // that have to read the provisioned config (the wrangler bundle, and
+    // `build --emit-bindings`'s requirements document) are produced after this
+    // function returns. Restoring here derived both from the reverted config, so
+    // `build --emit-bindings` handed a deployer `"crons": []` for an app with a
+    // nightly cron. See `snapshotWranglerConfig`.
+    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env);
 
-    try {
-        await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env);
+    const checkError = runPreDeployChecks(cwd, options, command);
 
-        const checkError = runPreDeployChecks(cwd, options, command);
-
-        if (checkError !== undefined) {
-            return { error: checkError, target, validation: empty };
-        }
-
-        // `--env <name>` validates the env-scoped view — a binding present only at
-        // the top level is a real gap for that environment (non-inheritable; see
-        // wrangler-validator.ts's NON_INHERITABLE_KEYS).
-        const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
-
-        if (reportWranglerProblems(validation, options.logger)) {
-            return { error: "wrangler validation failed", target, validation };
-        }
-
-        return { codegen, reblessSchemaBaseline, target, validation };
-    } finally {
-        if (wranglerPath !== undefined && wranglerBefore !== undefined) {
-            writeFileSync(wranglerPath, wranglerBefore, "utf8");
-        }
+    if (checkError !== undefined) {
+        return { error: checkError, target, validation: empty };
     }
+
+    // `--env <name>` validates the env-scoped view — a binding present only at
+    // the top level is a real gap for that environment (non-inheritable; see
+    // wrangler-validator.ts's NON_INHERITABLE_KEYS).
+    const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
+
+    if (reportWranglerProblems(validation, options.logger)) {
+        return { error: "wrangler validation failed", target, validation };
+    }
+
+    return { codegen, reblessSchemaBaseline, target, validation };
 };
 
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
 
-    const pipeline = await runPreDeployPipeline(options, "deploy");
+    const pipeline = await runPreDeployPipeline(options, options.commandName ?? "deploy");
 
     if (pipeline.error !== undefined) {
         // A validation failure carries its problem list; every earlier abort
@@ -1678,7 +1688,20 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
         return abortResult(formatError);
     }
 
-    const result = await executeDeploy({ ...options, logger: loggerForFormat(options.format, options.logger) });
+    // The dry-run rollback for `deploy --dry-run`: provisioning's writes stay on
+    // disk until the wrangler bundle below has been built against them, then the
+    // committed config goes back exactly as it was. `build` is excluded because
+    // it snapshots one level up — it writes its binding manifest AFTER this
+    // returns, and that document must describe the provisioned config too.
+    const restoreWrangler = options.dryRun === true && options.commandName !== "build" ? snapshotWranglerConfig(options.cwd ?? process.cwd()) : undefined;
+
+    let result: DeployCommandResult;
+
+    try {
+        result = await executeDeploy({ ...options, logger: loggerForFormat(options.format, options.logger) });
+    } finally {
+        restoreWrangler?.();
+    }
 
     if (isJsonFormat(options.format)) {
         printJson(result);

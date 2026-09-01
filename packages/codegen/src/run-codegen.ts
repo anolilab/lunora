@@ -914,7 +914,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasQueue: queues.some((queue) => queue.mode === "push"),
         hasScheduler: studioFeatures.scheduler,
         hasStorage: studioFeatures.storage,
-        hasVectors: schema.vectorIndexes.length > 0,
+        // Gated, not raw: the declaration alone is what the platform pass
+        // rejects on a host rating `vectorStore: "unsupported"`. Passing the raw
+        // count here emitted the runtime WIRING for `ctx.vectors` even when the
+        // type surface was correctly withheld, so "the surface was withheld" was
+        // only half true. Absent means never declared, which must not withhold.
+        hasVectors: platformGate.signals.vectorStore !== false && schema.vectorIndexes.length > 0,
         hasWorkflow: workflows.length > 0,
         hasX402: featureUsage.x402,
         // The single `defineIdentity(...)` contract (Plan 080). Wires

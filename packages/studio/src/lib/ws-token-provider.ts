@@ -19,7 +19,10 @@
  * the provider then falls back to the master token — the pre-095 behavior —
  * and remembers the miss so it doesn't re-probe on every reconnect. Any other
  * mint failure (network error, 403, 5xx) throws, which the client surfaces as
- * a failed connect attempt and retries with its reconnect backoff.
+ * a failed connect attempt and retries with its reconnect backoff. `invalidate()`
+ * clears that memory along with the cache — a 404 from a proxy or a BYO dev
+ * server is not proof the endpoint is gone forever, and the rotation-recovery
+ * path is exactly where re-probing is worth one request.
  */
 
 /** Path of the worker's admin WS-token mint endpoint. */
@@ -45,7 +48,7 @@ interface AdminWsTokenProviderOptions {
 interface AdminWsTokenProvider {
     /** Resolve the WS credential: a cached-or-fresh ephemeral token, or the master token on an old worker. Pass as the client's `wsToken`. */
     readonly getToken: () => Promise<string>;
-    /** Drop the cached token so the next `getToken` re-mints. Wire to `client.onTokenExpired`. */
+    /** Drop the cached token — and the "endpoint is missing" memory — so the next `getToken` re-mints. Wire to `client.onTokenExpired`. */
     readonly invalidate: () => void;
 }
 
@@ -121,6 +124,17 @@ export const createAdminWsTokenProvider = (options: AdminWsTokenProviderOptions)
         },
         invalidate: (): void => {
             cached = undefined;
+
+            // Clear the 404 latch too. It is a "don't re-probe on every reconnect"
+            // optimisation, not a permanent verdict: one 404 is reachable without a
+            // legacy worker (a proxy/CDN answering an unknown POST, a BYO dev setup
+            // where Vite serves the mint path), and this is the rotation-recovery
+            // path (`client.onTokenExpired`) — the one moment we already know the
+            // credential picture changed. Leaving it set pinned the WS credential to
+            // the MASTER admin token for the provider's whole life, putting it in
+            // the `?token=` query string — access logs, browser history — that this
+            // module exists to keep it out of.
+            endpointMissing = false;
         },
     };
 };

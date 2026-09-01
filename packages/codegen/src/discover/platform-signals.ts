@@ -21,6 +21,14 @@ interface PlatformCodeSignals {
 }
 
 /**
+ * Strip the parentheses a formatter (or a hand edit) may have left around an
+ * initializer, so the opt-out below compares the expression rather than its
+ * wrapping: `{ durable: (false) }` is the same declaration as
+ * `{ durable: false }` and must read as the same opt-out.
+ */
+const unwrapParentheses = (node: Node): Node => (Node.isParenthesizedExpression(node) ? unwrapParentheses(node.getExpression()) : node);
+
+/**
  * True when `node` is an object literal declaring a durable stream.
  *
  * The KEY's presence is not enough: `{ durable: false }` is an app explicitly
@@ -38,7 +46,13 @@ const declaresDurable = (node: Node): boolean =>
             return property.getName() === "durable";
         }
 
-        return Node.isPropertyAssignment(property) && property.getName() === "durable" && property.getInitializer()?.getText() !== "false";
+        if (!Node.isPropertyAssignment(property) || property.getName() !== "durable") {
+            return false;
+        }
+
+        const initializer = property.getInitializer();
+
+        return initializer === undefined || unwrapParentheses(initializer).getText() !== "false";
     });
 
 /**

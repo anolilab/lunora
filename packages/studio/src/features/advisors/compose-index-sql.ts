@@ -31,16 +31,21 @@ const hasIndexMetadata = (metadata: Record<string, unknown>): metadata is IndexF
         return false;
     }
 
-    if (
-        typeof suggestedIndex !== "object" ||
-        suggestedIndex === null ||
-        !Array.isArray((suggestedIndex as Record<string, unknown>)["fields"]) ||
-        ((suggestedIndex as Record<string, unknown>)["fields"] as unknown[]).length === 0
-    ) {
+    if (typeof suggestedIndex !== "object" || suggestedIndex === null) {
         return false;
     }
 
-    return true;
+    const { fields, name } = suggestedIndex as Record<string, unknown>;
+
+    if (!Array.isArray(fields) || fields.length === 0) {
+        return false;
+    }
+
+    // `name` was asserted by the type predicate but never checked. `metadata` is
+    // server-supplied `Record<string, unknown>`, so a finding carrying a
+    // non-string name reached `quoteIdentifier`, which calls `.replaceAll` on it
+    // — a TypeError thrown inside the render rather than a hidden action.
+    return typeof name === "string" && name.length > 0;
 };
 
 /**

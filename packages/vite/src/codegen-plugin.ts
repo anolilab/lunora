@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
@@ -32,6 +33,64 @@ const DEBOUNCE_MS = 100;
  * carries the same guard for the same reason.
  */
 const HOOK_SETTLE_MS = 300;
+
+/**
+ * How many times in a row a settle-window recheck may rerun codegen before it
+ * gives up and says why.
+ *
+ * The recheck below reruns when the schema sources changed across a hook run,
+ * which converges for any idempotent `postcodegen` (a formatter reaches a fixed
+ * point on its second pass). A hook that rewrites a schema-directory file to
+ * DIFFERENT bytes every run — a timestamp, a generated id — never would, so cap
+ * it rather than hand the dev loop back the spin the settle window exists to
+ * prevent.
+ */
+const MAX_SETTLE_RERUNS = 2;
+
+/**
+ * Content hash of the schema directory's TypeScript sources — everything codegen
+ * reads, minus its own `_generated/` output.
+ *
+ * Taken before codegen runs and compared again after the project's `postcodegen`
+ * has settled, this is what tells the hook's own writes apart from a developer's
+ * save landing in the same window. Timing cannot: both look identical to the
+ * watcher, which is why every save during a multi-second hook used to be dropped
+ * outright. Content can — a formatter that rewrites a file to the same bytes
+ * leaves the hash alone, and a real edit does not.
+ *
+ * Cheap by construction (a schema directory is a handful of files, read once per
+ * regeneration, not per watcher event). An unreadable directory hashes to a
+ * constant so a transient read error reads as "no change" rather than as an
+ * edit — degrading toward doing nothing, never toward a spurious rerun.
+ */
+const fingerprintSchemaSources = (schemaDirectory: string, generatedDirectory: string): string => {
+    let entries;
+
+    try {
+        entries = readdirSync(schemaDirectory, { recursive: true, withFileTypes: true });
+    } catch {
+        return "unreadable";
+    }
+
+    const hash = createHash("sha256");
+
+    const paths = entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+        .map((entry) => join(entry.parentPath, entry.name))
+        .filter((path) => !(path === generatedDirectory || path.startsWith(generatedDirectory + sep)))
+        .toSorted((a, b) => a.localeCompare(b));
+
+    for (const path of paths) {
+        try {
+            hash.update(path).update("\u0000").update(readFileSync(path));
+        } catch {
+            // A file that vanished mid-walk contributes nothing; the next run sees
+            // the settled tree.
+        }
+    }
+
+    return hash.digest("hex");
+};
 
 /** Matches a project-variant tsconfig filename (`tsconfig.build.json`, …). */
 const TSCONFIG_VARIANT_RE = /[/\\]tsconfig\..+\.json$/u;
@@ -145,6 +204,18 @@ interface CodegenSafelyResult {
      * above; this is only the caller's signal for whether to escalate.
      */
     blockingMessage?: string;
+
+    /**
+     * Set when codegen THREW — the schema could not be parsed/emitted at all.
+     * The hardest failure signal this function has, and (like
+     * {@link CodegenSafelyResult.blockingMessage}) only the caller's escalation
+     * signal: the message is logged and pushed to the overlay regardless.
+     *
+     * Distinct from a merely absent `outputDirectory`, which also covers the
+     * benign "no schema.ts yet" case an uninitialised project is in at
+     * `buildStart` — that one must stay non-fatal.
+     */
+    failure?: string;
     /** Absolute directory codegen actually wrote to; `undefined` when codegen was skipped or failed. */
     outputDirectory?: string;
 }
@@ -288,7 +359,7 @@ const runCodegenSafely = (
         // user sees it immediately without leaving the browser.
         overlay?.onError(error, message);
 
-        return {};
+        return { failure: `${LUNORA_TAG} codegen failed: ${message}` };
     }
 };
 
@@ -451,7 +522,18 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // shipping against a surface its target cannot serve, CI green the whole
             // way, from a variable someone exported in a shell profile.
             const skipCodegen = command !== "build" && codegenDisabled;
-            const { blockingMessage, outputDirectory } = skipCodegen ? {} : runCodegenSafely(options, logger);
+            const { blockingMessage, failure, outputDirectory } = skipCodegen ? {} : runCodegenSafely(options, logger);
+
+            // Codegen threw: the schema could not be parsed or emitted at all.
+            // Without this a `vite build` went on to bundle whatever `_generated/*`
+            // the last good run left on disk — a schema typo in CI exited 0 and
+            // shipped types and routes for a schema that no longer exists. Failing
+            // here is the same policy the ERROR-advisory escalation below applies to
+            // a strictly SOFTER signal; dev stays log-only (the overlay already
+            // reported it) for the same reason it does there.
+            if (command === "build" && failure !== undefined) {
+                this.error(failure);
+            }
 
             if (outputDirectory !== undefined) {
                 absoluteGeneratedDirectory = outputDirectory;
@@ -611,6 +693,17 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // configureServer touches it (buildStart never arms a debounce).
             let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+            // Armed after a `postcodegen` run to re-examine the schema sources once
+            // its settle window has passed — the compensation for the events
+            // `onChange` drops while the hook is running. Its own timer, NOT
+            // `debounceTimer`: the drop path clears that one, which would cancel
+            // exactly the recheck meant to recover the dropped save.
+            let settleRecheckTimer: ReturnType<typeof setTimeout> | undefined;
+
+            // Consecutive recheck-driven reruns, reset by any real watcher event
+            // that schedules a regeneration. See MAX_SETTLE_RERUNS.
+            let settleReruns = 0;
+
             // The reused ts-morph Project. Built on first codegen run and refreshed
             // from disk on each subsequent one, so the dev-loop never re-parses the
             // user's whole TS program per save. Dropped (rebuilt next run) whenever
@@ -681,6 +774,15 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
                     absoluteGeneratedDirectory = outputDirectory;
 
+                    // Snapshot the sources codegen just consumed, so the settle
+                    // recheck below can tell whether they moved under it while the
+                    // project's `postcodegen` was running. Taken AFTER the emit —
+                    // `runCodegen` only writes `_generated/`, so the sources are
+                    // identical either way, and both this call and the recheck's
+                    // then read the SAME `absoluteGeneratedDirectory` (the emit
+                    // reassigns it one line above) and so exclude the same tree.
+                    const consumedSources = fingerprintSchemaSources(absoluteSchemaDirectory, absoluteGeneratedDirectory);
+
                     // The project's post-generation step, before the client is told
                     // the API changed — the point of the hook is that what the dev
                     // server compiles is the FINISHED output, so reloading first
@@ -702,6 +804,42 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     // Armed only when a hook actually RAN — see HOOK_SETTLE_MS.
                     if (hook.ran) {
                         hookSettledAt = Date.now();
+
+                        // …and because arming it means `onChange` has been
+                        // discarding events for the hook's whole (possibly
+                        // multi-second) duration, re-examine the sources once the
+                        // window closes. A developer's save in that window changed
+                        // them; the hook's own writes did not (or rewrote the same
+                        // bytes), so this reruns for the first and stays silent for
+                        // the second. Without it the save was dropped with no log
+                        // and no rerun, leaving `_generated/` behind `schema.ts`
+                        // until the developer happened to save again.
+                        if (settleRecheckTimer) {
+                            clearTimeout(settleRecheckTimer);
+                        }
+
+                        settleRecheckTimer = setTimeout(() => {
+                            settleRecheckTimer = undefined;
+
+                            if (closed || fingerprintSchemaSources(absoluteSchemaDirectory, absoluteGeneratedDirectory) === consumedSources) {
+                                return;
+                            }
+
+                            settleReruns += 1;
+
+                            if (settleReruns > MAX_SETTLE_RERUNS) {
+                                serverLogger.warn(
+                                    `${LUNORA_TAG} \`postcodegen\` keeps rewriting the schema sources — stopping after ${String(MAX_SETTLE_RERUNS)} reruns. Make the hook idempotent or move it off the schema directory.`,
+                                );
+
+                                return;
+                            }
+
+                            serverLogger.info(`${LUNORA_TAG} schema changed while \`postcodegen\` was running — regenerating`);
+
+                            // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction; `regenerate`'s catch is its outermost statement
+                            regenerate(changedFile);
+                        }, HOOK_SETTLE_MS);
                     }
 
                     // Stop short of the reload when the post-step failed: the
@@ -804,6 +942,9 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 if (debounceTimer) {
                     clearTimeout(debounceTimer);
                 }
+
+                // A real save: the recheck's runaway-hook budget starts over.
+                settleReruns = 0;
 
                 debounceTimer = setTimeout(() => {
                     debounceTimer = undefined;
@@ -957,6 +1098,11 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 if (debounceTimer) {
                     clearTimeout(debounceTimer);
                     debounceTimer = undefined;
+                }
+
+                if (settleRecheckTimer) {
+                    clearTimeout(settleRecheckTimer);
+                    settleRecheckTimer = undefined;
                 }
 
                 server.watcher.off("add", onChange);

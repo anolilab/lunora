@@ -184,6 +184,27 @@ const closeFileSink = async (sink: NodeJS.WritableStream, stagePath: string, get
 };
 
 /**
+ * Close the staged file and move it onto `--out`.
+ *
+ * Commit: the bytes are all on disk, so replacing `--out` is atomic. A rejected
+ * rename (`--out` is a directory, a cross-device stage, a read-only parent)
+ * leaves the COMPLETE plaintext export sitting in the stage file — the
+ * disclosure the staging exists to prevent — so discard it before the failure
+ * propagates.
+ */
+const commitStagedExport = async (sink: NodeJS.WritableStream, file: { path: string; stage: string }, getError: () => Error | undefined): Promise<void> => {
+    await closeFileSink(sink, file.stage, getError);
+
+    try {
+        await rename(file.stage, file.path);
+    } catch (error) {
+        await discardPartialExport(sink, file.stage);
+
+        throw error;
+    }
+};
+
+/**
  * Stream an export. The worker emits NDJSON; we count newlines as we go and
  * pipe straight to the output sink, so a 10M-row export doesn't materialise
  * the body in memory.
@@ -281,9 +302,7 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     }
 
     if (file !== undefined) {
-        await closeFileSink(sink, file.stage, () => sinkError);
-        // Commit: the bytes are all on disk, so replacing `--out` is atomic.
-        await rename(file.stage, file.path);
+        await commitStagedExport(sink, file, () => sinkError);
 
         options.logger.success(`wrote ${String(rows)} rows to ${file.path} (${String(bytes)} bytes)`);
     }

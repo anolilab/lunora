@@ -37,6 +37,7 @@ const UPSTREAM = ["auth-ui-react", "core", "validators.ts"];
 
 const addAuthUi = async (): Promise<ReadonlyArray<string>> => {
     const result = await runAddFeature({
+        confirm: async () => true,
         cwd: workdir,
         feature: "auth-ui",
         from: registryRoot,

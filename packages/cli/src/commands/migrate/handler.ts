@@ -17,7 +17,7 @@ import { Project } from "ts-morph";
 
 import { REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationTable } from "../../../../../shared/reprojection-id";
 import { targetsRemoteWorker } from "../../util/admin-token";
-import { resolveAdminBaseUrl } from "../../util/admin-url";
+import { normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -650,6 +650,9 @@ interface MigrateToHyperdriveOptions {
     yes?: boolean;
 }
 
+/** Apply {@link normalizeAdminBaseUrl}, passing an absent URL straight through. */
+const normalizeOptionalUrl = (url: string | undefined): string | undefined => (url === undefined ? undefined : normalizeAdminBaseUrl(url));
+
 /**
  * `lunora migrate d1-to-hyperdrive` — copy `.global()` table data from a
  * D1-backed deployment into a Hyperdrive-backed one. A thin, guided
@@ -666,8 +669,13 @@ interface MigrateToHyperdriveOptions {
  */
 const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions): Promise<{ code: number }> => {
     const { logger } = options;
-    const fromUrl = options.fromUrl ?? options.toUrl;
-    const toUrl = options.toUrl ?? options.fromUrl;
+    // Normalized with the SAME rule `resolveAdminBaseUrl` applies to the request
+    // it sends, so the guard below compares what the two legs will actually
+    // address rather than what the user typed — `https://w/` and `https://w` are
+    // one deployment, and the raw comparison waved them through. The normalized
+    // values are what the export/import legs are handed, so guard and work agree.
+    const fromUrl = normalizeOptionalUrl(options.fromUrl ?? options.toUrl);
+    const toUrl = normalizeOptionalUrl(options.toUrl ?? options.fromUrl);
 
     // Refuse a self-migration: with only one URL given, the source and target
     // resolve to the same deployment, so the export and import would run against

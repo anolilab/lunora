@@ -208,6 +208,18 @@ interface DataBrowserModel {
     goNext: () => void;
     goPrevious: () => void;
     hasNext: boolean;
+
+    /**
+     * Whether the view carries a predicate the bulk ops would actually send.
+     *
+     * Derived from the DEBOUNCED `search` (plus the structured filters), not the
+     * raw search box: `bulkDelete`/`bulkPatch` send the debounced value, so
+     * gating their buttons on the raw one put "Delete N matching" on screen for
+     * up to 300ms with an empty predicate — a whole-table delete behind the
+     * predicate button's confirm, bypassing the separate `Clear all N rows?` one.
+     * Guard and request read the same value here by construction.
+     */
+    hasPredicate: boolean;
     hasPrevious: boolean;
     jumpToPage: (page: number) => void;
     liveError: string | undefined;
@@ -1066,6 +1078,9 @@ const useDataBrowser = ({
     // paging, so this fallback is a brief first-load transient only.
     const total = countQuery.data?.total ?? (page === null ? 0 : offset + page.rows.length);
     const hasPrevious = offset > 0;
+
+    // The predicate the bulk ops actually send — see `DataBrowserModel.hasPredicate`.
+    const hasPredicate = search !== "" || filters.length > 0;
     const hasNext = page !== null && offset + page.rows.length < total;
     const rangeStart = page === null || page.rows.length === 0 ? 0 : offset + 1;
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
@@ -1238,6 +1253,7 @@ const useDataBrowser = ({
         goNext,
         goPrevious,
         hasNext,
+        hasPredicate,
         hasPrevious,
         jumpToPage,
         liveError,

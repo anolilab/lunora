@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 import { join } from "@visulima/path";
 
+import safe from "./display";
 import parseManifest from "./manifest";
 
 /** One catalog entry as `lunora registry list` reports it. */
@@ -21,15 +22,11 @@ interface IndexItem extends CatalogItem {
 }
 
 /**
- * Strip C0/C1 control bytes (incl. ESC, the lead-in for ANSI/OSC sequences) from
- * a remote catalog string before it is printed to the terminal. A hostile
- * `--source` registry could otherwise embed escape sequences in a `name`/
- * `description` to spoof output, hide text, or trigger dangerous OSC operations.
+ * Optional-aware wrapper over the shared display sanitizer ({@link safe}): a
+ * hostile `--source` registry can embed escape or BIDI sequences in a `name`/
+ * `description` to spoof `list` output.
  */
-// eslint-disable-next-line no-control-regex -- intentionally matches the C0/C1 control range we strip
-const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/gu;
-
-const stripControlChars = (value: string | undefined): string | undefined => (value === undefined ? undefined : value.replaceAll(CONTROL_CHARS, ""));
+const stripControlChars = (value: string | undefined): string | undefined => (value === undefined ? undefined : safe(value));
 
 /** Names of the subdirectories under `root` that ship a `registry.json`. */
 const listItemDirectories = (root: string): string[] =>

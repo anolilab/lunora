@@ -110,6 +110,7 @@ const DEFAULT_IMPORT_BATCH_SIZE = 500;
 interface DeployCommandOptions {
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    commandName?: PreDeployCommand;
     cwd?: string;
     dockerAvailable?: DockerProbe;
     dryRun?: boolean;
