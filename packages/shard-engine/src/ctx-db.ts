@@ -55,7 +55,7 @@ import { decodeWire } from "../../../shared/wire-codec";
 import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
-import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
+import { backfillSearchIndexesForTable, isSearchIndexComplete } from "./ctx-db-backfill";
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
 import { allocateCommitSeq, COMMIT_SEQ_FIELD } from "./ctx-db-commit-seq";
@@ -1515,6 +1515,32 @@ const buildReader = (
         // widening the read.
         const engineLimit = resolveSearchScan(filtered ? undefined : limit);
         const viaFts = isFtsAvailable(sql);
+
+        // Refuse rather than answer from a half-built index. A search index
+        // declared over a table that already holds rows covers a growing PREFIX
+        // of it (`id ASC`) until its backfill finishes, and every layout below
+        // queries the companion regardless — so a matching document past the
+        // cursor is simply absent from a result set that looks complete. That is
+        // the one outcome the search contract promises against.
+        //
+        // Not the LIKE fallback below: it is only equivalent while the candidate
+        // set fits `MAX_SEARCH_SCAN`, taking the newest window of a larger table
+        // and scoring that (its own comment says so, on the grounds that it never
+        // runs in a Durable Object). Routing a mid-backfill read onto it would
+        // swap one silent partial answer — the oldest rows — for another — the
+        // newest 1024 — on exactly the large tables the backfill is paged for.
+        //
+        // One `__lunora_search_state` primary-key read per search call, placed
+        // after the page above so it sees the progress this very read just made.
+        // Completeness is a property of the index, not of a row or a hit, so it
+        // is never asked per row or per result. A table small enough to index in
+        // one page is complete from its first migration and never reaches here.
+        if (viaFts && !isSearchIndexComplete(sql, tableName, search.definition)) {
+            throw new LunoraError(
+                "SEARCH_INDEX_BUILDING",
+                `search index "${search.indexName}" on table "${tableName}" is still backfilling and currently covers only part of the table — retry once it finishes, or run the backfillSearch admin operation to complete it now`,
+            );
+        }
 
         const scored = viaFts
             ? searchViaFts(sql, tableName, search, engineLimit, scopeCondition)

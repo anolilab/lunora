@@ -165,8 +165,9 @@ const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
  * Bounded on purpose. A DO cold start runs `runShardMigrations` synchronously
  * inside a 128 MB isolate, so materialising a whole table there is how a large
  * table turns into an eviction loop. Instead each pass indexes a page and
- * records where it stopped; the next pass resumes. The index is usable
- * throughout — it simply covers a growing prefix of the table.
+ * records where it stopped; the next pass resumes. For a NEW index that means it
+ * covers a growing prefix of the table — see {@link isSearchIndexComplete}, which
+ * is how a reader tells that prefix from a finished index.
  */
 const SEARCH_BACKFILL_BATCH_ROWS = 500;
 
@@ -190,12 +191,17 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
         return { done: true, rows: 0 };
     }
 
-    if (pass.wipe) {
-        // Stored text was analyzed by rules the query side no longer uses (a
-        // changed `language`, a new analyzer version) — discard and re-walk.
-        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)}`);
-    }
-
+    // `pass.wipe` marks a REBUILD: the stored text was analyzed by rules the
+    // query side no longer uses (a changed `language`, a new analyzer version),
+    // so `pass.cursor` is `undefined` and the walk restarts at the top of the
+    // table. It deliberately does NOT empty the companion first. Emptying it
+    // took a COMPLETE index down to nothing and then rebuilt it 500 rows a
+    // pass — on a 1M-row table, thousands of requests served from an index
+    // covering a fraction of the rows, with the read path querying it either
+    // way. Each row below is written DELETE-then-INSERT, so the re-walk
+    // converges on the new analysis in place while every row keeps serving the
+    // old one until its turn: stale analysis on a shrinking suffix, rather than
+    // no row at all.
     const { cursor } = pass;
     const rows = runDrizzle(
         sql,
@@ -246,6 +252,22 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     writeSearchBackfillState(sql, ftName, lastId, done, profile);
 
     return { done, rows: rows.length };
+};
+
+/**
+ * Has this search companion finished its backfill — does it cover the WHOLE
+ * table under the analyzer the query side will use?
+ *
+ * `false` means the index is mid-walk and answers over a prefix of the table, so
+ * a reader that queries it anyway returns silently incomplete results. Exposed
+ * for the read path, which is the only place that distinction can be acted on
+ * (by falling back to a scan, or by telling the caller the index is still
+ * building) — the backfill itself cannot decide for it.
+ */
+const isSearchIndexComplete = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
+    const { profile } = createSearchAnalyzer(index.language);
+
+    return planSearchBackfillPass(readSearchBackfillState(sql, ftsTableName(tableName, index.name)), profile).finished;
 };
 
 /**
@@ -373,4 +395,4 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxP
 };
 
 export type { SearchBackfillProgress };
-export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable };
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, isSearchIndexComplete };

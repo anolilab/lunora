@@ -1,3 +1,4 @@
+import { ftsTableName } from "@lunora/search-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
@@ -55,6 +56,17 @@ const stagedSchema: SchemaLike = {
     },
 };
 
+/** The same index re-declared under a different analysis language, which invalidates every stored token. */
+const reanalyzedSchema: SchemaLike = {
+    tables: {
+        docs: {
+            indexes: [],
+            searchIndexes: [{ field: "body", language: "de", name: "by_body", staged: true }],
+            shape: { body: { kind: "string" }, title: { kind: "string" } },
+        },
+    },
+};
+
 /** Two staged indexes over the same rows, so one call has to cross from a budget-exhausted index to a fresh one. */
 const twoStagedSchema: SchemaLike = {
     tables: {
@@ -94,6 +106,9 @@ const writerFor = (schema: SchemaLike): DatabaseWriterLike => {
     });
 };
 
+/** How many rows the `by_body` companion currently holds — the index's coverage, independent of any analyzer. */
+const indexedRows = (): number => Number(harness.raw(`SELECT COUNT(*) AS count FROM "${ftsTableName("docs", "by_body")}"`)[0]?.["count"]);
+
 /** Titles matching `term` through the staged index, read the way an app would. */
 const searchTitles = async (term: string): Promise<unknown[]> => {
     const results = await writerFor(stagedSchema)
@@ -129,7 +144,12 @@ describe.runIf(FTS5_IN_BUILD)("staged search index backfill", () => {
         // but skips the backfill, which is the whole point of `staged`.
         runShardMigrations(harness.sql, stagedSchema);
 
-        await expect(searchTitles("hello")).resolves.toStrictEqual([]);
+        // Refused, not answered with the empty set: an index that covers none of
+        // the table is still an index covering a *prefix* of it, and serving a
+        // result set from that prefix is exactly the silently-partial answer the
+        // reader now declines to give. `ctx-db.search-incomplete-index.test.ts`
+        // pins the non-empty version of the same refusal.
+        await expect(searchTitles("hello")).rejects.toThrow(/still backfilling/u);
 
         backfillSearchIndexes(harness.sql, stagedSchema);
 
@@ -174,13 +194,49 @@ describe.runIf(FTS5_IN_BUILD)("staged search index backfill", () => {
 
         expect(first).toStrictEqual({ done: false, pages: 1 });
         // The row past the first page is still unindexed — proof the cap bit
-        // rather than the loop having quietly run to completion.
-        await expect(searchTitles("needle")).resolves.toStrictEqual([]);
+        // rather than the loop having quietly run to completion. The read
+        // refuses while that is true instead of answering from the 500 rows it
+        // does cover.
+        await expect(searchTitles("needle")).rejects.toThrow(/still backfilling/u);
 
         const second = backfillSearchIndexes(harness.sql, stagedSchema, { maxPages: 5 });
 
         expect(second.done).toBe(true);
         await expect(searchTitles("needle")).resolves.toStrictEqual(["t610"]);
+    });
+
+    it("keeps serving a complete index while a changed analyzer profile rebuilds it", async () => {
+        expect.assertions(3);
+
+        runShardMigrations(harness.sql, priorSchema);
+
+        const before = writerFor(priorSchema);
+
+        // More than one 500-row page, so a rebuild cannot finish in one pass —
+        // which is the only way the gap is observable.
+        for (let index = 0; index < 620; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seeding; the writer is single-connection
+            await before.insert("docs", { body: "filler text", title: `t${String(index)}` });
+        }
+
+        runShardMigrations(harness.sql, stagedSchema);
+        backfillSearchIndexes(harness.sql, stagedSchema);
+
+        expect(indexedRows()).toBe(620);
+
+        /*
+         * Changing `language` invalidates every stored token, so the next pass
+         * re-walks the table from the top. It used to `DELETE FROM` the companion
+         * first: a COMPLETE index dropped to zero rows and came back 500 at a
+         * time, while the read path queried it regardless — on a 1M-row table,
+         * thousands of requests answered from a fraction of the rows.
+         */
+        const first = backfillSearchIndexes(harness.sql, reanalyzedSchema, { maxPages: 1 });
+
+        expect(first).toStrictEqual({ done: false, pages: 1 });
+        // Every row is still in the index: the walked prefix carries the new
+        // analysis, the rest still carries the old one.
+        expect(indexedRows()).toBe(620);
     });
 
     it("does not walk one more page for the next index once the budget is spent", async () => {
