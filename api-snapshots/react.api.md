@@ -177,12 +177,6 @@ const Authenticated: ({ children }: AuthGateProps) => ReactNode;
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `FlagContext` (type)
-
-```ts
-type FlagContext = Record<string, unknown>;
-```
-
 ### `FlagValue` (type)
 
 ```ts
@@ -931,13 +925,13 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `useFlag` (const)
 
 ```ts
-const useFlag: <T extends FlagValue>(key: string, defaultValue: T, context?: FlagContext) => T;
+const useFlag: <T extends FlagValue>(key: string, defaultValue: T) => T;
 ```
 
 ### `useFlags` (const)
 
 ```ts
-const useFlags: <T extends Record<string, FlagValue>>(flags: T, context?: FlagContext) => T;
+const useFlags: <T extends Record<string, FlagValue>>(flags: T) => T;
 ```
 
 ### `useHttpStream` (const)

@@ -549,12 +549,6 @@ interface CsrfOptions {
 const DEFAULT_LOG_COLUMNS: Readonly<Record<PipelineLogField, string>>;
 ```
 
-### `DEFAULT_LOG_LIMIT` (const)
-
-```ts
-const DEFAULT_LOG_LIMIT: number;
-```
-
 ### `DEFAULT_REGISTRY_CACHE_TTL_MS` (const)
 
 ```ts
@@ -2510,12 +2504,6 @@ const r2Sink: (config: {
     name: string;
     prefix?: string;
 }) => ExportSink;
-```
-
-### `readShardKey` (const)
-
-```ts
-const readShardKey: (url: URL, request: Request) => string | undefined;
 ```
 
 ### `requestCarriesCredentials` (const)

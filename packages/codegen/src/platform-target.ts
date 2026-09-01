@@ -237,6 +237,8 @@ const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = 
  * declare it", which is never gated.
  */
 interface PlatformSignals {
+    /** A `.commitOrdered()` table. */
+    commitOrderedTables?: boolean;
     /** A `.shardBy(...)` schema — clients can address non-default shards, so the coordinator can fan out across them. */
     crossShardFanout?: boolean;
     /** A `.stream(handler, { durable: … })` registration. */
@@ -250,10 +252,11 @@ interface PlatformSignals {
 }
 
 /** The {@link PlatformSignals} keys, for the second gate loop. */
-const PLATFORM_SIGNAL_KEYS = ["crossShardFanout", "durableStreams", "globalTables", "queues", "secrets"] as const;
+const PLATFORM_SIGNAL_KEYS = ["commitOrderedTables", "crossShardFanout", "durableStreams", "globalTables", "queues", "secrets"] as const;
 
 /** Human-readable name for each signal, for the diagnostic message. */
 const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = {
+    commitOrderedTables: "commit-ordered tables (`.commitOrdered()`)",
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
     globalTables: "global tables (`.global()`)",

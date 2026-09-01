@@ -288,12 +288,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 type ConnectionStatusStore = Readable<ConnectionStatus>;
 ```
 
-### `FlagContext` (type)
-
-```ts
-type FlagContext = Record<string, unknown>;
-```
-
 ### `FlagValue` (type)
 
 ```ts
@@ -662,17 +656,17 @@ const connectionStatus: (client?: LunoraClient) => ConnectionStatusStore;
 ### `flag` (function)
 
 ```ts
-function flag<T extends FlagValue>(key: string, defaultValue: T, context?: FlagContext): Readable<T>;
+function flag<T extends FlagValue>(key: string, defaultValue: T): Readable<T>;
 
-function flag<T extends FlagValue>(client: LunoraClient, key: string, defaultValue: T, context?: FlagContext): Readable<T>;
+function flag<T extends FlagValue>(client: LunoraClient, key: string, defaultValue: T): Readable<T>;
 ```
 
 ### `flags` (function)
 
 ```ts
-function flags<T extends Record<string, FlagValue>>(flagDefaults: T, context?: FlagContext): Readable<T>;
+function flags<T extends Record<string, FlagValue>>(flagDefaults: T): Readable<T>;
 
-function flags<T extends Record<string, FlagValue>>(client: LunoraClient, flagDefaults: T, context?: FlagContext): Readable<T>;
+function flags<T extends Record<string, FlagValue>>(client: LunoraClient, flagDefaults: T): Readable<T>;
 ```
 
 ### `getLunoraClient` (const)

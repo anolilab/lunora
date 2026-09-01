@@ -91,10 +91,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `FlagContext` (type)
-
-Re-exported from `@lunora/react` — signature tracked at its source.
-
 ### `FlagValue` (type)
 
 Re-exported from `@lunora/react` — signature tracked at its source.

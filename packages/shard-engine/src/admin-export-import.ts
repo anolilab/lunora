@@ -344,5 +344,5 @@ const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminAr
     return { rows, startLine };
 };
 
-export { exportShardRows, exportShardTable, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow };
+export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow };
 export type { ExportRow, ExportShardAdminArgs, ExportShardArgs, ImportError, ImportShardAdminArgs, ImportShardArgs, ImportShardResult };

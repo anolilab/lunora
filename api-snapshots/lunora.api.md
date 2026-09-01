@@ -3865,10 +3865,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `DEFAULT_LOG_LIMIT` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
 ### `DEFAULT_REGISTRY_CACHE_TTL_MS` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4626,10 +4622,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `r2Sink` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `readShardKey` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

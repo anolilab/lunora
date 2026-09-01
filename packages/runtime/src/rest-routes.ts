@@ -275,4 +275,4 @@ const createRestRateLimit =
     };
 
 export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps };
-export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry };
+export { argsFromQuery, buildRestRoutes, createRestRateLimit, restSurfaceFromRegistry };

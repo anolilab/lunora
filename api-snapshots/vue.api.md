@@ -134,12 +134,6 @@ const AuthLoading: Component;
 const Authenticated: Component;
 ```
 
-### `FlagContext` (type)
-
-```ts
-type FlagContext = Record<string, unknown>;
-```
-
 ### `FlagValue` (type)
 
 ```ts
@@ -680,13 +674,13 @@ const useConnectionStatus: () => Readonly<Ref<ConnectionStatus>>;
 ### `useFlag` (const)
 
 ```ts
-const useFlag: <T extends FlagValue>(key: MaybeRefOrGetter<string>, defaultValue: T, context?: MaybeRefOrGetter<FlagContext | undefined>) => Readonly<Ref<T>>;
+const useFlag: <T extends FlagValue>(key: MaybeRefOrGetter<string>, defaultValue: T) => Readonly<Ref<T>>;
 ```
 
 ### `useFlags` (const)
 
 ```ts
-const useFlags: <T extends Record<string, FlagValue>>(flags: T, context?: MaybeRefOrGetter<FlagContext | undefined>) => Readonly<Ref<T>>;
+const useFlags: <T extends Record<string, FlagValue>>(flags: T) => Readonly<Ref<T>>;
 ```
 
 ### `useInfiniteQuery` (const)

@@ -8,7 +8,7 @@ import { flag, flags } from "../src/flag";
 const FLAGS_REF = "__lunora_flags__:eval";
 
 interface FlagSubscribeCall {
-    args: { context?: unknown; default: unknown; key: string; type: string };
+    args: { default: unknown; key: string; type: string };
     callback: (value: unknown) => void;
     functionPath: string;
     onError: SubscriptionErrorCallback | undefined;
@@ -108,18 +108,7 @@ describe("flag store", () => {
 
         const stop = store.subscribe(() => {});
 
-        expect(fake.calls[0]?.args).toStrictEqual({ context: undefined, default: "control", key: "hero", type: "string" });
-
-        stop();
-    });
-
-    it("merges a per-call targeting context into the subscribe args", () => {
-        const fake = createFakeClient();
-        const store = flag(fake.client, "hero", "control", { plan: "premium" });
-
-        const stop = store.subscribe(() => {});
-
-        expect(fake.calls[0]?.args.context).toStrictEqual({ plan: "premium" });
+        expect(fake.calls[0]?.args).toStrictEqual({ default: "control", key: "hero", type: "string" });
 
         stop();
     });

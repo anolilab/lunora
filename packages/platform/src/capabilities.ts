@@ -50,18 +50,17 @@
  * and the rating is still consulted by nothing. Codegen already has the shape
  * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
  * pass that diagnoses app-declared features with no `ctx.*` capability row
- * (`globalTables`, `durableStreams`, `crossShardFanout`, `queues`, `secrets`).
- * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
- * in that module's signal-key list and its human-readable label — and then
- * setting the signal from the IR.
+ * (`commitOrderedTables`, `globalTables`, `durableStreams`, `crossShardFanout`,
+ * `queues`, `secrets`). Promoting one is three lines there: a `PlatformSignals`
+ * field, plus its entry in that module's signal-key list and its human-readable
+ * label — and then setting the signal from the IR.
  *
- * **`commitOrderedTables` is the outstanding case.** `TableIR.commitOrdered`
- * sits in the same IR that already feeds the `globalTables` signal, so the
- * declaration is right there. Until it is promoted, a host rating it
- * `unsupported` emits the full `.commitOrdered()` surface with no diagnostic and
- * silently loses commit ordering — which is the one guarantee the feature is.
- * `memoryTables`, `objectStorageBackups` and `objectStorageCdcArchive` are
- * weaker instances of the same shape.
+ * `commitOrderedTables` was promoted that way: `TableIR.commitOrdered` sits in
+ * the same IR that feeds `globalTables`, and until it was read a host rating it
+ * `unsupported` emitted the full `.commitOrdered()` surface with no diagnostic
+ * and silently lost commit ordering — the one guarantee the feature is.
+ * `memoryTables`, `objectStorageBackups` and `objectStorageCdcArchive` remain
+ * weaker instances of the same shape, still unpromoted.
  *
  * **Adding a feature key is therefore half a change.** The other half is a row
  * in `CAPABILITY_ROWS` and an entry in `CAPABILITY_TO_FEATURE` (for an

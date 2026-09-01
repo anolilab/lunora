@@ -233,6 +233,10 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // its full surface and silently behaved as ephemeral.
     const codeSignals = discoverPlatformSignals(project, lunoraDirectory);
     const platformGate = gatePlatformFeatures(discoverFeatureUsage(project, lunoraDirectory), resolveCodegenTarget(projectRoot, options.target), {
+        // Read off the SAME IR as `globalTables` below. Until this was wired, a
+        // target whose matrix rates `commitOrderedTables` as `unsupported` emitted
+        // the full surface and silently dropped the ordering guarantee.
+        commitOrderedTables: schema.tables.some((table) => table.commitOrdered === true),
         crossShardFanout: schema.tables.some((table) => typeof table.shardMode === "object"),
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),

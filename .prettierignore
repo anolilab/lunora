@@ -64,3 +64,12 @@ marketing/videos/build/
 sdks/*/.build/
 sdks/**/target/
 sdks/**/.dart_tool/
+
+# Schema baselines — written by `serializeSchemaSnapshot`, whose exact output is
+# the canonical form. Prettier reformats them to 4-space, so every
+# `lunora prepare --update-schema-baseline` produced a file that then failed
+# `lint:prettier` until someone re-ran `--write`. The serializer owns this
+# format, not Prettier. (Safe: the ledger hash is taken from the re-serialized
+# object, never from the file's bytes, so on-disk spacing cannot shift a
+# schema version's identity.)
+**/.lunora-schema.json
