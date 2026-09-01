@@ -16,7 +16,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { analyzedSearchText, createSearchAnalyzer, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass } from "@lunora/search-core";
+import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass, searchIndexProfile } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
 
 import { matchesStaticWhere } from "./aggregate-sql";
@@ -191,7 +191,13 @@ const SEARCH_BACKFILL_BATCH_ROWS = 500;
  */
 const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): SearchBackfillPass => {
     const ftName = ftsTableName(tableName, index.name);
-    const { profile } = createSearchAnalyzer(index.language);
+    // `searchIndexProfile`, not the analyzer's profile alone: the analyzer knows
+    // only the language, so re-pointing an index at a different column left every
+    // stored row analysed from the abandoned one with nothing detecting it —
+    // searching the newly declared column returned nothing while the old one
+    // still matched. Shared with the sql-store plane so the two cannot disagree
+    // about when a rebuild is owed.
+    const profile = searchIndexProfile(index);
     const pass = planSearchBackfillPass(readSearchBackfillState(sql, ftName), profile);
 
     if (pass.finished) {
@@ -288,7 +294,13 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
  */
 const searchIndexCoversTable = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
     const companion = ftsTableName(tableName, index.name);
-    const { profile } = createSearchAnalyzer(index.language);
+    // `searchIndexProfile`, not the analyzer's profile alone: the analyzer knows
+    // only the language, so re-pointing an index at a different column left every
+    // stored row analysed from the abandoned one with nothing detecting it —
+    // searching the newly declared column returned nothing while the old one
+    // still matched. Shared with the sql-store plane so the two cannot disagree
+    // about when a rebuild is owed.
+    const profile = searchIndexProfile(index);
 
     // The finished case first, and on its own: it is every read of a healthy
     // index, and it answers from the same single primary-key lookup the backfill

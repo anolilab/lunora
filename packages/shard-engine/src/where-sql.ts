@@ -159,8 +159,43 @@ const compileComparator = <T>(
     return fragments.binary(reference, comparator, strategy.serialize(value));
 };
 
-const compileInList = <T>(reference: T, keyword: "IN" | "NOT IN", value: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T => {
-    const items = Array.isArray(value) ? value : [];
+/**
+ * Compile `in` / `notIn`, refusing anything that is not a list.
+ *
+ * A non-array used to fall back to the empty list, and the two directions then
+ * failed in OPPOSITE ways: `in` matched nothing, `notIn` matched everything. The
+ * second is the dangerous one — an RLS policy `{ role: { notIn: deniedRoles } }`
+ * whose `deniedRoles` arrived as a single string (a scalar from a config file, a
+ * one-element list collapsed by a caller, a JSON body that wasn't validated)
+ * compiled to `1 = 1` and dropped the restriction entirely, with nothing to
+ * signal it.
+ *
+ * Refused rather than widened to a one-element list, which would also have
+ * matched the "correct" rows here: `WhereInput` types both operators as arrays,
+ * so a scalar reaching this point is a mistake upstream, and quietly repairing
+ * it leaves the caller a predicate whose meaning depends on a coercion they
+ * never asked for. `BAD_REQUEST`, not `INTERNAL` — the value usually originates
+ * with the caller, and the runtime renders it as a 400 they can act on.
+ *
+ * An explicitly EMPTY list is untouched. It is a real predicate that says
+ * something, and it says it in both directions.
+ */
+const compileInList = <T>(
+    field: string,
+    reference: T,
+    keyword: "IN" | "NOT IN",
+    value: unknown,
+    strategy: WhereSqlStrategy<T>,
+    fragments: WhereFragments<T>,
+): T => {
+    if (!Array.isArray(value)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `\`${keyword === "IN" ? "in" : "notIn"}\` on "${field}" expects an array of values, received ${value === null ? "null" : typeof value}`,
+        );
+    }
+
+    const items: unknown[] = value;
 
     if (items.length === 0) {
         // `IN ()` is a syntax error: an empty set matches nothing, its complement everything.
@@ -183,7 +218,7 @@ const literalInList = (reference: SQL, items: ReadonlyArray<unknown>, negated: b
     return negated ? sql`${reference} NOT IN (${list})` : sql`${reference} IN (${list})`;
 };
 
-const compileFieldOperators = <T>(reference: T, operators: FieldOperators, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T[] => {
+const compileFieldOperators = <T>(field: string, reference: T, operators: FieldOperators, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T[] => {
     const record = operators as Record<string, unknown>;
     const clauses: T[] = [];
 
@@ -202,7 +237,7 @@ const compileFieldOperators = <T>(reference: T, operators: FieldOperators, strat
         } else if (operator === "contains") {
             clauses.push(compileContains(reference, value, strategy, fragments));
         } else {
-            clauses.push(compileInList(reference, operator === "in" ? "IN" : "NOT IN", value, strategy, fragments));
+            clauses.push(compileInList(field, reference, operator === "in" ? "IN" : "NOT IN", value, strategy, fragments));
         }
     }
 
@@ -214,7 +249,7 @@ const compileField = <T>(field: string, value: unknown, strategy: WhereSqlStrate
     const reference = strategy.fieldRef(field);
 
     if (isOperatorObject(value)) {
-        return compileFieldOperators(reference, value, strategy, fragments);
+        return compileFieldOperators(field, reference, value, strategy, fragments);
     }
 
     if (value === null) {

@@ -32,6 +32,7 @@ import { LunoraError } from "@lunora/errors";
 
 import type { RelationOperator } from "../../../shared/relation-operators";
 import { isRelationPredicate as isSharedRelationPredicate, RELATION_OPERATOR_SET } from "../../../shared/relation-operators";
+import { isMemoryTable } from "./ctx-db-memory";
 import { distinctValues } from "./relations";
 import type { QueryArgs, QueryPage, RelationDefinitionLike, TableDefinitionLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
@@ -548,15 +549,41 @@ const findShardedRelationTarget = (where: WhereInput, schema: ResolveContext["sc
 };
 
 /**
- * Registration-time guard for partial-replication shapes. A live shape can only
- * be poked from the op-log of its OWN shard Durable Object, so an
- * `effectiveWhere` that joins to a `.shardBy()` table reaches rows that live in
- * other DOs the poke loop can never observe. Reject such a shape up front with
- * the two supported remedies. Called from the generated `resolveShape` override
- * the moment a socket subscribes (the first point the compiled predicate and the
- * schema's shard modes are both in hand).
+ * Registration-time guard for partial-replication shapes: both ways a shape can
+ * name rows its poke loop is unable to observe. Called from the generated
+ * `resolveShape` override the moment a socket subscribes — the first point the
+ * compiled predicate and the schema are both in hand.
+ *
+ * **1. The shape's own table is `.memory()`.** A shard-local shape replicates FROM
+ * `__cdc_log`, and `recordCdc` deliberately never appends a memory table (see
+ * `ctx-db.ts`: its rows do not survive the next eviction, and log retention is
+ * opt-in, so a heartbeat-rate presence table would grow the log without bound).
+ * So `readCdcChangeKeys` returns nothing for it on every flush, `buildShapeDiff`
+ * returns `[]` before it ever probes membership, and the shape seeds once and
+ * then never moves again — no error, no counter, nothing to grep. Refused here
+ * rather than left to freeze silently.
+ *
+ * There is no fix available further down: a full-membership re-probe per poke
+ * would emit upserts but could never emit a DELETE, because without the log
+ * nothing records which keys left, and the snapshot-diff tier that solves exactly
+ * this for `.global()` tables (`diffGlobalMembership` against
+ * `__global_shape_snapshot`) is wired to the D1 read path.
+ *
+ * **2. The predicate joins a `.shardBy()` table.** A live shape can only be poked
+ * from the op-log of its OWN Durable Object, so an `effectiveWhere` that joins to
+ * a sharded table reaches rows that live in other DOs the poke loop can never
+ * observe.
  */
 const assertShapeShardable = (effectiveWhere: WhereInput | undefined, schema: ResolveContext["schema"], table: string): void => {
+    if (isMemoryTable(schema.tables[table])) {
+        throw Object.assign(
+            new Error(
+                `shape on "${table}" replicates from the changelog, which never records a .memory() table — the shape would seed once and never update again. Fix it by (a) dropping .memory() from "${table}" so its writes reach the changelog, or (b) reading it through a live query (\`useQuery\`), which refreshes off the changed-table set rather than the log.`,
+            ),
+            { code: "SHAPE_MEMORY_TABLE", name: "LunoraError", status: 400 },
+        );
+    }
+
     if (!effectiveWhere) {
         return;
     }

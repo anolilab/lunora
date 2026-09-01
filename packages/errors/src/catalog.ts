@@ -327,8 +327,29 @@ export const ERROR_CATALOG = {
     SEARCH_INDEX_BUILDING: { status: 503, title: "Search index is still building" },
     /** Thrown by `@lunora/auth` (Turnstile) and `@lunora/ratelimit` — an upstream dependency didn't respond. Fixed, safe message. */
     SERVICE_UNAVAILABLE: { status: 503, title: "Service unavailable" },
+
+    /**
+     * A shape was declared over a `.memory()` table. Refused at subscribe, because
+     * the poke path replicates from `__cdc_log` and a memory table is deliberately
+     * never appended to it — so the shape would seed once and then stay frozen
+     * while the table changed underneath it. Same registration-time refusal as
+     * `SHAPE_CROSS_SHARD_JOIN`, for the same reason: the diff can never move.
+     */
+    SHAPE_MEMORY_TABLE: { status: 400, title: "Shape over a memory table is unsupported" },
     SHAPE_CROSS_SHARD_JOIN: { status: 400, title: "Shape cross-shard join is unsupported" },
     UNAUTHENTICATED: { status: 401, title: "Unauthenticated" },
+
+    /**
+     * The client could not decode a frame the server sent for a subscription.
+     *
+     * `502` because the failure is upstream of the caller: their query was valid
+     * and the payload that came back was not readable. Delivered to the
+     * subscription's `onError` rather than thrown, so one bad frame cannot escape
+     * the socket listener and abort every other subscription on the connection —
+     * which is what it did before, while the status indicator still read
+     * `connected` and the cursor silently stopped advancing.
+     */
+    WIRE_DECODE_FAILED: { status: 502, title: "Could not decode a server frame" },
     UNKNOWN_COLUMN: { status: 404, title: "Unknown column" },
 
     /**

@@ -519,10 +519,27 @@ const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkRowArgs
         throw new LunoraError("BAD_REQUEST", "deleteRows: `table` is required");
     }
 
+    const filters = parseTablePageFilters(args["filters"]);
+    const search = typeof args["search"] === "string" ? args["search"] : undefined;
+
+    // A predicate is REQUIRED. Without one this op is indistinguishable from
+    // `clearTable` — same effect, but reached through the path an operator
+    // confirmed as "delete N matching" rather than the one that asks "clear all
+    // N rows?". The studio could send it during its search debounce, when the
+    // button was already on screen and the debounced value was still empty; that
+    // half is fixed client-side, and this is the boundary that makes the two
+    // operations distinguishable no matter who calls them.
+    //
+    // Same shape as `parseBulkPatchArgs` refusing an empty `doc` two functions
+    // below, rather than treating it as a no-op.
+    if ((filters === undefined || filters.length === 0) && (search === undefined || search === "")) {
+        throw new LunoraError("BAD_REQUEST", "deleteRows: a predicate (`filters` or `search`) is required — use `clearTable` to empty the table");
+    }
+
     return {
-        filters: parseTablePageFilters(args["filters"]),
+        filters,
         limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
-        search: typeof args["search"] === "string" ? args["search"] : undefined,
+        search,
         table,
     };
 };

@@ -2299,3 +2299,140 @@ describe("mask — guarded-read coverage (every MaskDatabase read method)", () =
         );
     });
 });
+
+describe("mask — reader terminals mask before the caller sees a row", () => {
+    /** Two rows on a masked table; `ssn` is the hidden value every probe below is aimed at. */
+    const seedRows = () => [
+        { _id: "u1", name: "Ann", ssn: "123-45-6789", table: "users" },
+        { _id: "u2", name: "Bo", ssn: "987-65-4321", table: "users" },
+    ];
+
+    /**
+     * SECURITY (value oracle): `.filter()`'s predicate must be handed the MASKED
+     * row. If it sees the raw row, `.filter(d => d.ssn === guess)` is a one-guess-
+     * per-call read of the hidden value: a correct guess returns rows, a wrong one
+     * returns none, and the caller reads the secret off that difference.
+     *
+     * The probe is the assertion: a RIGHT guess and a WRONG guess must be
+     * indistinguishable to the caller — same row count, same payload.
+     */
+    const probeWithGuess = async (guess: string): Promise<Record<string, unknown>[]> => {
+        const seed = seedRows();
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(async ({ ctx }) =>
+            (ctx as unknown as TestContext).db
+                .query("users")
+                .filter((document) => document["ssn"] === guess)
+                .collect(),
+        );
+
+        return handler.handler(makeContext(database, "u1"), {});
+    };
+
+    it("filter() is not a value oracle — a right guess and a wrong guess are indistinguishable", async () => {
+        expect.assertions(3);
+
+        const rightGuess = await probeWithGuess("123-45-6789");
+        const wrongGuess = await probeWithGuess("000-00-0000");
+
+        // Both must miss: the predicate compares against the redacted `null`.
+        expect(rightGuess).toHaveLength(0);
+        expect(wrongGuess).toHaveLength(0);
+        expect(rightGuess).toStrictEqual(wrongGuess);
+    });
+
+    it("filter() still matches on a NON-masked column, and masks what it hands back", async () => {
+        expect.assertions(3);
+
+        const seed = seedRows();
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(async ({ ctx }) =>
+            (ctx as unknown as TestContext).db
+                .query("users")
+                .filter((document) => document["name"] === "Ann")
+                .collect(),
+        );
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.["name"]).toBe("Ann");
+        expect(rows[0]?.["ssn"]).toBeNull();
+    });
+
+    it("first() masks the row it returns (bare query, no index chain)", async () => {
+        expect.assertions(2);
+
+        const seed = seedRows();
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").first());
+
+        const row = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(row?.["ssn"]).toBeNull();
+        expect(row?.["name"]).toBe("Ann");
+    });
+
+    it("first() returns the null sentinel for an empty table rather than throwing", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([]);
+
+        enableQueryReader(database, []);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").first());
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toBeNull();
+    });
+
+    it("paginate() masks every row on the page", async () => {
+        expect.assertions(3);
+
+        const seed = seedRows();
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").paginate());
+
+        const result = (await handler.handler(makeContext(database, "u1"), {})) as Page;
+
+        expect(result.page).toHaveLength(2);
+        expect(result.page[0]?.["ssn"]).toBeNull();
+        expect(result.page[1]?.["ssn"]).toBeNull();
+    });
+
+    it("take() masks every row it returns", async () => {
+        expect.assertions(3);
+
+        const seed = seedRows();
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").take(2));
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]?.["ssn"]).toBeNull();
+        expect(rows[1]?.["ssn"]).toBeNull();
+    });
+});

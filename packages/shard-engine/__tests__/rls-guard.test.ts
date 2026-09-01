@@ -9,7 +9,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "../src/rls-guard";
+import { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError, TABLE_FIRST_METHODS } from "../src/rls-guard";
 
 /** A spy writer: every gated method records its table/id and returns a sentinel. */
 const createFakeWriter = () => {
@@ -17,6 +17,7 @@ const createFakeWriter = () => {
         aggregate: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`aggregate:${tableName}`)),
         count: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`count:${tableName}`)),
         delete: vi.fn<(id: string) => Promise<string>>((id: string) => Promise.resolve(`delete:${id}`)),
+        deleteAll: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`deleteAll:${tableName}`)),
         deleteMany: vi.fn<(ids: ReadonlyArray<string>) => Promise<string>>((ids: ReadonlyArray<string>) => Promise.resolve(`deleteMany:${ids.join(",")}`)),
         findFirst: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`findFirst:${tableName}`)),
         findFirstOrThrow: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`findFirstOrThrow:${tableName}`)),
@@ -24,6 +25,11 @@ const createFakeWriter = () => {
         get: vi.fn<(id: string) => Promise<string>>((id: string) => Promise.resolve(`get:${id}`)),
         groupBy: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`groupBy:${tableName}`)),
         insert: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`insert:${tableName}`)),
+        // The bulk inserts: `insertManyUnsafe` skips validators and triggers, NOT
+        // the guard. Both must be reachable by the `it.each` below — they were
+        // gated in source but absent from this fake, so nothing proved it.
+        insertMany: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`insertMany:${tableName}`)),
+        insertManyUnsafe: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`insertManyUnsafe:${tableName}`)),
         lookupById: vi.fn<(id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>>((id: string) =>
             Promise.resolve({ row: { _id: id }, tableName: "sentinel" }),
         ),
@@ -84,17 +90,45 @@ describe("guardWriter — table-named methods under .rls('required')", () => {
     const tableMethods = [
         "aggregate",
         "count",
+        "deleteAll",
         "findFirst",
         "findFirstOrThrow",
         "findMany",
         "groupBy",
         "insert",
+        "insertMany",
+        "insertManyUnsafe",
         "query",
         "rank",
         "rankBefore",
         "rankPage",
         "rankPageRows",
     ] as const;
+
+    const byName = (a: string, b: string): number => a.localeCompare(b);
+
+    it("covers every method the guard gates by table name", () => {
+        expect.assertions(1);
+
+        // Tripwire for the FIRST structural half: this hand-written list drifting
+        // below `TABLE_FIRST_METHODS` is what let `insertMany` /
+        // `insertManyUnsafe` be gated in source and unreachable here, so deleting
+        // them from the guard left all 61 tests passing. The guard's own list is
+        // now derived from an exhaustive `keyof DatabaseWriterLike` map, so a new
+        // table-first method on the real writer reaches this assertion.
+        expect([...tableMethods].toSorted(byName)).toStrictEqual([...TABLE_FIRST_METHODS].toSorted(byName));
+    });
+
+    it("the fake writer declares every table-first method, so it.each actually reaches them", () => {
+        expect.assertions(1);
+
+        // The SECOND structural half: `it.each` silently no-ops for a method the
+        // fake never declared (the guard skips a non-function), so a green
+        // `it.each` proves nothing unless the fake implements the whole set.
+        const raw = createFakeWriter() as unknown as Record<string, unknown>;
+
+        expect(TABLE_FIRST_METHODS.filter((name) => typeof raw[name] !== "function")).toStrictEqual([]);
+    });
 
     it.each(tableMethods)("denies %s against the protected table", (method) => {
         expect.assertions(3);

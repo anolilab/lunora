@@ -22,10 +22,12 @@ import type {
     StudioFeaturesResult,
 } from "@lunora/shard-engine";
 import {
+    ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
     applyCdcChanges,
     createShardCtxDb as createShardContextDatabase,
     rankKeyFromDoc,
+    recordSchemaVersion,
     runDataMigration,
     runShardMigrations,
 } from "@lunora/shard-engine";
@@ -3343,7 +3345,7 @@ describe("shardDO admin bulk delete", () => {
 
         const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
-        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { limit: 2, table: "todos" }));
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { limit: 2, search: "p1", table: "todos" }));
         const body = await response.json<{ result: { count: number; hasMore: boolean } }>();
 
         expect(body.result.count).toBe(2);
@@ -3380,11 +3382,35 @@ describe("shardDO admin bulk delete", () => {
         expect(response.status).toBe(400);
     });
 
+    it("refuses a predicate-free deleteRows, which is clearTable by another name", async () => {
+        expect.assertions(2);
+
+        // Without `filters` or `search` this deletes every row — identical to
+        // `clearTable`, but reached through the path an operator confirmed as
+        // "delete N matching" rather than the one that asks "clear all N rows?".
+        // The studio could send it during its search debounce; that half is fixed
+        // client-side, and this is the boundary that keeps the two operations
+        // distinguishable no matter who calls them.
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 3);
+
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { table: "todos" }));
+
+        expect(response.status).toBe(400);
+
+        // And nothing was deleted on the way to refusing.
+        const remaining = await createShardContextDatabase({ schema: todosSchema, sql: database.sql }).findMany("todos", {});
+
+        expect(remaining.page).toHaveLength(3);
+    });
+
     it("maps an unknown table to a 404", async () => {
         expect.assertions(1);
 
         const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
-        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { table: "nope" }));
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { search: "p1", table: "nope" }));
 
         expect(response.status).toBe(404);
     });
@@ -3404,7 +3430,7 @@ describe("shardDO admin bulk delete", () => {
         await seedProject(seed, "p1", 1);
 
         const shard = new BareShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
-        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { table: "todos" }));
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { search: "p1", table: "todos" }));
 
         // The id collection succeeds, but the base `runShardWrite` stub rejects
         // the first row as an unknown table.
@@ -3675,7 +3701,7 @@ describe("shardDO admin bulk delete", () => {
         // `deleteRows` sends no cursor, so its scan is unordered and the last id it
         // saw is an arbitrary point in id space. Handing that back would invite a
         // caller to resume from it and skip every matching row sorting below.
-        const unordered = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { limit: 2, table: "todos" }));
+        const unordered = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { limit: 2, search: "p1", table: "todos" }));
 
         await expect(unordered.json<{ result: { cursor?: string } }>()).resolves.toStrictEqual({
             result: { count: 2, hasMore: true },
@@ -3687,5 +3713,160 @@ describe("shardDO admin bulk delete", () => {
         const body = await ordered.json<{ result: { cursor?: string } }>();
 
         expect(body.result.cursor).toBeDefined();
+    });
+});
+
+/**
+ * The five admin reads that `schema-history-reads.ts` registers in a lookup
+ * table rather than as arms of `readAdminOp`'s if-chain.
+ *
+ * They are LIVE wiring: `@lunora/studio` invokes every one of these paths by
+ * name (`use-sql-diagnostics` → `lintSql`, `use-back-relations` →
+ * `backRelationCounts`, `query-insights-range` → `getQueryInsights`,
+ * `schema-history` → `schemaHistory` / `schemaVersion`). What was missing is a
+ * test that drives them through the SERVER: the studio's own tests mock the
+ * RPC client, so before this block both halves were tested only against each
+ * other's stubs: the lookup in `schema-history-reads.ts` had never once
+ * returned a resolver.
+ *
+ * Every test here goes in through `ShardDO.fetch` with a real admin envelope —
+ * the same entry the studio's client posts to — not by calling a resolver.
+ */
+describe("shardDO admin schema-history reads", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        database.raw(`CREATE TABLE "posts" ("__id__" TEXT PRIMARY KEY, "title" TEXT)`);
+        database.raw(`INSERT INTO "posts" VALUES ('p1', 'first'), ('p2', 'second')`);
+        database.raw(`CREATE TABLE "comments" ("__id__" TEXT PRIMARY KEY, "postId" TEXT)`);
+        database.raw(`INSERT INTO "comments" VALUES ('c1', 'p1'), ('c2', 'p1'), ('c3', 'p2')`);
+
+        state = stateFor(database.sql);
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    /** Unwrap the `{ result }` envelope every admin read replies with. */
+    const readResult = async <T>(response: { json: () => Promise<unknown> }): Promise<T> => ((await response.json()) as { result: T }).result;
+
+    it("plans a read-only statement through lintSql", async () => {
+        expect.assertions(3);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.lintSql, { sql: `SELECT * FROM "posts"` }));
+
+        expect(response.status).toBe(200);
+
+        const result = await readResult<{ diagnostics: { message: string; severity: string }[]; plan: string[] }>(response);
+
+        expect(result.diagnostics.filter((entry) => entry.severity === "error")).toStrictEqual([]);
+        // EXPLAIN QUERY PLAN actually ran on the server: a full-table read reports a SCAN.
+        expect(result.plan.join(" ")).toContain("posts");
+    });
+
+    it("rejects a write statement through lintSql with a gate diagnostic (same classifier as runSql)", async () => {
+        expect.assertions(2);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.lintSql, { sql: `DELETE FROM "posts"` }));
+        const result = await readResult<{ diagnostics: { severity: string; source: string }[]; plan: string[] }>(response);
+
+        expect(result.diagnostics).toContainEqual(expect.objectContaining({ severity: "error", source: "gate" }));
+        expect(result.plan).toStrictEqual([]);
+    });
+
+    it("counts reverse relations per parent row through backRelationCounts", async () => {
+        expect.assertions(2);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.backRelationCounts, { ids: ["p1", "p2"], relations: [{ column: "postId", table: "comments" }] }),
+        );
+
+        expect(response.status).toBe(200);
+
+        const result = await readResult<{ relations: { column: string; counts: Record<string, number>; table: string }[] }>(response);
+
+        expect(result.relations).toStrictEqual([{ column: "postId", counts: { p1: 2, p2: 1 }, table: "comments" }]);
+    });
+
+    it("skips a malformed relation entry rather than 500-ing", async () => {
+        expect.assertions(2);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        // A hand-built payload whose `table` is not a string must be filtered out
+        // before it can reach `quoteIdentifier`.
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.backRelationCounts, { ids: ["p1"], relations: [{ column: "postId", table: 7 }] }));
+
+        expect(response.status).toBe(200);
+        await expect(readResult<{ relations: unknown[] }>(response)).resolves.toStrictEqual({ relations: [] });
+    });
+
+    it("answers getQueryInsights with the bucketed shape (tables materialised on demand)", async () => {
+        expect.assertions(2);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getQueryInsights, { range: "1h" }));
+
+        expect(response.status).toBe(200);
+        await expect(readResult<Record<string, unknown>>(response)).resolves.toStrictEqual(
+            expect.objectContaining({ buckets: expect.any(Array), entries: expect.any(Array) }),
+        );
+    });
+
+    it("lists recorded schema versions newest-first WITHOUT their snapshot payloads", async () => {
+        expect.assertions(3);
+
+        recordSchemaVersion(database.sql, "hash-one", `{"v":1}`, 1000);
+        recordSchemaVersion(database.sql, "hash-two", `{"v":2}`, 2000);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.schemaHistory, {}));
+        const result = await readResult<{ versions: { hash: string; snapshotJson?: string }[] }>(response);
+
+        expect(result.versions.map((version) => version.hash)).toStrictEqual(["hash-two", "hash-one"]);
+        // The payload is deliberately excluded from the list read — a wide schema's
+        // snapshot is tens of KB and 50 of them would be megabytes on the wire.
+        expect(result.versions.every((version) => version.snapshotJson === undefined)).toBe(true);
+        expect(response.status).toBe(200);
+    });
+
+    it("returns one version's full snapshot by hash, and an empty state for an unknown hash", async () => {
+        expect.assertions(2);
+
+        recordSchemaVersion(database.sql, "hash-one", `{"v":1}`, 1000);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const found = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.schemaVersion, { hash: "hash-one" }));
+
+        await expect(readResult<{ version?: { hash: string; snapshotJson: string } }>(found)).resolves.toStrictEqual({
+            version: { appliedAt: 1000, hash: "hash-one", seq: 1, snapshotJson: `{"v":1}` },
+        });
+
+        // A stale deep link is an empty state, not a failure — `{ version: undefined }`
+        // serialises to `{}`.
+        const missing = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.schemaVersion, { hash: "nope" }));
+
+        await expect(readResult<Record<string, unknown>>(missing)).resolves.toStrictEqual({});
+    });
+
+    it("does not resolve an Object.prototype key as a registered admin read", async () => {
+        expect.assertions(2);
+
+        // SECURITY: the lookup is a plain object literal, so a bare
+        // `SCHEMA_HISTORY_READS[name]` would find `Object.prototype.toString` —
+        // truthy, callable, and handed back as an outcome whose `.tables` the
+        // subscription bridge then reads. `Object.hasOwn` is what stops it, and
+        // this is the only thing that exercises its FALSE arm against a key that
+        // actually exists on the prototype.
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(adminRequest(`${ADMIN_FUNCTION_PREFIX}toString`, {}));
+
+        expect(response.status).not.toBe(200);
+        await expect(response.text()).resolves.not.toContain("[object Object]");
     });
 });

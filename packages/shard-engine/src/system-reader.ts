@@ -125,8 +125,10 @@ interface SystemDatabaseReader {
 
     /**
      * Begin a read over a system table. Call `.collect()` to resolve the full
-     * list — there is no filtering, indexing, or pagination (the backing source
-     * is remote; the surface stays deliberately minimal).
+     * list — there is no filtering or indexing (the backing source is remote;
+     * the surface stays deliberately minimal). The backing source may answer in
+     * bounded pages; `.collect()` walks all of them, so the caller always sees
+     * every row and never a silently truncated prefix.
      */
     query: <T extends SystemTableName>(table: T) => SystemQuery<T>;
 }

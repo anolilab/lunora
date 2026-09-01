@@ -415,6 +415,51 @@ describe("oauth-provider consent", () => {
         expect(replace).toHaveBeenCalledWith("/done");
         expect(assign).not.toHaveBeenCalled();
     });
+
+    it.each([
+        // eslint-disable-next-line no-script-url -- asserting these exact strings never reach `location.assign`.
+        ["javascript:alert(document.cookie)"],
+        // Leading whitespace/newlines are stripped by the URL parser and by the
+        // browser, so a prefix check on the raw string would let this through.
+        ["\n\t JavaScript:alert(1)"],
+        ["data:text/html,<script>alert(1)</script>"],
+    ])("refuses to hand %j to the browser", async (redirectURI: string) => {
+        expect.assertions(3);
+
+        const { createConsentController, resolveContext } = await import("../../src/core");
+
+        const assign = stubLocationAssign();
+        const replace = vi.fn();
+        const context = resolveContext({
+            authClient: {
+                getSession: vi.fn(),
+                oauth2: {
+                    consent: vi.fn(() => Promise.resolve({ data: { redirectURI }, error: null })),
+                    getConsent: vi.fn(() => Promise.resolve({ data: { clientName: "Acme", scope: "openid" }, error: null })),
+                },
+            } as never,
+            nav: { navigate: vi.fn(), replace },
+            plugins: { oauthProvider: true },
+        });
+
+        const controller = createConsentController(context, { consentId: "c1" });
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        await controller.actions.accept();
+
+        // `location.assign` runs in the AUTH app's origin, so a non-http(s)
+        // `redirectURI` is script execution against the very session the consent
+        // screen is deciding for. The authorization server vets the redirect
+        // HOST against the client's registration; nothing there vets the SCHEME.
+        expect(assign).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
+        expect(controller.getState().error).toBeDefined();
+    });
 });
 
 describe("password policy", () => {

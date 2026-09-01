@@ -488,6 +488,10 @@ const ERROR_CATALOG: {
         readonly status: 503;
         readonly title: "Service unavailable";
     };
+    readonly SHAPE_MEMORY_TABLE: {
+        readonly status: 400;
+        readonly title: "Shape over a memory table is unsupported";
+    };
     readonly SHAPE_CROSS_SHARD_JOIN: {
         readonly status: 400;
         readonly title: "Shape cross-shard join is unsupported";
@@ -495,6 +499,10 @@ const ERROR_CATALOG: {
     readonly UNAUTHENTICATED: {
         readonly status: 401;
         readonly title: "Unauthenticated";
+    };
+    readonly WIRE_DECODE_FAILED: {
+        readonly status: 502;
+        readonly title: "Could not decode a server frame";
     };
     readonly UNKNOWN_COLUMN: {
         readonly status: 404;

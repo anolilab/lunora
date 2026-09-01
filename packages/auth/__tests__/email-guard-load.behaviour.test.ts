@@ -24,12 +24,19 @@ const packageDirectory = fileURLToPath(new URL("..", import.meta.url));
 
 describe("loadEmailDomainLists — module loading", () => {
     it("imports its domain lists in a form native ESM accepts", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         // Read the specifiers off the source instead of restating them, so a future
         // edit that drops the import attribute is caught here rather than in prod.
         const source = readFileSync(new URL("../src/email-guard.ts", import.meta.url), "utf8");
         const specifiers = [...source.matchAll(/import\((\s*"@visulima\/[\w-]*email-domains\/domains"[^)]*)\)/g)].map((match) => match[1] ?? "");
+
+        // Pinned BEFORE the spawn, because an empty script body is a `node` exit
+        // 0: a rename, a move to a variable or a reformat that stops the pattern
+        // matching would leave this test passing having imported nothing, and it
+        // is the only guard the package has against the published-bundle ESM
+        // failure described above.
+        expect(specifiers).toHaveLength(2);
 
         expect(() =>
             execFileSync(
