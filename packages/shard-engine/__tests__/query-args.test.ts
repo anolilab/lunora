@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import { renderSql } from "../src/drizzle";
 import { buildSeekWhere, CURSOR_PREFIX, decodeCursor, encodeCursor, normalizeOrderKeys } from "../src/query-args";
 import type { OrderKey } from "../src/schema-types";
@@ -117,6 +118,31 @@ describe("encodeCursor / decodeCursor", () => {
 });
 
 describe("buildSeekWhere", () => {
+    it("accepts a legacy cursor whose absent field is a real `undefined`, at a PREFIX position too", () => {
+        expect.assertions(2);
+
+        const keys: OrderKey[] = [
+            { direction: "asc", field: "publishedAt", nullable: true },
+            { direction: "asc", field: "score", nullable: true },
+        ];
+
+        // Built the OLD way — `encodeCursor` normalises at mint now, so a cursor
+        // produced by it can no longer carry `undefined`. This is what a client
+        // holding a page boundary across the deploy still sends: `encodeWire`
+        // tags array-position `undefined` and `decodeWire` restores it.
+        const legacy = CURSOR_PREFIX + btoa(JSON.stringify(encodeWire([undefined, 5, "m1"])));
+        const values = decodeCursor(legacy);
+
+        // A multi-key seek builds PREFIX predicates as `{ eq: value }`, not just
+        // the pivot comparison. Handling the legacy value at the pivot alone left
+        // the prefix binding `undefined` verbatim, because the shared `where`
+        // compiler passes it straight to the driver on purpose — so a dropped
+        // variable in a user's query fails loudly rather than matching every null
+        // row. `decodeCursor` collapses it once, on read.
+        expect(values).not.toContain(undefined);
+        expect(() => buildSeekWhere(keys, values)).not.toThrow();
+    });
+
     it("rejects a truncated cursor instead of seeking the NULL group", () => {
         expect.assertions(2);
 

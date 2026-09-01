@@ -234,7 +234,18 @@ const decodeCursor = (cursor: string): unknown[] => {
         throw invalidCursor();
     }
 
-    return decoded;
+    // Collapse a legacy `undefined` to SQL NULL here, where the cursor is read,
+    // rather than at each place a value is used. `encodeCursor` normalises at
+    // mint time, but a cursor minted BEFORE that carries a real `undefined`
+    // (`encodeWire` tags array-position `undefined`, `decodeWire` restores it)
+    // and the prefix is unchanged, so those cursors are still accepted. Handling
+    // it only at the pivot was not enough: a multi-key seek also builds prefix
+    // predicates as `{ eq: value }`, and the shared `where` compiler binds
+    // `undefined` verbatim rather than treating it as NULL — deliberately, so a
+    // dropped variable in a user's query fails loudly instead of matching every
+    // null row.
+    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the domain value a cursor carries
+    return (decoded as unknown[]).map((value: unknown) => value ?? null);
 };
 
 /**
@@ -265,15 +276,9 @@ const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, in
     const { field } = column;
     const nonNullWanted = (column.direction !== "desc") === wantLater;
 
-    // Both spellings. `encodeCursor` collapses an absent field to `null` at mint
-    // time, but a cursor minted BEFORE that change is still accepted — the prefix
-    // is unchanged — and carries a real `undefined` that survives the wire codec
-    // (`encodeWire` tags array-position `undefined`; `decodeWire` restores it).
-    // A feed holding a page boundary across the deploy would otherwise bind
-    // `undefined` at the driver. This stays local to the cursor: the shared
-    // `where` compiler deliberately does NOT treat `undefined` as SQL NULL,
-    // because there it would silently widen a user's or an RLS policy's query.
-    if (value === null || value === undefined) {
+    // Only `null`: both a fresh cursor (normalised at mint) and a legacy one
+    // (normalised in `decodeCursor`) carry SQL NULL by the time they reach here.
+    if (value === null) {
         if (nonNullWanted) {
             // Inclusive at a NULL pivot is "the non-nulls, plus the NULL group itself" — every row.
             return inclusive ? { OR: [{ [field]: { isNull: false } }, { [field]: { isNull: true } }] } : { [field]: { isNull: false } };
