@@ -65,6 +65,7 @@ const ADMIN_FUNCTIONS: {
     readonly listWorkflows: "__lunora_admin__:listWorkflows";
     readonly maskPolicies: "__lunora_admin__:maskPolicies";
     readonly migrationStatus: "__lunora_admin__:migrationStatus";
+    readonly patchRows: "__lunora_admin__:patchRows";
     readonly pitrRestore: "__lunora_admin__:pitrRestore";
     readonly rankBefore: "__lunora_admin__:rankBefore";
     readonly rankPage: "__lunora_admin__:rankPage";
@@ -2395,6 +2396,7 @@ interface SearchScoredDocument {
 
 ```ts
 interface SelectMatchingIdsOptions {
+    after?: string;
     filters?: FilterClause[];
     limit?: number;
     search?: string;

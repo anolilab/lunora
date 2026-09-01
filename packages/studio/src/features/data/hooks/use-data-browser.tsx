@@ -1,15 +1,17 @@
+import type { FunctionReference } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { OnChangeFn, SortingState } from "@tanstack/react-table";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 // Bundler-inlined shared helper (see CLAUDE.md `shared/` rules) — the same wire
 // codec the shard writer stores `__doc__` with, so display and save agree on the
 // encoding rather than studio growing a second, drifting decoder.
+import { drainBulkOp } from "../../../../../../shared/bulk-drain";
 import { decodeDocument, decodeWire, encodeWire, isPlainObject } from "../../../../../../shared/wire-codec";
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
 import useMirroredRef from "../../../hooks/use-mirrored-ref";
-import type { BulkDeleteResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
+import type { BulkRowOpResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
 import type { DataView } from "../../../lib/saved-queries";
@@ -99,12 +101,13 @@ const serializeView = (
     ]);
 
 /**
- * Hard ceiling on the number of bounded server `deleteRows`/`clearTable` calls
- * one bulk action loops through, so "delete matching" / "clear table" can never
- * run unbounded. Each call deletes up to the server's per-call cap (500 rows)
- * and reports `hasMore`; the client loops the single round-trip — never per-row.
+ * Hard ceiling on the number of bounded server `deleteRows`/`clearTable`/
+ * `patchRows` calls one bulk action loops through, so "delete matching" /
+ * "clear table" / "set matching" can never run unbounded. Each call writes up to
+ * the server's per-call cap (500 rows) and reports `hasMore`; the client loops
+ * the single round-trip — never per-row.
  */
-const MAX_BULK_DELETE_BATCHES = 200;
+const MAX_BULK_BATCHES = 200;
 
 /**
  * How many rows the FK hover preview fetches to find an exact primary-key match.
@@ -119,6 +122,7 @@ const FACET_COLUMN = adminRef(ADMIN_FUNCTIONS.facetColumn);
 const WRITE_ROW = adminRef(ADMIN_FUNCTIONS.writeRow);
 const DELETE_ROWS = adminRef(ADMIN_FUNCTIONS.deleteRows);
 const CLEAR_TABLE = adminRef(ADMIN_FUNCTIONS.clearTable);
+const PATCH_ROWS = adminRef(ADMIN_FUNCTIONS.patchRows);
 
 /** Stable empty args for the no-argument `listTables` read (avoids a fresh object each render). */
 const NO_ARGS: Record<string, unknown> = {};
@@ -161,10 +165,28 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
     return fields;
 };
 
+/**
+ * Identity of a bulk request, for parking its resume cursor.
+ *
+ * `encodeWire` rather than a bare `JSON.stringify`: a `v.bigint()` / `v.bytes()`
+ * value in the patch document is exactly what the dialog's `decodeWire` produces,
+ * and `JSON.stringify` THROWS on a BigInt. That throw used to happen before the
+ * drain's `try`, so `fireAndForget` swallowed it and the whole op became a silent
+ * no-op — no request, no error, no notice.
+ *
+ * The shard is part of the key because it travels out-of-band in `callOptions`,
+ * not in `args`: without it, a cursor parked against shard A would be replayed
+ * against shard B's identical request and skip every row sorting below it.
+ */
+const bulkResumeKey = (reference: FunctionReference, args: Record<string, unknown>, shardKey: string): string =>
+    JSON.stringify([reference.__lunoraRef, shardKey, encodeWire(args)]);
+
 /** Everything {@link useDataBrowser} exposes to the `DataBrowser` render. */
 interface DataBrowserModel {
     addRow: () => void;
     bulkDelete: () => void;
+    /** Shallow-merge these fields into every row matching the active filters/search. */
+    bulkPatch: (document_: Record<string, unknown>) => void;
     cancelCellEdit: () => void;
     cancelEdit: () => void;
     changePageSize: (size: number) => void;
@@ -231,6 +253,8 @@ interface DataBrowserModel {
     total: number;
     viewMode: "json" | "table";
     writeError: null | string;
+    /** Outcome line for the last completed bulk op — how many rows it actually wrote. */
+    writeNotice: null | string;
 }
 
 /** The `readTablePage` arguments for the displayed view. */
@@ -299,12 +323,28 @@ const resolveStagedChanges = (page: TablePage | null, staged: StagedEditsModel["
 /** Whether a column is editable in place — every column but the meta ones. */
 const editableColumn = (column: string): boolean => !META_COLUMNS.has(column);
 
+/** Shown when a delete drain hits its batch bound. Re-running always makes progress: the removed rows no longer match. */
+const DELETE_TRUNCATED = `Stopped after ${MAX_BULK_BATCHES.toString()} batches — rows still match. Run it again to remove the rest.`;
+
+/** Shown when a patch drain hits its batch bound. Re-running resumes from the parked cursor rather than rescanning. */
+const PATCH_TRUNCATED = `Stopped after ${MAX_BULK_BATCHES.toString()} batches — rows still match. Run it again to set the rest.`;
+
 /**
- * Why `drainBulk` stopped: `"completed"` when the server reported no more
- * matching rows; `"cap-hit"` when the client's own `MAX_BULK_DELETE_BATCHES`
- * loop ran out first — matching rows may still remain.
+ * How a bulk drain reports itself: the verb for the outcome banner, the notice
+ * shown when the batch bound is hit, and whether the op resumes.
+ *
+ * `resumable` is what decides whether a cursor is sent at all. A delete does not
+ * need one — its own writes remove rows from the predicate — and ordering its scan
+ * would cost the server a sequential table scan (see `selectMatchingIds`).
  */
-type BulkDrainOutcome = "cap-hit" | "completed";
+interface BulkDrainSpec {
+    readonly resumable: boolean;
+    readonly truncated: string;
+    readonly verb: string;
+}
+
+const DELETE_DRAIN: BulkDrainSpec = { resumable: false, truncated: DELETE_TRUNCATED, verb: "deleted" };
+const PATCH_DRAIN: BulkDrainSpec = { resumable: true, truncated: PATCH_TRUNCATED, verb: "written" };
 
 const useDataBrowser = ({
     initialFilters,
@@ -397,6 +437,15 @@ const useDataBrowser = ({
     // rejected write without disturbing the page-read error.
     const [editing, setEditing] = useState<null | { docText: string; id: null | string }>(null);
     const [writeError, setWriteError] = useState<null | string>(null);
+    /** Rows the last bulk op wrote, so a drain that finishes doesn't finish silently. Cleared when the next one starts. */
+    const [writeNotice, setWriteNotice] = useState<null | string>(null);
+
+    /**
+     * Where the last capped bulk drain stopped, so the operator's next identical
+     * run resumes instead of rescanning. A ref, not state: nothing renders from it
+     * and re-rendering on it would re-key the page query mid-drain.
+     */
+    const bulkResume = useRef<null | { after: string; key: string }>(null);
 
     // Inline-edit state: the staged-edit buffer, the cell currently open for
     // editing, and whether a batch commit is in flight. Edits accumulate in
@@ -524,6 +573,13 @@ const useDataBrowser = ({
         stagedEdits.clear();
         setEditingCell(null);
         setOffset(0);
+        // Every bulk-op banner describes the view being left behind — "500 rows
+        // written." over a different table reads as if it just happened — and a
+        // parked resume cursor belongs to the old table/shard, where replaying it
+        // against the new one would skip every row sorting below it.
+        setWriteError(null);
+        setWriteNotice(null);
+        bulkResume.current = null;
     } else if (incomingViewKey !== seededViewKey) {
         // Not a re-seed (`isReseed` is false here, and `isReseed` is
         // `isTableSwitch || isSameTableViewApply` — so BOTH are false too: this
@@ -897,50 +953,76 @@ const useDataBrowser = ({
         }
     };
 
-    // Drain a server bulk-delete op (`deleteRows` with a predicate, or
-    // `clearTable` with none) by looping a single bounded round-trip while it
-    // reports `hasMore` — replacing the old N+1 read-then-delete-per-id loop. The
-    // server collects the matching ids and removes each THROUGH the schema-aware
-    // writer (so FTS / aggregate / rank shadow tables stay in sync), capped per
-    // call; the loop is bounded by `MAX_BULK_DELETE_BATCHES` so it can never run
-    // unbounded. Sequential by design: each call's deletes shrink the set the
-    // next read sees, so the round-trips can't be parallelised.
+    // Drain a bounded server bulk op (`deleteRows`, `clearTable`, `patchRows`) by
+    // looping a single round-trip while it reports `hasMore` — never per-row. The
+    // server writes each matching row THROUGH the schema-aware writer (so FTS /
+    // aggregate / rank shadow tables stay in sync), capped per call; the loop is
+    // bounded by `MAX_BULK_BATCHES` so it can never run unbounded. Sequential by
+    // design, so the round-trips can't be parallelised.
     //
-    // Running out of batches before the server reports `hasMore: false` means
-    // rows still match the predicate — the loop just stopped asking. Falling
-    // through to the same `setOffset(0); pageQuery.refetch();` as a clean finish
-    // would look like success (the visible page empties or shrinks along with
-    // whatever DID get deleted) while leaving the operator with no signal that
-    // more rows are still out there, so this reports the outcome and surfaces a
-    // truncation notice on `writeError` instead of staying silent.
-    const drainBulk = async (ref: typeof DELETE_ROWS, args: Record<string, unknown>): Promise<void> => {
+    // Running out of batches before the server reports `hasMore: false` means rows
+    // still match the predicate — the loop just stopped asking. Finishing silently
+    // would look like success (the visible page shrinks along with whatever DID get
+    // written) while leaving the operator with no signal that more rows are out
+    // there, so a truncation notice goes on `writeError`.
+    //
+    // `resume` is what makes "run it again" true for a PATCH. A delete drains on a
+    // re-run whether or not it resumes — the rows it removed no longer match — but a
+    // patch that leaves rows matching would rescan from the top, rewrite the same
+    // first `MAX_BULK_BATCHES × 500` rows, and hit the cap again forever. So the
+    // cursor the server hands back on a cap-hit is parked here, keyed by the exact
+    // request, and the next identical run picks up where this one stopped.
+    const drainBulk = async (reference: FunctionReference, args: Record<string, unknown>, spec: BulkDrainSpec): Promise<number> => {
         if (selectedTable === null) {
-            return;
+            return 0;
         }
 
         setWriteError(null);
+        setWriteNotice(null);
+
+        // A resumable op ALWAYS opens with a cursor — the one a previous capped run
+        // of this EXACT request parked, otherwise `""`, which sorts below every real
+        // id. A non-resumable one opens with none, which is what keeps its scan
+        // unordered. `drainBulkOp` owns it from there; it never travels in `args`.
+        const resumeKey = bulkResumeKey(reference, args, debouncedShard);
+        const parked = bulkResume.current?.key === resumeKey ? bulkResume.current.after : undefined;
+        const openCursor = spec.resumable ? (parked ?? "") : undefined;
+
+        let written = 0;
 
         try {
-            let outcome: BulkDrainOutcome = "cap-hit";
+            const drained = await drainBulkOp({
+                args,
+                maxBatches: MAX_BULK_BATCHES,
+                openCursor,
+                query: async (batchArgs) => (await client.query(reference, batchArgs, callOptions(debouncedShard))) as BulkRowOpResult,
+            });
 
-            for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
-                // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each call reflects the prior batch's deletes)
-                const result = (await client.query(ref, args, callOptions(debouncedShard))) as BulkDeleteResult;
+            written = drained.written;
+            bulkResume.current = drained.cursor === undefined ? null : { after: drained.cursor, key: resumeKey };
 
-                if (!result.hasMore) {
-                    outcome = "completed";
-                    break;
-                }
+            if (drained.outcome === "cap-hit") {
+                setWriteError(spec.truncated);
             }
 
+            setWriteNotice(`${written.toString()} ${written === 1 ? "row" : "rows"} ${spec.verb}.`);
+
+            return written;
+        } catch (error) {
+            // A throw loses the failing batch's own committed count, so this is a
+            // lower bound — hence "at least". The rows before the failure are already
+            // on disk, so silence here would be the worse lie.
+            setWriteError(`${(error as Error).message} (at least ${written.toString()} rows were already ${spec.verb})`);
+
+            bulkResume.current = null;
+
+            return written;
+        } finally {
+            // Also on the failure path: a partial batch is committed server-side, so
+            // reporting an error over a grid still showing pre-write values is worse
+            // than refreshing under the message.
             setOffset(0);
             pageQuery.refetch();
-
-            if (outcome === "cap-hit") {
-                setWriteError(`Stopped after ${MAX_BULK_DELETE_BATCHES.toString()} batches — rows still match this delete. Run it again to remove the rest.`);
-            }
-        } catch (error) {
-            setWriteError((error as Error).message);
         }
     };
 
@@ -1001,11 +1083,19 @@ const useDataBrowser = ({
     };
 
     const bulkDelete = (): void => {
-        fireAndForget(drainBulk(DELETE_ROWS, { filters: toFilterClauses(filters), search, table: selectedTable }));
+        fireAndForget(drainBulk(DELETE_ROWS, { filters: toFilterClauses(filters), search, table: selectedTable }, DELETE_DRAIN));
     };
 
     const emptyTable = (): void => {
-        fireAndForget(drainBulk(CLEAR_TABLE, { table: selectedTable }));
+        fireAndForget(drainBulk(CLEAR_TABLE, { table: selectedTable }, DELETE_DRAIN));
+    };
+
+    // Shallow-merge `doc` into every row matching the ACTIVE view — the same
+    // predicate "delete matching" removes by, so the count the button shows is
+    // the set that gets written. Routed through the writer server-side, which is
+    // why this exists at all: the SQL console refuses a raw `UPDATE`.
+    const bulkPatch = (document_: Record<string, unknown>): void => {
+        fireAndForget(drainBulk(PATCH_ROWS, { doc: document_, filters: toFilterClauses(filters), search, table: selectedTable }, PATCH_DRAIN));
     };
 
     const onFilterChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
@@ -1129,6 +1219,7 @@ const useDataBrowser = ({
     return {
         addRow,
         bulkDelete,
+        bulkPatch,
         cancelCellEdit,
         cancelEdit,
         changePageSize,
@@ -1184,6 +1275,7 @@ const useDataBrowser = ({
         total,
         viewMode,
         writeError,
+        writeNotice,
     };
 };
 

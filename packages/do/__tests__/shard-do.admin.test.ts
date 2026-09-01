@@ -32,6 +32,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
+import { drainBulkOp } from "../../../shared/bulk-drain";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
@@ -3171,21 +3172,24 @@ const todosSchema: SchemaLike = {
 };
 
 /**
- * Drives the `__lunora_admin__:deleteRows` / `__lunora_admin__:clearTable` ops
+ * Drives the `__lunora_admin__:deleteRows` / `clearTable` / `patchRows` ops
  * through a real schema-aware writer, mirroring the codegen-generated subclass'
- * `deleteRowThroughWriter` override. The base `runShardBulkDelete` owns the
- * bounded id-collection loop; this only supplies the per-row writer delete, so
- * the FTS / aggregate / rank shadow tables stay in sync exactly like a single
- * `writeRow` delete.
+ * `runShardWrite` override. The base `runShardBulkRowOp` owns the bounded
+ * id-collection loop; this only supplies the per-row writer call, so the FTS /
+ * aggregate / rank shadow tables stay in sync exactly like a single `writeRow`.
+ *
+ * ONE override covers all three ops, because they all route through the single
+ * `runShardWrite` seam. Pins `args.table` on every by-id call, as the generated
+ * override does, so an absent row raises rather than reaching a `.global()` twin.
  */
-class BulkDeleteShard extends ShardDO {
+class BulkOpsShard extends ShardDO {
     // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
     public override async handleRpc(): Promise<unknown> {
         throw new Error("handleRpc must not run for admin RPCs");
     }
 
-    protected override async deleteRowThroughWriter(_table: string, id: string): Promise<void> {
-        const writer = createShardContextDatabase({
+    protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+        const writer: DatabaseWriterLike = createShardContextDatabase({
             broadcast: (delta) => {
                 this.recordChangedTable(delta.table);
             },
@@ -3193,7 +3197,42 @@ class BulkDeleteShard extends ShardDO {
             sql: this.sql as SqlExec,
         });
 
-        await writer.delete(id);
+        if (args.op === "delete") {
+            await writer.delete(args.id ?? "", args.table);
+        } else if (args.op === "patch") {
+            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
+        } else {
+            throw new Error(`unexpected op in the bulk harness: ${args.op}`);
+        }
+
+        return { id: args.id ?? null, op: args.op };
+    }
+}
+
+/**
+ * A {@link BulkOpsShard} whose patch throws once `failAfter` rows have landed —
+ * the partial-write shape a `.unique()` violation or an OCC conflict produces
+ * mid-batch, where the rows before the failure are already committed.
+ */
+class FailingPatchShard extends BulkOpsShard {
+    private applied = 0;
+
+    public constructor(
+        state: ShardDOState,
+        environment: Record<string, unknown>,
+        private readonly failAfter: number,
+    ) {
+        super(state, environment);
+    }
+
+    protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+        if (this.applied >= this.failAfter) {
+            throw new Error("row write failed");
+        }
+
+        this.applied += 1;
+
+        return super.runShardWrite(args);
     }
 }
 
@@ -3226,6 +3265,14 @@ describe("shardDO admin bulk delete", () => {
 
     const rowCount = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "todos"`)[0]?.["c"] ?? 0);
 
+    /** Rows of `project` whose `done` is now `true` — what a bulk patch is supposed to have changed. */
+    const doneCount = (project: string): number =>
+        Number(
+            database.raw(
+                `SELECT COUNT(*) AS c FROM "todos" WHERE json_extract("__doc__", '$.projectId') = '${project}' AND json_extract("__doc__", '$.done') = 1`,
+            )[0]?.["c"] ?? 0,
+        );
+
     /** Seed `count` todos in the given project, returning the writer used (its reads hit the shadow tables). */
     const seedProject = async (writer: DatabaseWriterLike, project: string, count: number): Promise<void> => {
         for (let index = 0; index < count; index += 1) {
@@ -3242,7 +3289,7 @@ describe("shardDO admin bulk delete", () => {
         await seedProject(seed, "p1", 3);
         await seedProject(seed, "p2", 2);
 
-        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(
             bulkRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "projectId", operator: "eq", value: "p1" }], table: "todos" }),
@@ -3250,9 +3297,9 @@ describe("shardDO admin bulk delete", () => {
 
         expect(response.status).toBe(200);
 
-        const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
+        const body = await response.json<{ result: { count: number; hasMore: boolean } }>();
 
-        expect(body.result).toEqual({ deleted: 3, hasMore: false });
+        expect(body.result).toEqual({ count: 3, hasMore: false });
         // p1's three rows are gone; p2's two survive.
         expect(rowCount()).toBe(2);
         await expect(seed.count("todos", { projectId: "p2" })).resolves.toBe(2);
@@ -3266,7 +3313,7 @@ describe("shardDO admin bulk delete", () => {
         await seedProject(seed, "p1", 4);
         await seedProject(seed, "p2", 1);
 
-        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "projectId", operator: "eq", value: "p1" }], table: "todos" }));
 
@@ -3294,12 +3341,12 @@ describe("shardDO admin bulk delete", () => {
 
         await seedProject(seed, "p1", 5);
 
-        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { limit: 2, table: "todos" }));
-        const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
+        const body = await response.json<{ result: { count: number; hasMore: boolean } }>();
 
-        expect(body.result.deleted).toBe(2);
+        expect(body.result.count).toBe(2);
         expect(body.result.hasMore).toBe(true);
         // Only the capped batch was removed; the rest remain for the next loop.
         expect(rowCount()).toBe(3);
@@ -3313,12 +3360,12 @@ describe("shardDO admin bulk delete", () => {
         await seedProject(seed, "p1", 3);
         await seedProject(seed, "p2", 2);
 
-        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.clearTable, { table: "todos" }));
-        const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
+        const body = await response.json<{ result: { count: number; hasMore: boolean } }>();
 
-        expect(body.result).toEqual({ deleted: 5, hasMore: false });
+        expect(body.result).toEqual({ count: 5, hasMore: false });
         expect(rowCount()).toBe(0);
         // The counter shadow table dropped to zero for both projects.
         await expect(seed.count("todos", { projectId: "p1" })).resolves.toBe(0);
@@ -3327,7 +3374,7 @@ describe("shardDO admin bulk delete", () => {
     it("rejects deleteRows without a table (400)", async () => {
         expect.assertions(1);
 
-        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, {}));
 
         expect(response.status).toBe(400);
@@ -3336,7 +3383,7 @@ describe("shardDO admin bulk delete", () => {
     it("maps an unknown table to a 404", async () => {
         expect.assertions(1);
 
-        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { table: "nope" }));
 
         expect(response.status).toBe(404);
@@ -3359,9 +3406,286 @@ describe("shardDO admin bulk delete", () => {
         const shard = new BareShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { table: "todos" }));
 
-        // The id collection succeeds, but the base `deleteRowThroughWriter`
-        // stub rejects the first row as an unknown table.
+        // The id collection succeeds, but the base `runShardWrite` stub rejects
+        // the first row as an unknown table.
         expect(response.status).toBe(404);
         await expect(response.json()).resolves.toMatchObject({ error: { code: "UNKNOWN_TABLE" } });
+    });
+
+    describe("patchRows", () => {
+        it("patches only the rows matching a filter, leaving the rest", async () => {
+            expect.assertions(3);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedProject(seed, "p1", 3);
+            await seedProject(seed, "p2", 2);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const response = await shard.fetch(
+                bulkRequest(ADMIN_FUNCTIONS.patchRows, {
+                    doc: { done: true },
+                    filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                    table: "todos",
+                }),
+            );
+
+            expect(response.status).toBe(200);
+
+            const body = await response.json<{ result: { count: number; cursor?: string; hasMore: boolean } }>();
+
+            expect(body.result).toMatchObject({ count: 3, hasMore: false });
+            // p1's three rows flipped; p2's two are untouched.
+            expect([doneCount("p1"), doneCount("p2")]).toStrictEqual([3, 0]);
+        });
+
+        it("advances past every batch when the patch leaves the rows still matching", async () => {
+            expect.assertions(2);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedProject(seed, "p1", 5);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            // The predicate is on `projectId`, but the patch writes `done` — so a
+            // patched row STILL matches. Only the keyset cursor moves the scan
+            // forward; without it every batch re-reads (and re-writes) the same
+            // first two rows and the last three never change.
+            let after: string | undefined;
+            let calls = 0;
+
+            do {
+                // eslint-disable-next-line no-await-in-loop -- draining the bounded op is inherently sequential, exactly as the studio's loop does it
+                const response = await shard.fetch(
+                    bulkRequest(ADMIN_FUNCTIONS.patchRows, {
+                        // `""` on the first call: its PRESENCE is what puts the id scan
+                        // into ordered keyset mode, so the returned cursor is a real
+                        // boundary rather than the last id of an arbitrary scan.
+                        after: after ?? "",
+                        doc: { done: true },
+                        filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                        limit: 2,
+                        table: "todos",
+                    }),
+                );
+
+                // eslint-disable-next-line no-await-in-loop -- see above
+                const body = await response.json<{ result: { count: number; cursor?: string; hasMore: boolean } }>();
+
+                after = body.result.cursor;
+                calls += 1;
+
+                if (!body.result.hasMore) {
+                    break;
+                }
+            } while (calls < 10);
+
+            // 5 rows at 2 per call: two full batches plus the remainder.
+            expect(calls).toBe(3);
+            expect(doneCount("p1")).toBe(5);
+        });
+
+        it("keeps the aggregate shadow table consistent (the patch goes through the writer)", async () => {
+            expect.assertions(2);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedProject(seed, "p1", 3);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await shard.fetch(
+                bulkRequest(ADMIN_FUNCTIONS.patchRows, {
+                    doc: { projectId: "p2" },
+                    filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                    table: "todos",
+                }),
+            );
+
+            // Re-keying the aggregate's grouping column is only reflected in the
+            // counter shadow table if the write went THROUGH the writer; a raw
+            // UPDATE would leave both counts stale.
+            await expect(seed.count("todos", { projectId: "p1" })).resolves.toBe(0);
+            await expect(seed.count("todos", { projectId: "p2" })).resolves.toBe(3);
+        });
+
+        it("rejects an empty doc rather than reporting rows it did not change (400)", async () => {
+            expect.assertions(2);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.patchRows, { doc: {}, table: "todos" }));
+
+            expect(response.status).toBe(400);
+            await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+        });
+
+        it("rejects patchRows without a table (400)", async () => {
+            expect.assertions(1);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.patchRows, { doc: { done: true } }));
+
+            expect(response.status).toBe(400);
+        });
+
+        it("re-runs live subscribers after a partially-applied batch fails", async () => {
+            expect.assertions(3);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedProject(seed, "p1", 3);
+
+            // A socket subscribed to the table the patch writes. `sent` captures the
+            // frames the flush pushes; the state below has no `waitUntil`, so the
+            // fan-out is awaited synchronously and is observable once `fetch` resolves.
+            const sent: string[] = [];
+            const socket = {
+                deserializeAttachment: () => {
+                    return { admin: true, subs: { "s-1": { args: { table: "todos" }, functionPath: ADMIN_FUNCTIONS.readTablePage, table: "todos" } } };
+                },
+                send: (data: string) => {
+                    sent.push(data);
+                },
+            } as unknown as WebSocket;
+
+            // Fail on the third row, after two have already committed — the writer
+            // commits per row. Without the flush in the engine's `finally` the tables
+            // those two rows touched stay un-drained, and this subscriber keeps serving
+            // pre-patch values until some unrelated later write happens to flush.
+            const shard = new FailingPatchShard({ ...state, getWebSockets: () => [socket] }, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, 2);
+            const response = await shard.fetch(
+                bulkRequest(ADMIN_FUNCTIONS.patchRows, {
+                    doc: { done: true },
+                    filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                    table: "todos",
+                }),
+            );
+
+            expect(response.status).toBe(500);
+            // The two rows before the failure are committed, not rolled back.
+            expect(doneCount("p1")).toBe(2);
+            // …and the subscriber was told, rather than being left on a stale read.
+            expect(sent.some((raw) => (JSON.parse(raw) as { type: string }).type === "data")).toBe(true);
+        });
+    });
+
+    describe("client drain against a real shard", () => {
+        /**
+         * Drives the STUDIO'S OWN drain loop (`shared/bulk-drain`) against a real
+         * `ShardDO` — no mock client, no hand-written server.
+         *
+         * This is the seam every other test in this feature stops short of. The
+         * studio's component tests mock the server; the tests above bypass the
+         * client. The one defect that reached `alpha` lived exactly between them: the
+         * client dropped its opening keyset cursor, the shard answered an unordered
+         * scan with a cursor anyway, and BOTH mocks had independently "corrected" the
+         * missing cursor into "ordered, from the top" — so neither could see it.
+         *
+         * Crossing the seam is what makes the ids matter: they are real
+         * `crypto.randomUUID()` values, so insertion order (what an unordered scan
+         * returns) is uncorrelated with id order (what a keyset walk assumes). An
+         * unordered opening batch therefore skips a random ~half of the table.
+         */
+        const drainThroughShard = async (
+            shard: ShardDO,
+            functionPath: string,
+            args: Record<string, unknown>,
+            openCursor?: string,
+        ): Promise<{ outcome: string; written: number }> => {
+            const drained = await drainBulkOp({
+                args,
+                maxBatches: 50,
+                openCursor,
+                query: async (batchArgs) => {
+                    const response = await shard.fetch(bulkRequest(functionPath, batchArgs));
+
+                    if (!response.ok) {
+                        throw new Error(`bulk op failed: ${response.status.toString()}`);
+                    }
+
+                    const body = await response.json<{ result: { count: number; cursor?: string; hasMore: boolean } }>();
+
+                    return body.result;
+                },
+            });
+
+            return { outcome: drained.outcome, written: drained.written };
+        };
+
+        it("patches every matching row when the patch leaves them matching", async () => {
+            expect.assertions(3);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            // Comfortably more than one server page (`limit: 5` below), so the drain
+            // must actually walk the keyset rather than finishing in one call.
+            await seedProject(seed, "p1", 23);
+            await seedProject(seed, "p2", 4);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            // The filter is on `projectId` and the write is on `done`, so every
+            // patched row STILL matches — the shape where the cursor is the only
+            // thing that advances the scan.
+            const { outcome, written } = await drainThroughShard(
+                shard,
+                ADMIN_FUNCTIONS.patchRows,
+                { doc: { done: true }, filters: [{ column: "projectId", operator: "eq", value: "p1" }], limit: 5, table: "todos" },
+                "",
+            );
+
+            expect(outcome).toBe("completed");
+            expect(written).toBe(23);
+            // Every p1 row, not the ~half an unordered opening scan would have left.
+            expect(doneCount("p1")).toBe(23);
+        });
+
+        it("drains a delete without a cursor, exactly as the client sends it", async () => {
+            expect.assertions(2);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedProject(seed, "p1", 12);
+            await seedProject(seed, "p2", 3);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const { written } = await drainThroughShard(shard, ADMIN_FUNCTIONS.deleteRows, {
+                filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                limit: 5,
+                table: "todos",
+            });
+
+            expect(written).toBe(12);
+            expect(rowCount()).toBe(3);
+        });
+    });
+
+    it("withholds a cursor from an unordered scan, so no caller can resume from a meaningless boundary", async () => {
+        expect.assertions(2);
+
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 3);
+
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // `deleteRows` sends no cursor, so its scan is unordered and the last id it
+        // saw is an arbitrary point in id space. Handing that back would invite a
+        // caller to resume from it and skip every matching row sorting below.
+        const unordered = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { limit: 2, table: "todos" }));
+
+        await expect(unordered.json<{ result: { cursor?: string } }>()).resolves.toStrictEqual({
+            result: { count: 2, hasMore: true },
+        });
+
+        // `patchRows` opens with `after: ""`, so its scan IS ordered and a cursor
+        // comes back.
+        const ordered = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.patchRows, { after: "", doc: { done: true }, limit: 2, table: "todos" }));
+        const body = await ordered.json<{ result: { cursor?: string } }>();
+
+        expect(body.result.cursor).toBeDefined();
     });
 });

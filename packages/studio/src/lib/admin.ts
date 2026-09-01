@@ -85,6 +85,7 @@ export const ADMIN_FUNCTIONS = {
     listTables: "__lunora_admin__:listTables",
     maskPolicies: "__lunora_admin__:maskPolicies",
     migrationStatus: "__lunora_admin__:migrationStatus",
+    patchRows: "__lunora_admin__:patchRows",
     pitrRestore: "__lunora_admin__:pitrRestore",
     readTablePage: "__lunora_admin__:readTablePage",
     replayQueueMessage: "__lunora_admin__:replayQueueMessage",
@@ -156,14 +157,21 @@ export interface WriteRowResult {
 }
 
 /**
- * Result of a bulk delete (`__lunora_admin__:deleteRows` /
- * `__lunora_admin__:clearTable`) op. `deleted` is the rows removed in this call;
- * `hasMore` is `true` when matching rows remain beyond the server's per-call
- * cap, so the caller loops a single bounded round-trip rather than deleting an
- * unbounded set at once.
+ * Result of any writer-routed bulk row op — `__lunora_admin__:deleteRows`,
+ * `clearTable`, `patchRows`. One shape for all three: `count` is the rows this
+ * call wrote, and `hasMore` is `true` when matching rows remain beyond the
+ * server's per-call cap, so the caller loops a single bounded round-trip rather
+ * than writing an unbounded set at once.
+ *
+ * `cursor` comes back ONLY from an op that sent one — today just `patchRows`. A
+ * delete drains because its own writes shrink the match set; a patch usually
+ * leaves the row matching, so without the cursor its loop would rewrite the same
+ * first batch until it hit its bound. The server withholds the cursor when the
+ * scan was unordered, so a caller can never resume from a meaningless boundary.
  */
-export interface BulkDeleteResult {
-    deleted: number;
+export interface BulkRowOpResult {
+    count: number;
+    cursor?: string;
     hasMore: boolean;
 }
 

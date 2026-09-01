@@ -106,6 +106,7 @@ const ADMIN_FUNCTIONS = {
     listWorkflows: "__lunora_admin__:listWorkflows",
     maskPolicies: "__lunora_admin__:maskPolicies",
     migrationStatus: "__lunora_admin__:migrationStatus",
+    patchRows: "__lunora_admin__:patchRows",
     pitrRestore: "__lunora_admin__:pitrRestore",
     rankBefore: "__lunora_admin__:rankBefore",
     rankPage: "__lunora_admin__:rankPage",
@@ -862,6 +863,13 @@ interface ReadTablePageOptions {
  * `[1, 500]`) so the delete can never run unbounded.
  */
 interface SelectMatchingIdsOptions {
+    /**
+     * Keyset cursor. Present ⇒ the scan is ordered by primary key and returns only
+     * ids strictly greater than this; absent ⇒ an unordered scan, as before. Open a
+     * keyset drain with `""`, which sorts below every real id — NOT with `undefined`,
+     * which turns the ordering off and makes the returned cursor meaningless.
+     */
+    after?: string;
     filters?: FilterClause[];
     limit?: number;
     search?: string;
@@ -1360,6 +1368,19 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
  * `limit + 1`-th row existed — so the caller can loop bounded server calls
  * rather than deleting an unbounded set in one transaction. With no `search`
  * and no `filters` this matches the whole table (the `clearTable` path).
+ *
+ * **Passing `after` switches the read into keyset mode**: the scan is ordered by
+ * primary key and resumes strictly after that id. A caller whose writes do NOT
+ * remove the row from the match set (the bulk-PATCH path) needs this or it
+ * re-reads its own first batch forever; it opens the drain with `after: ""`,
+ * which sorts below every real id.
+ *
+ * Omitting `after` leaves the read exactly as it was — an UNORDERED scan. That
+ * matters: the bulk-DELETE path does not need a cursor (its own deletes shrink
+ * the match set), and ordering it would trade its sequential table scan for an
+ * `id`-index walk plus a row seek per candidate, since the predicate reads
+ * `__doc__`, which that index does not cover. Keeping the mode on the caller
+ * keeps the delete's SQL byte-identical.
  */
 const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { hasMore: boolean; ids: string[] } => {
     const { table } = options;
@@ -1373,12 +1394,29 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     const needle = options.search?.trim() ?? "";
     const predicate = buildTablePredicate(columns, needle, options.filters);
 
+    const conditions: string[] = [];
+    const parameters: unknown[] = [];
+
+    if (predicate !== undefined) {
+        // Already parenthesised per conjunct by `buildTablePredicate`, so ANDing
+        // the cursor on can't bind tighter than an inner OR.
+        conditions.push(predicate.where);
+        parameters.push(...predicate.parameters);
+    }
+
+    if (options.after !== undefined) {
+        conditions.push("id > ?");
+        parameters.push(options.after);
+    }
+
+    const whereSql = conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`;
+    // Ordering rides with the cursor and only with it — see the module note above
+    // on why the uncursored (delete) read must keep its unordered scan.
+    const orderSql = options.after === undefined ? "" : " ORDER BY id";
+
     // Over-fetch by one: a returned `limit + 1`-th row means more matches remain
     // beyond this batch, surfaced as `hasMore` (the extra id is dropped).
-    const fetched =
-        predicate === undefined
-            ? sql.exec<{ id: string }>(`SELECT id FROM ${quoted} LIMIT ?`, limit + 1).toArray()
-            : sql.exec<{ id: string }>(`SELECT id FROM ${quoted} WHERE ${predicate.where} LIMIT ?`, ...predicate.parameters, limit + 1).toArray();
+    const fetched = sql.exec<{ id: string }>(`SELECT id FROM ${quoted}${whereSql}${orderSql} LIMIT ?`, ...parameters, limit + 1).toArray();
 
     const hasMore = fetched.length > limit;
     const ids = fetched.slice(0, limit).map((row) => row.id);

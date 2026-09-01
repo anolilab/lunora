@@ -4,7 +4,7 @@
  * A table's TTL policy names an epoch-millisecond column whose value (optionally
  * offset by `after`) is the row's expiry instant. The DO alarm periodically calls
  * {@link selectExpiredIds} to page the expired rows, then removes each THROUGH the
- * schema-aware writer (`deleteRowThroughWriter`) so companions/CDC/subscriptions
+ * schema-aware writer (`runShardWrite`) so companions/CDC/subscriptions
  * stay correct and a `.softDelete()` table soft-deletes (flips the marker) rather
  * than physically removing the row. On a soft-delete table already-deleted rows
  * are excluded from the scan so the sweep doesn't re-process tombstones.

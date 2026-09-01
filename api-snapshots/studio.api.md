@@ -64,6 +64,7 @@ const ADMIN_FUNCTIONS: {
     readonly listTables: "__lunora_admin__:listTables";
     readonly maskPolicies: "__lunora_admin__:maskPolicies";
     readonly migrationStatus: "__lunora_admin__:migrationStatus";
+    readonly patchRows: "__lunora_admin__:patchRows";
     readonly pitrRestore: "__lunora_admin__:pitrRestore";
     readonly readTablePage: "__lunora_admin__:readTablePage";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";

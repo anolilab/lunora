@@ -255,8 +255,8 @@ import type {
     QueueBindingHandle,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
-    RunShardBulkDeleteArgs,
-    RunShardBulkDeleteResult,
+    RunShardBulkRowArgs,
+    RunShardBulkRowResult,
     RunShardCdcSyncArgs,
     RunShardExportArgs,
     RunShardImportArgs,
@@ -277,6 +277,7 @@ import {
     parseApplyCdcArgs,
     parseAssigneeArgument,
     parseBulkDeleteArgs,
+    parseBulkPatchArgs,
     parseCdcSyncArgs,
     parseClearTableArgs,
     parseClientSeqHeader,
@@ -973,13 +974,14 @@ const ROOT_SHARD_NAME = "__root__";
 const ADMIN_WILDCARD = "*";
 
 /**
- * Hard server-side ceiling on rows removed per `deleteRows` / `clearTable` call.
- * The op never deletes more than this in one round-trip; the result's `hasMore`
- * tells the caller to loop. Bound TO `readTablePage`'s `MAX_PAGE_SIZE` (not just
- * documented as matching it) so one "delete matching" batch drains exactly one
- * full preview page's worth of rows and the two can't silently drift apart.
+ * Hard server-side ceiling on rows written per bulk admin call — `deleteRows`,
+ * `clearTable`, `patchRows`. The op never touches more than this in one
+ * round-trip; the result's `hasMore` tells the caller to loop. Bound TO
+ * `readTablePage`'s `MAX_PAGE_SIZE` (not just documented as matching it) so one
+ * "delete matching" / "set matching" batch drains exactly one full preview
+ * page's worth of rows and the two can't silently drift apart.
  */
-const SHARD_BULK_DELETE_CAP = MAX_PAGE_SIZE;
+const SHARD_BULK_ROW_CAP = MAX_PAGE_SIZE;
 
 /** Rows swept per TTL batch, and the max batches drained per alarm tick (bounds one sweep's work so it can't stall the shard). */
 const TTL_SWEEP_BATCH = 200;
@@ -2105,7 +2107,7 @@ abstract class ShardDO {
      * Subclasses implement function dispatch.
      *
      * `headroom` is an optional BY-VALUE override, mirroring
-     * {@link ShardDO.deleteRowThroughWriter}'s pattern: the main `/rpc` dispatch
+     * {@link ShardDO.runShardWrite}'s pattern: the main `/rpc` dispatch
      * (`handleFetchCloudflare`) captures its freshly-minted tracker in a LOCAL and
      * passes it here explicitly, so the ctx this dispatch builds never depends on
      * `this.currentTransactionHeadroom` still holding the right value by the time
@@ -2988,69 +2990,66 @@ abstract class ShardDO {
      * so it reports the table as unknown; the codegen-generated subclass overrides
      * this to run the op against a live `createShardCtxDb(...)` writer (which
      * maintains the FTS/aggregate/rank shadow tables and runs validators).
+     *
+     * The single seam every writer-routed single-row write goes through — a studio
+     * row edit, a bulk row op, a TTL expiry. `headroom` is an optional BY-VALUE
+     * meter: a normal `/rpc` dispatch omits it and the override falls back to
+     * `this.transactionHeadroom()`, while {@link ShardDO.pollTtlSweeps} (an alarm
+     * work item, no dispatch in flight) passes its own tracker explicitly.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
-    protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+    protected runShardWrite(args: RunShardWriteArgs, _headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
         return Promise.reject(new LunoraError("UNKNOWN_TABLE", `unknown table: ${args.table}`, { status: 404 }));
     }
 
     /**
-     * Delete one row by primary key THROUGH the schema-aware writer — the
-     * per-row seam {@link runShardBulkDelete} loops over. Routing each delete
-     * through the writer (not raw SQL) is the whole point: it keeps the FTS /
-     * aggregate / rank shadow tables in sync and fires `onDelete` cascades,
-     * exactly like {@link runShardWrite}'s single-row delete.
+     * The engine behind every writer-routed BULK row op — `deleteRows`,
+     * `clearTable`, `patchRows`. Collects one bounded batch of matching ids with
+     * the same predicate {@link readTablePage} previews, then hands each to
+     * `apply` ONE AT A TIME so the FTS / aggregate / rank shadow tables stay
+     * correct. Bounded to {@link SHARD_BULK_ROW_CAP} per call; `hasMore` tells
+     * the caller to loop rather than writing an unbounded set at once.
      *
-     * The base class can't build a writer without the user's `schema.ts`, so it
-     * reports the table as unknown; the codegen-generated subclass overrides
-     * this to call `writer.delete(id)` on a live `createShardCtxDb(...)` writer.
+     * The three ops differ only in the per-row call and in what they name the
+     * count, so they share this and rename `count` at the wire boundary.
      *
-     * `headroom` is an optional BY-VALUE override: {@link ShardDO.runShardBulkDelete}
-     * (a normal `/rpc` dispatch) omits it, so the override falls back to
-     * `this.transactionHeadroom()` — the per-dispatch meter every other write
-     * already uses. {@link ShardDO.pollTtlSweeps} (an alarm work item, no dispatch
-     * in flight) passes its own fresh tracker explicitly instead.
+     * `after` is the KEYSET CURSOR, passed explicitly rather than read off `args`
+     * so that "this scan was ordered" and "a cursor may be returned" cannot drift
+     * apart: a cursor comes back only when one went in. The last id of an
+     * UNORDERED scan is an arbitrary point in id space, and a caller resuming from
+     * it would skip every matching row sorting below it — silently.
+     *
+     * Applications are sequential by design — parallel writes to one DO would
+     * contend on OCC — so the per-row `await` is intentional. That also makes each
+     * row an interleaving point, so a mid-batch throw is reachable (an OCC
+     * conflict, or a `.unique()` column patched to a constant across two rows).
+     * Rows applied before it are ALREADY COMMITTED — the writer commits per row —
+     * so the caller must flush on the failure path too; {@link handleBulkRowOp}
+     * owns that, alongside every other admin arm's flush.
      */
-    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
-    protected deleteRowThroughWriter(_table: string, _id: string, _headroom?: TransactionHeadroomTracker): Promise<void> {
-        return Promise.reject(new LunoraError("UNKNOWN_TABLE", `unknown table: ${_table}`, { status: 404 }));
-    }
+    protected async runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>, after?: string): Promise<RunShardBulkRowResult> {
+        const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_ROW_CAP), 1), SHARD_BULK_ROW_CAP);
 
-    /**
-     * Bulk-delete the rows of `table` matching the active `filters`/`search`
-     * (or every row, for `clearTable`), bounded to {@link SHARD_BULK_DELETE_CAP}
-     * per call. Concrete in the base: it collects the matching ids with the same
-     * predicate {@link readTablePage} previews, then deletes them ONE AT A TIME
-     * through {@link deleteRowThroughWriter} so the FTS / aggregate / rank shadow
-     * tables stay correct. Returns `{ deleted, hasMore }` so the caller loops a
-     * single bounded round-trip rather than deleting an unbounded set at once.
-     *
-     * Deletes are sequential by design — parallel writes to one DO would contend
-     * on OCC — so the per-row `await` is intentional.
-     */
-    protected async runShardBulkDelete(args: RunShardBulkDeleteArgs): Promise<RunShardBulkDeleteResult> {
-        const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_DELETE_CAP), 1), SHARD_BULK_DELETE_CAP);
-
-        // Collect this batch's ids first (a read; raw SQL is fine), then remove
-        // each through the writer. `hasMore` reflects whether matches remained
-        // beyond `limit`, so the caller can loop to drain the rest.
+        // Collect this batch's ids first (a read; raw SQL is fine), then write
+        // each through the writer.
         const { hasMore, ids } = selectMatchingIds(this.sql as SqlExec, {
+            after,
             filters: args.filters,
             limit,
             search: args.search,
             table: args.table,
         });
 
-        let deleted = 0;
+        let count = 0;
 
         for (const id of ids) {
-            // Sequential: serialise writes to avoid OCC contention on this DO.
-            // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO
-            await this.deleteRowThroughWriter(args.table, id);
-            deleted += 1;
+            // eslint-disable-next-line no-await-in-loop -- see the note above: per-row writer calls must serialise to avoid OCC contention on the shard DO
+            await apply(id);
+            count += 1;
         }
 
-        return { deleted, hasMore };
+        // Only an ordered scan yields a resumable boundary — see the note above.
+        return { count, cursor: after === undefined ? undefined : ids.at(-1), hasMore };
     }
 
     /**
@@ -4141,7 +4140,7 @@ abstract class ShardDO {
 
     /**
      * Sweep every `.ttl()` table once: page the rows past their expiry and remove
-     * each THROUGH the schema-aware writer (`deleteRowThroughWriter`) so companions
+     * each THROUGH the schema-aware writer (`runShardWrite`) so companions
      * / CDC / live subscriptions stay correct and a `.softDelete()` table soft-deletes
      * instead of physically removing the row. Work is bounded per tick
      * ({@link TTL_SWEEP_BATCH} × {@link TTL_SWEEP_MAX_BATCHES}) so a large backlog
@@ -4182,7 +4181,7 @@ abstract class ShardDO {
                 const page = selectExpiredIds(sql, spec, now, TTL_SWEEP_BATCH);
 
                 for (const id of page.ids) {
-                    // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO (same reasoning as `runShardBulkDelete`)
+                    // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO (same reasoning as `runShardBulkRowOp`)
                     const limitHit = await this.deleteExpiredTtlRow(spec.table, id, headroom, trace);
 
                     if (limitHit) {
@@ -6786,6 +6785,92 @@ abstract class ShardDO {
     }
 
     /**
+     * Serve the writer-routed BULK row ops — `deleteRows`, `clearTable`,
+     * `patchRows`. One seam rather than three arms of {@link handleAdminRpc}'s
+     * dispatch chain, because all three share the same shape: parse a predicate,
+     * run a bounded batch THROUGH the schema-aware writer, flush the touched
+     * tables so live subscribers re-run, and audit the counts.
+     *
+     * The caller checks the three paths before calling, so this always answers.
+     */
+    private async handleBulkRowOp(functionPath: string, args: Record<string, unknown>): Promise<Response> {
+        let applied = 0;
+
+        try {
+            // `clearTable` is `deleteRows` with no predicate — the same
+            // writer-routed bounded loop, matching every row — so the two share an
+            // arm and differ only in which parser reads the args and which verb the
+            // audit carries. Neither resumes, so neither passes a cursor.
+            const isClear = functionPath === ADMIN_FUNCTIONS.clearTable;
+
+            if (isClear || functionPath === ADMIN_FUNCTIONS.deleteRows) {
+                const parsed = isClear ? parseClearTableArgs(args) : parseBulkDeleteArgs(args);
+                const result = await this.runShardBulkRowOp(parsed, async (id) => {
+                    await this.runShardWrite({ id, op: "delete", table: parsed.table });
+                    applied += 1;
+                });
+
+                this.recordAudit(isClear ? "clearTable" : "deleteRows", { table: parsed.table, detail: { deleted: result.count, hasMore: result.hasMore } });
+
+                return adminResponse(result);
+            }
+
+            const parsed = parseBulkPatchArgs(args);
+            // Each row goes through `runShardWrite` — the same single-row seam the
+            // studio's row editor uses — so the `.global()` guard, the validators
+            // and the reactive invalidation apply unchanged and codegen needs no
+            // second writer override.
+            //
+            // A row that vanished between the id scan and here is SKIPPED, not
+            // fatal: the scan and the write are separated by an `await` per row, so
+            // a concurrent client mutation, another operator, or this table's own
+            // `.ttl()` sweep can remove one mid-batch. The delete arm is already
+            // silent on a missing row (`writer.delete` is idempotent); this makes
+            // the patch arm match rather than 500 on a routine race.
+            const result = await this.runShardBulkRowOp(
+                parsed,
+                async (id) => {
+                    try {
+                        await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table });
+                        applied += 1;
+                    } catch (error) {
+                        if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND") {
+                            throw error;
+                        }
+                    }
+                },
+                parsed.after,
+            );
+
+            // Field NAMES only — the patched values are operator data.
+            this.recordAudit("patchRows", { table: parsed.table, detail: { fields: Object.keys(parsed.doc), hasMore: result.hasMore, patched: result.count } });
+
+            return adminResponse(result);
+        } catch (error) {
+            // Rows applied before the throw are ALREADY COMMITTED (the writer
+            // commits per row), so a privileged partial write still gets an audit
+            // record — otherwise a batch that wrote 200 rows and then failed leaves
+            // no trace at all.
+            if (applied > 0) {
+                this.recordAudit("bulkRowOpFailed", { table: typeof args["table"] === "string" ? args["table"] : undefined, detail: { applied } });
+            }
+
+            throw error;
+        } finally {
+            // Flushed here, alongside every other admin arm's flush, and on the
+            // failure path too: without it the tables a partial batch touched stay
+            // un-drained and live subscribers keep serving pre-write values until
+            // some unrelated later write happens to flush them.
+            //
+            // Swallowed rather than awaited bare: a flush rejection would REPLACE
+            // the per-row error above, losing which row actually failed.
+            await this.flushChangedTables().catch((flushError: unknown) => {
+                this.recordShapeError("bulkRowOp:flush", flushError);
+            });
+        }
+    }
+
+    /**
      * Serve a reserved admin-introspection RPC (`__lunora_admin__:*`) for the
      * data browser. Gated by `env.LUNORA_ADMIN_TOKEN`: introspection is
      * **disabled unless the token is configured**, and when it is, the request
@@ -6867,32 +6952,8 @@ abstract class ShardDO {
                 return adminResponse(result);
             }
 
-            if (functionPath === ADMIN_FUNCTIONS.deleteRows) {
-                const parsed = parseBulkDeleteArgs(args);
-                const result = await this.runShardBulkDelete(parsed);
-
-                // Every row was removed through the writer, which records each
-                // touched table; flush so live subscribers re-run against the
-                // shrunken set.
-                await this.flushChangedTables();
-
-                this.recordAudit("deleteRows", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
-
-                return adminResponse(result);
-            }
-
-            if (functionPath === ADMIN_FUNCTIONS.clearTable) {
-                const parsed = parseClearTableArgs(args);
-
-                // `clearTable` is `deleteRows` with no predicate — the same
-                // writer-routed bounded loop, matching every row.
-                const result = await this.runShardBulkDelete(parsed);
-
-                await this.flushChangedTables();
-
-                this.recordAudit("clearTable", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
-
-                return adminResponse(result);
+            if (functionPath === ADMIN_FUNCTIONS.deleteRows || functionPath === ADMIN_FUNCTIONS.clearTable || functionPath === ADMIN_FUNCTIONS.patchRows) {
+                return await this.handleBulkRowOp(functionPath, args);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.rankBefore) {
@@ -9985,7 +10046,9 @@ abstract class ShardDO {
     }
 
     /**
-     * Delete one expired row through {@link ShardDO.deleteRowThroughWriter},
+     * Delete one expired row through {@link ShardDO.runShardWrite}, passing this
+     * sweep's own by-value meter (an alarm has no dispatch in flight, so the
+     * override's `this.transactionHeadroom()` fallback would be `undefined`),
      * absorbing a `TRANSACTION_LIMIT_EXCEEDED` as "batch full" rather than
      * letting it propagate — split out of {@link ShardDO.pollTtlSweeps} to keep
      * that method's own complexity down. Returns `true` when the limit was hit
@@ -9995,7 +10058,7 @@ abstract class ShardDO {
      */
     private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker, trace?: TraceRefLike): Promise<boolean> {
         try {
-            await this.deleteRowThroughWriter(table, id, headroom);
+            await this.runShardWrite({ id, op: "delete", table }, headroom);
 
             return false;
         } catch (error) {
@@ -11190,8 +11253,9 @@ export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
 export type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
-    RunShardBulkDeleteArgs,
-    RunShardBulkDeleteResult,
+    RunShardBulkPatchArgs,
+    RunShardBulkRowArgs,
+    RunShardBulkRowResult,
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,

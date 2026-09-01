@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import type { ColumnMeta, FilterClause, TableInfo, TablePage, TablesColumnsResult } from "../../lib/admin";
+import type { ColumnMeta, FilterClause, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult, TablesIndexesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
 import { advisorSchemaFromColumns } from "../../lib/cascade-schema";
@@ -13,6 +13,7 @@ import { maskRow } from "../../lib/mask-preview";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
 import { useSqlAssistant } from "../sql/hooks/use-sql-assistant";
 import { backRelationKey, backRelationsFor } from "./back-relations";
+import { BulkPatchDialog } from "./bulk-patch-dialog";
 import { CascadePreviewDialog, MAX_ROWS_PER_TABLE } from "./cascade-preview";
 import DataBrowserPage from "./data-browser-page";
 import DataFacets from "./data-facets";
@@ -30,6 +31,14 @@ import { TableListSidebar } from "./table-list-sidebar";
 
 /** Browser-local store for per-table enabled reverse-relation columns. */
 const BACK_RELATIONS_KEY = "lunora-studio-back-relations";
+
+/**
+ * Columns covered by a single-column UNIQUE index. Only single-column ones: a
+ * composite unique index does not make its members individually unique, so
+ * flagging them would cry wolf on every ordinary bulk set.
+ */
+const uniqueColumnsFor = (indexes: ReadonlyArray<TableIndexInfo> | undefined): ReadonlySet<string> =>
+    new Set((indexes ?? []).filter((index) => index.unique === true && index.fields.length === 1).map((index) => index.fields[0] ?? ""));
 
 /** Hoisted empty schema map so an unresolved `describeTables` doesn't churn the resolver's identity. */
 const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
@@ -185,6 +194,13 @@ export const DataBrowser = ({
     // them. The EDGES are derived from schema metadata the studio can fetch once;
     // only the COUNTS need a per-page round trip.
     const schemaQuery = useAdminQuery<TablesColumnsResult>(ADMIN_FUNCTIONS.describeTables, {}, { shardKey: initialShardKey ?? "" });
+
+    // Declared indexes, for the one thing the column metadata cannot answer:
+    // which columns carry a UNIQUE index. Setting such a column to a constant
+    // across two or more matching rows is a guaranteed mid-batch constraint
+    // failure — a partial write — so the bulk-patch dialog warns before the
+    // operator commits rather than after the writer refuses.
+    const indexesQuery = useAdminQuery<TablesIndexesResult>(ADMIN_FUNCTIONS.listTablesIndexes, {}, { shardKey: initialShardKey ?? "" });
     const columnsByTable = schemaQuery.data?.columnsByTable ?? EMPTY_COLUMNS_BY_TABLE;
     const [backRelationsOn, setBackRelationsOn] = usePersistedValue<Record<string, string[]>>(BACK_RELATIONS_KEY, {});
 
@@ -377,6 +393,19 @@ export const DataBrowser = ({
 
     const onInsertGeneratedRows = (rows: ReadonlyArray<Record<string, unknown>>): Promise<InsertBatchOutcome> => insertBatch(rows, closeGenerateDialog);
 
+    // Bulk-patch dialog. Purely open/closed state — the browser model owns the
+    // predicate and the drain loop, so the dialog only has to hand back the
+    // one-field document to merge.
+    const [bulkPatchOpen, setBulkPatchOpen] = useState<boolean>(false);
+
+    const onOpenBulkPatch = (): void => {
+        setBulkPatchOpen(true);
+    };
+
+    const closeBulkPatch = (): void => {
+        setBulkPatchOpen(false);
+    };
+
     // Follow a `v.id` ref cell. Targets in another storage tier (a `.global()` D1
     // table) can't be read from this shard, so route those to the global tier via
     // `onNavigateToGlobal`; same-tier (shard) targets use the in-shard navigation.
@@ -493,6 +522,7 @@ export const DataBrowser = ({
                         editable={editable}
                         onAskAiFilter={askAiFilter}
                         onInspect={inspection.onInspect}
+                        onOpenBulkPatch={onOpenBulkPatch}
                         onOpenGenerateRows={onOpenGenerateRows}
                         onRowDelete={openCascadePreview}
                         onSaveQuery={saveCurrentQuery}
@@ -539,6 +569,18 @@ export const DataBrowser = ({
                     onClose={closeExpandedCell}
                     resolveUrl={storageColumns.has(expandedCell.column) ? resolveStorageUrl : undefined}
                     value={expandedCell.value}
+                />
+            )}
+
+            {bulkPatchOpen && selectedTable !== null && (
+                <BulkPatchDialog
+                    columns={browser.columns.filter((name) => browser.editableColumn(name))}
+                    onApply={browser.bulkPatch}
+                    onClose={closeBulkPatch}
+                    shardKey={browser.queryShardKey}
+                    table={selectedTable}
+                    total={browser.total}
+                    uniqueColumns={uniqueColumnsFor(indexesQuery.data?.indexesByTable[selectedTable])}
                 />
             )}
 

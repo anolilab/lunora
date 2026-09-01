@@ -3956,7 +3956,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     return;
                 }
 
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             const { docJson: existingJson, row: existing, tableName } = located;
@@ -4316,7 +4316,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     return;
                 }
 
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             const field = schema.tables[located.tableName]?.softDeleteMode?.field;
@@ -4371,7 +4371,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     return;
                 }
 
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             const { docJson: existingJson, row: previous, tableName } = located;
