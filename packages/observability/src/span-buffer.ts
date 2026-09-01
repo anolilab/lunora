@@ -86,6 +86,20 @@ export interface TraceSummary {
 }
 
 /**
+ * Normalize a caller-supplied ring capacity to a usable integer.
+ *
+ * `> 0` alone was not enough, in both directions. A fractional capacity passed
+ * that test and then truncated to ZERO, so the ring evicted every entry it was
+ * handed and capture was silently off. `Infinity` passed it too and truncates to
+ * itself, removing the memory bound the ring exists to impose — on a buffer that
+ * lives for the life of a Durable Object.
+ *
+ * Anything not a finite value of at least 1 therefore falls back to the default
+ * rather than being coerced into a degenerate ring.
+ */
+const normalizeCapacity = (capacity: number): number => (Number.isFinite(capacity) && capacity >= 1 ? Math.trunc(capacity) : DEFAULT_CAPACITY);
+
+/**
  * A bounded, in-memory ring of recent {@link SpanEvent}s (oldest evicted first),
  * mirroring `LogBuffer`. Spans arrive in *completion* order — a parent settles
  * after its children — so ordering is imposed by {@link foldTraces} at read
@@ -96,8 +110,21 @@ export class SpanBuffer {
 
     private readonly capacity: number;
 
+    /** How many spans the ring has evicted since it was last cleared. */
+    private droppedCount = 0;
+
     public constructor(capacity: number = DEFAULT_CAPACITY) {
-        this.capacity = capacity > 0 ? Math.trunc(capacity) : DEFAULT_CAPACITY;
+        this.capacity = normalizeCapacity(capacity);
+    }
+
+    /**
+     * Spans evicted for capacity since the last {@link SpanBuffer.clear}. The
+     * ring silently drops its oldest span once full, which makes a busy instance
+     * look identical to one that recorded exactly `capacity` spans; this count
+     * is the difference between the two.
+     */
+    public get dropped(): number {
+        return this.droppedCount;
     }
 
     /** Number of spans currently buffered. */
@@ -105,9 +132,10 @@ export class SpanBuffer {
         return this.buffer.length;
     }
 
-    /** Drop every buffered span. */
+    /** Drop every buffered span, including the eviction count. */
     public clear(): void {
         this.buffer.length = 0;
+        this.droppedCount = 0;
     }
 
     /** Snapshot of the buffered spans in insertion order. Fresh array per call. */
@@ -130,6 +158,7 @@ export class SpanBuffer {
 
         if (this.buffer.length > this.capacity) {
             this.buffer.shift();
+            this.droppedCount += 1;
         }
     }
 }

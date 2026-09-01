@@ -408,6 +408,7 @@ interface IssuesResult {
 ```ts
 class LogBuffer {
     constructor(capacity?: number);
+    get dropped(): number;
     get size(): number;
     clear(): void;
     entries(): LogEntry[];
@@ -746,6 +747,7 @@ type SecurityFindingLevel = "error" | "info" | "warning";
 ```ts
 class SpanBuffer {
     constructor(capacity?: number);
+    get dropped(): number;
     get size(): number;
     clear(): void;
     entries(): SpanEvent[];

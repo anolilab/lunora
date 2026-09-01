@@ -55,7 +55,7 @@ import { decodeWire } from "../../../shared/wire-codec";
 import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
-import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
+import { backfillSearchIndexesForTable, searchIndexCoversTable } from "./ctx-db-backfill";
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
 import { allocateCommitSeq, COMMIT_SEQ_FIELD } from "./ctx-db-commit-seq";
@@ -1218,6 +1218,42 @@ const compileOrderBySql = (keys: OrderKey[]): SQL => {
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
 
 /**
+ * The index fields a staged read still has to ORDER BY: `indexFields` minus the
+ * LEADING run the range builder pins with `.eq()`.
+ *
+ * A pinned column holds one value across every row the read can return, so
+ * ordering by it is semantically a no-op — but SQLite does not treat it as one.
+ * It will not drop an equality-pinned term from an ORDER BY over an EXPRESSION
+ * index, so `WHERE json_extract(...) = ? ORDER BY json_extract(...), _creationTime, id`
+ * still sorts every match into a temp B-tree even though the index is built in
+ * exactly that order. Measured on `node:sqlite`, 50k rows, 1k per key:
+ *
+ * ```
+ * ORDER BY <expr> ASC, _creationTime ASC, id ASC   63.4us  SEARCH (<expr>=?) | USE TEMP B-TREE FOR ORDER BY
+ * ORDER BY _creationTime ASC, id ASC               11.2us  SEARCH (<expr>=?)
+ * ORDER BY <expr> DESC, _creationTime DESC, id DESC 266.0us SEARCH (<expr>=?) | USE TEMP B-TREE FOR ORDER BY
+ * ORDER BY _creationTime DESC, id DESC              16.1us SEARCH (<expr>=?)
+ * ```
+ *
+ * Only a LEADING run is dropped: `.withIndex("by_channel_author", q => q.eq("channelId", c))`
+ * over a two-field index leaves `authorId` unpinned, and the order across
+ * distinct authors is the caller's, so it has to stay in the clause.
+ *
+ * A range (`.gt()`/`.lte()`) pins nothing — its column takes many values within
+ * the read — so it does not qualify.
+ */
+const unpinnedIndexFields = (stage: QueryStage): ReadonlyArray<string> => {
+    const pinned = new Set(stage.sqlConditions.filter((condition) => condition.comparator === "=").map((condition) => condition.field));
+    let start = 0;
+
+    while (start < stage.indexFields.length && pinned.has(stage.indexFields[start] ?? "")) {
+        start += 1;
+    }
+
+    return stage.indexFields.slice(start);
+};
+
+/**
  * Order keys for a paginated stage: the staged index, else creation order, in the
  * staged direction.
  *
@@ -1228,10 +1264,11 @@ const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte",
  */
 const paginateOrderKeys = (stage: QueryStage, shape: Record<string, ValidatorLike>): OrderKey[] => {
     const direction = stage.order;
+    const orderFields = unpinnedIndexFields(stage);
 
-    if (stage.indexFields.length > 0) {
+    if (orderFields.length > 0) {
         return normalizeOrderKeys(
-            stage.indexFields.map((field) => {
+            orderFields.map((field) => {
                 return { [field]: direction };
             }),
             shape,
@@ -1477,7 +1514,45 @@ const buildReader = (
         // `.filter()` runs on top, which narrows *within* that window rather than
         // widening the read.
         const engineLimit = resolveSearchScan(filtered ? undefined : limit);
-        const scored = isFtsAvailable(sql)
+        const viaFts = isFtsAvailable(sql);
+
+        // Refuse rather than answer from a half-built index. A NEW search index
+        // declared over a table that already holds rows covers a growing PREFIX
+        // of it (`id ASC`) until its backfill finishes, and every layout below
+        // queries the companion regardless — so a matching document past the
+        // cursor is simply absent from a result set that looks complete. That is
+        // the one outcome the search contract promises against.
+        //
+        // Only that case. An index REBUILDING under a changed analyzer profile
+        // holds every row throughout — the re-walk rewrites each one in place —
+        // and refusing there would take the table's search offline for the whole
+        // rebuild, which on a large table is thousands of reads and on an
+        // analyzer-version bump is every table at once. It serves, some rows
+        // still analyzed by the previous rules. `searchIndexCoversTable` is where
+        // the two are told apart.
+        //
+        // Not the LIKE fallback below: it is only equivalent while the candidate
+        // set fits `MAX_SEARCH_SCAN`, taking the newest window of a larger table
+        // and scoring that (its own comment says so, on the grounds that it never
+        // runs in a Durable Object). Routing a mid-backfill read onto it would
+        // swap one silent partial answer — the oldest rows — for another — the
+        // newest 1024 — on exactly the large tables the backfill is paged for.
+        //
+        // One `__lunora_search_state` primary-key read per search call — a second
+        // one only where the first says the walk is unfinished, which is the path
+        // that is about to refuse or serve a rebuild. Placed after the page above
+        // so it sees the progress this very read just made.
+        // Coverage is a property of the index, not of a row or a hit, so it is
+        // never asked per row or per result. A table small enough to index in one
+        // page is complete from its first migration and never reaches here.
+        if (viaFts && !searchIndexCoversTable(sql, tableName, search.definition)) {
+            throw new LunoraError(
+                "SEARCH_INDEX_BUILDING",
+                `search index "${search.indexName}" on table "${tableName}" is still backfilling and currently covers only part of the table — retry once it finishes, or run the backfillSearch admin operation to complete it now`,
+            );
+        }
+
+        const scored = viaFts
             ? searchViaFts(sql, tableName, search, engineLimit, scopeCondition)
             : searchViaScan(sql, tableName, search, engineLimit, scopeCondition);
 
@@ -1510,33 +1585,25 @@ const buildReader = (
         return finishSearchPage(runSearchFetch(searchPageScan(plan)), plan);
     };
 
-    const buildOrderClause = (): SQL => {
-        const orderFields = stage.indexFields.length > 0 ? stage.indexFields : ["_creationTime"];
-        const orderDirection = stage.order === "desc" ? "DESC" : "ASC";
-        const parts = orderFields.map((field) => dsql`${jsonPathSql(field)} ${dsql.raw(orderDirection)}`);
-
-        // Fall through to creation order, then id, for rows sharing every indexed
-        // value — the same total order `compileOrderBySql` gives the object-form
-        // read, and the same order the declared index is physically built in
-        // (`<fields>, _creationTime, id`), so it stays an index walk.
+    const buildOrderClause = (): SQL =>
+        // Literally the key list `paginateOrderKeys` builds, not a restatement of
+        // it. `.collect()` and `.paginate()` must agree on the order of tied rows
+        // or a page boundary skips or repeats them, and the tiebreak rule
+        // (`<index fields>, _creationTime, id`, minus the `.eq()`-pinned leading
+        // run) is already owned by `normalizeOrderKeys` — which is also where
+        // `buildSeek` reads it. Spelling it out again here is how the seek and
+        // the sort drift apart: the hand-rolled version used the stage direction
+        // for the tiebreak where `normalizeOrderKeys` derives it from
+        // `tiebreakDirectionFor`, which agree only because a staged read happens
+        // to have a uniform direction.
         //
-        // Without it the order of tied rows is whatever the engine returns, which
-        // is not stable: two messages written in the same millisecond and read
-        // back with `.withIndex("by_channel").order("asc")` came out in the order
-        // of their RANDOM server-minted ids. It looked deterministic only while
-        // the index could not satisfy the ORDER BY and SQLite sorted into a temp
-        // B-tree whose input order it happened to preserve.
-        if (!orderFields.includes("_creationTime")) {
-            parts.push(dsql`${jsonPathSql("_creationTime")} ${dsql.raw(orderDirection)}`);
-        }
-
-        if (!orderFields.some((field) => field === "_id" || field === "id")) {
-            // Same direction as everything above it — see `tiebreakDirectionFor`.
-            parts.push(dsql`${jsonPathSql("id")} ${dsql.raw(orderDirection)}`);
-        }
-
-        return dsql.join(parts, dsql`, `);
-    };
+        // Without any tiebreak the order of tied rows is whatever the engine
+        // returns, which is not stable: two messages written in the same
+        // millisecond and read back with `.withIndex("by_channel").order("asc")`
+        // came out in the order of their RANDOM server-minted ids. That looked
+        // deterministic only while the index could not satisfy the ORDER BY and
+        // SQLite sorted into a temp B-tree whose input order it preserved.
+        compileOrderBySql(paginateOrderKeys(stage, tableDefinition.shape));
 
     /**
      * Report this read's dependency footprint, once per terminal.

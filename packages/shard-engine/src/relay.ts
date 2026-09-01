@@ -35,6 +35,34 @@ import type { ShapeRowOp } from "./shape-global-diff";
  */
 const shapeRoutingKey = (name: string, args?: Record<string, unknown>): string => stableWireKey({ args: args ?? {}, name });
 
+/**
+ * The single canonical key for one relayed shape REGISTRATION — a
+ * `(relayIndex, connectionId, subId)` triple, as stored in the owner's proxy
+ * registry and in its durable twin.
+ *
+ * INVARIANT this relies on: `subId` is unique per connection for the life of that
+ * connection. The owner deletes by key with no incarnation check, and the release
+ * is posted from a `waitUntil` while a resubscribe travels on a separately
+ * resolved stub — so if a client ever reused a `subId` across an unsubscribe and
+ * a resubscribe on the SAME socket, a late release could reap the replacement and
+ * that subscription would silently stop receiving pokes. Clients mint these
+ * monotonically per instance (`shape_<n>` in `@lunora/client`) and the key is
+ * scoped by `connectionId`, so this is a protocol violation rather than a race
+ * the owner has to defend against, and its blast radius is the offending client's
+ * own subscription. Ordering the frames or versioning the registration would
+ * cost an incarnation field in every SDK's wire format to buy nothing for a
+ * conforming client.
+ *
+ * Same argument as {@link shapeRoutingKey} one function up, and the same cost of
+ * getting it wrong. The write site and the two reclamation sites (in-memory and
+ * durable, in two different modules) must produce byte-identical keys or the
+ * release silently matches nothing — and a registration that is never reclaimed
+ * is exactly what pins op-log retention forever, which is the leak the release
+ * path exists to close. Built here so a change to the separator or the field
+ * order cannot reach one site and not the others.
+ */
+const relayProxyKey = (relayIndex: number, connectionId: string, subId: string): string => `${String(relayIndex)}:${connectionId}:${subId}`;
+
 /** Whether a fan-out key is owner-served (the default) or has been promoted to a relay set. */
 type PromotionState = "owned" | "promoted";
 
@@ -169,6 +197,31 @@ interface RelayShapeSubscribe {
 }
 
 /**
+ * A relay tells the owner that one of its sockets no longer holds a relayed
+ * shape — an explicit `shape_unsubscribe`, or the socket closing. The owner
+ * drops the matching per-socket proxy registrations, in memory and from
+ * `__lunora_relay_shapes`.
+ *
+ * Without it, the only reclamation those rows ever got was the relay detaching
+ * (its LAST socket closing). A busy relay never detaches, `connectionId` is
+ * freshly minted per upgrade, and every registration pins the op-log retention
+ * floor (`OwnerRelay.minShapeCursor` is a min over the registry) — so one
+ * orphan on a quiet table holds `__cdc_log` retention at its cursor forever
+ * while the operator's retention setting appears to do nothing.
+ *
+ * `subId` scopes it to one subscription; absent means every shape held by that
+ * connection (the socket-close case). Cohort registrations are untouched: they
+ * belong to the relay set, not to any one socket, and are reclaimed on detach /
+ * full drain.
+ */
+interface RelayShapeUnsubscribe {
+    connectionId: string;
+    relayIndex: number;
+    subId?: string;
+    type: "relay_shape_unsubscribe";
+}
+
+/**
  * The owner's response to a {@link RelayShapeSubscribe}: the serialized poke
  * frames (pokeStart/pokePart…/pokeEnd) to send to the subscribing socket, plus
  * the **cohort frontier** the relay must stamp the socket's memo at. `cursor` is
@@ -217,10 +270,21 @@ interface RelayShapePoke {
 }
 
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe;
+type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
 
-export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, shapeRoutingKey };
-export type { OwnerRelayFrame, PromotionState, PromotionThresholds, RelayAttach, RelayDetach, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe };
+export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, relayProxyKey, shapeRoutingKey };
+export type {
+    OwnerRelayFrame,
+    PromotionState,
+    PromotionThresholds,
+    RelayAttach,
+    RelayDetach,
+    RelayFrame,
+    RelayShapePoke,
+    RelayShapeSeed,
+    RelayShapeSubscribe,
+    RelayShapeUnsubscribe,
+};
 // The DO-name contract lives in `shared/` so `@lunora/runtime` (which mints relay
 // names) and this package (which parses them) can't drift; re-exported so `./relay`
 // stays the single import surface for the relay tier inside `@lunora/do`.

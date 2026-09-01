@@ -37,6 +37,7 @@ import {
     explainIssue,
     foldTraces,
     formatTally,
+    FUNCTION_METRICS_MAX_PATHS,
     instrumentDatabase,
     ISSUE_STATE_TABLE,
     LogBuffer,
@@ -945,7 +946,7 @@ const streamFrames = (
 } => {
     return {
         ack: () => {
-            ws.send(JSON.stringify({ id, type: "ack" }));
+            trySendFrame(ws, JSON.stringify({ id, type: "ack" }));
         },
         // `generation` rides only durable chunks (an `undefined` key is dropped
         // by JSON.stringify) — the client echoes it on resume so the server can
@@ -1737,8 +1738,12 @@ abstract class ShardDO {
      * Per-function execution counters surfaced by the
      * `__lunora_admin__:getFunctionStats` RPC, keyed by `<file>:<function>`
      * path. Shares the `metrics` lifecycle: in-memory, reset on
-     * hibernation/restart. The map is naturally bounded by the app's registered
-     * function count (a finite set), so no eviction is needed. Maintained by
+     * hibernation/restart. `functionPath` is caller-controlled (the runtime
+     * forwards it unchecked), so the map is NOT bounded by the app's registered
+     * function count — every path that reaches a metrics-recording dispatch
+     * lands here, including one that resolves to nothing. `recordFunctionCall`
+     * therefore caps it at {@link FUNCTION_METRICS_MAX_PATHS} the same way the
+     * durable `__lunora_metrics` twin caps its table. Maintained by
      * `recordFunctionCall` at the one dispatch site that also bumps the
      * aggregate `metrics` counters.
      */
@@ -2018,8 +2023,21 @@ abstract class ShardDO {
         // (e.g. a malformed attachment in `lifecycleInfo`). The failure is held
         // rather than left in flight so a teardown step can't displace it, and
         // rethrown once cleanup is done.
+        //
+        // The two relay posts below are NOT held that way: they are logged and
+        // swallowed. They are fire-and-forget control frames by contract
+        // (`RelayHub.releaseRelayShapes` / `announceDrain`), so a dropped one
+        // leaves the registration to the coarser detach/full-drain reclamation
+        // — while a throw out of `webSocketClose` is a Durable Object close
+        // handler failing, which the runtime can only answer by breaking the
+        // actor, taking every OTHER live socket on this shard down with it.
+        // Trading a transient cross-DO post failure for that is a bad deal, and
+        // there is nobody to hand the rejection to anyway: the socket is
+        // already gone and nothing retries a close. The `webSocketMessage`
+        // sibling that releases a single shape reasons identically. A lifecycle
+        // hook throwing is a different class — that is the app's own code
+        // failing, and it still propagates.
         let dispatchError: { error: unknown } | undefined;
-        let relayError: { error: unknown } | undefined;
 
         try {
             if (attachment.connectionId !== undefined) {
@@ -2049,22 +2067,19 @@ abstract class ShardDO {
             this.shapeMemos.delete(ws);
             this.globalShapeSnapshots.delete(ws);
 
-            // Drop the durable global-shape and shape-poke-cursor baselines for
-            // this socket too — leaving them would orphan rows under a
-            // `connectionId` that can never reconnect (a fresh upgrade mints a
-            // new id), slowly leaking both tables.
-            if (attachment.connectionId !== undefined) {
-                try {
-                    deleteGlobalShapeSnapshotsForConnection(this.sql as SqlExec, attachment.connectionId);
-                } catch {
-                    /* stub sql / missing table — nothing durable to clean up */
-                }
+            this.purgeDurableSocketBaselines(attachment.connectionId);
 
-                try {
-                    deleteShapePokeCursorsForConnection(this.sql as SqlExec, attachment.connectionId);
-                } catch {
-                    /* stub sql / missing table — nothing durable to clean up */
-                }
+            // Release this socket's owner-side relayed-shape registrations
+            // BEFORE the attachment is cleared — the relay reads `connectionId`
+            // off it to address the release. Per-socket, so it covers the far
+            // more common case than the detach below: a relay that keeps other
+            // sockets never detaches, and each of its retired connections would
+            // otherwise leave a permanent row pinning op-log retention.
+            try {
+                await this.relay?.releaseRelayShapes(ws);
+            } catch (error) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay-shape release; a close handler must not reject (see above)
+                console.error("[@lunora/do] relay shape release failed during socket close:", error);
             }
 
             // Clear the attachment so a future reconnection starts clean.
@@ -2072,37 +2087,57 @@ abstract class ShardDO {
 
             // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
             // socket detaches from its owner, so the owner stops forwarding to it.
-            // The detach is a network post, so it can reject — hold that too
-            // rather than letting it escape the `finally` and replace a dispatch
-            // failure the caller still has to see.
+            // The detach is a network post, so it can reject — logged like the
+            // release above rather than escaping the `finally`, where it would
+            // both break the actor and displace a dispatch failure the caller
+            // still has to see.
             try {
                 await this.relay?.announceDrain(ws);
             } catch (error) {
-                relayError = { error };
+                // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay detach; a close handler must not reject (see above)
+                console.error("[@lunora/do] relay drain failed during socket close:", error);
             }
         }
 
-        // Rethrow outside the `finally` so neither failure can be lost to the
-        // other: a dispatch failure always wins (the relay one is only a
-        // diagnostic then), and a relay failure still surfaces on its own.
+        // Rethrown outside the `finally` so no teardown step can displace it.
         if (dispatchError !== undefined) {
-            if (relayError !== undefined) {
-                // eslint-disable-next-line no-console -- server-side diagnostic for a relay drain that failed behind a dispatch error
-                console.error("[@lunora/do] relay drain failed during socket close:", relayError.error);
-            }
-
             throw dispatchError.error;
-        }
-
-        if (relayError !== undefined) {
-            throw relayError.error;
         }
     }
 
-    /** Hibernation API: invoked on socket error. */
-    // eslint-disable-next-line class-methods-use-this -- Workers hibernation handler: the platform invokes it on the instance; the signature must stay an instance method
-    public webSocketError(_ws: ShardSocketLike, _error: unknown): void {
-        // Subclasses can override with proper logging. Avoid throwing.
+    /**
+     * Hibernation API: invoked on socket error — and, for an error-terminated
+     * socket, invoked INSTEAD OF {@link ShardDO.webSocketClose}, not before it.
+     *
+     * workerd's hibernation manager dispatches exactly one termination event per
+     * socket (`legacy-hibernation-manager.c++`, `handleSocketTermination`): a
+     * premature `DISCONNECTED` becomes a synthetic 1006 close event, and EVERY
+     * other exception — a protocol error, an event timeout, a `webSocketMessage`
+     * handler that threw — becomes an error event with no close to follow. So
+     * the teardown `webSocketClose` owns (the `onDisconnect` dispatch, the
+     * per-socket memos, and the durable `__shape_poke_cursor` /
+     * `__lunora_global_shape_snapshot` rows keyed by a `connectionId` that can
+     * never reconnect) has to run from here too. One orphaned poke-cursor row
+     * pins `minShapePokeCursor` — a `SELECT MIN(cursor)` over the whole table —
+     * and with it the CDC log's retention floor, permanently.
+     *
+     * Delegating is safe to run twice: `webSocketClose` clears the attachment,
+     * so a second pass finds no `connectionId` and does nothing.
+     *
+     * The error handler must not throw (the runtime is already tearing the
+     * socket down and there is nothing left to retry), so a teardown failure is
+     * logged rather than propagated. Subclasses overriding this for logging must
+     * call `super.webSocketError(...)` or the rows above leak.
+     */
+    public async webSocketError(rawSocket: WebSocket, error: unknown): Promise<void> {
+        try {
+            // 1006 / `wasClean: false` — the same shape workerd synthesizes for
+            // the disconnect half of this branch.
+            await this.webSocketClose(rawSocket, 1006, "websocket error", false);
+        } catch (teardownError) {
+            // eslint-disable-next-line no-console -- server-side diagnostic: the socket is already gone, so there is nothing to propagate a teardown failure to
+            console.error("[@lunora/do] socket error teardown failed:", teardownError, "(original socket error:", error, ")");
+        }
     }
 
     /**
@@ -3501,8 +3536,16 @@ abstract class ShardDO {
             // Throttled GC: drop dedup rows past the retention window at most once
             // per interval per warm instance.
             if (now - this.lastIdempotencyTrimAt > IDEMPOTENCY_GC_INTERVAL_MS) {
-                trimIdempotent(this.sql as SqlExec, now - IDEMPOTENCY_RETENTION_MS);
+                // Stamp BEFORE the sweep, not after: the throttle guard is the
+                // only thing that stops this running again, so a trim that
+                // throws must still push the next attempt out by a full
+                // interval. Stamping after left a persistently failing
+                // full-scan DELETE re-running inside every subsequent
+                // mutation's write transaction, swallowed by the catch below
+                // and getting more expensive each time. Both siblings
+                // (`durable-stream-runner.trim`, `cdc-retention`) stamp first.
                 this.lastIdempotencyTrimAt = now;
+                trimIdempotent(this.sql as SqlExec, now - IDEMPOTENCY_RETENTION_MS);
             }
         } catch {
             // Missing dedup table (pre-migration shard / test stub) or a stub
@@ -3952,6 +3995,26 @@ abstract class ShardDO {
             } catch {
                 /* stub sql / missing table — nothing durable to clean up */
             }
+        }
+
+        // The relayed twin of those two deletes. A socket on a RELAY registers
+        // its shape in the OWNER's `__lunora_relay_shapes`, which this DO cannot
+        // reach with a local DELETE — and nothing else reclaims that row until
+        // the whole relay detaches, while every surviving row pins the op-log
+        // retention floor (`OwnerRelay.minShapeCursor`). Fire-and-forget through
+        // `waitUntil`: it is a cross-DO post, the unsubscribe must not block on
+        // it, and it is a no-op on an owner.
+        const released = this.relay?.releaseRelayShapes(ws, subId).catch((error: unknown) => {
+            // Never reject out of here: this runs under `webSocketMessage`,
+            // where a throw is a fatal-channel error. The release is
+            // best-effort anyway — a dropped frame leaves the registration to
+            // the coarser detach/full-drain reclamation.
+            // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay-shape release
+            console.error("[@lunora/do] relay shape release failed:", error);
+        });
+
+        if (released !== undefined) {
+            this.shardHost.waitUntil?.(released);
         }
     }
 
@@ -5167,7 +5230,7 @@ abstract class ShardDO {
         const rawSize = typeof message === "string" ? message.length : message.byteLength;
 
         if (rawSize > MAX_WS_FRAME_UNITS) {
-            ws.send(JSON.stringify({ message: "frame too large", type: "error" }));
+            trySendFrame(ws, JSON.stringify({ message: "frame too large", type: "error" }));
 
             return;
         }
@@ -5178,7 +5241,7 @@ abstract class ShardDO {
         try {
             envelope = JSON.parse(text) as SubscriptionEnvelope;
         } catch {
-            ws.send(JSON.stringify({ message: "invalid envelope", type: "error" }));
+            trySendFrame(ws, JSON.stringify({ message: "invalid envelope", type: "error" }));
 
             return;
         }
@@ -5281,7 +5344,7 @@ abstract class ShardDO {
             // socket that only cleared the user-subscription gate must never be
             // able to read admin data by naming a reserved functionPath.
             if (isAdmin && this.readAttachment(ws).admin !== true) {
-                ws.send(JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
+                trySendFrame(ws, JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
 
                 return;
             }
@@ -5303,18 +5366,15 @@ abstract class ShardDO {
                 // A malformed tagged payload (over-long bigint, over-deep nesting)
                 // must not throw out of `webSocketMessage` — surface a structured
                 // error frame instead, mirroring the persist-failure path.
-                try {
-                    ws.send(
-                        JSON.stringify({
-                            code: "BAD_SUBSCRIPTION_ARGS",
-                            error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
-                            id: envelope.id,
-                            type: "error",
-                        }),
-                    );
-                } catch {
-                    // Socket may already be closed; never throw out of webSocketMessage.
-                }
+                trySendFrame(
+                    ws,
+                    JSON.stringify({
+                        code: "BAD_SUBSCRIPTION_ARGS",
+                        error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+                        id: envelope.id,
+                        type: "error",
+                    }),
+                );
 
                 return;
             }
@@ -5328,17 +5388,12 @@ abstract class ShardDO {
                         ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
                         : "failed to persist subscription attachment";
 
-                try {
-                    ws.send(JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
-                } catch {
-                    // Socket may already be closed; nothing else we can do —
-                    // never let the webSocketMessage handler throw.
-                }
+                trySendFrame(ws, JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
 
                 return;
             }
 
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+            trySendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }));
 
             // Seed the subscriber with the query's current result so the first
             // value arrives over the same channel as later updates. When the
@@ -5376,7 +5431,7 @@ abstract class ShardDO {
 
         if (envelope.type === "shape_unsubscribe") {
             this.shapeUnsubscribe(ws, envelope.id);
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+            trySendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }));
 
             return;
         }
@@ -5386,7 +5441,7 @@ abstract class ShardDO {
             // anything matching the admin prefix is rejected up front rather
             // than allowed to slip through executeStream().
             if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                ws.send(JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
+                trySendFrame(ws, JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
 
                 return;
             }
@@ -5481,7 +5536,7 @@ abstract class ShardDO {
             }
 
             this.unsubscribe(ws, envelope.id);
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+            trySendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }));
         }
     }
 
@@ -6532,6 +6587,36 @@ abstract class ShardDO {
     }
 
     /**
+     * Drop the durable global-shape and shape-poke-cursor baselines a closing
+     * socket leaves behind. Leaving them orphans rows under a `connectionId`
+     * that can never reconnect (a fresh upgrade mints a new id), slowly leaking
+     * both tables — and an orphaned poke cursor also pins `minShapePokeCursor`,
+     * and with it the CDC log's retention floor. No-op for a socket that never
+     * recorded a connection id (it wrote no rows to begin with).
+     *
+     * Each delete is swallowed on its own: a stub `sql` handle or a
+     * pre-migration shard has nothing durable to clean up, and neither may fail
+     * the close path.
+     */
+    private purgeDurableSocketBaselines(connectionId: string | undefined): void {
+        if (connectionId === undefined) {
+            return;
+        }
+
+        try {
+            deleteGlobalShapeSnapshotsForConnection(this.sql as SqlExec, connectionId);
+        } catch {
+            /* stub sql / missing table — nothing durable to clean up */
+        }
+
+        try {
+            deleteShapePokeCursorsForConnection(this.sql as SqlExec, connectionId);
+        } catch {
+            /* stub sql / missing table — nothing durable to clean up */
+        }
+    }
+
+    /**
      * Fold one dispatch into the per-function counters keyed by `functionPath`,
      * creating the entry on first sight. `errorMessage` is supplied only when
      * the handler threw, in which case the failure counters advance too. The
@@ -6632,6 +6717,17 @@ abstract class ShardDO {
         }
 
         if (existing === undefined) {
+            // Distinct-path cap, mirroring the durable twin's
+            // `FUNCTION_METRICS_MAX_PATHS` admission rule: `functionPath` is
+            // caller-controlled, and the recording paths that never resolve it
+            // (the idempotency cache hit, the watermark short-circuit) can be
+            // driven with a fresh path per request. Refuse the new path rather
+            // than evict — protecting the incumbents is the reason the cap
+            // exists, exactly as `admitPath` argues on the durable side.
+            if (this.functionStats.size >= FUNCTION_METRICS_MAX_PATHS) {
+                return;
+            }
+
             this.functionStats.set(functionPath, stat);
         }
     }
@@ -8399,7 +8495,10 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getLogs) {
-            return { entries: this.logs.entries() };
+            // `dropped` rides along so the panel can say "newest 500 of N" — a
+            // full ring is otherwise indistinguishable from an instance that
+            // logged exactly 500 lines.
+            return { dropped: this.logs.dropped, entries: this.logs.entries() };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getTraces) {
@@ -8410,7 +8509,9 @@ abstract class ShardDO {
             // `DEFAULT_TRACE_LIMIT` shown is only part of the ring.
             const folded = foldTraces(this.spans.entries());
 
-            return { total: folded.total, traces: folded.traces };
+            // `dropped` counts spans the ring evicted before this read, so a
+            // truncated waterfall reads as truncated rather than as complete.
+            return { dropped: this.spans.dropped, total: folded.total, traces: folded.traces };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getMetricSeries) {
@@ -8715,7 +8816,7 @@ abstract class ShardDO {
         const iterable = this.executeStream(functionPath, args);
 
         if (!iterable) {
-            ws.send(JSON.stringify({ error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` }, id, type: "error" }));
+            trySendFrame(ws, JSON.stringify({ error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` }, id, type: "error" }));
 
             return;
         }
@@ -8727,17 +8828,14 @@ abstract class ShardDO {
         // canceller map, so a flurry of rejections can't push the count
         // past the cap.
         if (cancellers.size >= ShardDO.MAX_STREAMS_PER_SOCKET) {
-            try {
-                ws.send(
-                    JSON.stringify({
-                        error: { code: "TOO_MANY_STREAMS", message: `stream cap of ${String(ShardDO.MAX_STREAMS_PER_SOCKET)} reached on this socket` },
-                        id,
-                        type: "error",
-                    }),
-                );
-            } catch {
-                /* socket may be closed */
-            }
+            trySendFrame(
+                ws,
+                JSON.stringify({
+                    error: { code: "TOO_MANY_STREAMS", message: `stream cap of ${String(ShardDO.MAX_STREAMS_PER_SOCKET)} reached on this socket` },
+                    id,
+                    type: "error",
+                }),
+            );
 
             return;
         }
@@ -8751,7 +8849,7 @@ abstract class ShardDO {
         const controller = new AbortController();
 
         cancellers.set(id, controller);
-        ws.send(JSON.stringify({ id, type: "ack" }));
+        trySendFrame(ws, JSON.stringify({ id, type: "ack" }));
 
         try {
             for await (const chunk of iterable.iterator(controller.signal)) {
@@ -8784,7 +8882,8 @@ abstract class ShardDO {
                 console.error("[@lunora/do] unhandled stream error:", error);
             }
 
-            ws.send(
+            trySendFrame(
+                ws,
                 JSON.stringify({
                     error: { code: body.code, message: body.message },
                     id,
@@ -9308,7 +9407,7 @@ abstract class ShardDO {
             this.seedSubscriptionMemo(ws, subId, outcome);
 
             try {
-                ws.send(`{"type":"resume","id":${JSON.stringify(subId)}${cdcSuffix(resume.cursor ?? 0, epoch)}}`);
+                trySendFrame(ws, `{"type":"resume","id":${JSON.stringify(subId)}${cdcSuffix(resume.cursor ?? 0, epoch)}}`);
             } catch {
                 /* socket may have closed between the ack and this seed */
             }
@@ -9381,7 +9480,7 @@ abstract class ShardDO {
         // Both persistence and seeding succeeded — ack last (the client keys pokes
         // by shape id, not the ack, so the seed poke arriving first is fine).
         try {
-            ws.send(JSON.stringify({ id: subId, type: "ack" }));
+            trySendFrame(ws, JSON.stringify({ id: subId, type: "ack" }));
         } catch {
             /* socket may already be closed; never throw out of webSocketMessage */
         }
@@ -9391,7 +9490,7 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- groups with the shape-subscribe flow; uses only its args + the socket
     private sendShapeSubscribeError(ws: ShardSocketLike, subId: string, code: string, message: string): void {
         try {
-            ws.send(JSON.stringify({ code, error: { code, message }, id: subId, type: "error" }));
+            trySendFrame(ws, JSON.stringify({ code, error: { code, message }, id: subId, type: "error" }));
         } catch {
             /* socket may already be closed; never throw out of webSocketMessage */
         }

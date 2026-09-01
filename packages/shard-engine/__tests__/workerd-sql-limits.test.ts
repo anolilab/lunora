@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import type { SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { runSql } from "../src/do-exec";
-import { renderSql, sqliteInList, unionAll } from "../src/drizzle";
+import { renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "../src/drizzle";
+import { buildSeekBeforeWhere, buildSeekWhere } from "../src/query-args";
 import { compileWhereSql } from "../src/where-sql";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -252,6 +253,42 @@ describe("bound-parameter cap", () => {
         } finally {
             harness.close();
         }
+    });
+
+    it("keeps a bounded page over the widest orderBy under the cap, seek included", () => {
+        expect.assertions(3);
+
+        // `@lunora/server`'s list args cap `orderBy` at 8 keys; `normalizeOrderKeys`
+        // splices `_creationTime` in and `buildSeek` appends the `id` tiebreak, so
+        // the widest reachable seek is 10 columns. A reactive page ANDs TWO of
+        // them — the cursor's lower bound and the fixed end cursor's upper one.
+        //
+        // Flattened, that seek bound `k(k+1)/2` parameters each, so the pair spent
+        // 110 against Workerd's cap of 100 and the statement failed to PREPARE
+        // with a bare `SQLITE_ERROR` — a broken page, not a slow one. Nested, it
+        // is `2k-1` each.
+        const keys = [
+            ...Array.from({ length: 8 }, (_, index) => {
+                return { direction: "asc" as const, field: `f${String(index)}`, nullable: false };
+            }),
+            { direction: "asc" as const, field: "_creationTime", nullable: false },
+        ];
+        const values = [...keys.map((_, index) => index), "row_1"];
+
+        const page = { AND: [buildSeekWhere(keys, values), buildSeekBeforeWhere(keys, values)] };
+        const { params } = renderSql("sqlite", compileWhereSql(page, strategy)!);
+
+        expect(params.length).toBeLessThanOrEqual(WORKERD_SQLITE_LIMITS.boundParams);
+        // 10 columns: (2 * 10 - 1) for the nested seek + 1 for the redundant
+        // leading bound, twice over.
+        expect(params).toHaveLength(40);
+
+        // And the list budget shrinks to match, rather than assuming a fixed half
+        // of the cap is free: the two together must still fit.
+        const items = Array.from({ length: 40 }, (_, index) => `id-${String(index)}`);
+        const withList = renderSql("sqlite", compileWhereSql({ AND: [page, { tag: { in: items } }] }, strategy)!);
+
+        expect(withList.params.length).toBeLessThanOrEqual(WORKERD_SQLITE_LIMITS.boundParams);
     });
 
     it("splits the list budget across every `in` in one `where`, not per list", () => {

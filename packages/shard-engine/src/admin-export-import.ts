@@ -13,6 +13,7 @@
  */
 import { toErrorBody } from "@lunora/errors";
 
+import { COMMIT_SEQ_FIELD } from "./ctx-db-commit-seq";
 import type { DatabaseWriterLike, SchemaLike } from "./schema-types";
 
 /** One NDJSON line: a row from `table` shaped per its schema. */
@@ -223,9 +224,26 @@ const idAlreadyExists = async (writer: DatabaseWriterLike, explicitId: string): 
     }
 };
 
+/**
+ * Drop the system fields the writer re-derives on insert.
+ *
+ * `_commitSeq` is injected into the stored document of every `.commitOrdered()`
+ * table (see `ctx-db-commit-seq.ts`) and so rides out on export — but it is
+ * neither a framework field nor declared in `definition.shape`, so validation
+ * rejected it as an "unexpected field" and EVERY row of such a table failed to
+ * restore (with the request still returning 200 and an `errors` array).
+ *
+ * Stripped rather than tolerated: the value is a PER-SHARD counter, so replaying
+ * one shard's numbering into another would break the `_commitSeq > cursor`
+ * monotonicity the changefeed depends on. `insert` allocates a fresh one.
+ */
+const stripDerivedFields = (document: Record<string, unknown>): Record<string, unknown> =>
+    COMMIT_SEQ_FIELD in document ? Object.fromEntries(Object.entries(document).filter(([key]) => key !== COMMIT_SEQ_FIELD)) : document;
+
 /** Validate, conflict-check and insert one inbound row, returning its outcome. */
 const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ExportRow, line: number): Promise<RowOutcome> => {
-    const { doc, table } = row;
+    const { table } = row;
+    let { doc } = row;
 
     if (typeof table !== "string" || table.length === 0) {
         return { error: { code: "BAD_ROW", line, message: "row is missing `table`", table }, kind: "error" };
@@ -235,6 +253,8 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row:
     if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
         return { error: { code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table }, kind: "error" };
     }
+
+    doc = stripDerivedFields(doc);
 
     const failure = validateImportRow(schema, table, doc);
 

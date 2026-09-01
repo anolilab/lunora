@@ -63,12 +63,21 @@ const createFakeStorage = (): FakeStorage => {
 };
 
 interface TestContext {
-    auth: { roles: string[]; userId: null | string };
+    auth: { getIdentity?: () => Promise<Record<string, unknown> | null>; userId: null | string };
     storage: FakeStorage["storage"];
 }
 
+// Roles reach a rule only as the `roles` claim on the resolved identity.
 const makeContext = (fake: FakeStorage, userId: null | string, roles: string[] = []): TestContext => {
-    return { auth: { roles, userId }, storage: fake.storage };
+    return {
+        auth: {
+            getIdentity: async () => {
+                return { roles, userId };
+            },
+            userId,
+        },
+        storage: fake.storage,
+    };
 };
 
 const rulesForTest = <Context>(rules: ReadonlyArray<StorageRule<Context>>): Middleware<any, any> =>
@@ -332,12 +341,12 @@ const createBucketedFakeStorage = (): BucketedFakeStorage => {
 };
 
 interface BucketedContext {
-    auth: { roles: string[]; userId: null | string };
+    auth: { getIdentity?: () => Promise<Record<string, unknown> | null>; userId: null | string };
     storage: BucketedFakeAccessor;
 }
 
 const makeBucketedContext = (fake: BucketedFakeStorage, userId: null | string): BucketedContext => {
-    return { auth: { roles: [], userId }, storage: fake.storage };
+    return { auth: { userId }, storage: fake.storage };
 };
 
 describe("storageRules — bucket scoping", () => {
@@ -412,7 +421,7 @@ describe("storageRules — allowlist (privileged methods dropped)", () => {
         };
 
         let exposed: Record<string, unknown> = {};
-        const context = { auth: { roles: [], userId: "u1" }, storage: backing };
+        const context = { auth: { userId: "u1" }, storage: backing };
         const handler = lunora.action.use(rulesForTest([rule])).action(async ({ ctx }) => {
             exposed = ctx.storage;
         });

@@ -561,6 +561,87 @@ describe("dispatchQueueBatch — poison message isolation (deterministic dispatc
         });
     });
 
+    it("logs the drop even with NO capture sink configured — the production shape", async () => {
+        expect.assertions(4);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+            const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+            // No `capture`: `shouldCaptureQueue(env)` needs an explicit
+            // `LUNORA_QUEUE_CAPTURE=1` or a dev-shaped `WORKER_ENV`, so a
+            // production deployment passes `undefined` and the capture record
+            // that describes the drop is never built. The ack is terminal — no
+            // retry, no DLQ — so without a log the message vanishes with no
+            // signal anywhere.
+            await expect(
+                dispatchQueueBatch(
+                    batch("q", [m1, m2]),
+                    { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                    { env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 404, "NOT_FOUND") },
+                ),
+            ).resolves.toBeUndefined();
+
+            expect(m2.acked).toBe(true);
+            expect(error).toHaveBeenCalledTimes(1);
+            expect(error.mock.calls[0]?.[0]).toContain("dropped message m2");
+        } finally {
+            error.mockRestore();
+        }
+    });
+
+    it("redacts the dropped-message log and names the real disposition", async () => {
+        expect.assertions(6);
+
+        // A non-envelope 4xx body: `toDispatchError` cannot parse it, so it
+        // falls back to an INTERNAL-coded error carrying the upstream response
+        // text VERBATIM. That text is whatever the upstream wrote — here a
+        // bearer token — and the drop log is a Workers log line, so it must go
+        // through the same redaction every other error-to-output path uses.
+        const secret = "Bearer sk-live-4f9c1a";
+        const leakyFetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+            const { args } = JSON.parse((init?.body ?? "{}") as string) as { args?: { id?: string } };
+
+            if (args?.id === "m2") {
+                return new Response(`upstream rejected: authorization=${secret}`, { status: 400 });
+            }
+
+            return Response.json({ ok: true });
+        }) as typeof fetch;
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+            const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+            await expect(
+                dispatchQueueBatch(
+                    batch("q", [m1, m2]),
+                    { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                    { env: DISPATCH_ENV, fetchImpl: leakyFetch },
+                ),
+            ).resolves.toBeUndefined();
+
+            expect(m2.acked).toBe(true);
+            expect(error).toHaveBeenCalledTimes(1);
+
+            const logged = (error.mock.calls[0] ?? []).map((part) => (part instanceof Error ? part.message : String(part))).join(" ");
+
+            expect(logged).toContain("dropped message m2");
+            // Redacted to its code — the raw upstream body never reaches the log.
+            expect(logged).not.toContain(secret);
+            // And the disposition is named exactly: a deterministic dispatch
+            // failure, NOT an exhausted retry budget. An operator told the wrong
+            // one goes looking in a dead-letter queue this message never enters.
+            expect(logged).toContain("deterministic 400 (INTERNAL");
+        } finally {
+            error.mockRestore();
+        }
+    });
+
     it("keeps an explicit ack the handler already made and only retries the genuinely undecided message", async () => {
         expect.assertions(5);
 

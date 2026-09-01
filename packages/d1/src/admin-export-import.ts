@@ -153,6 +153,44 @@ const exportGlobalRows = async function* (exec: D1Exec, schema: SchemaLike, args
     }
 };
 
+/**
+ * Structural read of a validator's `.nullable()` flag — `.nullable()` is the one
+ * thing that clears `notNull`.
+ */
+const acceptsNull = (validator: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } | undefined): boolean =>
+    validator?._meta?.column?.notNull === false;
+
+/**
+ * Drop `null`s that mean "this optional field was never set".
+ *
+ * A `.global()` table stores real columns, so an unset `v.optional(...)` field is
+ * a SQL NULL. Snapshots taken before the export decoder learned that (see
+ * `nullMeansAbsent` in `@lunora/sql-store`) carry `"field": null` on the wire —
+ * and `optional(string).parse(null)` throws, so every row that simply had no
+ * value for an optional column was rejected on restore and silently missing from
+ * the restored table. Normalised once, here, so both the validation below and the
+ * writer see the field as absent, which is what it was.
+ *
+ * A `.nullable()` column keeps its `null`: there it is a value, not an absence.
+ */
+const normalizeUnsetOptionals = (definition: SchemaLike["tables"][string], document: Record<string, unknown>): Record<string, unknown> => {
+    const unset = new Set<string>();
+
+    for (const [field, validator] of Object.entries(definition.shape)) {
+        if (document[field] !== null || validator.kind !== "optional" || acceptsNull(validator)) {
+            continue;
+        }
+
+        const inner = (validator._meta as { inner?: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } } | undefined)?.inner;
+
+        if (!acceptsNull(inner)) {
+            unset.add(field);
+        }
+    }
+
+    return unset.size === 0 ? document : Object.fromEntries(Object.entries(document).filter(([field]) => !unset.has(field)));
+};
+
 const validateRow = (schema: SchemaLike, table: string, document: Record<string, unknown>): string | undefined => {
     const definition = schema.tables[table];
 
@@ -274,6 +312,9 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args
     } catch (error: unknown) {
         return { error: { code: "BAD_ROW", line, message: error instanceof Error ? error.message : String(error), table }, kind: "error" };
     }
+
+    // Reached only past the global-table check above, so the definition exists.
+    decoded = normalizeUnsetOptionals(schema.tables[table], decoded);
 
     const failure = validateRow(schema, table, decoded);
 

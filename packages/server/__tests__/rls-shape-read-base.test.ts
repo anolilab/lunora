@@ -83,9 +83,10 @@ describe("buildRlsReadRegistry", () => {
 
         const asAdmin = composeShapeReadWhere(registry, {
             ctx: {},
-            identity: null,
+            // Roles arrive as a claim on the verified identity — the same source
+            // the request path reads. There is no separate `roles` field to set.
+            identity: { roles: ["admin"] },
             rlsRequired: true,
-            roles: ["admin"],
             shapeWhere: { channelId: "c1" },
             table: "docs",
             tablePublic: false,
@@ -99,9 +100,8 @@ describe("buildRlsReadRegistry", () => {
         // The `notes` shape, whose own middleware DOES grant the role, stays open.
         const notesAsAdmin = composeShapeReadWhere(registry, {
             ctx: {},
-            identity: null,
+            identity: { roles: ["admin"] },
             rlsRequired: true,
-            roles: ["admin"],
             shapeWhere: { channelId: "c1" },
             table: "notes",
             tablePublic: false,
@@ -131,7 +131,6 @@ describe("composeShapeReadWhere", () => {
             ctx: {},
             identity: null,
             rlsRequired: false,
-            roles: [],
             shapeWhere,
             table: "docs",
             tablePublic: false,
@@ -151,7 +150,6 @@ describe("composeShapeReadWhere", () => {
             ctx: {},
             identity: null,
             rlsRequired: false,
-            roles: [],
             shapeWhere,
             table: "docs",
             tablePublic: false,
@@ -170,7 +168,6 @@ describe("composeShapeReadWhere", () => {
             ctx: {},
             identity: null,
             rlsRequired: false,
-            roles: [],
             shapeWhere,
             table: "docs",
             tablePublic: false,
@@ -189,7 +186,6 @@ describe("composeShapeReadWhere", () => {
             ctx: {},
             identity: null,
             rlsRequired: true,
-            roles: [],
             shapeWhere,
             table: "docs",
             tablePublic: false,
@@ -210,7 +206,6 @@ describe("composeShapeReadWhere", () => {
             ctx: {},
             identity: null,
             rlsRequired: true,
-            roles: [],
             shapeWhere,
             table: "docs",
             tablePublic: true,
@@ -235,9 +230,8 @@ describe("composeShapeReadWhere", () => {
 
         const asAdmin = composeShapeReadWhere(registry, {
             ctx: {},
-            identity: null,
+            identity: { roles: ["admin"] },
             rlsRequired: true,
-            roles: ["admin"],
             shapeWhere,
             table: "docs",
             tablePublic: false,
@@ -251,7 +245,6 @@ describe("composeShapeReadWhere", () => {
             ctx: {},
             identity: null,
             rlsRequired: true,
-            roles: [],
             shapeWhere,
             table: "docs",
             tablePublic: false,

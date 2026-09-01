@@ -22,7 +22,7 @@
  * `query` guarded by the same policies.
  */
 
-import { computeReadBaseWhere, indexRolePermissions, resolveCan } from "./middleware";
+import { computeReadBaseWhere, indexRolePermissions, readIdentityRoles, resolveCan } from "./middleware";
 import type { RlsTag } from "./policy-tag";
 import { readRlsTags } from "./policy-tag";
 import { deny } from "./predicates";
@@ -57,8 +57,6 @@ interface ShapeReadWhereRequest {
     readonly identity: Record<string, unknown> | null;
     /** `true` when the schema is `.rls("required")` — gates the fail-closed branch. */
     readonly rlsRequired: boolean;
-    /** Role labels the request carries (drives `auth.can(...)`). */
-    readonly roles: ReadonlyArray<string>;
     /** The shape's own predicate (`where(ctx, args)`). */
     readonly shapeWhere: WhereInput;
     /** Logical table the shape replicates. */
@@ -155,16 +153,33 @@ const andMerge = (injected: undefined | WhereInput, caller: WhereInput): WhereIn
  * roles — restricted to the grants of the rls() middleware that declared it, so
  * a permission registered on a different middleware can never satisfy it.
  */
-const evaluateGroupBaseWhere = (group: ScopedReadPolicies, request: ShapeReadWhereRequest): undefined | WhereInput =>
-    computeReadBaseWhere(group.policies, {
+const evaluateGroupBaseWhere = (group: ScopedReadPolicies, request: ShapeReadWhereRequest): undefined | WhereInput => {
+    // Roles come from the socket's verified identity claims, and ONLY from there.
+    // The caller does not get to hand them in separately — a `roles` field on
+    // this request would be a role set with no producer behind it, which is how
+    // role-gated policies came to pass their tests while `auth.roles` was
+    // permanently `[]` in production.
+    //
+    // KNOWN DIVERGENCE: the request path takes the union of that claim and any
+    // `ctx.auth.roles` an upstream middleware contributed (see `AuthLike`). A
+    // shape runs no procedure, so no middleware fires and there is nothing to
+    // union — an app deriving roles in middleware rather than from claims (e.g.
+    // `accessRoles()` mapping Cloudflare Access groups) therefore has those roles
+    // on queries but not on live shapes, and a role-gated policy can resolve
+    // differently for the two. Closing it means moving the mapping onto the
+    // identity, where the shape path can see it, not adding a field here.
+    const roles = readIdentityRoles(request.identity);
+
+    return computeReadBaseWhere(group.policies, {
         auth: {
-            can: resolveCan(request.roles, group.rolePermissions),
+            can: resolveCan(roles, group.rolePermissions),
             identity: request.identity,
-            roles: request.roles,
+            roles,
             userId: request.userId,
         },
         ctx: request.ctx,
     });
+};
 
 /** Resolve the table's read base-where (or the fail-closed sentinel), or `undefined` when unrestricted. */
 const resolveReadBaseWhere = (registry: RlsReadRegistry, request: ShapeReadWhereRequest): undefined | WhereInput => {

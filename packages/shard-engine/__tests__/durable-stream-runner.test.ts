@@ -193,6 +193,44 @@ describe("durableStreamRunner.attach", () => {
             }
         });
 
+    it("sweeps expired transcripts on a replay-terminal attach, not only when a NEW run starts", async () => {
+        expect.assertions(3);
+
+        // A run whose retention lapsed long ago...
+        claimStreamRun(harness.sql, "expired", Date.now() - 100_000, 1);
+        appendStreamChunk(harness.sql, "expired", 1, JSON.stringify("stale"));
+        finishStreamRun(harness.sql, "expired", "complete", 1);
+
+        // ...alongside a finished, still-in-retention run a caller replays.
+        const kept = Date.now();
+
+        claimStreamRun(harness.sql, "kept", kept, 86_400_000);
+        appendStreamChunk(harness.sql, "kept", 1, JSON.stringify("hello"));
+        appendStreamChunk(harness.sql, "kept", 2, JSON.stringify("again"));
+        finishStreamRun(harness.sql, "kept", "complete", 2);
+
+        const runner = new DurableStreamRunner({ sql: () => harness.sql });
+        const { events, sink } = recordingSink();
+
+        // The replay-terminal branch returns before the run-claim path — the only
+        // place the sweep used to run. A shard whose streaming settled into
+        // replays (or stopped starting runs at all) therefore kept every expired
+        // transcript forever, however long its retention had been set to.
+        await runner.attach({
+            generation: kept,
+            iterator: () => {
+                throw new Error("a replay must never re-run the handler");
+            },
+            runKey: "kept",
+            sinceChunk: 1,
+            sink,
+        });
+
+        expect(chunksOf(events).map((event) => event.data)).toStrictEqual(["again"]);
+        expect(readStreamRun(harness.sql, "expired")).toBeUndefined();
+        expect(readStreamRun(harness.sql, "kept")).toBeDefined();
+    });
+
     it("starts a fresh run and stamps every chunk with the run's generation", async () => {
         expect.assertions(4);
 

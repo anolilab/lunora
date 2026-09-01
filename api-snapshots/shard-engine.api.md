@@ -324,7 +324,7 @@ const COMMIT_SEQ_TABLE = "__commit_seq";
 ### `CURSOR_PREFIX` (const)
 
 ```ts
-const CURSOR_PREFIX = "~2";
+const CURSOR_PREFIX = "~3";
 ```
 
 ### `CacheEntry` (interface)
@@ -867,6 +867,14 @@ interface FacetColumnResult {
 interface FacetValue {
     count: number;
     value: unknown;
+}
+```
+
+### `FanOutBudget` (interface)
+
+```ts
+interface FanOutBudget {
+    remaining: number;
 }
 ```
 
@@ -1448,9 +1456,11 @@ class OwnerRelay extends RelayLink {
     }>;
     announce(): Promise<void>;
     announceDrain(): Promise<void>;
+    releaseRelayShapes(): Promise<void>;
     relayCount(): number;
     minShapeCursor(): number | undefined;
     isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
+    protected onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
     protected onAttach(index: number): void;
     protected onDetach(index: number): void;
     protected onWhisperFrame(message: RelayFrame): Promise<void>;
@@ -1463,7 +1473,7 @@ class OwnerRelay extends RelayLink {
 ### `OwnerRelayFrame` (type)
 
 ```ts
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe;
+type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
 ```
 
 ### `PaginationOptions` (interface)
@@ -2035,6 +2045,7 @@ class RelayMember extends RelayLink {
     }>;
     announce(): Promise<void>;
     announceDrain(closing: ShardSocketLike): Promise<void>;
+    releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void>;
     relayCount(): number;
     isShapeRelayUniform(): boolean;
     minShapeCursor(): number | undefined;
@@ -2042,6 +2053,7 @@ class RelayMember extends RelayLink {
     protected onDetach(): void;
     protected onWhisperFrame(): Promise<void>;
     protected onShapeSubscribe(): RelayShapeSeed;
+    protected onShapeUnsubscribe(): void;
     protected onShapePoke(poke: RelayShapePoke): number;
 }
 ```
@@ -2089,6 +2101,17 @@ interface RelayShapeSubscribe {
     subId: string;
     type: "relay_shape_subscribe";
     userId?: string;
+}
+```
+
+### `RelayShapeUnsubscribe` (interface)
+
+```ts
+interface RelayShapeUnsubscribe {
+    connectionId: string;
+    relayIndex: number;
+    subId?: string;
+    type: "relay_shape_unsubscribe";
 }
 ```
 
@@ -2154,6 +2177,7 @@ interface ResolveRelationPredicatesOptions {
 
 ```ts
 interface ResolveWithOptions {
+    fanOutBudget?: FanOutBudget;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
     parents: Record<string, unknown>[];
@@ -4401,7 +4425,7 @@ const recordShapeProbePass: (counters: ShapeProbeCounters, run: number, served: 
 ### `relationHooks` (const)
 
 ```ts
-const relationHooks: (args: Pick<QueryArgs, "relationBaseWhere" | "relationMask">) => Pick<QueryArgs, "relationBaseWhere" | "relationMask">;
+const relationHooks: (args: Pick<QueryArgs, "relationBaseWhere" | "relationMask">) => Pick<QueryArgs, "relationBaseWhere" | "relationMask"> & Pick<ResolveWithOptions, "fanOutBudget">;
 ```
 
 ### `relayCountFor` (const)

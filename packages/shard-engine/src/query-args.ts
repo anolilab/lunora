@@ -116,6 +116,23 @@ const normalizeOrderKeys = (orderBy: OrderByInput[] | undefined, shape?: Record<
         return [{ direction: "asc", field: "_creationTime", nullable: false }];
     }
 
+    // Every declared index is built `(<fields>, _creationTime, id)` — see
+    // `INDEX_SORT_KEYS` in `ctx-db-migrations.ts`. An ORDER BY that jumps
+    // straight from the declared fields to `id` skips the index's middle column,
+    // so the index cannot answer the sort and SQLite sorts every match into a
+    // temp B-tree instead. Splicing `_creationTime` in here — the one place both
+    // ORDER BY builders AND `buildSeek` read their key list from — is what keeps
+    // the emitted order, the emitted seek, and the physical index shape in
+    // agreement. Doing it in the ORDER BY builders alone would give the seek a
+    // different total order than the sort it pages, which skips or repeats rows.
+    //
+    // Skipped when an id field is already ordered: `id` is unique, so nothing
+    // after it can change the order, and the extra key would only cost a cursor
+    // column and a seek disjunct.
+    if (!keys.some((key) => ID_FIELDS.has(key.field) || key.field === "_creationTime")) {
+        keys.push({ direction: tiebreakDirectionFor(keys), field: "_creationTime", nullable: false });
+    }
+
     return keys;
 };
 
@@ -168,8 +185,18 @@ const fromBase64 = (encoded: string): string => {
  *
  * `~` is deliberately outside the base64 alphabet, so a legacy (unprefixed)
  * cursor can never be mistaken for a prefixed one whatever its payload.
+ *
+ * Bumped `~2` -> `~3` when the sort key list changed shape twice over: every
+ * `orderBy` now carries `_creationTime` before the `id` tiebreak (see
+ * {@link normalizeOrderKeys}), and a `.withIndex()` read drops the fields its
+ * range pins with `.eq()` (see `unpinnedIndexFields`). The second is what makes
+ * the bump mandatory rather than tidy: a `.withIndex(q => q.eq(f, v)).paginate()`
+ * cursor was `[v, id]` and is now `[creationTime, id]` — SAME LENGTH, so the
+ * arity check in {@link buildSeek} cannot catch it, and the old payload would be
+ * seeked as a `_creationTime` pivot with a channel id in it. Silently, and
+ * shaped like a correct page.
  */
-const CURSOR_PREFIX = "~2";
+const CURSOR_PREFIX = "~3";
 
 /**
  * Encode the sort key of `doc` (the values of each `orderBy` field, then its
@@ -338,25 +365,69 @@ const buildSeek = (keys: OrderKey[], cursorValues: unknown[], wantLater: boolean
         throw invalidCursor();
     }
 
-    const branches: WhereInput[] = [];
+    // Nested, not flattened. The flat expansion repeats the prefix equalities in
+    // every disjunct — `(a>?) OR (a=? AND b>?) OR (a=? AND b=? AND id>?)` — and
+    // binds `k(k+1)/2` parameters for `k` columns. `paginateWhere` can AND TWO
+    // seeks (the cursor and a reactive page's fixed end cursor), so that is
+    // `k(k+1)`: with `orderBy` capped at 8 keys, plus `_creationTime` and the id
+    // tiebreak, 10 columns bound 110 parameters against Workerd's per-statement
+    // cap of 100 — the statement fails to PREPARE with a bare `SQLITE_ERROR`,
+    // which is a broken page rather than a slow one.
+    //
+    // Factoring the shared prefix out — `(a>?) OR (a=? AND ((b>?) OR (b=? AND id>?)))`
+    // — is the same predicate (distribute it and you get the flat form back,
+    // term for term) at `2k-1` parameters: 19 instead of 55. Measured identical
+    // on both the plan and the returned rows.
+    const nest = (pivot: number): WhereInput => {
+        const column = columns[pivot];
 
-    for (const [pivot, pivotColumn] of columns.entries()) {
-        const conditions: WhereInput[] = [];
-
-        for (const [prefix, prefixColumn] of columns.slice(0, pivot).entries()) {
-            conditions.push({ [prefixColumn.field]: { eq: cursorValues[prefix] } });
+        if (column === undefined) {
+            throw invalidCursor();
         }
 
-        conditions.push(pivotCondition(pivotColumn, cursorValues[pivot], wantLater, inclusiveFinal && pivot === columns.length - 1));
+        const comparison = pivotCondition(column, cursorValues[pivot], wantLater, inclusiveFinal && pivot === columns.length - 1);
 
-        // Wrap multi-condition branches so each disjunct is explicitly grouped
-        // rather than leaning on SQL's AND-over-OR precedence.
-        const [first] = conditions;
+        if (pivot === columns.length - 1) {
+            return comparison;
+        }
 
-        branches.push(conditions.length === 1 && first !== undefined ? first : { AND: conditions });
+        return { OR: [comparison, { AND: [{ [column.field]: { eq: cursorValues[pivot] } }, nest(pivot + 1)] }] };
+    };
+
+    const seek: WhereInput = nest(0);
+    const [leading] = columns;
+
+    // A REDUNDANT leading-column bound, ANDed onto the disjunction above.
+    //
+    // Every branch of that disjunction constrains the leading column — the first
+    // strictly, the rest by equality — so every row it can match already
+    // satisfies `leading >=|<= pivot`. SQLite cannot see that: an OR over
+    // several columns gives the planner no range on any single one, so it walks
+    // the whole index (`SCAN … USING INDEX`) testing each row. Stating the bound
+    // separately hands it back the range and the walk becomes a seek. Measured
+    // on `node:sqlite`, 50k rows, a `.withIndex(...)` page 2: `SCAN` at 799us
+    // vs `SEARCH … (<expr><?)` at 18.5us.
+    //
+    // It is a pure `WhereInput` addition, so no dialect learns anything new, and
+    // it constrains only the LEADING column — whose direction is uniform by
+    // definition — so a mixed-direction `orderBy` stays correct where a row-value
+    // comparison `(a, b) < (?, ?)` would not. Row-value is also no help here:
+    // SQLite does not apply its range optimisation to an EXPRESSION index, and
+    // every DO index is on `json_extract(...)` (measured: 523us, still `SCAN`).
+    //
+    // Gated on a non-nullable leading key with a non-null pivot, because that is
+    // exactly when `pivotCondition` emits a bare comparator. With the
+    // `OR col IS NULL` arm present the conjunct is a second disjunction rather
+    // than a bound and the planner drops the range again (measured 816 -> 478us,
+    // still `SCAN`) — same gate `pivotCondition` already computes.
+    if (columns.length < 2 || leading === undefined || leading.nullable || cursorValues[0] === null) {
+        return seek;
     }
 
-    return { OR: branches };
+    // `inclusive`, always: only the FIRST branch is strict on this column; the
+    // rest pin it by equality, so the tightest bound covering all of them is the
+    // non-strict one.
+    return { AND: [pivotCondition(leading, cursorValues[0], wantLater, true), seek] };
 };
 
 /**

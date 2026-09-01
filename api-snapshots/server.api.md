@@ -1969,7 +1969,6 @@ interface ShapeReadWhereRequest {
     readonly ctx: unknown;
     readonly identity: Record<string, unknown> | null;
     readonly rlsRequired: boolean;
-    readonly roles: ReadonlyArray<string>;
     readonly shapeWhere: WhereInput;
     readonly table: string;
     readonly tablePublic: boolean;
@@ -4504,7 +4503,6 @@ interface PolicyAssertion {
 ```ts
 interface TestIdentity {
     identity?: Record<string, unknown> | null;
-    roles?: ReadonlyArray<string>;
     userId?: null | string;
 }
 ```

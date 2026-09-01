@@ -313,6 +313,18 @@ export const ERROR_CATALOG = {
     REPLICA_NOT_READY: { status: 421, title: "Replica not caught up" },
     /** A write reached a read replica. Same `421` routing verdict — writes belong to the owner. */
     REPLICA_READ_ONLY: { status: 421, title: "Replica is read-only" },
+
+    /**
+     * A search index is provisioned but still covers only part of its table, so
+     * the read refuses rather than answering from the indexed prefix.
+     *
+     * `503` and retryable, but deliberately NOT `SERVICE_UNAVAILABLE`: nothing is
+     * down. One index on one table is warming, every other read is fine, and the
+     * backfill advances on each read — so a caller that retries makes progress,
+     * where a generic outage code invites it to back off. The message names both
+     * exits (wait, or run the `backfillSearch` admin op).
+     */
+    SEARCH_INDEX_BUILDING: { status: 503, title: "Search index is still building" },
     /** Thrown by `@lunora/auth` (Turnstile) and `@lunora/ratelimit` — an upstream dependency didn't respond. Fixed, safe message. */
     SERVICE_UNAVAILABLE: { status: 503, title: "Service unavailable" },
     SHAPE_CROSS_SHARD_JOIN: { status: 400, title: "Shape cross-shard join is unsupported" },

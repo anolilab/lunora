@@ -8,7 +8,7 @@
  * operator a change is safe while the gate refuses to ship it.
  */
 import type { DriftChange, SchemaSnapshot, TableSnapshot } from "../../../../../shared/schema-snapshot";
-import { diffSchemaSnapshots, parseSnapshotJson } from "../../../../../shared/schema-snapshot";
+import { describeShape, diffExistingField, diffSchemaSnapshots, parseSnapshotJson } from "../../../../../shared/schema-snapshot";
 import type { ColumnMeta } from "../../lib/admin";
 
 /** How a table fared between two versions. */
@@ -48,16 +48,23 @@ const columnsOf = (table: TableSnapshot): ColumnMeta[] =>
             // field it reads, so match on `field` — keying on the accessor would
             // silently drop every FK arrow whose accessor differs from its column.
             ref: Object.values(table.relations).find((relation) => relation.field === name && relation.kind === "one")?.table,
-            type: field.kind,
+            // `describeShape`, not `field.kind`: a repointed `v.id()` or a changed
+            // array element is `id`/`array` under both, so the cell would look
+            // identical on both sides of a change the row is flagging.
+            type: describeShape(field),
         };
     });
 
 /**
- * Per-field status for one table, derived by comparing the two field maps
- * directly rather than parsing `DriftChange.summary` — the summaries are
- * operator prose and must stay free to change wording.
+ * Per-field status for one table, derived from the shared diff engine rather
+ * than by parsing `DriftChange.summary` — the summaries are operator prose and
+ * must stay free to change wording, and `DriftChange` carries no field name.
+ *
+ * Routed through the shared `diffExistingField` rather than compared here: a
+ * second opinion on what counts as a change is how the canvas comes to render
+ * as unchanged exactly what the deploy gate blocks.
  */
-const fieldStatusOf = (before: TableSnapshot | undefined, after: TableSnapshot | undefined): Record<string, FieldStatus> => {
+const fieldStatusOf = (tableName: string, before: TableSnapshot | undefined, after: TableSnapshot | undefined): Record<string, FieldStatus> => {
     const status: Record<string, FieldStatus> = {};
     const beforeFields = before?.fields ?? {};
     const afterFields = after?.fields ?? {};
@@ -68,7 +75,7 @@ const fieldStatusOf = (before: TableSnapshot | undefined, after: TableSnapshot |
         if (old === undefined) {
             status[name] = before === undefined ? "unchanged" : "added";
         } else {
-            status[name] = old.kind === field.kind && old.optional === field.optional ? "unchanged" : "changed";
+            status[name] = diffExistingField(tableName, name, old, field).length === 0 ? "unchanged" : "changed";
         }
     }
 
@@ -114,7 +121,7 @@ const buildSchemaDiffModel = (before: SchemaSnapshot | undefined, after: SchemaS
         const old = before?.tables[name];
         const status = statusOf(old === undefined, name);
 
-        tables.push({ columns: columnsOf(table), fieldStatus: fieldStatusOf(old, table), name, shardMode: table.shardMode, status });
+        tables.push({ columns: columnsOf(table), fieldStatus: fieldStatusOf(name, old, table), name, shardMode: table.shardMode, status });
     }
 
     // Removed tables have no "after" shape, so they render from their last known
@@ -122,7 +129,7 @@ const buildSchemaDiffModel = (before: SchemaSnapshot | undefined, after: SchemaS
     // one thing the canvas cannot show.
     for (const [name, table] of Object.entries(before?.tables ?? {})) {
         if (after.tables[name] === undefined) {
-            tables.push({ columns: columnsOf(table), fieldStatus: fieldStatusOf(table, undefined), name, shardMode: table.shardMode, status: "removed" });
+            tables.push({ columns: columnsOf(table), fieldStatus: fieldStatusOf(name, table, undefined), name, shardMode: table.shardMode, status: "removed" });
         }
     }
 

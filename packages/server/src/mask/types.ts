@@ -33,6 +33,7 @@ export interface MaskContext<Context = unknown> {
         /** `true` when any of the request's `roles` grants `permission` (see {@link MaskOptions.roles}). Fails closed for unregistered roles. */
         readonly can: (permission: Permission | string) => boolean;
         readonly identity?: Record<string, unknown> | null;
+        /** Role labels from the identity's `roles` claim (see `PolicyContext.auth.roles`). */
         readonly roles: ReadonlyArray<string>;
         readonly userId: null | string;
     };

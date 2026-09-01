@@ -53,10 +53,23 @@ const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
 const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: Recorded[] } => {
     const statements: Recorded[] = [];
 
+    /*
+     * The one piece of real state the double keeps: the backfill-progress row
+     * per companion. Everything else here is stateless canned rows, but the
+     * reader refuses a search whose index is not recorded complete — so a
+     * double that dropped the write and answered the read with nothing would
+     * report every index as mid-backfill and make every search below throw.
+     */
+    const searchState = new Map<string, unknown[]>();
+
     const exec = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<Row> => {
         const sql = query.replaceAll(/\s+/gu, " ").trim();
 
         statements.push({ params, sql });
+
+        if (sql.startsWith(`INSERT INTO "__lunora_search_state"`)) {
+            searchState.set(String(params[0]), params);
+        }
 
         // The FTS5 probe (`CREATE VIRTUAL TABLE … fts5`) and all DDL/DML succeed
         // by returning no rows. A search reads the vocabulary view and joins
@@ -70,11 +83,23 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
         // snapshot, so report one changed row.
         const routes: { pattern: RegExp; rows: () => Row[] }[] = [
             { pattern: /^SELECT changes\(\) AS changed$/u, rows: () => [{ changed: 1 }] as unknown as Row[] },
+            {
+                pattern: /^SELECT "cursor", "done", "profile" FROM "__lunora_search_state"/u,
+                rows: () => {
+                    const stored = searchState.get(String(params[0]));
+
+                    return (stored ? [{ cursor: stored[1], done: stored[2], profile: stored[3] }] : []) as unknown as Row[];
+                },
+            },
             // The migration-time backfill probes whether the shadow already
             // carries rows (always "no" here, so the backfill runs) and then
             // scans the source table — the canned rows stand in for a table that
             // already held data when the search index was declared.
             { pattern: /^SELECT COUNT\(\*\) AS count FROM /u, rows: () => [{ count: 0 }] as unknown as Row[] },
+            // "Does the source table hold anything?" — what decides whether a
+            // `staged` index has a walk to skip. The canned rows ARE that table,
+            // so an empty `matchRows` answers "empty" and a seeded one "not".
+            { pattern: /^SELECT 1 FROM "docs" LIMIT 1$/u, rows: () => matchRows as unknown as Row[] },
             { pattern: /^SELECT id, _creationTime, "__doc__" FROM "docs" ORDER BY id ASC/u, rows: () => matchRows as unknown as Row[] },
             { pattern: /__fts_by_body__vocab/u, rows: () => matchRows as unknown as Row[] },
             // `lookupById` folds every table into one UNION-ALL probe tagged

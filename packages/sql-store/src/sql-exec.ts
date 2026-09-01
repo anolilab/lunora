@@ -141,22 +141,57 @@ interface SqlCtxExec {
 /** SQLite storage encode for `.global()` column values — the shared `@lunora/sql-store` codec (SQLite has no boolean, so true/false → 1/0). */
 const serializeColumnValue: (value: unknown) => unknown = sqliteEncode;
 
+/** Structural read of a validator's `.nullable()` flag — `.nullable()` is the one thing that clears `notNull`. */
+const acceptsNull = (validator: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } | undefined): boolean =>
+    validator?._meta?.column?.notNull === false;
+
 /**
- * The `field → effective column kind` mapping for a table, derived once per
- * (immutable) definition and memoized. `effectiveColumnKind` is pure over the
- * validator and the shape never mutates after `defineSchema`, so the mapping is
- * static per definition — precomputing it removes the per-row
+ * Does a stored SQL NULL in this column mean the field is ABSENT rather than
+ * null?
+ *
+ * The DO store keeps documents as JSON, where an unset `v.optional(...)` field
+ * simply has no key. A `.global()` table keeps real columns, so the same field is
+ * a NULL — and decoding that back as `null` is a lie about the declared type
+ * (`v.optional(v.string())` is `string | undefined`, never `null`). It also broke
+ * the export/import round trip outright: the exported line carried
+ * `"field": null` and the importer ran `optional(string).parse(null)`, which
+ * throws, so every row that simply had no value for an optional column was
+ * missing from the restore.
+ *
+ * `v.string().nullable()` and `v.optional(v.string().nullable())` are the
+ * opposite case — NULL is a value the column genuinely holds — so those keep it.
+ */
+const nullMeansAbsent = (validator: TableDefinitionLike["shape"][string]): boolean => {
+    if (validator.kind !== "optional" || acceptsNull(validator)) {
+        return false;
+    }
+
+    // `@lunora/values` stashes the wrapped validator on `_meta.inner`; the
+    // package's own `ValidatorLike` does not declare it (see `shared/effective-kind`,
+    // which reads it the same way for the same reason).
+    const inner = (validator._meta as { inner?: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } } | undefined)?.inner;
+
+    return !acceptsNull(inner);
+};
+
+/**
+ * The `field → [effective column kind, NULL means absent]` mapping for a table,
+ * derived once per (immutable) definition and memoized. Both halves are pure over
+ * the validator and the shape never mutates after `defineSchema`, so the mapping
+ * is static per definition — precomputing it removes the per-row
  * `Object.entries(definition.shape)` + `effectiveColumnKind` recomputation on the
  * decode hot path (a page/global read decodes R rows × M columns). Keyed on the
  * definition object identity (stable: definitions come from `defineSchema`).
  */
-const columnKindCache = new WeakMap<TableDefinitionLike, [string, string | undefined][]>();
+const columnKindCache = new WeakMap<TableDefinitionLike, [string, string | undefined, boolean][]>();
 
-const columnKinds = (definition: TableDefinitionLike): [string, string | undefined][] => {
+const columnKinds = (definition: TableDefinitionLike): [string, string | undefined, boolean][] => {
     let kinds = columnKindCache.get(definition);
 
     if (kinds === undefined) {
-        kinds = Object.entries(definition.shape).map(([field, validator]) => [field, effectiveColumnKind(validator)] as [string, string | undefined]);
+        kinds = Object.entries(definition.shape).map(
+            ([field, validator]) => [field, effectiveColumnKind(validator), nullMeansAbsent(validator)] as [string, string | undefined, boolean],
+        );
         columnKindCache.set(definition, kinds);
     }
 
@@ -178,10 +213,10 @@ const columnKinds = (definition: TableDefinitionLike): [string, string | undefin
 const decodeGlobalRow = (definition: TableDefinitionLike, row: Record<string, unknown>): Record<string, unknown> => {
     const decoded: Record<string, unknown> = {};
 
-    for (const [field, kind] of columnKinds(definition)) {
+    for (const [field, kind, absentOnNull] of columnKinds(definition)) {
         const raw = row[field];
 
-        if (raw === undefined) {
+        if (raw === undefined || (absentOnNull && raw === null)) {
             continue;
         }
 

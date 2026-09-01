@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { diffSchemaSnapshots, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
+import { diffSchemaSnapshots, hashSchemaSnapshot, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import type { SchemaIR, TableIR } from "../src/ir";
 import { buildSchemaSnapshot, evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError } from "../src/schema-drift";
 
@@ -39,8 +39,8 @@ describe("schema-drift", () => {
 
             // tables sorted alphabetically (messages before users)
             expect(Object.keys(snapshot.tables)).toStrictEqual(["messages", "users"]);
-            expect(snapshot.tables.users?.fields.nickname).toStrictEqual({ kind: "string", optional: true });
-            expect(snapshot.tables.users?.fields.name).toStrictEqual({ kind: "string", optional: false });
+            expect(snapshot.tables.users?.fields.nickname).toStrictEqual({ kind: "string", nullable: false, optional: true, unique: false });
+            expect(snapshot.tables.users?.fields.name).toStrictEqual({ kind: "string", nullable: false, optional: false, unique: false });
             // migration ids sorted
             expect(snapshot.migrationIds).toStrictEqual(["m1", "m2"]);
         });
@@ -543,6 +543,203 @@ describe("schema-drift", () => {
             const { changes } = diffSchemaSnapshots(undefined, buildSchemaSnapshot(pinned("us"), []));
 
             expect(changes.some((candidate) => candidate.type === "changedJurisdiction")).toBe(false);
+        });
+    });
+
+    /*
+     * A snapshot of only `{ kind, optional }` was byte-identical across every
+     * change INSIDE a validator, so each of these produced zero drift, an
+     * unchanged baseline file, and — because `recordSchemaVersion` keys on the
+     * content hash — no ledger row either.
+     */
+    describe("validator interior", () => {
+        /** The three signals a change has to move: a classified drift change, the serialized bytes, and the content hash. */
+        const compare = (before: TableIR["shape"], after: TableIR["shape"]) => {
+            const baseline = buildSchemaSnapshot(schema([table("users", before)]), []);
+            const current = buildSchemaSnapshot(schema([table("users", after)]), []);
+
+            return {
+                changes: diffSchemaSnapshots(baseline, current).changes,
+                hashMoved: hashSchemaSnapshot(baseline) !== hashSchemaSnapshot(current),
+                serializationMoved: serializeSchemaSnapshot(baseline) !== serializeSchemaSnapshot(current),
+            };
+        };
+
+        it("sees a repointed `v.id()` foreign key", () => {
+            expect.assertions(4);
+
+            const { changes, hashMoved, serializationMoved } = compare(
+                { owner: { kind: "id", tableName: "users" } },
+                { owner: { kind: "id", tableName: "orgs" } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ remediation: "backfill", severity: "breaking", type: "changedFieldShape" });
+            expect(changes[0]?.summary).toContain("id(users) → id(orgs)");
+            expect([hashMoved, serializationMoved]).toStrictEqual([true, true]);
+        });
+
+        it("sees an array element type change (it moves the storage projection)", () => {
+            expect.assertions(3);
+
+            const { changes, hashMoved } = compare(
+                { tags: { inner: { kind: "string" }, kind: "array" } },
+                { tags: { inner: { kind: "bigint" }, kind: "array" } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(hashMoved).toBe(true);
+        });
+
+        it("sees an object property and a record value type change", () => {
+            expect.assertions(2);
+
+            const object = compare(
+                { profile: { kind: "object", shape: { a: { kind: "string" } } } },
+                { profile: { kind: "object", shape: { a: { kind: "number" } } } },
+            );
+            const record = compare(
+                { counts: { keyType: { kind: "string" }, kind: "record", valueType: { kind: "string" } } },
+                { counts: { keyType: { kind: "string" }, kind: "record", valueType: { kind: "bigint" } } },
+            );
+
+            expect(object.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+            expect(record.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+        });
+
+        it("sees a changed literal", () => {
+            expect.assertions(2);
+
+            const { changes, hashMoved } = compare({ tier: { kind: "literal", literalValue: '"a"' } }, { tier: { kind: "literal", literalValue: '"b"' } });
+
+            expect(changes.map((change) => change.type)).toStrictEqual(["changedFieldShape"]);
+            expect(hashMoved).toBe(true);
+        });
+
+        it("flags a swapped union member as breaking but a widened union as safe", () => {
+            expect.assertions(3);
+
+            const swapped = compare(
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "boolean" }] } },
+            );
+            const widened = compare({ value: { kind: "string" } }, { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } });
+            const narrowed = compare({ value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } }, { value: { kind: "string" } });
+
+            expect(swapped.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+            // Widening accepts everything the old shape did, so nothing stored becomes invalid.
+            expect(widened.changes.map((change) => [change.severity, change.type])).toStrictEqual([["safe", "widenedFieldShape"]]);
+            expect(narrowed.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+        });
+
+        it("treats a reordered union as no change at all — a union is a set", () => {
+            expect.assertions(2);
+
+            const { changes, hashMoved } = compare(
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+                { value: { kind: "union", members: [{ kind: "number" }, { kind: "string" }] } },
+            );
+
+            expect(changes).toStrictEqual([]);
+            expect(hashMoved).toBe(false);
+        });
+
+        it("classifies tightening a constraint as breaking and relaxing it as safe", () => {
+            expect.assertions(4);
+
+            const plain = { kind: "string" } as const;
+            const unique = { column: { notNull: true, unique: true }, kind: "string" } as const;
+            const nullable = { column: { notNull: false }, kind: "string" } as const;
+
+            expect(compare({ email: plain }, { email: unique }).changes.map((change) => [change.severity, change.type])).toStrictEqual([
+                ["breaking", "addedFieldConstraint"],
+            ]);
+            expect(compare({ email: unique }, { email: plain }).changes.map((change) => [change.severity, change.type])).toStrictEqual([
+                ["safe", "relaxedFieldConstraint"],
+            ]);
+            // `.nullable()` removed: every row holding NULL is now invalid.
+            expect(compare({ email: nullable }, { email: plain }).changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+            expect(compare({ email: plain }, { email: nullable }).changes.map((change) => change.severity)).toStrictEqual(["safe"]);
+        });
+
+        it("reads `.unique()` through `v.optional()` whichever node the chain recorded it on", () => {
+            expect.assertions(2);
+
+            const onInner = buildSchemaSnapshot(
+                schema([table("users", { email: { inner: { column: { notNull: true, unique: true }, kind: "string" }, kind: "optional" } })]),
+                [],
+            );
+            const onWrapper = buildSchemaSnapshot(
+                schema([table("users", { email: { column: { notNull: true, unique: true }, inner: { kind: "string" }, kind: "optional" } })]),
+                [],
+            );
+
+            expect(onInner.tables.users?.fields.email?.unique).toBe(true);
+            expect(onWrapper.tables.users?.fields.email?.unique).toBe(true);
+        });
+
+        it("does not report drift for detail a pre-deepening baseline never recorded", () => {
+            expect.assertions(1);
+
+            /*
+             * The shape a baseline written before the deepening has on disk. Every
+             * app has one, and reporting a breaking change per constrained field on
+             * the first run after upgrading is how `--allow-schema-drift` becomes
+             * reflexive.
+             */
+            const legacy = {
+                jurisdiction: undefined,
+                migrationIds: [],
+                tables: { users: { fields: { email: { kind: "string", optional: false } }, indexes: {}, relations: {}, shardMode: "root" } },
+                version: SCHEMA_SNAPSHOT_VERSION,
+            } as const;
+
+            const current = buildSchemaSnapshot(schema([table("users", { email: { column: { notNull: false, unique: true }, kind: "string" } })]), []);
+
+            expect(diffSchemaSnapshots(legacy, current).changes).toStrictEqual([]);
+        });
+
+        it("keeps the serialization independent of field, index and object-property declaration order", () => {
+            expect.assertions(2);
+
+            const shapeA = { profile: { kind: "object", shape: { a: { kind: "string" }, b: { kind: "number" } } }, zed: { kind: "string" } } as const;
+            const shapeB = { profile: { kind: "object", shape: { b: { kind: "number" }, a: { kind: "string" } } }, zed: { kind: "string" } } as const;
+
+            const first = buildSchemaSnapshot(
+                schema([
+                    table(
+                        "users",
+                        { ...shapeA },
+                        {
+                            indexes: [
+                                { fields: ["zed"], name: "by_zed" },
+                                { fields: ["a"], name: "by_a" },
+                            ],
+                        },
+                    ),
+                ]),
+                [],
+            );
+            const second = buildSchemaSnapshot(
+                schema([
+                    table(
+                        "users",
+                        // Same columns, declared the other way round.
+                        { zed: shapeB.zed, profile: shapeB.profile },
+                        {
+                            indexes: [
+                                { fields: ["a"], name: "by_a" },
+                                { fields: ["zed"], name: "by_zed" },
+                            ],
+                        },
+                    ),
+                ]),
+                [],
+            );
+
+            expect(serializeSchemaSnapshot(first)).toBe(serializeSchemaSnapshot(second));
+            expect(hashSchemaSnapshot(first)).toBe(hashSchemaSnapshot(second));
         });
     });
 });
