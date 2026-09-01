@@ -390,6 +390,41 @@ describe("ctx-db relations", () => {
             expect(messages.every((row) => (row["reactions"] as Record<string, unknown>[]).length === 2)).toBe(true);
         });
 
+        it("does not spend fan-out budget on a relation that reads nothing", async () => {
+            expect.assertions(2);
+
+            // `limit: 0` is answered without a single read, so charging the
+            // shared budget for it lets a zero-limit relation exhaust the
+            // allowance and push a LATER capped relation onto the unbounded
+            // batched path — the exact over-fetch the budget exists to prevent.
+            const seen: string[] = [];
+            const recording: SqlExec = {
+                exec: (query: string, ...parameters: unknown[]) => {
+                    seen.push(query);
+
+                    return harness.sql.exec(query, ...parameters);
+                },
+            };
+
+            runShardMigrations(recording, schema);
+
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: recording });
+
+            await seed(writer);
+            seen.length = 0;
+
+            const { page } = await writer.findMany("messages", {
+                orderBy: [{ _id: "asc" }],
+                with: { reactions: { limit: 0 } },
+            });
+
+            // Nothing is read for the relation at all...
+            expect(seen.filter((query) => query.includes(`FROM "reactions"`))).toHaveLength(0);
+
+            // ...and every parent still gets its (empty) array.
+            expect(page.every((row) => (row["reactions"] as Record<string, unknown>[]).length === 0)).toBe(true);
+        });
+
         it("_count attaches per-parent aggregate without loading rows", async () => {
             expect.assertions(4);
 

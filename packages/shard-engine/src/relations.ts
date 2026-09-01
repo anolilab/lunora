@@ -37,6 +37,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { applySelect } from "./query-args";
 import type { FanOutBudget, NestedWith, QueryArgs, RelationDefinitionLike, ResolveWithOptions, TableDefinitionLike } from "./schema-types";
+import { FAN_OUT_BUDGET } from "./schema-types";
 import type { WhereInput } from "./where-types";
 
 /**
@@ -53,9 +54,16 @@ import type { WhereInput } from "./where-types";
  * and cannot be forgotten at a call site.
  */
 const relationHooks = (
-    args: Pick<QueryArgs, "fanOutBudget" | "relationBaseWhere" | "relationMask">,
-): Pick<QueryArgs, "fanOutBudget" | "relationBaseWhere" | "relationMask"> => {
-    return { fanOutBudget: args.fanOutBudget, relationBaseWhere: args.relationBaseWhere, relationMask: args.relationMask };
+    args: Pick<QueryArgs, "relationBaseWhere" | "relationMask">,
+): Pick<QueryArgs, "relationBaseWhere" | "relationMask"> & Pick<ResolveWithOptions, "fanOutBudget"> => {
+    return {
+        // Lifted back off the symbol the nested `fetcher` args carry it under —
+        // see `FAN_OUT_BUDGET`. Doing it here keeps every `resolveWith` call site
+        // spreading one thing, and keeps the budget out of the public `QueryArgs`.
+        fanOutBudget: (args as { [FAN_OUT_BUDGET]?: FanOutBudget })[FAN_OUT_BUDGET],
+        relationBaseWhere: args.relationBaseWhere,
+        relationMask: args.relationMask,
+    };
 };
 
 /** Project a loaded child (or page) per `nested.select`, keeping system + nested-`with` keys. Returns the input unchanged when no select. */
@@ -149,6 +157,16 @@ const groupByForeignKey = (
     return groups;
 };
 
+/**
+ * Attach the shared fan-out budget to a `fetcher`'s args.
+ *
+ * The one place the cast lives. `QueryArgs` deliberately has no field for this
+ * (see {@link FAN_OUT_BUDGET}), so the symbol is an excess property as far as the
+ * type is concerned — which is exactly the property that keeps a caller from
+ * setting it.
+ */
+const withBudget = (args: QueryArgs, budget: FanOutBudget): QueryArgs => ({ ...args, [FAN_OUT_BUDGET]: budget }) as QueryArgs;
+
 /** Distinct, non-nullish values of `field` across `rows`, preserving first-seen order. */
 const distinctValues = (rows: Record<string, unknown>[], field: string): unknown[] => {
     const seen = new Set<unknown>();
@@ -228,14 +246,19 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         // Apply the child table's read policy on the relation hop (RLS): the
         // policy filter rides `baseWhere` exactly as a top-level read would, and
         // `relationBaseWhere` is threaded on so nested `with` levels inherit it.
-        const { page } = await fetcher(relation.table, {
-            baseWhere: relationBaseWhere?.(relation.table),
-            fanOutBudget: budget,
-            relationBaseWhere,
-            relationMask,
-            where: { [relation.references]: { in: fkValues } },
-            with: nested.with,
-        });
+        const { page } = await fetcher(
+            relation.table,
+            withBudget(
+                {
+                    baseWhere: relationBaseWhere?.(relation.table),
+                    relationBaseWhere,
+                    relationMask,
+                    where: { [relation.references]: { in: fkValues } },
+                    with: nested.with,
+                },
+                budget,
+            ),
+        );
         const byReference = new Map<unknown, Record<string, unknown>>();
 
         for (const child of masked(relation.table, page)) {
@@ -266,16 +289,21 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         // RLS: the child table's read policy rides `baseWhere` (same as a
         // top-level read); `relationBaseWhere` threads on for nested `with`.
         const fetchWhere = async (where: WhereInput, limit: number | undefined): Promise<Record<string, unknown>[]> => {
-            const { page } = await fetcher(relation.table, {
-                baseWhere: relationBaseWhere?.(relation.table),
-                limit,
-                orderBy: nested.orderBy,
-                fanOutBudget: budget,
-                relationBaseWhere,
-                relationMask,
-                where: nested.where ? { AND: [nested.where, where] } : where,
-                with: nested.with,
-            });
+            const { page } = await fetcher(
+                relation.table,
+                withBudget(
+                    {
+                        baseWhere: relationBaseWhere?.(relation.table),
+                        limit,
+                        orderBy: nested.orderBy,
+                        relationBaseWhere,
+                        relationMask,
+                        where: nested.where ? { AND: [nested.where, where] } : where,
+                        with: nested.with,
+                    },
+                    budget,
+                ),
+            );
 
             return page;
         };
@@ -301,6 +329,19 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
          * injected `fetcher` is a `findMany`-shaped interface with no way to say
          * that — which is the point at which it would be worth widening.
          */
+        // `cap === 0` is answered without reading anything, so it neither needs
+        // the fan-out nor may pay for it: charging the budget for reads it does
+        // not issue lets a `limit: 0` relation exhaust the allowance and push a
+        // LATER capped relation onto the unbounded batched path, which is the
+        // over-fetch the budget exists to bound.
+        if (cap === 0) {
+            for (const parent of parents) {
+                parent[name] = [];
+            }
+
+            return;
+        }
+
         const canFanOut = cap !== undefined && referenceValues.length <= budget.remaining;
 
         if (canFanOut) {
@@ -308,7 +349,7 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         }
 
         const pages = canFanOut
-            ? await Promise.all(referenceValues.map(async (value) => (cap === 0 ? [] : fetchWhere({ [relation.field]: value }, cap))))
+            ? await Promise.all(referenceValues.map(async (value) => fetchWhere({ [relation.field]: value }, cap)))
             : [await fetchWhere({ [relation.field]: { in: referenceValues } }, undefined)];
 
         const groups = groupByForeignKey(pages, relation.field, (page) => masked(relation.table, page));

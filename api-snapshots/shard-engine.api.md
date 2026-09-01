@@ -1564,7 +1564,6 @@ const QUEUE_TABLE = "__lunora_queue_messages";
 interface QueryArgs {
     baseWhere?: WhereInput;
     cursor?: null | string;
-    fanOutBudget?: FanOutBudget;
     includeDeleted?: boolean;
     limit?: number;
     omitContinueCursor?: boolean;
@@ -4426,7 +4425,7 @@ const recordShapeProbePass: (counters: ShapeProbeCounters, run: number, served: 
 ### `relationHooks` (const)
 
 ```ts
-const relationHooks: (args: Pick<QueryArgs, "fanOutBudget" | "relationBaseWhere" | "relationMask">) => Pick<QueryArgs, "fanOutBudget" | "relationBaseWhere" | "relationMask">;
+const relationHooks: (args: Pick<QueryArgs, "relationBaseWhere" | "relationMask">) => Pick<QueryArgs, "relationBaseWhere" | "relationMask"> & Pick<ResolveWithOptions, "fanOutBudget">;
 ```
 
 ### `relayCountFor` (const)

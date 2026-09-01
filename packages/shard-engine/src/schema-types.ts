@@ -205,12 +205,27 @@ export interface ApplyOnDeleteOptions {
  * Mutable and passed by reference on purpose: the bound that matters is the
  * TOTAL number of reads a single request issues, and each nested `with` level
  * resolves inside its own `fetcher` call, so a per-level cap bounds nothing.
- * Threaded exactly the way `relationBaseWhere` is, and for the same reason —
- * nested levels have to inherit it.
+ *
+ * Deliberately NOT a field on {@link QueryArgs}. It has to cross the injected
+ * `fetcher` boundary to reach the next level, but it is internal accounting, not
+ * a query anybody writes — as a public argument it would be a documented knob
+ * whose obvious value (`{ remaining: Infinity }`) disables the subrequest bound
+ * and turns a slow read into a failed one. It rides the args object under
+ * {@link FAN_OUT_BUDGET} instead, which no public type can name.
  */
 export interface FanOutBudget {
     remaining: number;
 }
+
+/**
+ * The key a {@link FanOutBudget} travels under on a `fetcher`'s args.
+ *
+ * `Symbol.for`, not `Symbol()`: a package can appear more than once in a
+ * dependency graph and `shared/` files are inlined per bundle, so a
+ * module-local symbol risks being written by one copy and read by another. The
+ * global registry makes them the same key whatever the bundling does.
+ */
+export const FAN_OUT_BUDGET = Symbol.for("lunora.relations.fanOutBudget");
 
 export interface ResolveWithOptions {
     fanOutBudget?: FanOutBudget;
@@ -239,6 +254,10 @@ export interface QueryArgs {
     baseWhere?: WhereInput;
     cursor?: null | string;
 
+    includeDeleted?: boolean;
+
+    limit?: number;
+
     /**
      * Return `continueCursor: null` without building one. **Engine-internal**, in
      * the same sense as `baseWhere` / `relationBaseWhere` / `relationMask`: no
@@ -253,10 +272,6 @@ export interface QueryArgs {
      * next page exists, and pages nowhere. `isDone` stays honest either way, so
      * prefer it for "is there more". Nothing but `findFirst` should set this.
      */
-    fanOutBudget?: FanOutBudget;
-    includeDeleted?: boolean;
-
-    limit?: number;
     omitContinueCursor?: boolean;
     orderBy?: OrderByInput[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;

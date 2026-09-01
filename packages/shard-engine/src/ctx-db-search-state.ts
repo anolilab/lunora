@@ -56,17 +56,27 @@ const migrateSearchState = (sql: SqlExec): void => {
 
     try {
         runDrizzle(sql, dsql`ALTER TABLE ${dsql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${dsql.identifier("covered")} INTEGER NOT NULL DEFAULT 0`);
-
-        // Reached only on the deploy that adds the column, so the rows in front
-        // of it predate any `covered` write — and `done` already says it for
-        // them: a companion recorded as finished has walked the whole table.
-        // Without this an index that was complete before this build, and whose
-        // profile changes in this same deploy, would read as uncovered and
-        // refuse every search for the length of the rebuild.
-        runDrizzle(sql, dsql`UPDATE ${dsql.identifier(SEARCH_STATE_TABLE)} SET ${dsql.identifier("covered")} = 1 WHERE ${dsql.identifier("done")} = 1`);
     } catch {
         // Already present (or the table was just created with it).
     }
+
+    // Backfill `covered` for rows that predate the column, in its OWN statement
+    // rather than inside the `ALTER` above.
+    //
+    // Sharing the ALTER's try meant this ran only on the single call that added
+    // the column: if the process stopped between the two — or the UPDATE itself
+    // failed — every later call took the ALTER's catch and skipped the backfill
+    // forever. An index completed before this build would then read as uncovered
+    // for good, and refuse every search for the length of its next rebuild.
+    //
+    // `done` already carries the answer for those rows: a companion recorded as
+    // finished has walked the whole table. `AND covered = 0` makes this a no-op
+    // write after the first successful pass, so paying for it on every migration
+    // call costs a matchless scan of a table with one row per index.
+    runDrizzle(
+        sql,
+        dsql`UPDATE ${dsql.identifier(SEARCH_STATE_TABLE)} SET ${dsql.identifier("covered")} = 1 WHERE ${dsql.identifier("done")} = 1 AND ${dsql.identifier("covered")} = 0`,
+    );
 };
 
 /** A persisted flag column (`done`, `covered`), however this engine's driver spells a boolean. */
