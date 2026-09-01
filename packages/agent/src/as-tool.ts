@@ -21,6 +21,20 @@ const TERMINAL_STATUSES = new Set(["complete", "errored", "terminated"]);
 /** Default cap on child-run status polls before the tool gives up. */
 const DEFAULT_MAX_POLLS = 120;
 
+/**
+ * How deep a chain of sub-agent delegations may go. A run started by a user is
+ * depth 0 and each `asTool` call spawns its child one deeper, so at most three
+ * levels of sub-agents run below any user-facing run.
+ *
+ * `maxTurns` bounds the turns of ONE level and nothing bounded the TREE: two
+ * agents holding each other's `asTool` delegate back and forth forever, and
+ * because every level derives a DISTINCT child `threadKey`, the per-thread
+ * run-queue cap never applies across them. A timed-out parent does not stop its
+ * child either, so an unbounded chain keeps spawning Workflow instances (and
+ * billing model calls) long after the top-level run has answered.
+ */
+const MAX_DELEGATION_DEPTH = 3;
+
 /** Default delay (ms) between child-run status polls. */
 const DEFAULT_POLL_INTERVAL_MS = 500;
 
@@ -108,6 +122,13 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         throw new LunoraError("INTERNAL", "@lunora/agent: agent.asTool requires a non-empty `description` (the parent model decides from it)");
     }
 
+    if (options.maxPolls !== undefined && (!Number.isInteger(options.maxPolls) || options.maxPolls < 1)) {
+        // `slice`-style leniency has no place here: `maxPolls: 0` returned
+        // "timeout" without a single status read, so the parent reported the
+        // child had not finished before the child had even been looked at.
+        throw new LunoraError("INTERNAL", "@lunora/agent: agent.asTool `maxPolls` must be a positive integer");
+    }
+
     const { name } = options;
     const bindingName = agentBindingName(name);
     const maxPolls = options.maxPolls ?? DEFAULT_MAX_POLLS;
@@ -116,6 +137,16 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
     const listMessages = toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.listMessages);
 
     const execute = async (input: AgentSubToolInput, context: AgentToolContext): Promise<string> => {
+        // Recursion bound, checked BEFORE the binding is touched so a cycle
+        // costs nothing at the last level. Returned as the tool's answer rather
+        // than thrown: a throw fails (and retries) the parent's durable step,
+        // while a message lets the parent's model recover and answer directly.
+        const depth = (Number.isInteger(context.depth) ? (context.depth as number) : 0) + 1;
+
+        if (depth > MAX_DELEGATION_DEPTH) {
+            return `Sub-agent "${name}" was not started: the maximum delegation depth of ${String(MAX_DELEGATION_DEPTH)} is already reached. Answer with what you have instead of delegating further.`;
+        }
+
         const binding = context.env[bindingName] as AgentWorkflowBindingLike | undefined;
 
         if (!binding || typeof binding.create !== "function" || typeof binding.get !== "function") {
@@ -130,7 +161,7 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         // run instead of starting a second one.
         const childThreadKey = `${context.threadKey}::sub::${name}::${context.toolCallId}`;
         const childInstanceId = `sub-${name}-${context.toolCallId}`;
-        const params: AgentRunInput = { input: input.prompt, threadKey: childThreadKey };
+        const params: AgentRunInput = { depth, input: input.prompt, threadKey: childThreadKey };
 
         let instance: AgentWorkflowInstanceLike;
 
@@ -160,6 +191,17 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         }
 
         if (terminal === "timeout") {
+            // Giving up on the poll is abandoning the child, so stop it: the
+            // parent already reports it never finished, and a child left running
+            // keeps spawning turns (and its own sub-agents) that nothing will
+            // ever read. Best-effort — an instance that already finished or was
+            // reaped rejects `terminate`, which must not mask the answer.
+            try {
+                await instance.terminate();
+            } catch {
+                /* the child is already gone (or unreachable) — the answer below stands either way */
+            }
+
             return `Sub-agent "${name}" did not finish within the allotted time.`;
         }
 

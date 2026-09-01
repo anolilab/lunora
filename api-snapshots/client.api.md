@@ -1322,6 +1322,7 @@ type SubscriptionErrorCallback = (error: SubscriptionError) => void;
 ```ts
 class SubscriptionRegistry {
     static key(functionPath: string, args: Record<string, unknown>, shardKey?: string): string;
+    static keyOf(state: SubscriptionState): string;
     get(key: string): SubscriptionState | undefined;
     getById(id: string): SubscriptionState | undefined;
     add(state: SubscriptionState): void;
@@ -1353,6 +1354,7 @@ interface SubscriptionState {
     serverCursor?: number;
     serverEpoch?: string;
     readonly shardKey?: string;
+    readonly wireArgs: Record<string, unknown>;
 }
 ```
 

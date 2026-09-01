@@ -10,6 +10,7 @@ const EMPTY_TOOLS_PATTERN = /non-empty map of tools/u;
 const GATED_TOOL_PATTERN = /cannot compose "gated"/u;
 const DUPLICATE_ID_PATTERN = /duplicate code step id "dup"/u;
 const BOOM_PATTERN = /boom/u;
+const MAX_STEPS_PATTERN = /`maxSteps` must be a positive integer/u;
 
 // `step` is required on AgentToolContext — production always threads a real
 // durable handle — so a hand-built context supplies the pass-through double.
@@ -310,5 +311,29 @@ describe(codeTool, () => {
         const gated: AgentToolDefinition = { ...fakeTool("x"), needsApproval: true };
 
         expect(() => codeTool({ gated })).toThrow(GATED_TOOL_PATTERN);
+    });
+
+    it.each([0, -1, 0.5, Number.NaN])("rejects a non-positive-integer maxSteps at declaration time (%s)", (maxSteps) => {
+        // `slice(0, maxSteps)` swallowed these silently: `0`/`0.5`/`NaN` ran NO
+        // step and still reported success, `-1` dropped the LAST step — a script
+        // that looks like it committed its final side effect and did not.
+        expect(() => codeTool({ search: fakeTool(["hit"]) }, { maxSteps })).toThrow(MAX_STEPS_PATTERN);
+    });
+
+    it("keeps running every step under a valid maxSteps", async () => {
+        const calls: unknown[] = [];
+        const tool = codeTool({ search: fakeTool("hit", calls) }, { maxSteps: 2 });
+
+        await tool.execute(
+            {
+                steps: [
+                    { id: "a", tool: "search" },
+                    { id: "b", tool: "search" },
+                ],
+            },
+            context,
+        );
+
+        expect(calls).toHaveLength(2);
     });
 });

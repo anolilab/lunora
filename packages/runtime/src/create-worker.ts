@@ -2806,12 +2806,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * Dispatch every code-defined cron job declared under the firing expression,
      * collecting per-job failures into `errors` so one failing job neither aborts
      * the others nor is swallowed.
+     * @returns how many jobs were declared under `cron` — 0 means the expression
+     * matched nothing, which the caller reports rather than treating as success.
      */
-    const runCronJobs = async (cron: string, env: unknown, errors: Error[], toError: (error: unknown) => Error): Promise<void> => {
+    const runCronJobs = async (cron: string, env: unknown, errors: Error[], toError: (error: unknown) => Error): Promise<number> => {
         const cronJobs = options.cronJobs?.[cron];
 
         if (!cronJobs) {
-            return;
+            return 0;
         }
 
         for (const job of cronJobs) {
@@ -2822,6 +2824,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 errors.push(toError(error));
             }
         }
+
+        return cronJobs.length;
     };
 
     /**
@@ -3368,6 +3372,34 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             );
         };
 
+        /**
+         * Walk every page of the DO's `/list` and return the records.
+         *
+         * The DO answers ONE bounded page (`{ records, truncated, cursor }`), so
+         * handing the raw body back both breaks the declared
+         * `Record<string, unknown>[]` contract and silently drops every job past
+         * the page size. Mirrors `@lunora/scheduler`'s `createScheduler.list()`
+         * — the shard-side client of the same route.
+         */
+        const listAll = async (): Promise<Record<string, unknown>[]> => {
+            const all: Record<string, unknown>[] = [];
+            let cursor: string | undefined;
+
+            for (;;) {
+                const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+                // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page, so the round-trips are inherently sequential
+                const page = await call<{ cursor?: string; records?: Record<string, unknown>[]; truncated?: boolean }>(`/list${query}`, { method: "GET" });
+
+                all.push(...(Array.isArray(page.records) ? page.records : []));
+
+                if (page.truncated !== true || typeof page.cursor !== "string" || page.cursor.length === 0) {
+                    return all;
+                }
+
+                cursor = page.cursor;
+            }
+        };
+
         const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
             const { id } = await post<{ id: string }>("/schedule", { args, scheduledFor, ...targetFields(target) });
 
@@ -3377,7 +3409,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return {
             cancel: async (id) => await post<{ cancelled: boolean }>("/cancel", { id }),
             get: async (id) => await call<Record<string, unknown> | null>(`/get?id=${encodeURIComponent(id)}`, { method: "GET" }),
-            list: async () => await call<Record<string, unknown>[]>("/list", { method: "GET" }),
+            list: listAll,
             runAfter: async (delayMs, target, args) => {
                 if (!Number.isFinite(delayMs) || delayMs < 0) {
                     throw new LunoraError("ctx.scheduler.runAfter: `delayMs` must be a non-negative finite number", { code: "BAD_REQUEST", status: 400 });
@@ -4526,14 +4558,29 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Code-defined crons: run every job declared under the firing expression.
         // Failures join `errors` for the combined rethrow below. `env` carries the
         // `WORKFLOW_*` bindings a workflow-targeting job starts an instance on.
-        await runCronJobs(controller.cron, env, errors, toError);
+        const ranJobs = await runCronJobs(controller.cron, env, errors, toError);
+        const isBackupCron = Boolean(options.backupStore) && options.backupCron !== undefined && options.backupCron === controller.cron;
 
-        if (options.backupStore && options.backupCron !== undefined && options.backupCron === controller.cron) {
+        if (isBackupCron) {
             try {
                 await runScheduledBackup(options, shardDO, effectiveAdminToken(), controller);
             } catch (error: unknown) {
                 errors.push(toError(error));
             }
+        }
+
+        if (!userHandler && ranJobs === 0 && !isBackupCron) {
+            // Cloudflare fired an expression nothing is registered under — almost
+            // always `triggers.crons` in wrangler.jsonc drifting from the
+            // generated cron map. Returning quietly makes that a green invocation
+            // that ran nothing, which is indistinguishable from a working cron
+            // until someone notices the work never happened.
+            const registered = [...new Set([...Object.keys(options.crons ?? {}), ...Object.keys(options.cronJobs ?? {})])];
+
+            // eslint-disable-next-line no-console -- the scheduled() entry point has no request-scoped logger; the host captures console
+            console.warn(
+                `[lunora] scheduled("${controller.cron}") fired but no cron handler is registered for that expression. Registered: ${registered.length === 0 ? "(none)" : registered.join(", ")}. Check that \`triggers.crons\` in wrangler.jsonc matches the app's cron definitions.`,
+            );
         }
 
         const [first] = errors;

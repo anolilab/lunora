@@ -54,6 +54,14 @@ export interface AgentStepLike {
  * @experimental
  */
 export interface AgentToolContext {
+    /**
+     * How many sub-agent delegations deep this run already is — 0 for a run a
+     * user started, one more per `agent.asTool` hop. The loop copies it off
+     * {@link AgentRunInput.depth}; `agent.asTool` reads it to refuse spawning a
+     * child past the delegation-depth bound (see `as-tool.ts`). Absent is 0.
+     */
+    depth?: number;
+
     /** The Worker environment bindings. */
     env: Record<string, unknown>;
 
@@ -851,8 +859,21 @@ export interface AgentVoiceConfig {
     /**
      * Spoken on connect before the first user turn — a fixed greeting synthesized
      * through the TTS model. Omit for a silent-until-spoken-to session.
+     *
+     * Synthesized once per THREAD, not once per socket: the greeting's persisted
+     * row is keyed per thread, and a reconnect onto a thread that already exists
+     * gets the `ready` frame without paying for the same line again.
      */
     greeting?: string;
+
+    /**
+     * Cap on how many turns one voice socket may run before it is closed with
+     * code `4002`. Every turn is a full LLM generation plus sentence-by-sentence
+     * TTS — billed and persisted — on a hibernatable socket that can live for
+     * days, and the one-turn-in-flight guard throttles nothing. Defaults to 100;
+     * a client that hits the cap reconnects for a fresh budget.
+     */
+    maxTurns?: number;
 
     /**
      * TTS voice/speaker id forwarded to the TTS model (e.g. a Deepgram Aura voice
@@ -893,7 +914,7 @@ export interface AgentAsToolOptions {
     /** What the sub-agent does — shown to the parent's model (it decides from it). */
     description: string;
 
-    /** Cap on child-run status polls before giving up. Default 120. */
+    /** Cap on child-run status polls before giving up — a positive integer. Default 120. */
     maxPolls?: number;
 
     /**
@@ -959,6 +980,15 @@ export type EnsureThreadOutcome =
  * @experimental
  */
 export interface AgentRunInput {
+    /**
+     * Sub-agent delegation depth. A run a user starts omits it (0); each
+     * `agent.asTool` hop stamps its child one deeper, and the tool refuses to
+     * delegate past the bound — `maxTurns` bounds one level's turns, this bounds
+     * the TREE (every hop mints a distinct child `threadKey`, so the per-thread
+     * run-queue cap never applies across them).
+     */
+    depth?: number;
+
     /** The user message that starts (or continues) the thread. */
     input: string;
 

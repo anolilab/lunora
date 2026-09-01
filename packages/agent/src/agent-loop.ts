@@ -95,6 +95,13 @@ interface AgentLoopOptions {
 
 const DEFAULT_MAX_TURNS = 8;
 
+/**
+ * The run's sub-agent delegation depth, floored at 0. A caller-supplied depth
+ * only ever RESTRICTS how far this run may delegate (see `as-tool.ts`), so a
+ * bogus one — absent, negative, fractional — is treated as a top-level run.
+ */
+const normalizeDepth = (depth: number | undefined): number => (Number.isInteger(depth) && (depth as number) > 0 ? (depth as number) : 0);
+
 /** Everything one turn (and its tool calls) needs, prepared once per run. */
 interface TurnContext {
     agent: AgentDefinition;
@@ -103,6 +110,8 @@ interface TurnContext {
     /** Patch this run's thread by key (status/error/usage/…). */
     /** Retire a persisted message by key (dispatches `agents:agentDeleteMessage`). */
     deleteMessage: (messageKey: string) => Promise<void>;
+    /** Sub-agent delegation depth of THIS run (`params.depth`), handed to every tool context. */
+    depth: number;
     env: Record<string, unknown>;
     generate: AgentGenerate;
     /** Read the thread's synced state (dispatches `agents:agentState`) — the tool ctx's `getState`. */
@@ -342,7 +351,7 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
-    const { env, getState, instanceId, onTokenDelta, persist, run, setState, step, threadKey, tools } = turnContext;
+    const { depth, env, getState, instanceId, onTokenDelta, persist, run, setState, step, threadKey, tools } = turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -364,11 +373,11 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         onTokenDelta?.({ data, kind: "progress", threadKey, toolCallId: call.id });
     };
 
-    const toolContext = { env, getState, idempotencyKey: stepName, reportProgress, run, setState, step, threadKey, toolCallId: call.id };
+    const toolContext = { depth, env, getState, idempotencyKey: stepName, reportProgress, run, setState, step, threadKey, toolCallId: call.id };
     // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
     // that mutates state is a side effect inside a decision predicate, which is
     // exactly the misuse durability here is fixing, not relocating.
-    const gateContext: AgentApprovalContext = { env, getState, idempotencyKey: stepName, run, threadKey, toolCallId: call.id };
+    const gateContext: AgentApprovalContext = { depth, env, getState, idempotencyKey: stepName, run, threadKey, toolCallId: call.id };
     // Distinct from `stepName` (`tool:${call.name}:${call.id}`) so
     // `@lunora/workflow`'s BY-NAME step memoization can never confuse the gate's
     // durable result with the tool's own (see the advisor's duplicate-step-name
@@ -501,10 +510,15 @@ const splitForCompaction = (
 };
 
 /**
- * Apply automatic history compaction for a turn. When {@link splitForCompaction}
- * decides to compact and a `compact` seam is present, summarize the older
- * messages and return the recent tail plus the summary; otherwise return the
- * history unchanged. Called INSIDE the turn's memoized step, so the LLM
+ * Apply automatic history compaction for a turn. Shared with the in-DO voice
+ * pipeline (`voice-turn.ts`), which runs on the SAME thread — an agent that
+ * configures compaction must get it on a voice turn too, or a long conversation
+ * silently sends the whole history on every spoken turn.
+ *
+ * When {@link splitForCompaction} decides to compact and a `compact` seam is
+ * present, summarize the older messages and return the recent tail plus the
+ * summary; otherwise return the history unchanged. Called INSIDE the durable
+ * loop's memoized turn step (and inline on a voice turn), so the LLM
  * summarization is replay-safe. Best-effort: a summarization throw falls back to
  * the full, uncompacted history rather than failing the turn.
  *
@@ -513,8 +527,11 @@ const splitForCompaction = (
  * turn — the price of the per-turn memoized-step model. Persisting a running brief
  * to reuse across turns is a deliberate future optimization.
  */
-const compactHistory = async (turnContext: TurnContext, history: AgentMessageRow[]): Promise<{ history: AgentMessageRow[]; summary: string | undefined }> => {
-    const { agent, compact, env } = turnContext;
+const compactHistory = async (
+    context: { agent: AgentConfig; compact: AgentCompact | undefined; env: Record<string, unknown> },
+    history: AgentMessageRow[],
+): Promise<{ history: AgentMessageRow[]; summary: string | undefined }> => {
+    const { agent, compact, env } = context;
     const split = splitForCompaction(history, agent.compaction);
 
     if (split === undefined || compact === undefined) {
@@ -1216,6 +1233,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     const turnContext: TurnContext = {
         agent,
         compact,
+        depth: normalizeDepth(params.depth),
         env,
         generate,
         getState,
@@ -1329,4 +1347,4 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 };
 
 export type { AgentLoopOptions };
-export { runAgentLoop, splitForCompaction };
+export { compactHistory, runAgentLoop, splitForCompaction };

@@ -106,4 +106,72 @@ describe("schedulerDO (workerd)", () => {
             await expect(state.storage.getAlarm()).resolves.toBe(later);
         });
     });
+
+    it("storage.list({ end }) is an EXCLUSIVE upper bound — the semantics the unit fake models", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("end-bound");
+
+        // The alarm path bounds its due-slice with `end: t:<paddedNow>:~`, and
+        // `../fake-state` models that as `key < end`. Pin the real runtime's
+        // behaviour here so the fake cannot silently drift from it: a fake that
+        // is wrong about `end` makes every mis-sorted-key bug invisible to the
+        // whole mock suite.
+        await runInDurableObject(stub, async (_instance, state) => {
+            await state.storage.put({
+                "t:000000000001000:a": "a",
+                "t:000000000002000:b": "b",
+                "t:000000000003000:c": "c",
+            });
+
+            const bounded = await state.storage.list<string>({ end: "t:000000000002000:b", prefix: "t:" });
+
+            // `end` itself is excluded; everything below it is returned.
+            expect([...bounded.keys()]).toEqual(["t:000000000001000:a"]);
+        });
+    });
+
+    it("/dead answers a bounded page and its cursor walks the rest", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("dead-paging");
+
+        // Nothing prunes `dead:`, so this set grows without limit in a real app;
+        // 250 rows is enough to prove the response is paged rather than dumping
+        // the whole prefix into one JSON body.
+        await runInDurableObject(stub, async (_instance, state) => {
+            for (let index = 0; index < 250; index += 1) {
+                const key = String(index).padStart(4, "0");
+
+                // eslint-disable-next-line no-await-in-loop -- sequential seeding against one DO's storage
+                await state.storage.put(`dead:d${key}`, { args: {}, attempts: 6, enqueuedAt: 1, functionPath: "f", id: `d${key}`, scheduledFor: 1 });
+            }
+        });
+
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        let pages = 0;
+
+        for (;;) {
+            const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+            // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page
+            const response = await stub.fetch(`https://scheduler.internal/dead${query}`, { method: "GET" });
+            // eslint-disable-next-line no-await-in-loop -- see above
+            const body = await response.json<{ cursor?: string; records: { id: string }[]; truncated: boolean }>();
+
+            pages += 1;
+            seen.push(...body.records.map((record) => record.id));
+
+            expect(body.records.length).toBeLessThanOrEqual(100);
+
+            if (!body.truncated || typeof body.cursor !== "string") {
+                break;
+            }
+
+            cursor = body.cursor;
+        }
+
+        expect(pages).toBe(3);
+        expect(new Set(seen).size).toBe(250);
+    });
 });

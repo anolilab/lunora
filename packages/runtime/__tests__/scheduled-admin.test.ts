@@ -58,6 +58,10 @@ const recordingScheduler = (): { calls: { body: string; method: string; pathname
                 return Response.json({ removed: true });
             }
 
+            if (url.pathname === "/complete") {
+                return Response.json({ inFlight: 0 });
+            }
+
             return Response.json({ cancelled: true });
         },
     };
@@ -464,5 +468,69 @@ describe("createWorker — scheduled admin endpoints", () => {
         );
 
         expect(response.status).toBe(426);
+    });
+
+    it("pool release forwards POST /complete with the id and pool", async () => {
+        expect.assertions(3);
+
+        const { calls, namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/scheduled/pool/release", {
+                body: JSON.stringify({ id: "j1", pool: "mail" }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body: { inFlight: number } = await response.json();
+
+        expect(body.inFlight).toBe(0);
+        expect(calls).toEqual([{ body: JSON.stringify({ id: "j1", pool: "mail" }), method: "POST", pathname: "/complete" }]);
+    });
+
+    it("pool release rejects a missing pool (400)", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/scheduled/pool/release", {
+                body: JSON.stringify({ id: "j1" }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+        expect(calls).toEqual([]);
+    });
+
+    it("pool release rejects without a valid admin bearer (403)", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/scheduled/pool/release", {
+                body: JSON.stringify({ id: "j1", pool: "mail" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(403);
+        expect(calls).toEqual([]);
     });
 });

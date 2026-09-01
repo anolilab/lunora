@@ -567,6 +567,26 @@ const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError 
     return { message: messageText, ...(code === undefined ? {} : { code }) };
 };
 
+/**
+ * Wrap a subscriber's callback in a fresh closure, so registering it in a
+ * `Set` gives THIS subscriber its own slot.
+ *
+ * Registering the caller's own function directly deduped two consumers that
+ * passed the SAME reference — a module-level handler, a `useCallback`-stable
+ * one — down to a single Set entry, so the first `unsubscribe()` emptied the
+ * set and tore the shared registration out from under the second consumer.
+ * Passes `undefined` through so an unset `onError`/`onCheckpoint` stays unset.
+ */
+const wrapSubscriber = <A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined => {
+    if (callback === undefined) {
+        return undefined;
+    }
+
+    return (argument: A): void => {
+        callback(argument);
+    };
+};
+
 /** Fan an error out to every registered `onError` callback, swallowing throws so one bad listener can't starve the rest. */
 const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallback>, error: SubscriptionError): void => {
     for (const errorCallback of callbacks) {
@@ -2451,9 +2471,26 @@ class LunoraClient {
     public async listDeadJobs(): Promise<ScheduleRecord[]> {
         this.assertOpen();
 
-        const body = (await this.adminFetch(SCHEDULED_DEAD_PATH, "GET")) as { records?: ScheduleRecord[] };
+        // Walk every page. `/dead` became a bounded, cursored read so a shard
+        // that dead-lettered thousands of jobs over a weekend cannot fail to
+        // serialize them in one response — but the studio's dead-letter panel is
+        // the ONLY view of a permanently-failed job and the only way to requeue
+        // one, so stopping at the first page would hide exactly the backlog the
+        // operator opened it for. Returning `records` alone made this silently
+        // truncate the moment the route grew its limit.
+        const records: ScheduleRecord[] = [];
+        let cursor: string | undefined;
 
-        return body.records ?? [];
+        do {
+            const path = cursor === undefined ? SCHEDULED_DEAD_PATH : `${SCHEDULED_DEAD_PATH}?cursor=${encodeURIComponent(cursor)}`;
+            // eslint-disable-next-line no-await-in-loop -- each page's request needs the PRIOR page's cursor; there is nothing to parallelise
+            const body = (await this.adminFetch(path, "GET")) as { cursor?: string; records?: ScheduleRecord[]; truncated?: boolean };
+
+            records.push(...(body.records ?? []));
+            cursor = body.truncated === true ? body.cursor : undefined;
+        } while (cursor !== undefined);
+
+        return records;
     }
 
     /**
@@ -3419,8 +3456,17 @@ class LunoraClient {
         const key = SubscriptionRegistry.key(function_.__lunoraRef, argsRecord, options.shardKey);
 
         let state = this.subscriptions.get(key);
-        const subscriptionCallback = callback as SubscriptionCallback;
-        const errorCallback = options.onError;
+
+        // Wrap, never register the caller's own function: `callbacks` is a Set,
+        // so two consumers that pass the SAME reference (a module-level handler,
+        // a `useCallback`-stable one) would collapse to one entry and the first
+        // unsubscribe would tear the registration out from under the second.
+        // A fresh closure per `subscribe()` call gives each consumer its own
+        // slot, its own delivery, and its own unsubscribe. Mirrored below for
+        // `onError`/`onCheckpoint`, which have the same shape.
+        const subscriptionCallback = wrapSubscriber(callback as SubscriptionCallback) as SubscriptionCallback;
+        const errorCallback = wrapSubscriber(options.onError);
+        const checkpointCallback = wrapSubscriber(options.onCheckpoint);
 
         if (!state) {
             this.nextSubId += 1;
@@ -3442,6 +3488,11 @@ class LunoraClient {
                 serverBase: cached?.value,
                 serverCursor: cached?.serverCursor,
                 shardKey: options.shardKey,
+                // Encode ONCE, here, so an unsupported arg value throws at this
+                // call site instead of inside a reconnect's open handler — and
+                // so a caller mutating its own `args` object afterwards cannot
+                // poison the resubscribe (see `SubscriptionState.wireArgs`).
+                wireArgs: encodeCallArgs(argsRecord, `args for '${function_.__lunoraRef}'`) as Record<string, unknown>,
                 ...(cached?.serverEpoch === undefined ? {} : { serverEpoch: cached.serverEpoch }),
             };
             this.subscriptions.add(state);
@@ -3457,8 +3508,8 @@ class LunoraClient {
         // `@lunora/db` collection still receives `settled` fan-out even when it
         // joins a query a plain `useQuery` opened first (the state already existed
         // above). One slot would drop every subscriber but the state's creator.
-        if (options.onCheckpoint) {
-            state.checkpointCallbacks.add(options.onCheckpoint);
+        if (checkpointCallback) {
+            state.checkpointCallbacks.add(checkpointCallback);
         }
 
         // Replay last value to new subscriber synchronously if available.
@@ -3482,8 +3533,8 @@ class LunoraClient {
                 subscriptionState.errorCallbacks.delete(errorCallback);
             }
 
-            if (options.onCheckpoint) {
-                subscriptionState.checkpointCallbacks.delete(options.onCheckpoint);
+            if (checkpointCallback) {
+                subscriptionState.checkpointCallbacks.delete(checkpointCallback);
             }
 
             if (subscriptionState.callbacks.size === 0) {
@@ -5166,7 +5217,20 @@ class LunoraClient {
             // disconnect/reconnect cycle.
             conn.lastFrameAt = Date.now();
 
-            handlers.onOpen?.();
+            // A WS listener that throws unwinds into the host's event loop,
+            // where nothing can recover it — the rest of `onOpen` (resubscribe,
+            // queued unsubscribes, stream flush, whisper rejoin, offline-queue
+            // flush) is skipped and the client still reports `connected`. The
+            // legs are individually throw-free today (args are pre-encoded at
+            // subscribe time, every send goes through `sendOn`); this is the
+            // containment that keeps a future one from silently killing a
+            // reconnect. Same guard on `message` below.
+            try {
+                handlers.onOpen?.();
+            } catch (error) {
+                // eslint-disable-next-line no-console -- last-resort visibility for a throw that would otherwise vanish into the event loop
+                console.error("[lunora] connection open handler threw", error);
+            }
 
             this.startHeartbeat(conn, disconnect);
         });
@@ -5189,7 +5253,16 @@ class LunoraClient {
             // with the reader below, for every caller of this helper.
             conn.lastFrameAt = Date.now();
 
-            handlers.onMessage(event);
+            try {
+                handlers.onMessage(event);
+            } catch (error) {
+                // See the `open` listener above. Frame handlers that can fail on
+                // hostile/corrupt input route their own failure to the affected
+                // subscriber (see `handleDataMessage`); this catches whatever is
+                // left so one bad frame cannot take the socket's listener down.
+                // eslint-disable-next-line no-console -- last-resort visibility for a throw that would otherwise vanish into the event loop
+                console.error("[lunora] server frame handler threw", error);
+            }
         });
 
         socket.addEventListener("close", (event?: { code?: number }): void => {
@@ -5580,12 +5653,14 @@ class LunoraClient {
             // sub (a hydrated read or an earlier frame), so the server can
             // resume instead of re-snapshotting. Omitted on a cold sub.
             query: {
-                // Wire-encode so a `bigint`/`Date`/bytes arg survives the frame's
-                // `JSON.stringify` (the shard `decodeWire`s at its subscribe entry
-                // point). Identity for pure-JSON args. Cannot throw here: the
-                // registry key (`stableWireKey`) already encoded these args at
-                // subscribe() time, so reconnect resends stay safe.
-                args: encodeWire(state.args) as Record<string, unknown>,
+                // `wireArgs` is the pre-encoded form of `args` (computed at
+                // `subscribe` time) so a `bigint`/`Date`/bytes arg survives the
+                // frame's `JSON.stringify`; the shard `decodeWire`s it at its
+                // subscribe entry point. Identity for pure-JSON args. Encoding
+                // HERE would run inside the reconnect's `open` handler, where a
+                // caller's post-subscribe mutation of its own args object turns
+                // into a throw that kills the whole resubscribe sequence.
+                args: state.wireArgs,
                 functionPath: state.fn.__lunoraRef,
                 table,
                 ...(resumable ? { sinceSeq: state.serverCursor } : {}),
@@ -5777,7 +5852,7 @@ class LunoraClient {
             // that identity accept it (correct) and everyone else drops it
             // (correct), so there is no need to also suppress the broadcast.
             const identity = this.identityFingerprint();
-            const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+            const key = SubscriptionRegistry.keyOf(state);
 
             fanSubscriptionError(state.errorCallbacks, subscriptionError);
 
@@ -6003,7 +6078,25 @@ class LunoraClient {
             return;
         }
 
-        const payload = this.resolveDataPayload(message, state);
+        let payload: unknown;
+
+        try {
+            payload = this.resolveDataPayload(message, state);
+        } catch (error) {
+            // The frame carried a value `decodeWire` refuses (an over-long
+            // bigint, an over-depth tree, a malformed map entry). Left to throw
+            // it escapes the WS `message` listener: `onError` never fires, the
+            // cursor never advances, and every later frame carrying the same
+            // value dies identically — the subscription frozen with the
+            // indicator still reading `connected`. Surface it to the subscriber
+            // instead and leave the cached value + cursor untouched.
+            fanSubscriptionError(state.errorCallbacks, {
+                code: "WIRE_DECODE_FAILED",
+                message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
+            });
+
+            return;
+        }
 
         if (payload === UNMERGEABLE_DELTA) {
             this.resnapshotSubscription(state);
@@ -6063,7 +6156,7 @@ class LunoraClient {
         // which is clientId-scoped (plan 266 S3); relaying a `data` frame's
         // watermark here would reintroduce the same cross-client leak S3 fixed.
         if (this.tabCoordinator?.isLeader()) {
-            const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+            const key = SubscriptionRegistry.keyOf(state);
 
             this.tabCoordinator.broadcastSubscriptionData(key, payload, state.serverCursor, state.serverEpoch, this.identityFingerprint());
         }
@@ -6129,7 +6222,7 @@ class LunoraClient {
         // confirmed would stay masked on a follower until the next VISIBLE data
         // frame (see `onSubscriptionSettled` in the constructor).
         if (this.tabCoordinator?.isLeader()) {
-            const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+            const key = SubscriptionRegistry.keyOf(state);
 
             this.tabCoordinator.broadcastSubscriptionSettled(
                 key,

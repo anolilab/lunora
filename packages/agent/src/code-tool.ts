@@ -319,6 +319,14 @@ const codeTool = (tools: Record<string, AnyAgentTool>, options: CodeToolOptions 
         }
     }
 
+    if (options.maxSteps !== undefined && (!Number.isInteger(options.maxSteps) || options.maxSteps < 1)) {
+        // `slice(0, maxSteps)` swallows every bad value silently: `0`, `0.5` and
+        // `NaN` run NO step and still report success, `-1` drops the LAST step —
+        // a script that looks like it committed its final side effect and did
+        // not. Fail at declaration time, like `defineAgent`'s `maxTurns`.
+        throw new LunoraError("INTERNAL", "@lunora/agent: codeTool `maxSteps` must be a positive integer");
+    }
+
     const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
 
     return {

@@ -16,6 +16,8 @@ const NO_WORKFLOW_BINDING = /no Workflow binding "AGENT_RESEARCH"/u;
 const REQUIRES_NAME = /requires a `name`/u;
 const NON_EMPTY_DESCRIPTION = /non-empty `description`/u;
 const QUOTA_EXCEEDED = /quota exceeded/u;
+const MAX_POLLS_PATTERN = /`maxPolls` must be a positive integer/u;
+const DEPTH_EXCEEDED = /delegation depth/u;
 
 /**
  * A mock `AGENT_<NAME>` Workflow binding: `create` records the params + id, and
@@ -112,7 +114,7 @@ describe(agentAsTool, () => {
         expect(binding.created).toHaveLength(1);
         // Derived from the parent's threadKey + toolCallId — same inputs replay identically.
         expect(binding.created[0]?.id).toBe("sub-research-call_9");
-        expect(binding.created[0]?.params).toStrictEqual({ input: "find X", threadKey: "thread-1::sub::research::call_9" });
+        expect(binding.created[0]?.params).toStrictEqual({ depth: 1, input: "find X", threadKey: "thread-1::sub::research::call_9" });
     });
 
     it("polls the child run's status until it reaches a terminal state", async () => {
@@ -221,5 +223,127 @@ describe(agentAsTool, () => {
     it("rejects a missing name or description", () => {
         expect(() => agentAsTool({ description: "d", name: "" })).toThrow(REQUIRES_NAME);
         expect(() => agentAsTool({ description: "", name: "research" })).toThrow(NON_EMPTY_DESCRIPTION);
+    });
+
+    it.each([0, -1, 1.5, Number.NaN])("rejects a non-positive-integer maxPolls at declaration time (%s)", (maxPolls) => {
+        // `maxPolls: 0` made `pollUntilTerminal` return without a single status
+        // read while still reporting a timeout — the child run is left going and
+        // the parent reports it never finished.
+        expect(() => agentAsTool({ description: "d", maxPolls, name: "research" })).toThrow(MAX_POLLS_PATTERN);
+    });
+});
+
+describe("sub-agent recursion bound", () => {
+    it("stamps the child's delegation depth on the run params", async () => {
+        const binding = mockAgentBinding(["complete"]);
+        const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 0 }]);
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+
+        await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run));
+
+        // A top-level run is depth 0, so its child runs at depth 1.
+        expect(binding.created[0]?.params).toStrictEqual({ depth: 1, input: "go", threadKey: "thread-1::sub::research::call_9" });
+    });
+
+    it("increments the parent's depth rather than restarting from zero", async () => {
+        const binding = mockAgentBinding(["complete"]);
+        const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 0 }]);
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+
+        await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run, { depth: 2 }));
+
+        expect((binding.created[0]?.params as { depth?: number }).depth).toBe(3);
+    });
+
+    it("refuses to spawn a child at the depth bound — no Workflow instance is created", async () => {
+        const binding = mockAgentBinding(["complete"]);
+        const { run } = runWithChildThread([]);
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+
+        // Two agents that hold each other's `asTool` delegate back and forth
+        // forever: every level mints a DISTINCT child threadKey, so the per-thread
+        // run-queue cap never applies across them and `maxTurns` only bounds each
+        // level. The depth counter is what bounds the TREE.
+        const answer = await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run, { depth: 3 }));
+
+        expect(answer).toMatch(DEPTH_EXCEEDED);
+        expect(binding.created).toStrictEqual([]);
+    });
+
+    it("threads the run's depth through the loop onto the tool context", async () => {
+        const child = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const binding = mockAgentBinding(["complete"]);
+        const runtime = memoryRuntime();
+        const supervisor = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: { research: child.asTool({ description: "Delegate research.", name: "research", wait: immediate }) },
+        });
+        const generate = scriptedGenerate([toolTurn("call_9", "research", { prompt: "find X" }, "delegating…"), { text: "Done.", toolCalls: [] }]);
+
+        await runAgentLoop(
+            loopDefaults(supervisor, {
+                env: { AGENT_RESEARCH: binding },
+                generate,
+                params: { depth: 3, input: "hello", threadKey: "thread-1" },
+                run: runtime.run,
+                step: new DurableStepJournal(),
+            }),
+        );
+
+        // The loop must carry `params.depth` onto every tool context, or the bound
+        // resets to zero at each level and bounds nothing.
+        expect(binding.created).toStrictEqual([]);
+
+        const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool" && message.toolName === "research");
+
+        expect(toolRow?.content).toMatch(DEPTH_EXCEEDED);
+    });
+
+    it("terminates the child run when the poll budget is exhausted", async () => {
+        let terminated = 0;
+        const instance: AgentWorkflowInstanceLike = {
+            sendEvent: async () => {},
+            status: async () => {
+                return { status: "running" };
+            },
+            terminate: async () => {
+                terminated += 1;
+            },
+        };
+        const binding: AgentWorkflowBindingLike = {
+            create: async (options) => {
+                return { id: options?.id ?? "generated-id" };
+            },
+            get: async () => instance,
+        };
+        const { run } = runWithChildThread([]);
+        const tool = agentAsTool({ description: "d", maxPolls: 2, name: "research", wait: immediate });
+
+        // Giving up on the poll did NOT stop the child: the parent reported "did
+        // not finish" while the subtree kept running (and billing) invisibly.
+        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
+        expect(terminated).toBe(1);
+    });
+
+    it("still answers when terminating an abandoned child fails", async () => {
+        const instance: AgentWorkflowInstanceLike = {
+            sendEvent: async () => {},
+            status: async () => {
+                return { status: "running" };
+            },
+            terminate: async () => {
+                throw new Error("instance already gone");
+            },
+        };
+        const binding: AgentWorkflowBindingLike = {
+            create: async () => {
+                return { id: "sub-research-call_9" };
+            },
+            get: async () => instance,
+        };
+        const { run } = runWithChildThread([]);
+        const tool = agentAsTool({ description: "d", maxPolls: 2, name: "research", wait: immediate });
+
+        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
     });
 });

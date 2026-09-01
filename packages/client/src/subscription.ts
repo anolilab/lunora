@@ -109,6 +109,20 @@ export interface SubscriptionState {
      */
     serverEpoch?: string;
     readonly shardKey?: string;
+
+    /**
+     * The wire-encoded form of `args`, computed once at `subscribe` time (so an
+     * unsupported value fails loud at the call site, not inside a reconnect's
+     * open handler). Sent on every `subscribe` frame — identical to `args` for
+     * pure JSON, tagged tokens for `bigint`/`Date`/bytes/… (the shard
+     * `decodeWire`s them at its subscribe entry point).
+     *
+     * A SNAPSHOT, not a view: `args` is the caller's own object, retained by
+     * reference and never copied, so a caller that mutates it after subscribing
+     * would otherwise poison every later resubscribe. `encodeWire` rebuilds
+     * every container, so this copy is immune to that.
+     */
+    readonly wireArgs: Record<string, unknown>;
 }
 
 /**
@@ -126,6 +140,17 @@ export class SubscriptionRegistry {
         return `${functionPath}::${stableWireKey(args)}::${shardKey ?? ""}`;
     }
 
+    /**
+     * The registry key of an already-registered state, from its cached
+     * {@link SubscriptionState.argsKey}. Re-deriving it from `state.args` would
+     * re-read the caller's own (mutable) args object, so a caller that mutated
+     * its args after subscribing would compute a DIFFERENT key on unsubscribe
+     * and leak the registration forever.
+     */
+    public static keyOf(state: SubscriptionState): string {
+        return `${state.fn.__lunoraRef}::${state.argsKey}::${state.shardKey ?? ""}`;
+    }
+
     private readonly byKey = new Map<string, SubscriptionState>();
 
     private readonly byId = new Map<string, SubscriptionState>();
@@ -139,12 +164,12 @@ export class SubscriptionRegistry {
     }
 
     public add(state: SubscriptionState): void {
-        this.byKey.set(SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey), state);
+        this.byKey.set(SubscriptionRegistry.keyOf(state), state);
         this.byId.set(state.id, state);
     }
 
     public remove(state: SubscriptionState): void {
-        const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+        const key = SubscriptionRegistry.keyOf(state);
 
         // Identity-checked: only evict the `byKey` slot when it still maps to
         // THIS state. After a server `complete` removed S1, a fresh subscription

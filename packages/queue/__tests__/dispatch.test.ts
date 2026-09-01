@@ -265,11 +265,12 @@ describe("dispatchQueueBatch capture", () => {
         expect(records[0]).toMatchObject({ deadLettered: false, outcome: "retry" });
     });
 
-    it("flags deadLettered once attempts exceeds maxRetries (retries exhausted)", async () => {
+    it("flags deadLettered once attempts exceeds maxRetries on a queue with a DLQ", async () => {
         expect.assertions(1);
 
         const capture = vi.fn<QueueCaptureSink>();
         const queue = defineQueue({
+            deadLetterQueue: "q-dlq",
             handler: (_context, b) => {
                 b.messages[0]?.retry();
             },
@@ -282,6 +283,28 @@ describe("dispatchQueueBatch capture", () => {
         const [records] = capture.mock.calls[0] as [{ deadLettered: boolean; outcome: string }[]];
 
         expect(records[0]).toMatchObject({ deadLettered: true, outcome: "retry" });
+    });
+
+    it("does not flag deadLettered when the queue declares no dead-letter queue", async () => {
+        expect.assertions(1);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        // No `deadLetterQueue`: Cloudflare DELETES a message that exhausts
+        // maxRetries. Recording it as dead-lettered points an operator at a queue
+        // that does not exist and hides the fact that the message is simply gone.
+        const queue = defineQueue({
+            handler: (_context, b) => {
+                b.messages[0]?.retry();
+            },
+            maxRetries: 3,
+        });
+        const m = captureMessage({ n: 2 }, { attempts: 4 });
+
+        await dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} });
+
+        const [records] = capture.mock.calls[0] as [{ deadLettered: boolean; outcome: string }[]];
+
+        expect(records[0]).toMatchObject({ deadLettered: false, outcome: "retry" });
     });
 
     it("never flags deadLettered for an ack, even past maxRetries", async () => {
@@ -481,7 +504,11 @@ const scopedDispatchQueueAckingAsItGoes = defineQueue({
  * `{ messageId }` option. The per-message runner pins the id itself, so the
  * failure comes back attributed without the handler doing anything.
  */
+// Declares a `deadLetterQueue` so the dead-letter assertions below are about the
+// disposition under test and not about whether a DLQ exists at all — an
+// exhausted message on a queue WITHOUT one is dropped, never dead-lettered.
 const perMessageRunQueue = defineQueue({
+    deadLetterQueue: "q-dlq",
     handler: async (_context, b) => {
         for (const m of b.messages) {
             // eslint-disable-next-line no-await-in-loop -- see scopedDispatchQueue
