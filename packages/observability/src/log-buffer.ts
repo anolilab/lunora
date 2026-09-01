@@ -34,6 +34,20 @@ interface LogEntry {
 const DEFAULT_CAPACITY = 500;
 
 /**
+ * Normalize a caller-supplied ring capacity to a usable integer.
+ *
+ * `> 0` alone was not enough, in both directions. A fractional capacity passed
+ * that test and then truncated to ZERO, so the ring evicted every entry it was
+ * handed and capture was silently off. `Infinity` passed it too and truncates to
+ * itself, removing the memory bound the ring exists to impose — on a buffer that
+ * lives for the life of a Durable Object.
+ *
+ * Anything not a finite value of at least 1 therefore falls back to the default
+ * rather than being coerced into a degenerate ring.
+ */
+const normalizeCapacity = (capacity: number): number => (Number.isFinite(capacity) && capacity >= 1 ? Math.trunc(capacity) : DEFAULT_CAPACITY);
+
+/**
  * A bounded, in-memory ring buffer of recent {@link LogEntry} records.
  *
  * In-memory only: like the metrics counters on `ShardDO`, the buffer is a field
@@ -58,8 +72,7 @@ class LogBuffer {
     private droppedCount = 0;
 
     public constructor(capacity: number = DEFAULT_CAPACITY) {
-        // Guard against a zero/negative capacity silently disabling capture.
-        this.capacity = capacity > 0 ? Math.trunc(capacity) : DEFAULT_CAPACITY;
+        this.capacity = normalizeCapacity(capacity);
     }
 
     /**

@@ -2023,8 +2023,21 @@ abstract class ShardDO {
         // (e.g. a malformed attachment in `lifecycleInfo`). The failure is held
         // rather than left in flight so a teardown step can't displace it, and
         // rethrown once cleanup is done.
+        //
+        // The two relay posts below are NOT held that way: they are logged and
+        // swallowed. They are fire-and-forget control frames by contract
+        // (`RelayHub.releaseRelayShapes` / `announceDrain`), so a dropped one
+        // leaves the registration to the coarser detach/full-drain reclamation
+        // — while a throw out of `webSocketClose` is a Durable Object close
+        // handler failing, which the runtime can only answer by breaking the
+        // actor, taking every OTHER live socket on this shard down with it.
+        // Trading a transient cross-DO post failure for that is a bad deal, and
+        // there is nobody to hand the rejection to anyway: the socket is
+        // already gone and nothing retries a close. The `webSocketMessage`
+        // sibling that releases a single shape reasons identically. A lifecycle
+        // hook throwing is a different class — that is the app's own code
+        // failing, and it still propagates.
         let dispatchError: { error: unknown } | undefined;
-        let relayError: { error: unknown } | undefined;
 
         try {
             if (attachment.connectionId !== undefined) {
@@ -2065,7 +2078,8 @@ abstract class ShardDO {
             try {
                 await this.relay?.releaseRelayShapes(ws);
             } catch (error) {
-                relayError = { error };
+                // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay-shape release; a close handler must not reject (see above)
+                console.error("[@lunora/do] relay shape release failed during socket close:", error);
             }
 
             // Clear the attachment so a future reconnection starts clean.
@@ -2073,30 +2087,21 @@ abstract class ShardDO {
 
             // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
             // socket detaches from its owner, so the owner stops forwarding to it.
-            // The detach is a network post, so it can reject — hold that too
-            // rather than letting it escape the `finally` and replace a dispatch
-            // failure the caller still has to see.
+            // The detach is a network post, so it can reject — logged like the
+            // release above rather than escaping the `finally`, where it would
+            // both break the actor and displace a dispatch failure the caller
+            // still has to see.
             try {
                 await this.relay?.announceDrain(ws);
             } catch (error) {
-                relayError ??= { error };
+                // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay detach; a close handler must not reject (see above)
+                console.error("[@lunora/do] relay drain failed during socket close:", error);
             }
         }
 
-        // Rethrow outside the `finally` so neither failure can be lost to the
-        // other: a dispatch failure always wins (the relay one is only a
-        // diagnostic then), and a relay failure still surfaces on its own.
+        // Rethrown outside the `finally` so no teardown step can displace it.
         if (dispatchError !== undefined) {
-            if (relayError !== undefined) {
-                // eslint-disable-next-line no-console -- server-side diagnostic for a relay drain that failed behind a dispatch error
-                console.error("[@lunora/do] relay drain failed during socket close:", relayError.error);
-            }
-
             throw dispatchError.error;
-        }
-
-        if (relayError !== undefined) {
-            throw relayError.error;
         }
     }
 

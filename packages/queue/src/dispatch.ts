@@ -18,7 +18,7 @@
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "@lunora/dispatch";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { getDispatchMessageId, isDeterministicDispatchFailure } from "@lunora/dispatch";
-import { LunoraError } from "@lunora/errors";
+import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { createQueueRunContext } from "./run-context";
 import type { MessageBatchLike, MessageLike, QueueDefinition, QueueMessage, QueueMessageBatch, QueueRetryOptions } from "./types";
@@ -467,10 +467,28 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         // line a production deployment discards the message with no signal
         // anywhere: a rotated admin token silently stops the receipts and
         // nothing says so.
+        //
+        // This is the ONLY disposition that reaches here: `resolveAttributedFailure`
+        // returns a message for a deterministic dispatch failure (400/403/404/422)
+        // and nothing else. Retry exhaustion never reaches this line — the broker
+        // owns that, and it dead-letters rather than acking — so the message names
+        // which of the two happened instead of sending an operator to a DLQ that
+        // will never hold it.
+        //
+        // Routed through `toErrorBody` for the same reason every other
+        // error-to-output path in the repo is: this error is rebuilt from a
+        // dispatch RESPONSE, and an unparseable body becomes an internal-coded
+        // error carrying that body verbatim (see `toDispatchError`'s fallback).
+        // Logging the raw value would put an upstream 4xx's response text — a
+        // token, a SQL fragment, an internal identifier — into the Workers log.
+        // A developer-facing code keeps its message; an internal one is redacted to
+        // its code, which together with the message id, queue and export name is
+        // what actually locates the failure.
+        const { body, status } = toErrorBody(handlerError, { redactedMessage: "internal error" });
+
         // eslint-disable-next-line no-console -- last-resort operator signal for a dropped message; there is no injected logger on the dispatch path
         console.error(
-            `@lunora/queue: dropped message ${attributed.id} on queue "${batch.queue}" (${entry.exportName}) — the handler failed it with a deterministic 4xx, so it was acked, not retried:`,
-            handlerError,
+            `@lunora/queue: dropped message ${attributed.id} on queue "${batch.queue}" (${entry.exportName}) — a dispatch it made failed with a deterministic ${String(status)} (${body.code}: ${body.message}), so it was acked, not retried. Its retries are NOT exhausted and it is not dead-lettered — it will never be redelivered.`,
         );
     }
 

@@ -107,6 +107,15 @@ const nextId: () => string = randomId;
 /**
  * Report a swallowed persistence rejection: hand it to the caller's handler if
  * one is configured, else `console.warn` so it is never fully silent.
+ *
+ * The handler is app-supplied, so it can throw — and every call site here is
+ * either a `.catch()` on a floating promise (where a rethrow becomes an
+ * unhandled rejection) or a compensating cleanup path whose remaining steps
+ * would be skipped (see {@link OfflineQueue.rewriteStamp}, where skipping them
+ * loses the mutation outright). A reporting call must therefore never be able
+ * to change control flow: a throwing handler is contained here and falls back
+ * to the same `console.warn` as no handler at all, so the failure it was meant
+ * to report is still visible.
  */
 const reportPersistenceError = (
     handler: ((context: PersistenceErrorContext) => void) | undefined,
@@ -115,8 +124,13 @@ const reportPersistenceError = (
     mutationId?: string,
 ): void => {
     if (handler) {
-        handler({ error, mutationId, operation });
-        return;
+        try {
+            handler({ error, mutationId, operation });
+
+            return;
+        } catch {
+            /* fall through to the console warning below */
+        }
     }
 
     // eslint-disable-next-line no-console -- last-resort visibility for a swallowed durable-write failure

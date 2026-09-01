@@ -100,3 +100,32 @@ describe("logBuffer", () => {
         expect(buffer.size).toBe(500);
     });
 });
+
+describe("logBuffer capacity normalization", () => {
+    it("falls back to the default for a capacity that would truncate to zero", () => {
+        expect.assertions(2);
+
+        // `> 0` accepted this and `Math.trunc` then made it 0, so the ring
+        // evicted every entry it was handed — capture silently off.
+        const buffer = new LogBuffer(0.5);
+
+        buffer.push({ level: "info", message: "kept", timestamp: 1 });
+
+        expect(buffer.size).toBe(1);
+        expect(buffer.dropped).toBe(0);
+    });
+
+    it("falls back to the default for a non-finite capacity", () => {
+        expect.assertions(1);
+
+        // Infinity truncates to itself, removing the memory bound the ring
+        // exists to impose on a buffer that lives as long as the DO does.
+        const buffer = new LogBuffer(Number.POSITIVE_INFINITY);
+
+        for (let index = 0; index < 1200; index += 1) {
+            buffer.push({ level: "info", message: String(index), timestamp: index });
+        }
+
+        expect(buffer.size).toBeLessThan(1200);
+    });
+});

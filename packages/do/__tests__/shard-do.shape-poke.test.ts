@@ -750,9 +750,10 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         consoleError.mockRestore();
     });
 
-    it("surfaces a relay drain failure when the lifecycle dispatch succeeded", async () => {
-        expect.assertions(2);
+    it("logs a relay drain failure rather than failing the close handler", async () => {
+        expect.assertions(3);
 
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const sockets: FakeWebSocket[] = [];
         const shard = new ShapePokeShard(makeState(sockets), {});
         const ws = createFakeWebSocket();
@@ -772,9 +773,43 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
             releaseRelayShapes: () => Promise.resolve(),
         };
 
-        // Nothing else in flight → the relay error is the one the runtime sees…
-        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).rejects.toThrow("relay detach failed");
+        // The detach is a fire-and-forget control frame — a dropped one falls
+        // back to the coarser reclamation. Rejecting out of `webSocketClose`
+        // would instead fail a Durable Object close event, which the runtime can
+        // only answer by breaking the actor and every OTHER socket on this
+        // shard. So it resolves and the failure is logged…
+        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).resolves.toBeUndefined();
+        expect(consoleError).toHaveBeenCalledWith("[@lunora/do] relay drain failed during socket close:", expect.any(Error));
         // …and the teardown ahead of it still ran.
         expect(readShapePokeCursor(harness.sql, "conn-10", "s1")).toBeUndefined();
+
+        consoleError.mockRestore();
+    });
+
+    it("logs a relayed-shape release failure rather than failing the close handler", async () => {
+        expect.assertions(3);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-11", subs: {} };
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+        // Same contract as the drain above: the release is a best-effort
+        // cross-DO post whose loss is reclaimed on detach/full drain. It must
+        // not be able to fail the close handler either.
+        (shard as unknown as { relay: { announceDrain: () => Promise<void>; releaseRelayShapes: () => Promise<void> } }).relay = {
+            announceDrain: () => Promise.resolve(),
+            releaseRelayShapes: () => Promise.reject(new Error("relay shape release failed")),
+        };
+
+        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).resolves.toBeUndefined();
+        expect(consoleError).toHaveBeenCalledWith("[@lunora/do] relay shape release failed during socket close:", expect.any(Error));
+        expect(ws.attachment).toBeUndefined();
+
+        consoleError.mockRestore();
     });
 });

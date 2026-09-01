@@ -453,6 +453,54 @@ describe("offlineQueue — persistence error reporting", () => {
         expect(handler.mock.calls[0]?.[0]).toMatchObject({ error: appendError, operation: "append" });
     });
 
+    it("restampIdentity restores the record even when onPersistenceError itself throws", async () => {
+        expect.assertions(3);
+
+        const base = createInMemoryPersistence();
+
+        await base.append({ args: {}, functionPath: "posts:create", id: "1", identity: "old" });
+
+        let appends = 0;
+        const persistence: PersistenceAdapter = {
+            ...base,
+            append: async (mutation) => {
+                appends += 1;
+
+                if (appends === 1) {
+                    throw new Error("quota");
+                }
+
+                return base.append(mutation);
+            },
+        };
+        // An app handler is user code and may throw. Reporting the append
+        // failure must not skip the compensating re-append that follows it —
+        // `remove` has already succeeded, so a skipped compensation leaves
+        // NOTHING durable and the write is lost on the next reload.
+        const handler = vi.fn<(context: PersistenceErrorContext) => void>(() => {
+            throw new Error("handler blew up");
+        });
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const queue = new OfflineQueue({ onPersistenceError: handler }, { persistence });
+
+        await queue.hydrate();
+
+        queue.restampIdentity("old", "new");
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        const persisted = await base.load();
+
+        expect(persisted).toHaveLength(1);
+        expect(persisted[0]?.identity).toBe("old");
+        // The report the throwing handler dropped still reaches the fallback.
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
     it("restampIdentity reports a failed remove as 'remove', not as 'append'", async () => {
         expect.assertions(3);
 
