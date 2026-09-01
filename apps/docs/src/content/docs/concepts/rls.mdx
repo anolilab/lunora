@@ -60,9 +60,24 @@ const documentPolicies = definePolicies([
 `when` receives a context with:
 
 - `auth.userId`: the resolved caller id (`null` when unauthenticated).
-- `auth.roles`: the request's role list, read from the `roles` claim on the
-  resolved identity (a `string[]`, or the comma-separated string better-auth's
-  `admin()` plugin emits). Empty when the claim is absent.
+- `auth.roles`: the request's role list. It is the union of two sources, so a
+  role from either one counts:
+    - the `roles` or `role` claim on the resolved identity — a `string[]`, or a
+      comma-separated string (the form better-auth's `admin()` plugin stores a
+      multi-role value in, under the singular `role`). On the built-in `.auth()`
+      wiring that claim is forwarded for you; a hand-written `resolveIdentity`
+      has to include it.
+    - `ctx.auth.roles` set by an upstream middleware, for providers whose
+      envelope carries something other than roles —
+      [`accessRoles()`](/docs/packages/cloudflare-access) maps Cloudflare Access
+      `groups` onto role labels this way.
+
+    Empty when neither is present, and `auth.can(...)` then fails closed.
+
+    Take roles only from a field an administrator controls. A `resolveIdentity`
+    that forwards a user-editable profile column named `role` lets the end user
+    grant themselves permissions.
+
 - `auth.can(permission)`: whether any of those roles grants a named permission
   (see below). Fails closed for unknown roles.
 - `auth.identity`: the raw identity claims.

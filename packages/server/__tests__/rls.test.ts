@@ -472,6 +472,73 @@ describe("rls — read path", () => {
         expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
     });
 
+    // `@lunora/cloudflare-access`'s `accessRoles()` maps a verified Access `groups`
+    // claim onto role labels and hands them over as `ctx.auth.roles` — the Access
+    // envelope never carries a `roles` claim, so the identity path cannot see
+    // them. Reading only the claim silently drops every such role, and a
+    // role-gated DENY branch that stops firing LEAKS rows.
+    it("honours roles contributed by an upstream middleware, not just the identity claim", async () => {
+        expect.assertions(1);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => (auth.roles.includes("admin") ? true : { ownerId: auth.userId }),
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
+
+        await handler.handler(
+            {
+                auth: {
+                    // No `roles` claim on the identity — exactly the Access shape.
+                    getIdentity: async () => {
+                        return { email: "ada@example.com" };
+                    },
+                    roles: ["admin"],
+                    userId: "u1",
+                },
+                db: database.writer,
+            },
+            {},
+        );
+
+        expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
+    });
+
+    it("unions middleware roles with the identity claim rather than letting one win", async () => {
+        expect.assertions(1);
+
+        // Two producers, one role each, and a policy that needs both. Either
+        // source alone leaves the caller short, so this fails if the resolution
+        // picks a winner instead of merging.
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => (auth.roles.includes("admin") && auth.roles.includes("auditor") ? true : { ownerId: auth.userId }),
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
+
+        await handler.handler(
+            {
+                auth: {
+                    getIdentity: async () => {
+                        return { roles: ["auditor"] };
+                    },
+                    roles: ["admin"],
+                    userId: "u1",
+                },
+                db: database.writer,
+            },
+            {},
+        );
+
+        expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
+    });
+
     it("count() throws COUNT_RLS_UNSUPPORTED when a policy applies", async () => {
         expect.hasAssertions();
 
@@ -1806,13 +1873,22 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         expect(result).toBeNull();
     });
 
-    it("leaves a non-policy table's facade entry on its original binding (no backend re-route)", async () => {
+    /**
+     * This test previously asserted the OPPOSITE — that a non-policy table's
+     * facade entry keeps its original binding — on the stated grounds that a
+     * `.global()` table's entry is bound to the D1 `globalDb` writer and
+     * re-binding it would query the wrong backend.
+     *
+     * That premise is false. `packages/codegen/src/emit.ts` binds EVERY table's
+     * facade entry through the one shard ctx-db, `.global()` included, and says
+     * why in its own comment: `createShardCtxDb` routes global ops to D1
+     * internally and stamps the subscription hooks, so binding a global facade
+     * straight to `globalDb` would skip both. There is no wrong backend to route
+     * to, and the exemption bought nothing while costing a read filter.
+     */
+    it("re-binds EVERY facade entry once any policy is in scope, policy table or not", async () => {
         expect.assertions(2);
 
-        // `documents` has a policy → its facade entry is re-bound through RLS;
-        // `events` has none (it stands in for a `.global()` table) → its entry
-        // must stay the exact object the runtime glued on, so it keeps routing
-        // to its own backend rather than the local wrapped writer.
         const database = createFakeDatabase([]);
 
         let documentsEntry: unknown;
@@ -1833,9 +1909,30 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
 
         await handler.handler(context, {});
 
-        // events: identical reference (untouched); documents: re-bound (replaced).
-        expect(eventsEntry).toBe(originalEvents);
         expect(documentsEntry).not.toBe(originalDocuments);
+        expect(eventsEntry).not.toBe(originalEvents);
+    });
+
+    it("threads relationBaseWhere through a NON-policy table's facade, so a hop cannot hydrate hidden rows", async () => {
+        expect.assertions(1);
+
+        // The bypass: `events` has no policy, so its facade entry was never
+        // re-bound and reached the raw writer with no `relationBaseWhere`. A
+        // `with` hop onto `documents` — which DOES have a read policy — then
+        // hydrated and returned rows the policy exists to hide. The flat method
+        // form `ctx.db.findMany("events", …)` was guarded the whole time; only
+        // the idiomatic facade form leaked.
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([ownerPolicy])).query(async ({ ctx }) => {
+            const { db } = ctx as unknown as { db: Record<string, { findMany: (args?: unknown) => Promise<unknown> }> };
+
+            return db["events"]!.findMany({ with: { documents: true } });
+        });
+
+        await handler.handler(makeFacadeContext(database, "u1"), {});
+
+        expect((database.calls.at(-1)?.args as { relationBaseWhere?: unknown }).relationBaseWhere).toBeTypeOf("function");
     });
 });
 

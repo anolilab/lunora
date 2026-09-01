@@ -477,7 +477,16 @@ class AppBuilder<Env extends object> {
 
                 const session = await auth.api.getSession({ headers: (request as Request).headers });
 
-                return session?.user?.id ? { userId: session.user.id } : null;
+                if (!session?.user?.id) {
+                    return null;
+                }
+
+                // `role` rides along so `rls(policies, { roles })` and `auth.can(...)`
+                // work on this wiring without a hand-written resolver. better-auth's
+                // `admin()` plugin owns that column (comma-joined for multiple roles)
+                // and only an administrator can write it; it is absent when the plugin
+                // is off, which reads as no roles.
+                return { role: (session.user as { role?: unknown }).role, userId: session.user.id };
             };
             const authInstance = getAuth();
 
