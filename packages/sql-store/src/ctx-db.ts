@@ -141,6 +141,37 @@ const nullSafeEqualsSql = (engine: SqlDialect["name"], reference: SQL, value: un
 };
 
 /**
+ * Where this engine puts NULLs, spelled out, for the keys that can hold one.
+ *
+ * `buildSeekWhere` is shared and dialect-blind: its NULL-aware pivot assumes the
+ * SQLite/MySQL default, NULLs FIRST ascending and LAST descending. Postgres is
+ * the mirror (`DESC` implies NULLS FIRST), so an ORDER BY that leans on the
+ * engine default puts the NULL group on the side the seek does NOT expect. The
+ * visible failure is a `desc` page over a nullable column: the seek's
+ * `OR col IS NULL` arm re-selects the NULL group, Postgres sorts it back to the
+ * top of every page, and with at least `limit` NULL rows the cursor stops
+ * advancing and pagination loops on the same page forever.
+ *
+ * Stating the placement here rather than branching `pivotCondition` on a dialect
+ * keeps the seek builder pure and dialect-blind, and fixes the `asc` and
+ * null-pivot shapes in the same stroke — they disagreed with the seek on
+ * Postgres too, just less visibly.
+ *
+ * Emitted only for a NULLABLE key on Postgres: MySQL has no `NULLS` clause in
+ * its grammar at all, SQLite already agrees, and on a non-nullable column the
+ * clause is noise that can cost the index — Postgres cannot answer
+ * `ORDER BY c DESC NULLS LAST` from a plain btree walk.
+ * @returns the ` NULLS FIRST`/` NULLS LAST` suffix, or `""` when the engine default already agrees
+ */
+const nullsPlacement = (dialect: SqlDialect, key: { direction?: string; nullable?: boolean }): string => {
+    if (dialect.name !== "postgres" || key.nullable !== true) {
+        return "";
+    }
+
+    return key.direction === "desc" ? " NULLS LAST" : " NULLS FIRST";
+};
+
+/**
  * Drizzle `ORDER BY` list — the SQL-object twin of `@lunora/do`'s string
  * `compileOrderBy`: each key as `<col> ASC|DESC`, with an `id` tiebreak appended
  * unless an id field is already ordered (keeps paging deterministic).
@@ -150,9 +181,11 @@ const nullSafeEqualsSql = (engine: SqlDialect["name"], reference: SQL, value: un
  * indexes the way the DO does, so it gains nothing directly — but it shares
  * `buildSeekWhere`, and a cursor seek that disagrees with its own ORDER BY about
  * tie direction skips or repeats rows at a page boundary where the keys tie.
+ *
+ * NULL placement is the other half of that agreement — see {@link nullsPlacement}.
  */
-const compileOrderBySql = (keys: ReadonlyArray<{ direction?: string; field: string }>): SQL => {
-    const parts = keys.map((key) => sql`${columnRefSql(key.field)} ${sql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
+const compileOrderBySql = (keys: ReadonlyArray<{ direction?: string; field: string; nullable?: boolean }>, dialect: SqlDialect): SQL => {
+    const parts = keys.map((key) => sql`${columnRefSql(key.field)} ${sql.raw(`${key.direction === "desc" ? "DESC" : "ASC"}${nullsPlacement(dialect, key)}`)}`);
 
     if (!keys.some((key) => ID_ORDER_FIELDS.has(key.field))) {
         // No adaptation: the helper reads `direction` off the last key and
@@ -2693,7 +2726,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // fresh database returns an empty page instead of `no such table`.
             await ensureMigrated();
 
-            const orderKeys = normalizeOrderKeys(args.orderBy);
+            const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape);
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
             // Relation reads routed by the child's backend (shard-local child of
@@ -2805,7 +2838,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
 
             const whereCondition = compileWhereSql(predicate, whereSqlStrategy);
-            const orderBy = compileOrderBySql(orderKeys);
+            const orderBy = compileOrderBySql(orderKeys, dialect);
 
             let query = sql`SELECT * FROM ${sql.identifier(tableName)}`;
 

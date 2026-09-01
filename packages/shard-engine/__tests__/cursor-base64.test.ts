@@ -49,7 +49,7 @@ describe("cursor base64", () => {
 
         // The id lands in the cursor verbatim, so a non-ASCII document id is the
         // realistic way the slow path gets exercised in production.
-        const keys = [{ direction: "asc" as const, field: "_creationTime" }];
+        const keys = [{ direction: "asc" as const, field: "_creationTime", nullable: false }];
         const record = { _creationTime: 1_700_000_000_000, _id: "用户_42" };
 
         expect(decodeCursor(encodeCursor(record, keys))).toStrictEqual([1_700_000_000_000, "用户_42"]);

@@ -1431,6 +1431,7 @@ type OrderByInput = Record<string, SortDirection>;
 interface OrderKey {
     direction: SortDirection;
     field: string;
+    nullable: boolean;
 }
 ```
 
@@ -4062,7 +4063,7 @@ const normalizeIdStructurally: (schema: SchemaLike, tableName: string, id: strin
 ### `normalizeOrderKeys` (const)
 
 ```ts
-const normalizeOrderKeys: (orderBy: OrderByInput[] | undefined) => OrderKey[];
+const normalizeOrderKeys: (orderBy: OrderByInput[] | undefined, shape?: Record<string, ValidatorLike>) => OrderKey[];
 ```
 
 ### `normalizeSourceDocument` (const)

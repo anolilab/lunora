@@ -98,26 +98,6 @@ const membersOf = (relativePath: string, name: string): string[] => {
 
 const CLIENT_TYPES = "packages/client/src/types.ts";
 const SCHEDULER_TYPES = "packages/scheduler/src/types.ts";
-const WORKFLOW_TYPES = "packages/workflow/src/types.ts";
-
-describe("functionReference mirrors", () => {
-    it.each([SCHEDULER_TYPES, WORKFLOW_TYPES])("%s declares this package's FunctionReference verbatim", (mirror) => {
-        expect.assertions(3);
-
-        expect(declarationOf(mirror, "type", "FunctionKind")).toBe(declarationOf(CLIENT_TYPES, "type", "FunctionKind"));
-        expect(declarationOf(mirror, "interface", "FunctionReference")).toBe(declarationOf(CLIENT_TYPES, "interface", "FunctionReference"));
-        expect(declarationOf(mirror, "type", "ArgsOf")).toBe(declarationOf(CLIENT_TYPES, "type", "ArgsOf"));
-    });
-
-    it("reads the phantom key inference actually depends on", () => {
-        expect.assertions(2);
-
-        // Guards the exact failure above: a mirror that reads a key the emit does
-        // not carry still compiles, and degrades to `unknown` instead of erroring.
-        expect(declarationOf(CLIENT_TYPES, "interface", "FunctionReference")).toContain("__lunoraPhantom?:");
-        expect(declarationOf(CLIENT_TYPES, "type", "ArgsOf")).toContain("infer A");
-    });
-});
 
 describe("scheduleRecord mirrors", () => {
     it("this package's admin-wire ScheduleRecord carries every field the scheduler writes", () => {

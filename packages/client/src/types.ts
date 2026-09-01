@@ -1,28 +1,6 @@
-/** The registered function kinds a {@link FunctionReference} can describe. `stream` is a query that yields multiple frames over the WS. */
-export type FunctionKind = "action" | "mutation" | "query" | "stream";
+import type { FunctionReference } from "../../../shared/function-reference";
 
-/**
- * Opaque reference to a registered function emitted by `@lunora/codegen`.
- *
- * At runtime it carries the `<file>:<function>` identifier in `__lunoraRef`.
- * Generated declarations decorate this with phantom type parameters so the
- * client can infer args / return values per call site.
- */
-export interface FunctionReference<Kind extends FunctionKind = FunctionKind, Args = unknown, Return = unknown> {
-    /**
-     * Phantom marker carrying the `Kind`/`Args`/`Return` type parameters for
-     * inference. Never present at runtime; declared as a covariant (output)
-     * position so a concrete reference stays assignable to a widened one.
-     */
-    readonly __lunoraPhantom?: { args: Args; kind: Kind; returns: Return };
-    readonly __lunoraRef: string;
-}
-
-/** Extract the args type from a {@link FunctionReference}. */
-export type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R> ? A : never;
-
-/** Extract the return type from a {@link FunctionReference}. */
-export type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
+export type { ArgsOf, FunctionKind, FunctionReference, ReturnOf } from "../../../shared/function-reference";
 
 /**
  * Typed reference to an HTTP-SSE stream route (`httpRoute.<verb>(path).stream()`)

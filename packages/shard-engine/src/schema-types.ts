@@ -304,6 +304,16 @@ export interface QueryPage {
 export interface OrderKey {
     direction: SortDirection;
     field: string;
+
+    /**
+     * Can this column hold SQL NULL? Required, not optional, so every place that
+     * builds an `OrderKey` has to answer — the keyset seek emits an extra
+     * `OR col IS NULL` arm for a nullable ordered column (see `pivotCondition`),
+     * and that arm costs a full index scan on a column that never holds NULL.
+     * `undefined` would make "forgot to thread it" silently mean "not nullable",
+     * which is the row-losing direction.
+     */
+    nullable: boolean;
 }
 
 /** Query-options shape shared by every aggregate reader. */

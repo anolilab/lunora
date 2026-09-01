@@ -118,14 +118,18 @@ const compileContains = <T>(reference: T, value: unknown, strategy: WhereSqlStra
 };
 
 /**
- * `null` and `undefined` are the same value to SQL: a column holding NULL and a
- * column absent from a JSON-blob document both read back as NULL, and a missing
- * key binds NULL. Both take the null path below rather than one being bound
- * verbatim — `undefined` reaching a driver is not a NULL, it is an unbindable
- * value the DO's `stmt.raw(...)` rejects (or, worse, binds as one).
+ * SQL NULL is `null` here and ONLY `null`.
+ *
+ * `undefined` is deliberately not folded into it. A JS absence in a predicate is
+ * a mistake — a dropped variable, a typo'd destructure, an RLS policy that built
+ * `{ ownerId: undefined }` — and folding it would turn that into `ownerId IS
+ * NULL`, quietly matching every ownerless row instead of failing. It binds a
+ * placeholder the driver rejects, so the mistake surfaces where it was made.
+ *
+ * The keyset cursor is the one place a legitimately absent value exists;
+ * `encodeCursor` collapses it to `null` at the source so this shared compiler
+ * needs no `undefined` awareness at all.
  */
-const isSqlNull = (value: unknown): boolean => value === null || value === undefined;
-
 const compileComparator = <T>(
     reference: T,
     operator: string,
@@ -134,7 +138,8 @@ const compileComparator = <T>(
     strategy: WhereSqlStrategy<T>,
     fragments: WhereFragments<T>,
 ): T => {
-    if (isSqlNull(value)) {
+    // user's `where: { col: { eq: undefined } }` still fails loudly at the driver instead of quietly matching every null row.
+    if (value === null) {
         // `= NULL` / `<> NULL` never match, so THOSE two map to IS [NOT] NULL.
         if (operator === "eq" || operator === "ne") {
             return fragments.nullCheck(reference, operator === "ne");
@@ -212,7 +217,7 @@ const compileField = <T>(field: string, value: unknown, strategy: WhereSqlStrate
         return compileFieldOperators(reference, value, strategy, fragments);
     }
 
-    if (isSqlNull(value)) {
+    if (value === null) {
         return [fragments.nullCheck(reference, false)];
     }
 

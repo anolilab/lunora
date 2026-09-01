@@ -785,6 +785,59 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
             expect(seek).toMatch(NULL_SAFE_OPERATOR[engine]);
         },
     );
+
+    /** `notes` plus a nullable ordered column, so a page can straddle a null group. */
+    const publishedSchema: SchemaLike = {
+        tables: {
+            posts: {
+                indexes: [],
+                shape: { publishedAt: optionalCol("number"), title: col("string") },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
+
+    it.each(["postgres", "mysql", "sqlite"] as const)("renders the %s ORDER BY with the NULL placement the shared keyset seek assumes", async (engine) => {
+        expect.assertions(2);
+
+        const { exec, statements } = recordingExec([]);
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema: publishedSchema });
+
+        await writer.findMany("posts", { limit: 20, orderBy: [{ publishedAt: "desc" }] });
+
+        const listed = statements.find((statement) => /select \* from .*posts.*order by/iu.test(statement));
+
+        expect(listed).toBeDefined();
+
+        // `buildSeekWhere` is dialect-blind and fixes ONE NULL placement:
+        // NULLs first ascending, last descending — the SQLite/MySQL default.
+        // Postgres is the mirror (`DESC` implies NULLS FIRST), so leaning on
+        // its default puts the null group on the side the seek does not
+        // expect: page 2's `OR publishedAt IS NULL` arm re-selects those rows
+        // and Postgres sorts them back to the top of every following page, so
+        // with at least `limit` null rows the cursor stops advancing and the
+        // feed loops on one page. Stating the placement is what keeps the two
+        // in agreement. MySQL has no `NULLS` clause in its grammar at all, and
+        // SQLite already agrees, so neither may be given one.
+        expect(listed).toMatch(engine === "postgres" ? /desc nulls last/iu : /desc(?! nulls)/iu);
+    });
+
+    it("leaves a notNull ordered column's ORDER BY bare on Postgres", async () => {
+        expect.assertions(2);
+
+        // The placement clause is not free: Postgres cannot answer
+        // `ORDER BY c DESC NULLS LAST` from a plain btree walk, so it is emitted
+        // only where a null group can exist. `notes.priority` is declared notNull.
+        const { exec, statements } = recordingExec([]);
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect("postgres"), exec, schema });
+
+        await writer.findMany("notes", { limit: 20, orderBy: [{ priority: "desc" }] });
+
+        const listed = statements.find((statement) => /select \* from .*notes.*order by/iu.test(statement));
+
+        expect(listed).toBeDefined();
+        expect(listed).not.toMatch(/nulls (first|last)/iu);
+    });
 });
 
 describe("createSqlCtxDb — _creationTime is server-authoritative", () => {

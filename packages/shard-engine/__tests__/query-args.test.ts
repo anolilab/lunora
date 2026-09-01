@@ -32,16 +32,43 @@ describe("normalizeOrderKeys", () => {
     it("defaults to creation order when absent", () => {
         expect.assertions(2);
 
-        expect(normalizeOrderKeys(undefined)).toEqual([{ direction: "asc", field: "_creationTime" }]);
-        expect(normalizeOrderKeys([])).toEqual([{ direction: "asc", field: "_creationTime" }]);
+        expect(normalizeOrderKeys(undefined)).toEqual([{ direction: "asc", field: "_creationTime", nullable: false }]);
+        expect(normalizeOrderKeys([])).toEqual([{ direction: "asc", field: "_creationTime", nullable: false }]);
     });
 
     it("flattens the { field: dir }[] form, preserving order", () => {
         expect.assertions(1);
 
-        expect(normalizeOrderKeys([{ priority: "desc" }, { createdAt: "asc" }])).toEqual([
-            { direction: "desc", field: "priority" },
-            { direction: "asc", field: "createdAt" },
+        expect(
+            normalizeOrderKeys([{ priority: "desc" }, { createdAt: "asc" }], {
+                createdAt: { _meta: { column: { notNull: true } }, kind: "number" },
+                priority: { _meta: { column: { notNull: true } }, kind: "number" },
+            }),
+        ).toEqual([
+            { direction: "desc", field: "priority", nullable: false },
+            { direction: "asc", field: "createdAt", nullable: false },
+        ]);
+    });
+
+    it("marks a column nullable through either spelling, and an undeclared one conservatively", () => {
+        expect.assertions(1);
+
+        // `.nullable()` clears `column.notNull` and keeps the base kind;
+        // `v.optional(inner)` builds a fresh `"optional"` validator whose own
+        // column meta carries the DEFAULT `notNull: true`. Reading only `notNull`
+        // would call the optional column non-nullable and drop its rows from
+        // every page that crosses the null group.
+        expect(
+            normalizeOrderKeys([{ nulled: "asc" }, { optional: "asc" }, { plain: "asc" }, { undeclared: "asc" }], {
+                nulled: { _meta: { column: { notNull: false } }, kind: "number" },
+                optional: { _meta: { column: { notNull: true } }, kind: "optional" },
+                plain: { _meta: { column: { notNull: true } }, kind: "number" },
+            }),
+        ).toEqual([
+            { direction: "asc", field: "nulled", nullable: true },
+            { direction: "asc", field: "optional", nullable: true },
+            { direction: "asc", field: "plain", nullable: false },
+            { direction: "asc", field: "undeclared", nullable: true },
         ]);
     });
 });
@@ -50,7 +77,7 @@ describe("encodeCursor / decodeCursor", () => {
     it("round-trips the orderBy values plus id", () => {
         expect.assertions(1);
 
-        const keys = [{ direction: "asc" as const, field: "createdAt" }];
+        const keys = [{ direction: "asc" as const, field: "createdAt", nullable: false }];
         const doc = { _id: "row_42", createdAt: 1700, title: "ignored" };
 
         const cursor = encodeCursor(doc, keys);
@@ -61,7 +88,7 @@ describe("encodeCursor / decodeCursor", () => {
     it("survives unicode payloads", () => {
         expect.assertions(1);
 
-        const keys = [{ direction: "asc" as const, field: "name" }];
+        const keys = [{ direction: "asc" as const, field: "name", nullable: false }];
         const doc = { _id: "café", name: "naïve — 日本語" };
 
         expect(decodeCursor(encodeCursor(doc, keys))).toEqual(["naïve — 日本語", "café"]);
@@ -92,7 +119,7 @@ describe("buildSeekWhere", () => {
     it("single ascending key expands to a two-branch lexicographic seek", () => {
         expect.assertions(1);
 
-        const where = buildSeekWhere([{ direction: "asc", field: "createdAt" }], [1700, "row_42"]);
+        const where = buildSeekWhere([{ direction: "asc", field: "createdAt", nullable: true }], [1700, "row_42"]);
         const compiled = compile(where);
 
         expect(compiled).toEqual({
@@ -104,7 +131,7 @@ describe("buildSeekWhere", () => {
     it("descending key uses < for the strict comparison, tiebreak included", () => {
         expect.assertions(1);
 
-        const where = buildSeekWhere([{ direction: "desc", field: "createdAt" }], [1700, "row_42"]);
+        const where = buildSeekWhere([{ direction: "desc", field: "createdAt", nullable: true }], [1700, "row_42"]);
         const compiled = compile(where);
 
         // `id < ?`, not `id > ?`: the implicit tiebreak sorts the same way the
@@ -118,10 +145,27 @@ describe("buildSeekWhere", () => {
         // every value the comparator can reach and no comparator will ever match
         // it — the descending page would simply stop at the last non-null row. The
         // tiebreak is the framework `id`, which is never null, so it is spared the
-        // arm (see `NEVER_NULL_FIELDS`).
+        // arm — as is any key whose declared column is `notNull`.
         expect(compiled).toEqual({
             params: [1700, 1700, "row_42"],
             sql: `((${json("createdAt")} < ?) OR (${json("createdAt")} IS NULL)) OR ((${json("createdAt")} = ?) AND (id < ?))`,
+        });
+    });
+
+    it("omits the null arm entirely when the ordered column cannot hold NULL", () => {
+        expect.assertions(1);
+
+        // Same shape as the descending test above with `nullable` cleared: a
+        // schema-declared `notNull` column has no null group to reach, so the arm
+        // is pure cost. It is not a small one — the second disjunct on the pivot
+        // is not answerable from the index range the comparator seeks, so SQLite
+        // abandons the seek for a full scan (measured 9.3us -> 469us over 50k
+        // rows; see `ctx-db.paginate-plan.test.ts`, which asserts the plan).
+        const where = buildSeekWhere([{ direction: "desc", field: "createdAt", nullable: false }], [1700, "row_42"]);
+
+        expect(compile(where)).toEqual({
+            params: [1700, 1700, "row_42"],
+            sql: `(${json("createdAt")} < ?) OR ((${json("createdAt")} = ?) AND (id < ?))`,
         });
     });
 
@@ -130,8 +174,8 @@ describe("buildSeekWhere", () => {
 
         const where = buildSeekWhere(
             [
-                { direction: "asc", field: "a" },
-                { direction: "desc", field: "b" },
+                { direction: "asc", field: "a", nullable: true },
+                { direction: "desc", field: "b", nullable: true },
             ],
             ["av", "bv", "row_1"],
         );
@@ -150,7 +194,7 @@ describe("buildSeekWhere", () => {
     it("an explicit id sort key is used as the terminal column (no synthetic tiebreak)", () => {
         expect.assertions(1);
 
-        const where = buildSeekWhere([{ direction: "asc", field: "id" }], ["row_1"]);
+        const where = buildSeekWhere([{ direction: "asc", field: "id", nullable: false }], ["row_1"]);
         const compiled = compile(where);
 
         expect(compiled).toEqual({ params: ["row_1"], sql: "id > ?" });
@@ -159,7 +203,7 @@ describe("buildSeekWhere", () => {
     it("a null pivot value seeks past the null group instead of selecting it", () => {
         expect.assertions(1);
 
-        const where = buildSeekWhere([{ direction: "asc", field: "createdAt" }], [null, "row_42"]);
+        const where = buildSeekWhere([{ direction: "asc", field: "createdAt", nullable: true }], [null, "row_42"]);
         const compiled = compile(where);
 
         // `IS NOT NULL`, not `IS NULL`. Every comparator used to fold a null
@@ -180,7 +224,7 @@ describe("buildSeekWhere", () => {
         // `encodeCursor` reads the ordered field off the document verbatim, so a
         // column the document omits arrives as `undefined` — which used to reach
         // the driver as a bound parameter (`Provided value cannot be bound`).
-        const where = buildSeekWhere([{ direction: "asc", field: "createdAt" }], [undefined, "row_42"]);
+        const where = buildSeekWhere([{ direction: "asc", field: "createdAt", nullable: true }], [undefined, "row_42"]);
         const compiled = compile(where);
 
         expect(compiled.params).toEqual(["row_42"]);
@@ -194,7 +238,7 @@ describe("buildSeekWhere", () => {
         // this cursor — the pivot branch is unsatisfiable and only the tiebreak
         // can advance.
 
-        const where = buildSeekWhere([{ direction: "desc", field: "createdAt" }], [null, "row_42"]);
+        const where = buildSeekWhere([{ direction: "desc", field: "createdAt", nullable: true }], [null, "row_42"]);
         const compiled = compile(where);
 
         expect(compiled).toEqual({
