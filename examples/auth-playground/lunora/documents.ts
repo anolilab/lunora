@@ -13,16 +13,10 @@ interface DocumentRow {
 }
 
 /**
- * Lightweight identity gate. `ctx.auth.userId` is populated by Lunora's
- * runtime from the resolved session — see `src/server/index.ts` for how the
- * auth instance is wired in.
- *
- * For the *full* org-membership check, queries should compose
- * `withAuthPlugins(auth)` and call `ctx.authApi.getActiveMember({ headers,
- * query: { organizationId } })` — the addon docs page walks through the
- * `httpAction` recipe that has access to inbound `Headers`. This demo
- * keeps the handler simple and trusts the per-document `ownerId` for
- * isolation; production apps want the membership check too.
+ * Identity gate. `ctx.auth.userId` is populated by Lunora's runtime from the
+ * resolved session — see `src/server/index.ts` for how the auth instance is
+ * wired in. It is the only caller-identifying value on a procedure context that
+ * the client cannot forge.
  */
 const assertSignedIn = (userId: null | string): string => {
     if (!userId) {
@@ -33,25 +27,44 @@ const assertSignedIn = (userId: null | string): string => {
 };
 
 /**
- * List documents in an organization, newest-first. Anyone signed in can call
- * this; pair it with `withAuthPlugins` to add a strict membership check.
+ * What isolates these documents, and what does not.
+ *
+ * `ownerId` is stamped from the session on `create` and required to match on
+ * every read, so a caller only ever sees their own rows. `organizationId` is
+ * NOT a trust boundary here: it arrives in `args`, so a caller can file a
+ * document under any org id they like — it is a label on their own documents,
+ * not a claim the server verified.
+ *
+ * Gating on *membership* needs the inbound `Headers`, because better-auth
+ * authorizes `getActiveMember` from the caller's session cookie. A Lunora
+ * procedure context deliberately carries only the resolved identity, so a
+ * `query`/`mutation` cannot make that call — compose `withAuthPlugins(auth)`
+ * onto an `httpAction`, which does have the request, and check
+ * `ctx.authApi.getActiveMember({ headers: request.headers, query: {
+ * organizationId } })` there before trusting the org id. A production app wants
+ * that check in addition to the owner scoping below.
  */
-export const list = query.input({ organizationId: v.string() }).query(async ({ args: { organizationId }, ctx }): Promise<DocumentRow[]> => {
-    assertSignedIn(ctx.auth.userId);
+export const list = query
+    .input({ organizationId: v.string().meta({ schema: { maxLength: 128 } }) })
+    .query(async ({ args: { organizationId }, ctx }): Promise<DocumentRow[]> => {
+        const userId = assertSignedIn(ctx.auth.userId);
 
-    const rows = await ctx.db
-        .query("documents")
-        .withIndex("by_org_created", (range) => range.eq("organizationId", organizationId))
-        .collect();
+        // The equality prefix pins the row set to this caller's own documents; the
+        // index's trailing `createdAt` supplies the ordering, so nothing is sorted
+        // (or over-read) in JS.
+        return ctx.db
+            .query("documents")
+            .withIndex("by_org_owner_created", (range) => range.eq("organizationId", organizationId).eq("ownerId", userId))
+            .order("desc")
+            .collect();
+    });
 
-    return [...rows].sort((a, b) => b.createdAt - a.createdAt);
-});
-
+/** File a new document. `ownerId` comes from the session, never from `args`. */
 export const create = mutation
     .input({
-        organizationId: v.string(),
-        title: v.string(),
-        body: v.string(),
+        organizationId: v.string().meta({ schema: { maxLength: 128 } }),
+        title: v.string().meta({ schema: { maxLength: 256 } }),
+        body: v.string().meta({ schema: { maxLength: 100_000 } }),
     })
     .mutation(async ({ args: { organizationId, title, body }, ctx }): Promise<Id<"documents">> => {
         const userId = assertSignedIn(ctx.auth.userId);

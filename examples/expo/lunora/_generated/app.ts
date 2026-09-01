@@ -229,7 +229,7 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
-        options.listSchemaTables = () => ["messages"];
+        options.listSchemaTables = () => ["messages", "ratelimit_buckets"];
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 

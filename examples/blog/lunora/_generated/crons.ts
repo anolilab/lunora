@@ -19,10 +19,16 @@ export interface LunoraCronJob {
  * Deduplicated cron schedules — mirror of wrangler's `triggers.crons`. The
  * Lunora vite plugin keeps `wrangler.jsonc` in sync with this array.
  */
-export const LUNORA_CRON_TRIGGERS: ReadonlyArray<string> = [];
+export const LUNORA_CRON_TRIGGERS: ReadonlyArray<string> = [
+    "0 3 * * *",
+];
 
 /**
  * Dispatcher map keyed by cron expression. The Worker's `scheduled()` handler
  * looks up `event.cron` here and dispatches every job in the list.
  */
-export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {};
+export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {
+    "0 3 * * *": [
+        { name: "purge stale drafts", functionPath: "cleanup:purgeStaleDrafts", args: {} },
+    ],
+};

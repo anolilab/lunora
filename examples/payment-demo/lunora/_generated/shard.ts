@@ -105,6 +105,15 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
             "type": "index",
             "unique": true
         }
+    ],
+    "ratelimit_buckets": [
+        {
+            "fields": [
+                "key"
+            ],
+            "name": "by_key",
+            "type": "index"
+        }
     ]
 };
 
@@ -367,6 +376,39 @@ const LUNORA_TABLE_COLUMNS: Record<
             "optional": false,
             "type": "boolean"
         }
+    ],
+    "ratelimit_buckets": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "key",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "value",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "ts",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "prev",
+            "optional": true,
+            "type": "number"
+        }
     ]
 };
 
@@ -457,101 +499,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "table_without_insert",
         "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
         "title": "Table has no insert path"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:billing:checkout",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `checkout` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "checkout",
-            "file": "billing",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:billing:recordApiCall",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `recordApiCall` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "recordApiCall",
-            "file": "billing",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:billing:apiCallsRemaining",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `apiCallsRemaining` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "apiCallsRemaining",
-            "file": "billing",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:billing:portal",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `portal` (billing) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "portal",
-            "file": "billing",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:billing:checkout:priceId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `priceId` of public procedure `checkout` (billing:14) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "priceId",
-            "exportName": "checkout",
-            "file": "billing",
-            "line": 14
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
     },
     {
         "cacheKey": "procedure_without_structured_event:billing:checkout",
@@ -665,7 +612,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "checkout",
@@ -690,7 +637,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "recordApiCall",
@@ -715,7 +662,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "apiCallsRemaining",
@@ -740,7 +687,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "portal",
@@ -835,7 +782,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
 };
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
-const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "6cee520ae0eeed64", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"customers\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerCustomerId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_customer\": {\n          \"fields\": [\n            \"provider\",\n            \"providerCustomerId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"events\": {\n      \"fields\": {\n        \"processedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerEventId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"type\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_provider_event\": {\n          \"fields\": [\n            \"provider\",\n            \"providerEventId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"paymentSessions\": {\n      \"fields\": {\n        \"amountMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"capturedMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"currency\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerSessionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"refundedMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_session\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSessionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"subscriptions\": {\n      \"fields\": {\n        \"cancelAtPeriodEnd\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"currentPeriodEnd\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"currentPeriodStart\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"priceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerSubscriptionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_subscription\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSubscriptionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"usageEvents\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"featureId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"idempotencyKey\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"mode\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"reportedToProvider\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference_feature\": {\n          \"fields\": [\n            \"referenceId\",\n            \"featureId\"\n          ],\n          \"unique\": false\n        },\n        \"by_idempotency\": {\n          \"fields\": [\n            \"provider\",\n            \"idempotencyKey\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "baf24c0833d16a4e", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"customers\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerCustomerId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_customer\": {\n          \"fields\": [\n            \"provider\",\n            \"providerCustomerId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"events\": {\n      \"fields\": {\n        \"processedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerEventId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"type\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_provider_event\": {\n          \"fields\": [\n            \"provider\",\n            \"providerEventId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"paymentSessions\": {\n      \"fields\": {\n        \"amountMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"capturedMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"currency\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerSessionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"refundedMinor\": {\n          \"kind\": \"bigint\",\n          \"optional\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_session\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSessionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"subscriptions\": {\n      \"fields\": {\n        \"cancelAtPeriodEnd\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"currentPeriodEnd\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"currentPeriodStart\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        },\n        \"priceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"providerSubscriptionId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"state\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"updatedAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference\": {\n          \"fields\": [\n            \"referenceId\"\n          ],\n          \"unique\": false\n        },\n        \"by_provider_subscription\": {\n          \"fields\": [\n            \"provider\",\n            \"providerSubscriptionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"usageEvents\": {\n      \"fields\": {\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"featureId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"idempotencyKey\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"mode\": {\n          \"kind\": \"string\",\n          \"optional\": true\n        },\n        \"provider\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"quantity\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"referenceId\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"reportedToProvider\": {\n          \"kind\": \"boolean\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_reference_feature\": {\n          \"fields\": [\n            \"referenceId\",\n            \"featureId\"\n          ],\n          \"unique\": false\n        },\n        \"by_idempotency\": {\n          \"fields\": [\n            \"provider\",\n            \"idempotencyKey\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -848,6 +795,7 @@ export interface ShardDOConfig {
     relationExistsPushDown?: "always" | "auto" | "never";
     /** Optional telemetry sink. When supplied, each `ctx.log.*` call is forwarded to `sink.onLog`. Pass the SAME sink you give `createWorker({ observability })` (which drives `onRpc`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
+    /** `unknown` because `@lunora/scheduler`'s `Scheduler` is not assignable to `SchedulerLike`; the shard casts it. */
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
     payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;
@@ -1539,6 +1487,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             facade["paymentSessions"] = bindTableFacade(db, "paymentSessions");
             facade["subscriptions"] = bindTableFacade(db, "subscriptions");
             facade["usageEvents"] = bindTableFacade(db, "usageEvents");
+            facade["ratelimit_buckets"] = bindTableFacade(db, "ratelimit_buckets");
 
             const payments: LunoraPayment = config.payment
                 ? paymentsFromContext({ auth: { userId: userId ?? null }, db: db as unknown as LunoraPaymentDbLike }, config.payment(env))

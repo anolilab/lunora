@@ -25,7 +25,7 @@ import { createDbStore, RateLimiter } from "lunorash/ratelimit";
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
 
 export const limits = {
-    default: { kind: "token bucket", period: 60_000, rate: 10 },
+    send: { kind: "token bucket", period: 60_000, rate: 30 },
 } as const satisfies RateLimitConfigMap;
 
 export type LimitName = keyof typeof limits;

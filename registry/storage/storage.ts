@@ -14,7 +14,10 @@
  *     stored object. Gate the matching `GET /storage/:key` route in your Worker
  *     with {@link verifySignedUrl} before streaming the R2 body.
  *   - **deleteObject** (mutation) — delete a stored object by key.
- *   - **listObjects** (query) — list stored objects under an optional prefix.
+ *   - **listObjects** (action) — list stored objects under an optional prefix.
+ *     An action, not a query: R2 is not a reactive source, so a query would never
+ *     update on upload yet would re-issue a billable LIST on every unrelated
+ *     mutation.
  *
  * Every key is scoped per-tenant with {@link scopeKey} so a client-supplied key
  * can't address another user's data (IDOR). Edit the scope to match your tenancy
@@ -38,7 +41,7 @@ import { env } from "cloudflare:workers";
 import { RateLimiter, rateLimit, createMemoryStore } from "@lunora/ratelimit";
 import { createStorage, scopeKey } from "@lunora/storage";
 import type { Storage } from "@lunora/storage";
-import { action, mutation, query, v } from "#lunora/_generated/server.js";
+import { action, mutation, v } from "#lunora/_generated/server.js";
 
 /** The R2 bucket binding type `createStorage` expects. */
 type StorageBucket = Parameters<typeof createStorage>[0]["bucket"];
@@ -48,6 +51,15 @@ type StorageBucket = Parameters<typeof createStorage>[0]["bucket"];
  * open flood targets. The default store is in-memory (per-isolate, resets on
  * eviction) — run `lunora add ratelimit` for the durable, `ctx.db`-backed store
  * in production, and tune the rate to your upload/download volume.
+ *
+ * The key at every `.use(...)` site below is the authenticated owner, falling
+ * back to the server-trusted `ctx.ip` (Cloudflare's `CF-Connecting-IP`,
+ * forwarded server-side, never read from a client header). The `ctx.ip` hop
+ * matters even though every endpoint requires an owner: middleware runs BEFORE
+ * the handler, so an unauthenticated caller consumes a token *before*
+ * {@link requireOwner} rejects them. Keyed `"anon"` alone, every anonymous
+ * client shares one bucket and a single one exhausts it for all of them — see
+ * the `ratelimit_key_spoofable_or_global` advisor lint.
  */
 const limiter = new RateLimiter({
     config: {
@@ -55,9 +67,6 @@ const limiter = new RateLimiter({
     },
     store: createMemoryStore(),
 });
-
-/** Rate-limit key: the authenticated owner (every endpoint here requires one via {@link requireOwner}). */
-const rateLimitByOwner = rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? "anon" });
 
 /**
  * Read a required string env var/secret or throw a clear, actionable error.
@@ -145,7 +154,7 @@ export const generateUploadUrl = action
         expiresInSeconds: v.optional(v.number()),
         key: v.string().meta({ schema: { maxLength: 1024 } }),
     })
-    .use(rateLimitByOwner)
+    .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { contentType, expiresInSeconds, key }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
             throw new Error(
@@ -169,7 +178,7 @@ export const getDownloadUrl = action
         expiresInSeconds: v.optional(v.number()),
         key: v.string().meta({ schema: { maxLength: 1024 } }),
     })
-    .use(rateLimitByOwner)
+    .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { expiresInSeconds, key }, ctx }): Promise<{ key: string; url: string }> => {
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         const url = await makeStorage().getSignedUrl(scoped, { expiresInSeconds, method: "GET" });
@@ -180,7 +189,7 @@ export const getDownloadUrl = action
 /** Delete a stored object owned by the caller. */
 export const deleteObject = mutation
     .input({ key: v.string().meta({ schema: { maxLength: 1024 } }) })
-    .use(rateLimitByOwner)
+    .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .mutation(async ({ args: { key }, ctx }): Promise<{ ok: true }> => {
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         await makeStorage().delete(scoped);
@@ -199,17 +208,25 @@ interface StorageObject {
 }
 
 /**
- * List the caller's stored objects under an optional sub-prefix. Read-only, so
- * it's a query. Returns the R2 page cursor + `truncated` flag for pagination;
- * keys are returned relative to the caller's tenant prefix.
+ * List the caller's stored objects under an optional sub-prefix. Returns the R2
+ * page cursor + `truncated` flag for pagination; keys are returned relative to
+ * the caller's tenant prefix.
+ *
+ * **An action, not a query** — like {@link generateUploadUrl} and
+ * {@link getDownloadUrl}, and for the same reason. R2 is not a reactive source:
+ * a query here would never re-run when a file is uploaded (so the list would go
+ * stale silently), while Lunora *would* re-evaluate it on every unrelated
+ * mutation to the shard — issuing a billable R2 LIST each time. Refetch it after
+ * an upload/delete instead of subscribing to it.
  */
-export const listObjects = query
+export const listObjects = action
     .input({
         cursor: v.optional(v.string().meta({ schema: { maxLength: 2048 } })),
         limit: v.optional(v.number()),
         prefix: v.optional(v.string().meta({ schema: { maxLength: 1024 } })),
     })
-    .query(async ({ args: { cursor, limit, prefix }, ctx }): Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }> => {
+    .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
+    .action(async ({ args: { cursor, limit, prefix }, ctx }): Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }> => {
         const base = requireOwner(ctx.auth.userId);
         const scopedPrefix = prefix === undefined ? `${base}/` : `${scopeKey(base, prefix)}`;
         const stripLength = `${base}/`.length;

@@ -162,4 +162,16 @@ export class SubscriptionRegistry {
     public all(): SubscriptionState[] {
         return [...this.byKey.values()];
     }
+
+    /**
+     * Drop every registration. Terminal — used by `LunoraClient.close()`, whose
+     * whole point is to release the callback closures each {@link SubscriptionState}
+     * holds (`callbacks`, `errorCallbacks`, `checkpointCallbacks` — React state
+     * setters and `@lunora/db` collection closures), which otherwise outlive the
+     * closed client for as long as the client object is reachable.
+     */
+    public clear(): void {
+        this.byKey.clear();
+        this.byId.clear();
+    }
 }

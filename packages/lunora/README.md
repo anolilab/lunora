@@ -66,6 +66,20 @@ export default defineSchema({
 });
 ```
 
+The `query` / `mutation` / `action` builders are **not** re-exported here: codegen types them against your schema and emits them into your app's `_generated/server` module, so import them from there.
+
+```ts
+// lunora/messages.ts — the procedure builders come from codegen
+import { query, v } from "@/lunora/_generated/server";
+
+export const list = query.input({ author: v.id("users") }).query(async ({ ctx, args: { author } }) =>
+    ctx.db
+        .query("messages")
+        .filter((message) => message.author === author)
+        .collect(),
+);
+```
+
 ```ts
 // src/worker.ts — the worker entry
 import { createWorker } from "lunorash/runtime";
@@ -85,18 +99,18 @@ pnpm exec lunora deploy
 
 ### Subpaths
 
-| Import                         | Re-exports              | Use                                                      |
-| ------------------------------ | ----------------------- | -------------------------------------------------------- |
-| `lunorash` / `lunorash/server` | `@lunora/server`        | `query` / `mutation` / `action`, `defineSchema`, …       |
-| `lunorash/values`              | `@lunora/values`        | the `v.*` validator suite                                |
-| `lunorash/errors`              | `@lunora/errors`        | `LunoraError`, the error catalog, `toErrorBody`          |
-| `lunorash/runtime`             | `@lunora/runtime`       | `createWorker` and the query coordinator                 |
-| `lunorash/do`                  | `@lunora/do`            | `ShardDO` / `SessionDO`                                  |
-| `lunorash/platform`            | `@lunora/platform`      | Host contracts (`ShardHost`, `SocketHost`, …)            |
-| `lunorash/observability`       | `@lunora/observability` | Telemetry: logs, metrics, traces, issues                 |
-| `lunorash/ratelimit`           | `@lunora/ratelimit`     | `rateLimit()` middleware, `RateLimiter`, `createDbStore` |
-| `lunorash/flags`               | `@lunora/flags`         | feature flags (`defineFlags`, evaluation)                |
-| `lunorash/client`              | `@lunora/client`        | the browser SDK (`LunoraClient`, `Preloaded`, …)         |
+| Import                         | Re-exports              | Use                                                        |
+| ------------------------------ | ----------------------- | ---------------------------------------------------------- |
+| `lunorash` / `lunorash/server` | `@lunora/server`        | `defineSchema`, `defineTable`, `initLunora`, `cronJobs`, … |
+| `lunorash/values`              | `@lunora/values`        | the `v.*` validator suite                                  |
+| `lunorash/errors`              | `@lunora/errors`        | `LunoraError`, the error catalog, `toErrorBody`            |
+| `lunorash/runtime`             | `@lunora/runtime`       | `createWorker` and the query coordinator                   |
+| `lunorash/do`                  | `@lunora/do`            | `ShardDO` / `SessionDO`                                    |
+| `lunorash/platform`            | `@lunora/platform`      | Host contracts (`ShardHost`, `SocketHost`, …)              |
+| `lunorash/observability`       | `@lunora/observability` | Telemetry: logs, metrics, traces, issues                   |
+| `lunorash/ratelimit`           | `@lunora/ratelimit`     | `rateLimit()` middleware, `RateLimiter`, `createDbStore`   |
+| `lunorash/flags`               | `@lunora/flags`         | feature flags (`defineFlags`, evaluation)                  |
+| `lunorash/client`              | `@lunora/client`        | the browser SDK (`LunoraClient`, `Preloaded`, …)           |
 
 Granular subpaths are forwarded too:
 

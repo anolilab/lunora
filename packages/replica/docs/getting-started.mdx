@@ -82,9 +82,12 @@ import { useLocalQuery } from "@lunora/replica/react";
 import { mirror } from "./mirror";
 
 function TodoList() {
-    const todos = useLocalQuery<{ id: string; title: string; done: boolean }>(mirror, "SELECT id, title, done FROM todos ORDER BY id");
+    // A discriminated union: `{ data }` on success, `{ error }` when the query
+    // fails — including "the table doesn't exist yet", before the first diff
+    // lands. It is never `undefined`, so check `error` explicitly.
+    const { data: todos, error } = useLocalQuery<{ id: string; title: string; done: boolean }>(mirror, "SELECT id, title, done FROM todos ORDER BY id");
 
-    if (todos === undefined) {
+    if (error) {
         return <p>Waiting for data…</p>;
     }
 

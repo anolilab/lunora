@@ -33,18 +33,21 @@
  * client-facing reactive channel. Unlike a normal query, a flag read never
  * issues an HTTP fetch — the reserved prefix isn't a registered function, so an
  * HTTP RPC would 404. It rides Lunora's WebSocket only, seeded on subscribe.
+ *
+ * The channel is public and unauthenticated, so it carries **no** client-supplied
+ * targeting context: the server evaluates every flag under the socket's own
+ * verified identity (`defineFlags({ identify })`). Putting a caller-supplied
+ * context on this wire would let any subscriber spoof targeting attributes
+ * (`{ plan: "premium" }`) to unlock a flag gated on them. Context-dependent
+ * evaluation belongs in a server function, via `ctx.flags.*`.
  */
 const FLAGS_EVAL_PATH = "__lunora_flags__:eval";
-
-/** A targeting context merged on top of the app's default (`defineFlags({ identify })`). */
-type FlagContext = Record<string, unknown>;
 
 /** The value kinds a flag resolves to — OpenFeature's boolean / number / string / structured (JSON) flags. */
 type FlagValue = boolean | number | string | { [key: string]: unknown } | unknown[] | null;
 
-/** Wire args the generated flag-subscription read override reads: the key, its value kind, the fallback, and the targeting context. */
+/** Wire args the generated flag-subscription read override reads: the key, its value kind, and the fallback. */
 interface FlagSubscribeArgs extends Record<string, unknown> {
-    context?: FlagContext;
     default: unknown;
     key: string;
     type: "boolean" | "number" | "object" | "string";
@@ -83,8 +86,6 @@ const flagsReference: FlagsReference = { __lunoraRef: FLAGS_EVAL_PATH };
 
 /** What identifies one flag read on the wire. */
 interface FlagSubscription<T extends FlagValue> {
-    /** Per-call targeting context merged on top of the app's default `identify` targeting key. */
-    context: FlagContext | undefined;
     /** Held until the first evaluation lands, and re-applied on any failure (see {@link subscribeFlag}). */
     default: T;
     key: string;
@@ -109,7 +110,7 @@ const subscribeFlag = <T extends FlagValue>(client: FlagClient, args: FlagSubscr
     try {
         return client.subscribe(
             flagsReference,
-            { context: args.context, default: args.default, key: args.key, type: flagKind(args.default) },
+            { default: args.default, key: args.key, type: flagKind(args.default) },
             (next) => {
                 set(next as T);
             },
@@ -125,5 +126,5 @@ const subscribeFlag = <T extends FlagValue>(client: FlagClient, args: FlagSubscr
     }
 };
 
-export type { FlagContext, FlagSubscription, FlagValue };
+export type { FlagSubscription, FlagValue };
 export { flagKind, subscribeFlag };

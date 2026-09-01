@@ -700,6 +700,7 @@ const SHAPES_FILENAME = "shapes.ts";
 interface SandboxUsage {
     usesSandboxBrowser: boolean;
     usesSandboxContainer: boolean;
+    usesSandboxFs: boolean;
 }
 ```
 

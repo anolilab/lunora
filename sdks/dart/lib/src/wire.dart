@@ -48,6 +48,11 @@ const int wireMaxDepth = 64;
 /// service. Applied only on decode — the untrusted direction.
 const int wireMaxBigIntDigits = 1024;
 
+/// Largest integer a float64 holds exactly (2^53 - 1). JSON numbers are
+/// float64, so an integer past this cannot cross the wire as a number without
+/// changing value — `BigInt` and its tag exist for that case.
+const int wireMaxExactInteger = 9007199254740991;
+
 /// JavaScript's `undefined`, distinct from JSON null.
 ///
 /// As an object field it is dropped on encode (matching `JSON.stringify`); in an
@@ -204,7 +209,10 @@ Object? encodeWire(Object? value, [int depth = 0]) {
   if (value is Uint8List) {
     return <Object?>[wireTag, 'bytes', base64.encode(value)];
   }
-  if (value is bool || value is int || value is String) {
+  if (value is int) {
+    return _encodeInt(value);
+  }
+  if (value is bool || value is String) {
     return value;
   }
   if (value is double) {
@@ -221,6 +229,22 @@ Object? encodeWire(Object? value, [int depth = 0]) {
     'cannot encode a ${value.runtimeType} over the Lunora wire — only null, bool, int, double, String, List, Map, '
     'BigInt, Uint8List and the Wire* wrappers round-trip',
   );
+}
+
+/// A Dart `int` onto the wire.
+///
+/// Dart's `int` is 64-bit; a JSON number is a float64. Passing a larger one
+/// straight through meant the SERVER's own `JSON.parse` rounded it, so the value
+/// that arrived was quietly a different integer. Refuse, as the Go port does,
+/// and name the way across.
+Object? _encodeInt(int value) {
+  if (value > wireMaxExactInteger || value < -wireMaxExactInteger) {
+    throw WireFormatException(
+      'integer $value exceeds the exact float64 range — wrap it in a BigInt so it crosses the wire as a bigint tag',
+    );
+  }
+
+  return value;
 }
 
 Object? _encodeDouble(double value) {

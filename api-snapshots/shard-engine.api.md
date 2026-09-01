@@ -3717,12 +3717,6 @@ const envPositiveInt: (env: unknown, key: string, fallback: number) => number;
 const exportShardRows: (writer: DatabaseWriterLike, schema: SchemaLike, args: ExportShardArgs) => AsyncGenerator<ExportRow, void, undefined>;
 ```
 
-### `exportShardTable` (const)
-
-```ts
-const exportShardTable: (writer: DatabaseWriterLike, table: string, batchSize?: number) => AsyncGenerator<ExportRow, void, undefined>;
-```
-
 ### `facetColumn` (const)
 
 ```ts
@@ -3799,12 +3793,6 @@ const hasTrigger: (schema: SchemaLike, tableName: string, op: TriggerOpLike) => 
 
 ```ts
 const haversineMeters: (a: GeoPoint, b: GeoPoint) => number;
-```
-
-### `hydrateDocsById` (const)
-
-```ts
-const hydrateDocsById: (deps: RankPageDeps, tableName: string, ids: ReadonlyArray<string>) => Map<string, Record<string, unknown>>;
 ```
 
 ### `importShardRows` (const)

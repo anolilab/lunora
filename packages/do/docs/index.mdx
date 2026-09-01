@@ -38,7 +38,27 @@ hits its single-instance ceiling.
 
 Per-shard configuration. The generated shard passes these through to
 `super(state, env, options)` from the object you hand `createShardDO(...)`, so
-you set them there rather than subclassing:
+you set them there rather than subclassing.
+
+Prefer the generated app builder where you have one — `defineApp()` carries the
+same knobs as chainable methods and wires the worker half of each capability at
+the same time:
+
+```ts
+// src/server/index.ts
+import { defineApp } from "../../lunora/_generated/app";
+
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    // `true` takes the defaults; an object tunes the caps.
+    .reactiveCache({ maxBytes: 4 * 1024 * 1024, maxEntries: 1000 })
+    .build();
+
+export const ShardDO = app.ShardDO;
+```
+
+Hand-composing the worker instead, the same options are the `createShardDO`
+config:
 
 ```ts
 export const ShardDO = createShardDO({

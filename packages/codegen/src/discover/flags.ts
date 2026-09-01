@@ -10,12 +10,21 @@ import { defaultExportExpression, propertyInitializer } from "./ast";
 /** The only file a feature-flag provider may be declared in — mirrors `lunora/queues.ts`. */
 const FLAGS_FILENAME = "flags.ts";
 
-/** The `@lunora/flags` subpath exporting the first-class Flagship provider factory. */
-const FLAGSHIP_PROVIDER_MODULE = "@lunora/flags/providers/flagship";
+/**
+ * Every specifier that exports the first-class Flagship provider factory: the
+ * granular `@lunora/flags` subpath and the umbrella's re-export of it.
+ *
+ * Both are required. Templates depend on `lunorash`, never `@lunora/flags`, so
+ * matching only the granular specifier meant an umbrella project's
+ * `flagshipProvider({ binding: "FLAGS" })` degraded to `{ provider: "custom" }`
+ * — no `flagshipBinding`, no reconcile hint, and an app deployed with
+ * `ctx.flags` wired to nothing.
+ */
+const FLAGSHIP_PROVIDER_MODULES = new Set(["@lunora/flags/providers/flagship", "lunorash/flags/flagship"]);
 
 /**
- * Decide whether a callee identifier refers to `flagshipProvider` from
- * `@lunora/flags/providers/flagship`. Mirrors `isDefineQueue`: trust the import
+ * Decide whether a callee identifier refers to `flagshipProvider` from one of
+ * {@link FLAGSHIP_PROVIDER_MODULES}. Mirrors `isDefineQueue`: trust the import
  * declaration when the checker has a symbol (so aliasing survives), and fall
  * back to the surface text when no symbol is available (a bare in-memory
  * ts-morph project can't always resolve the workspace package).
@@ -32,7 +41,7 @@ const isFlagshipProvider = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (declaration.getImportDeclaration().getModuleSpecifierValue() !== FLAGSHIP_PROVIDER_MODULE) {
+        if (!FLAGSHIP_PROVIDER_MODULES.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
             return false;
         }
 

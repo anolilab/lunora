@@ -79,7 +79,9 @@ for (const finding of findings) {
 
 ### Runtime lints
 
-The runtime tier (`hot_shard`, `index_utilization`, `constraint_validator`) reads observed signal off the `LintContext` (`shardTraffic`, `tableScans`, `indexHits`, `tableSamples`). The Studio backend fills those from each shard's durable counters:
+The runtime tier (`hot_shard`, `index_utilization`, `fan_out_breadth`, `constraint_validator`) reads observed signal off the `LintContext` (`shardTraffic`, `tableScans`, `indexHits`, `tableSamples`). The Studio backend fills `shardTraffic` / `tableScans` / `indexHits` from the shards' admin signal.
+
+`tableSamples` has **no shipped feeder**: nothing in the runtime or the Studio reads bounded row samples out of a shard, so `constraint_validator` is a no-op unless _you_ pass samples yourself (the Studio excludes it from the lint set it runs, rather than running it against an input it cannot fill). It is exported and driveable — the sample shape is `AdvisorTableSample` — but wiring it to a deployment means adding a sampling admin read first.
 
 ```ts
 import { fromServerSchema, runAdvisor } from "@lunora/advisor";

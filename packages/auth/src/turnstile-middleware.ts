@@ -39,18 +39,27 @@ interface VerifyTurnstileMiddlewareOptions<Context> {
     message?: string;
 
     /**
-     * Selector that pulls the visitor IP from `ctx` (the procedure context has
-     * no raw `Headers`, so this must come from `args`/ctx). Optional.
+     * Selector that pulls the visitor IP off `ctx` — typically `ctx.ip`, or
+     * `ctx.args.ip` when the caller sends it (the procedure context has no raw
+     * `Headers`). Optional.
      */
     remoteip?: (context: Context) => string | undefined;
     /** Your Turnstile secret key (the `TURNSTILE_SECRET_KEY` env var). */
     secret: string;
 
     /**
-     * Selector that pulls the `cf-turnstile-response` token from `ctx`. The
+     * Selector that pulls the `cf-turnstile-response` token off `ctx`. The
      * procedure context carries only the resolved identity, **not** the raw
      * inbound `Headers` (see `withAuthPlugins` in `./middleware`), so the token
-     * must travel in the function `args` and be read out here.
+     * travels in the function `args` — which the builder surfaces to middleware
+     * as `ctx.args` (validated, frozen):
+     *
+     * ```ts
+     * export const submit = mutation
+     *     .input({ message: v.string(), turnstileToken: v.string() })
+     *     .use(verifyTurnstileMiddleware({ secret: env.TURNSTILE_SECRET_KEY, token: (ctx) => ctx.args.turnstileToken }))
+     *     .mutation(async ({ args, ctx }) => { … });
+     * ```
      */
     token: (context: Context) => string | undefined;
 
@@ -67,8 +76,10 @@ interface VerifyTurnstileMiddlewareOptions<Context> {
  * Procedure middleware that enforces a Turnstile (CAPTCHA) check before the
  * handler runs. Attach it with `.use()`. It reads the token (and optional IP)
  * from `ctx` via the provided selectors — because the procedure context does
- * not carry raw request headers, the token must be passed through the function
- * `args`. To gate the better-auth sign-in/sign-up flow itself, prefer
+ * not carry raw request headers, the token is passed through the function
+ * `args` and read back as `ctx.args.<field>` (the builder surfaces the
+ * VALIDATED args on the middleware context, frozen). To gate the better-auth
+ * sign-in/sign-up flow itself, prefer
  * better-auth's native `captcha` plugin (re-exported from `@lunora/auth/plugins`)
  * — this middleware is for non-auth Lunora procedures.
  *

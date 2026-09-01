@@ -32,9 +32,37 @@ The core outputs, always written:
 - `dataModel.ts`: the `Doc<"messages">` / `Id<"users">` types derived from your
   tables.
 
-It also emits `app.ts`, `functions.ts`, `shard.ts`, and Drizzle schemas, plus
-`crons.ts`, `containers.ts`, `workflows.ts`, `vectors.ts`, `seed.ts`, and the
-OpenAPI / OpenRPC spec files, each only when you use the matching feature.
+It also emits `app.ts`, `functions.ts`, `shard.ts`, and the Drizzle schemas
+below, plus `crons.ts`, `containers.ts`, `workflows.ts`, `vectors.ts`,
+`seed.ts`, and the OpenAPI / OpenRPC spec files, each only when you use the
+matching feature.
+
+### The Drizzle schemas
+
+`drizzle.shard.ts` and `drizzle.global.ts` mirror your tables as Drizzle
+`sqliteTable` definitions, split by where the rows live: `.global()` tables (D1)
+go in `drizzle.global.ts`, everything else (the default root shard and
+`.shardBy()` tables) in `drizzle.shard.ts`. A project with no table on one side
+gets an empty module, not a missing file.
+
+They exist for the escape hatch: `ctx.db` covers the typed path, and when you
+need raw Drizzle — a `@lunora/d1` `client.drizzle` query against your global
+tables, a hand-written join, a Drizzle Studio config — you import the table
+objects instead of redeclaring them.
+
+```ts
+import { drizzle } from "drizzle-orm/d1";
+import { eq } from "drizzle-orm";
+
+import { users } from "./lunora/_generated/drizzle.global.js";
+
+const rows = await drizzle(env.DB).select().from(users).where(eq(users.email, email));
+```
+
+`searchIndexes` are not emitted — Drizzle has no `sqliteTable` abstraction for
+FTS5 virtual tables, and the runtime handles that plumbing outside Drizzle.
+Nothing you write has to import these files; ignore them if you never reach for
+Drizzle directly.
 
 ## When it runs
 

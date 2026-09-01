@@ -442,12 +442,6 @@ interface CreateVoiceAgentResult {
 }
 ```
 
-### `FlagContext` (type)
-
-```ts
-type FlagContext = Record<string, unknown>;
-```
-
 ### `FlagValue` (type)
 
 ```ts
@@ -674,13 +668,13 @@ const createConnectionStatus: () => Accessor<ConnectionStatus>;
 ### `createFlag` (const)
 
 ```ts
-const createFlag: <T extends FlagValue>(key: MaybeAccessor<string>, defaultValue: T, context?: MaybeAccessor<FlagContext | undefined>) => Accessor<T>;
+const createFlag: <T extends FlagValue>(key: MaybeAccessor<string>, defaultValue: T) => Accessor<T>;
 ```
 
 ### `createFlags` (const)
 
 ```ts
-const createFlags: <T extends Record<string, FlagValue>>(flags: T, context?: MaybeAccessor<FlagContext | undefined>) => Accessor<T>;
+const createFlags: <T extends Record<string, FlagValue>>(flags: T) => Accessor<T>;
 ```
 
 ### `createInfiniteQuery` (const)

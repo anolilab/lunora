@@ -38,18 +38,31 @@
               "env":
                   "GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
               "with":
+                  # commitlint's `type-enum`, verbatim. A squash merge takes the PR
+                  # title as the commit message, and the `commit-msg` hook does not
+                  # run server-side, so this list IS the type gate for merged work —
+                  # and it had drifted in both directions: `infra` passed here and
+                  # landed a type semantic-release cannot map, while `deps`,
+                  # `security`, `style` and `translation` failed a required check
+                  # despite being valid everywhere else in the repo.
+                  #
+                  # `scripts/check-pr-title-types.js` (the yaml-lint job) fails if
+                  # this list and commitlint's ever disagree again.
                   "types": |
                       build
                       chore
                       ci
+                      deps
                       docs
                       feat
                       fix
                       perf
-                      infra
                       refactor
                       revert
+                      security
+                      style
                       test
+                      translation
 
             - "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
               "if": "always() && (steps.lint_pr_title.outputs.error_message != null)"

@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { resolveTargetOrThrow } from "@lunora/config";
+import { isRunnableTarget, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
@@ -49,6 +49,30 @@ const resolveOverlayOption = (overlay: LunoraPluginOptions["overlay"]): false | 
     };
 };
 
+/**
+ * `resolveTargetOrThrow`, plus the check that the resolved target is one this
+ * plugin can actually run.
+ *
+ * `isRunnableTarget` is the shared predicate the CLI's `deploy`/`dev` guard
+ * uses too, so the two cannot drift. `resolveTargetOrThrow` accepts a
+ * codegen-only target like `node` — legitimately, since generating for it is
+ * meaningful — so without this check the plugin would go on to run the
+ * **Cloudflare** build pipeline against it and emit the wrong surface silently.
+ */
+const resolveRunnableTargetOrThrow = (projectRoot: string, explicit?: string): string => {
+    const target = resolveTargetOrThrow(projectRoot, explicit);
+
+    if (!isRunnableTarget(target)) {
+        const runnable = runnableTargetIds();
+
+        throw new Error(
+            `target "${target}" has no command-line toolchain, so the Lunora Vite plugin cannot build or serve it — it can only generate for it (\`lunora codegen --target ${target}\`). Buildable targets: ${runnable.join(", ")}`,
+        );
+    }
+
+    return target;
+};
+
 const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunoraPluginOptions => {
     const input = options ?? {};
     const schemaDirectory = input.schemaDir ?? "lunora";
@@ -87,7 +111,7 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
         // `lunora.json`, then the default — so a project that sets `target`
         // once gets it in `vite build` and `lunora deploy` alike, and a typo
         // fails here rather than emitting the default surface silently.
-        target: resolveTargetOrThrow(projectRoot, input.target),
+        target: resolveRunnableTargetOrThrow(projectRoot, input.target),
         validateWrangler: input.validateWrangler ?? true,
     };
 };

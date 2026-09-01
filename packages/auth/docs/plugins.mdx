@@ -189,32 +189,43 @@ package root:
   (bot / invalid / expired) verdict is **returned**, not thrown; it only throws
   a structural `LunoraError` on transport failure (network error / non-2xx).
 - `verifyTurnstileMiddleware({ secret, token, ... })`: Lunora procedure
-  middleware (`.use()`) that gates any procedure on a Turnstile check. It reads
-  the token from `ctx` via the `token` selector (the token travels in the
-  function `args`, since the procedure context carries no raw `Headers`). Fails
-  **closed** by default; pass `failOpen: true` to admit on a siteverify outage.
+  middleware (`.use()`) that gates any procedure on a Turnstile check. Its
+  `token` selector reads from **`ctx`** — see the caveat below before reaching
+  for it. Fails **closed** by default; pass `failOpen: true` to admit on a
+  siteverify outage.
+
+A Turnstile token arrives in the request body, so it lands in the function
+`args`. Call `verifyTurnstile` directly in the handler, where `args` is in
+scope:
 
 ```ts
 // lunora/contactForm.ts — gate a plain mutation, no auth involved
-import { mutation } from "@/lunora/_generated/server";
-import { verifyTurnstileMiddleware } from "@lunora/auth";
+import { verifyTurnstile } from "@lunora/auth";
+import { LunoraError } from "@lunora/errors";
 
+import { mutation } from "@/lunora/_generated/server";
 import { v } from "lunorash/values";
 
-export const submit = mutation
-    .input({ message: v.string(), turnstileToken: v.string() })
-    // The procedure context carries no raw Headers, so the token rides in args
-    // and the selector reads it back off ctx once it's been surfaced there.
-    .use(
-        verifyTurnstileMiddleware({
-            secret: env.TURNSTILE_SECRET_KEY,
-            token: (ctx) => ctx.turnstileToken,
-        }),
-    )
-    .mutation(async ({ args }) => {
-        /* args.message has passed the Turnstile check */
-    });
+export const submit = mutation.input({ message: v.string(), turnstileToken: v.string() }).mutation(async ({ ctx, args }) => {
+    // `ctx.env` is `Record<string, unknown> | undefined`, so narrow the secret.
+    const secret = String(ctx.env?.TURNSTILE_SECRET_KEY ?? "");
+    // A bot / invalid / expired verdict is RETURNED, not thrown — check it.
+    const verdict = await verifyTurnstile({ secret, token: args.turnstileToken });
+
+    if (!verdict.success) {
+        throw new LunoraError("FORBIDDEN", "turnstile verification failed");
+    }
+
+    /* args.message has passed the Turnstile check */
+});
 ```
+
+<Callout type="warn">
+    **`verifyTurnstileMiddleware`'s `token` selector cannot read the args.** A `.use()` middleware is handed only the context, and the builder never places the
+    parsed `args` onto it — so `token: (ctx) => ctx.turnstileToken` does not type-check, and cast past it reads `undefined` and the middleware throws
+    `FORBIDDEN "turnstile token missing"` on **every** submission. The selector is usable only for a token an earlier `.use()` already put on the context. For a
+    token that arrives in the args, use the in-handler `verifyTurnstile` call above.
+</Callout>
 
 <Callout type="warn">
     **Use the `captcha` plugin for the auth flow.** It hooks better-auth's pipeline and reads the token from the `x-captcha-response` header. The standalone
@@ -284,23 +295,48 @@ only token ever returned is the one from an explicit **Impersonate**.
 `@lunora/auth/middleware` exports a Lunora-style middleware factory that
 surfaces every plugin endpoint on `ctx.authApi`:
 
+It is a **procedure** middleware, so it goes on a `query`/`mutation`/`action`
+builder — `httpAction` is not a builder and has no `.use()`, and its
+`HttpActionCtx` carries no `authApi`:
+
 ```ts
-import { httpAction } from "lunorash/server";
+// lunora/orgs.ts
 import { withAuthPlugins } from "@lunora/auth/middleware";
 
-import { auth } from "./auth.js";
+import { internalAction, v } from "./_generated/server";
+import { auth } from "./auth";
 
 // Compose once with .use(...) and every handler downstream sees authApi.
-export const createOrg = httpAction(async (ctx, request) => {
-    const { name } = await request.json();
+export const createOrg = internalAction
+    .input({ cookie: v.string(), name: v.string() })
+    .use(withAuthPlugins(auth))
+    .action(async ({ ctx, args }) =>
+        ctx.authApi.createOrganization({
+            body: { name: args.name, slug: args.name.toLowerCase().replaceAll(/\s+/gu, "-") },
+            // Rebuilt from the transport — the middleware cannot pre-bind them.
+            headers: new Headers({ cookie: args.cookie }),
+        }),
+    );
+```
 
-    const org = await ctx.authApi.createOrganization({
-        body: { name, slug: name.toLowerCase().replace(/\s+/g, "-") },
-        headers: request.headers,
-    });
+The transport that has the real headers forwards what the endpoint needs:
 
-    return Response.json(org);
-});
+```ts
+// lunora/http.ts
+import { httpAction, httpRouter } from "lunorash/server";
+
+import { internal } from "./_generated/api";
+
+export const app = httpRouter();
+
+app.post(
+    "/orgs",
+    httpAction(async (ctx, request) => {
+        const { name } = (await request.json()) as { name: string };
+
+        return Response.json(await ctx.runAction(internal.orgs.createOrg, { cookie: request.headers.get("cookie") ?? "", name }));
+    }),
+);
 ```
 
 `ctx.authApi` is typed against the plugin set loaded on the auth instance:
@@ -312,13 +348,18 @@ export const createOrg = httpAction(async (ctx, request) => {
 Lunora's procedure context carries the resolved identity (`ctx.auth.userId`,
 `ctx.auth.getIdentity()`) but not the raw inbound `Headers`. Better-auth
 endpoints need the headers to read the caller's session cookie, so the
-middleware does **not** pre-bind them. Pass them through from the transport
-that has them:
+middleware does **not** pre-bind them, and a header-less call is an
+authorization bypass rather than a missing convenience. Route them in from the
+transport that has them:
 
-- **HTTP action**: `request.headers` (as shown above).
-- **WebSocket subscription**: propagated from the upgrade request.
-- **Server-to-server** (cron job, queue consumer): pass `new Headers()` and
-  authenticate via a bearer token or service-key plugin instead.
+- **HTTP action**: `request.headers` — forward what the endpoint needs through
+  the procedure's `args` and rebuild a `Headers` on the far side, as above.
+  A `Headers` object cannot itself cross the RPC boundary.
+- **WebSocket subscription**: propagated from the upgrade request the same way.
+- **Server-to-server** (cron job, queue consumer): there is no caller session,
+  so use the explicit escape hatch — `ctx.authApi.withoutHeaders().<method>(…)`
+  — and authenticate via a bearer token or service-key plugin instead. The
+  runtime guard throws `LunoraAuthHeadersError` on a header-less call otherwise.
 
 ## Migrations
 

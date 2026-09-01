@@ -327,7 +327,14 @@ export interface RagConfig {
     /**
      * Embedding model, declared once so index + retrieve embed identically: a
      * Workers AI id (e.g. `@cf/baai/bge-base-en-v1.5`) or any AI SDK
-     * `EmbeddingModel`. Falls back to `createAi`'s `defaultModel` when omitted.
+     * `EmbeddingModel`.
+     *
+     * Omitting it resolves through `ai.embeddingModel(undefined)`, which falls
+     * back to `createAi`'s `defaultEmbeddingModel` — NOT `defaultModel`, which
+     * this said before and which would be a language-model id in an
+     * embedding-model slot. On the generated `ctx.ai` that default comes from
+     * `LUNORA_AI_DEFAULT_EMBEDDING_MODEL` in the Worker env; with neither set,
+     * the first index/retrieve throws.
      */
     embeddingModel?: EmbeddingModelInput;
 

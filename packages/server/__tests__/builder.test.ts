@@ -1,6 +1,7 @@
 import { DEFER_VALIDATION, installCompiledValidatorMap } from "@lunora/values";
 import { describe, expect, it, vi } from "vitest";
 
+import type { Middleware } from "../src/index";
 import { initLunora, LunoraError, v, ValidationError } from "../src/index";
 
 const c = initLunora.dataModel<Record<string, never>>().create();
@@ -207,6 +208,180 @@ describe(".meta()", () => {
         await iterator.next();
 
         expect(seen).toStrictEqual({ rateLimit: "pins/watch" });
+    });
+});
+
+// `ctx.args` is what makes a payload-gating middleware possible at all: the
+// procedure context carries the resolved identity, not the request body, so a
+// guard like `@lunora/auth`'s Turnstile/email-gate middlewares — whose whole
+// contract is a `(ctx) => ctx.args.<field>` selector — reads its input here or
+// nowhere. Without it every such guard rejects every call.
+describe("ctx.args (the middleware's view of the call arguments)", () => {
+    it("exposes the call arguments to middleware as ctx.args", async () => {
+        expect.assertions(2);
+
+        let seen: unknown;
+
+        const guarded = c.mutation
+            .input({ message: v.string(), turnstileToken: v.string() })
+            .use(async ({ ctx, next }) => {
+                // The documented selector shape, verbatim.
+                seen = ctx.args.turnstileToken;
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .mutation(({ args }) => args.message);
+
+        await expect(guarded.handler({}, { message: "hi", turnstileToken: "tok" })).resolves.toBe("hi");
+        expect(seen).toBe("tok");
+    });
+
+    // Compile-time half of the same claim, in the shape `@lunora/auth`'s guards
+    // are actually written: a factory generic over the ctx whose ONLY inference
+    // site is the `.use()` position. If `.use()` did not hand the middleware the
+    // args, `(ctx) => ctx.args.token` here would not type-check — which is what
+    // both shipped guards' JSDoc tells users to write.
+    it("infers ctx.args through a generic selector-taking middleware factory", async () => {
+        expect.assertions(2);
+
+        let seen: unknown;
+
+        const selectorGuard =
+            <Context>(select: (context: Context) => string | undefined): Middleware<Context, Context> =>
+            async ({ ctx, next }) => {
+                seen = select(ctx);
+
+                return await next();
+            };
+
+        const guarded = c.mutation
+            .input({ token: v.string() })
+            .use(selectorGuard((ctx) => ctx.args.token))
+            .mutation(() => "ok");
+
+        await expect(guarded.handler({}, { token: "tok" })).resolves.toBe("ok");
+        expect(seen).toBe("tok");
+    });
+
+    // The trust boundary: a security middleware must never be handed input that
+    // has not crossed the validators. Undeclared wire keys are dropped by
+    // `validateArgs`, so they must not reappear on `ctx.args`.
+    it("surfaces the VALIDATED args, not the raw wire object", async () => {
+        expect.assertions(1);
+
+        let seen: unknown;
+
+        const guarded = c.mutation
+            .input({ email: v.string() })
+            .use(async ({ ctx, next }) => {
+                seen = ctx.args;
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .mutation(() => "ok");
+
+        await guarded.handler({}, { email: "a@b.test", role: "admin" } as unknown as { email: string });
+
+        expect(seen).toStrictEqual({ email: "a@b.test" });
+    });
+
+    // `ctx.args` is a frozen COPY, so a middleware cannot rewrite the payload the
+    // handler is then dispatched with — a guard that verified `email` must not be
+    // able to hand the handler a different one (nor an unrelated middleware do it
+    // by accident).
+    it("hands middleware a frozen copy the handler does not read back", async () => {
+        expect.assertions(4);
+
+        let frozen: boolean | undefined;
+        let seen: unknown;
+
+        const guarded = c.mutation
+            .input({ email: v.string() })
+            .use(async ({ ctx, next }) => {
+                seen = ctx.args;
+                // Asserted alongside `isFrozen`, which answers `true` for a
+                // missing `ctx.args` and would pass vacuously on its own.
+                frozen = Object.isFrozen(ctx.args);
+
+                expect(() => {
+                    (ctx.args as unknown as { email: string }).email = "evil@b.test";
+                }).toThrow(TypeError);
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .mutation(({ args }) => args.email);
+
+        await expect(guarded.handler({}, { email: "a@b.test" })).resolves.toBe("a@b.test");
+        expect(seen).toStrictEqual({ email: "a@b.test" });
+        expect(frozen).toBe(true);
+    });
+
+    it("exposes the call arguments to middleware inside a streaming procedure", async () => {
+        expect.assertions(1);
+
+        let seen: unknown;
+
+        const guarded = c.query
+            .input({ room: v.string() })
+            .use(async ({ ctx, next }) => {
+                seen = ctx.args.room;
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .stream(async function* watchRoom() {
+                yield "ok";
+            });
+
+        const { signal } = new AbortController();
+        // The chain is deferred to the first pump — drive one step to observe it.
+        await guarded.handler({}, { room: "lobby" }, signal)[Symbol.asyncIterator]().next();
+
+        expect(seen).toBe("lobby");
+    });
+
+    // `.meta()` and `.args` land on the same decorated context; adding one must
+    // not have displaced the other.
+    it("carries ctx.meta alongside ctx.args", async () => {
+        expect.assertions(2);
+
+        let seenArgs: unknown;
+        let seenMeta: unknown;
+
+        const guarded = c.mutation
+            .input({ email: v.string() })
+            .meta({ rateLimit: "signup" })
+            .use(async ({ ctx, next }) => {
+                seenArgs = ctx.args;
+                seenMeta = ctx.meta;
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .mutation(() => "ok");
+
+        await guarded.handler({}, { email: "a@b.test" });
+
+        expect(seenArgs).toStrictEqual({ email: "a@b.test" });
+        expect(seenMeta).toStrictEqual({ rateLimit: "signup" });
+    });
+
+    // Ordering, not decoration: the args reach middleware only after they have
+    // been parsed, so a bad payload is rejected before any guard runs.
+    it("rejects an invalid payload before the chain runs", async () => {
+        expect.assertions(2);
+
+        const ran = vi.fn<() => void>();
+
+        const guarded = c.mutation
+            .input({ email: v.string() })
+            .use(async ({ ctx, next }) => {
+                ran();
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .mutation(() => "ok");
+
+        await expect(guarded.handler({}, { email: 42 as unknown as string })).rejects.toThrow(ValidationError);
+        expect(ran).not.toHaveBeenCalled();
     });
 });
 

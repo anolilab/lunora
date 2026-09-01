@@ -116,15 +116,23 @@ through the same `SchedulerDO`:
 ```ts
 import { createCronTrigger } from "@lunora/scheduler";
 
+import { internal } from "@/lunora/_generated/api";
+
 export const triggers = [
-    createCronTrigger({ cron: "0 3 * * *", functionPath: "cleanup:cleanupOldMessages" }),
-    createCronTrigger({ cron: "*/15 * * * *", functionPath: "presence:sweep" }),
+    createCronTrigger({ schedule: "0 3 * * *", fn: internal.cleanup.cleanupOldMessages }),
+    createCronTrigger({ schedule: "*/15 * * * *", fn: internal.presence.sweep }),
 ];
 ```
 
+`schedule` is the cron expression and `fn` is a **function reference** from
+`_generated/api`, not a path string — omit either and `createCronTrigger` throws
+"createCronTrigger() requires `schedule` and `fn`". Each call returns
+`{ crons, wranglerJsonc, dispatcher }`; paste `wranglerJsonc` under
+`triggers.crons` in your `wrangler.jsonc`.
+
 The CLI's wrangler validator surfaces a missing or unreachable trigger as an
-error during dev, so a typo'd `functionPath` fails fast rather than silently
-never firing.
+error during dev, so a bad reference fails fast rather than silently never
+firing.
 
 ## How dispatch works
 

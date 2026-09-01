@@ -141,7 +141,7 @@ change that adds or removes a capability.
 | Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
-| Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
+| Built-in HTTP / socket        | ✅⁴    | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Several sockets per client    | ❌³    | ❌³ | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
 
 ¹ Each in the language's own PULL type, not one shape forced onto eight — an
@@ -167,6 +167,15 @@ pokes — the second `attachSocket` orphans the first socket, and
 attached last. Do not add a connection key to the buffer map without first
 giving these clients a real multi-socket model; a key alone would quiet one
 symptom of a configuration that is broken in several other places.
+
+⁴ **python is the exception, and this row said otherwise for a long time.**
+`LunoraClient` defaults `http_post` to a real `urllib` transport rather than
+requiring one to be injected, and `connect_and_run` drives a live socket through
+the optional `websockets` package. Every other port takes both from the caller.
+The row read ❌ for all eight because that is what the seven were, and nobody
+re-read the eighth — a matrix is only worth its accuracy in the direction it does
+not expect to be wrong. Injecting `http_post` still overrides the default
+everywhere it is passed.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the
@@ -653,9 +662,8 @@ closures are not data), but every assertion reads its expectation from there.
 
 **All eight suites read that file at run time and fail if the run did not cover
 it**, so adding a name there turns every language red until it is covered. The
-evidence is produced by the case executing, never by a suite listing names it
-claims to cover, and the mechanism is whatever each runner offers rather than one
-shape forced onto all eight:
+mechanism is whatever each runner offers rather than one shape forced onto all
+eight:
 
 | Language | Mechanism                                                                                                |
 | -------- | -------------------------------------------------------------------------------------------------------- |
@@ -672,7 +680,20 @@ Where the manifest drives the run, a required name with no dispatch arm fails,
 which is the same guarantee from the other direction: the only way to go green is
 to execute a case under that name.
 
-**The manifest holds a suite to 33 named cases; it cannot hold one that ran
+**What the `covers()` form actually proves is narrower than it looks.** In the
+six ports that record rather than dispatch, `covers("x")` is the first statement
+of the case body — before the fixture is even loaded — so what it evidences is
+that the case FUNCTION WAS INVOKED, not that any assertion inside it ran. A body
+whose assertions were deleted still satisfies the check. That is still strictly
+more than a hand-kept list of names (which is what this replaced, and which
+drifted), and it is what the check is for: catching a manifest name that no case
+is wired to at all. It is not a defence against a case being hollowed out — no
+coverage mechanism here is, since a suite can always delete an assertion. Read
+the row as "a case exists and runs under this name", and rely on the assertions
+themselves for the rest.
+
+**The manifest holds a suite to every name in
+`protocol/conformance-cases.json` — 37 of them today; it cannot hold one that ran
 nothing at all.** Six of these eight test tools exit 0 having collected NO tests
 — `unittest discover` finding no matching module, an empty `test/test_*.rb`
 glob, a Go package with no `_test.go`, `cargo test` and `swift test` with

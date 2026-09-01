@@ -149,6 +149,22 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
             }
         },
         parse: parseInboundEmail,
+        // SECURITY: fails closed BEFORE any mapper sees the message, because a
+        // claimed message starts a durable run whose tools execute RLS-bypassed.
+        // Cloudflare Email Routing authenticates the recipient domain, never the
+        // sender, so `from`/subject/body are attacker-chosen; a `null` verdict
+        // means the receiving MX stamped no `Authentication-Results` header at
+        // all, which is "unknown", not "fine".
+        //
+        // The header above tells mappers not to trust `email.from`. That is
+        // advice each mapper has to remember; this is the guard every agent
+        // routes through, so a mapper that forgets is not the only thing
+        // standing between a forged sender and a privileged run.
+        verify: (email) => {
+            const { dkim, dmarc, spf } = email.authentication;
+
+            return dmarc === "pass" || (spf === "pass" && dkim === "pass");
+        },
     });
 
     // `createInboundEmailHandler` types `message` as `ForwardableEmailMessageLike`;

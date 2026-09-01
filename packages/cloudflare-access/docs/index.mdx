@@ -24,7 +24,7 @@ An Access policy attached to the **Worker** protects every hostname that Worker 
 ```ts
 import { createAccessResolver } from "@lunora/cloudflare-access";
 
-import { defineApp } from "./_generated/server";
+import { defineApp } from "./_generated/app";
 
 export default defineApp<Env>()
     .shard((env) => env.SHARD)
@@ -79,7 +79,7 @@ It affects local runs only — production behaviour comes from the policy you at
 
 ### Wiring by hand
 
-`.access()` is the generated builder's method. To wire the resolver onto a worker you compose yourself, use the `extend` escape hatch (in your worker entry, e.g. `_generated/server` is consumed by `lunora/server.ts`):
+`.access()` is the generated builder's method. To wire the resolver onto a worker you compose yourself, use the `extend` escape hatch (in your worker entry, which imports the generated builder from `_generated/app`):
 
 ```ts
 export default defineApp<Env>()
@@ -151,13 +151,10 @@ There are two ways to get it; pick one.
 Just read `ctx.access` in a handler. Codegen detects the use and wires the facade onto **every** ctx (query, mutation, and action), with no import and no middleware:
 
 ```ts
-export const whoAmI = query({
-    args: {},
-    handler: async (ctx) => ({
-        email: ctx.access.email,
-        isOps: ctx.access.hasGroup("ops"),
-    }),
-});
+export const whoAmI = query.query(async ({ ctx }) => ({
+    email: ctx.access.email,
+    isOps: ctx.access.hasGroup("ops"),
+}));
 ```
 
 The facade is built **synchronously** from the same resolved identity `ctx.auth` uses, so a global `ctx.access` adds only one small object construction per request, with no extra I/O and no JWT re-verification (that happened once at the edge in `resolveIdentity`). The type seam is emitted only when a handler reads `ctx.access`, so a project that never touches it carries no extra surface.

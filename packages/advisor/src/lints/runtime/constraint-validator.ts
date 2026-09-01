@@ -315,6 +315,12 @@ const checkTable = (
  * Constraint validator — flag rows that violate declared FK / NOT NULL / UNIQUE
  * constraints by cross-checking sampled row data against the schema.
  *
+ * No shipped feeder fills `context.tableSamples` — neither the runtime nor the
+ * Studio reads bounded row samples out of a shard (the Studio drops this lint
+ * from the set it runs for exactly that reason). It runs only for a caller that
+ * gathers samples itself, which is why the guard below returns `[]` rather than
+ * assuming the feed is present.
+ *
  * This lint reads the `context.tableSamples` feed (bounded row samples supplied
  * by the studio backend via `readTablePage`) and the declared schema. Three
  * families of check run over each sample:

@@ -37,6 +37,13 @@ public final class Wire {
     public static final int MAX_BIGINT_DIGITS = 1024;
 
     /**
+     * Largest integer a double holds exactly (2^53 - 1). JSON numbers are doubles, so an integer
+     * past this cannot cross the wire as a number without changing value — {@link WireBigInt} and
+     * its tag exist for that case.
+     */
+    public static final long MAX_EXACT_INTEGER = (1L << 53) - 1;
+
+    /**
      * JavaScript's {@code undefined}, distinct from JSON null.
      *
      * <p>As an object field it is dropped on encode (matching {@code JSON.stringify}); in an array
@@ -158,7 +165,7 @@ public final class Wire {
         }
 
         if (value instanceof Number number) {
-            return number.doubleValue();
+            return encodeInteger(number);
         }
 
         if (value instanceof List<?> items) {
@@ -200,6 +207,39 @@ public final class Wire {
                         + " Wire* wrappers round-trip");
     }
 
+    /**
+     * A whole-number {@link Number} onto the wire.
+     *
+     * <p>A {@code long} holds integers a {@code double} cannot, so narrowing one silently changed
+     * its value — the server received a different integer than the caller sent and neither end
+     * could tell. Refuse, as the Go port does, and name the way across.
+     */
+    private static Object encodeInteger(Number number) {
+        if (number instanceof BigInteger big) {
+            if (big.bitLength() > 53) {
+                throw outOfExactRange(big);
+            }
+
+            return big.doubleValue();
+        }
+
+        long value = number.longValue();
+
+        if (value > MAX_EXACT_INTEGER || value < -MAX_EXACT_INTEGER) {
+            throw outOfExactRange(value);
+        }
+
+        return (double) value;
+    }
+
+    private static WireFormatException outOfExactRange(Object value) {
+        return new WireFormatException(
+                "wire-codec: integer "
+                        + value
+                        + " exceeds the exact double range — wrap it in WireBigInt so it crosses"
+                        + " the wire as a bigint tag");
+    }
+
     private static Object encodeDouble(double value) {
         if (Double.isNaN(value)) {
             return List.of(TAG, "nan");
@@ -233,8 +273,13 @@ public final class Wire {
                 new ArrayList<>(List.of(TAG, "error", error.name(), error.message(), props));
 
         // `cause` rides a positional slot; absent when unset, keeping the
-        // 5-element form.
-        if (error.cause() != null && error.cause() != UNDEFINED) {
+        // 5-element form. UNDEFINED alone means unset — gating on null as well
+        // conflated it with an explicitly-null cause, which the reference
+        // encodes (it tests `cause !== undefined`), so `new Error(m, { cause:
+        // null })` lost its 6th slot and came back as an error that never had
+        // a cause. Decode supplies UNDEFINED for the 5-element form, so the
+        // two stay distinguishable across a round trip.
+        if (error.cause() != UNDEFINED) {
             encoded.add(encode(error.cause(), depth + 1));
         }
 
@@ -294,16 +339,17 @@ public final class Wire {
             case "bigint":
                 return decodeBigInt(items);
             case "date":
-                return new WireDate(((Number) decode(items.get(2), depth + 1)).doubleValue());
+                return new WireDate(
+                        asNumber(decode(payload(items, "date"), depth + 1), "date").doubleValue());
             case "url":
-                return new WireUrl((String) items.get(2));
+                return new WireUrl(asString(payload(items, "url"), "url"));
             case "map":
                 return decodeMap(items, depth);
             case "set":
                 {
                     List<Object> decoded = new ArrayList<>();
 
-                    for (Object item : (List<?>) items.get(2)) {
+                    for (Object item : asList(payload(items, "set"), "set")) {
                         decoded.add(decode(item, depth + 1));
                     }
 
@@ -317,7 +363,7 @@ public final class Wire {
                 {
                     List<Object> decoded = new ArrayList<>();
 
-                    for (Object item : (List<?>) items.get(2)) {
+                    for (Object item : asList(payload(items, "arr"), "arr")) {
                         decoded.add(decode(item, depth + 1));
                     }
 
@@ -355,8 +401,14 @@ public final class Wire {
     private static Object decodeMap(List<?> items, int depth) {
         List<Map.Entry<Object, Object>> entries = new ArrayList<>();
 
-        for (Object item : (List<?>) items.get(2)) {
-            List<?> pair = (List<?>) item;
+        for (Object item : asList(payload(items, "map"), "map")) {
+            // A truncated entry is a rejection, not a pair with a missing half:
+            // `pair.get(1)` threw a bare IndexOutOfBoundsException straight out
+            // of Wire.decode, so a caller catching WireFormatException around a
+            // decode caught nothing at all.
+            if (!(item instanceof List<?> pair) || pair.size() < 2) {
+                throw new WireFormatException("wire-codec: malformed map entry");
+            }
 
             entries.add(Map.entry(decode(pair.get(0), depth + 1), decode(pair.get(1), depth + 1)));
         }
@@ -364,19 +416,74 @@ public final class Wire {
         return new WireMap(entries);
     }
 
+    /** The tag's payload slot, or a typed rejection when the array is too short. */
+    private static Object payload(List<?> items, String tag) {
+        if (items.size() < 3) {
+            throw new WireFormatException("wire-codec: malformed " + tag + " tag");
+        }
+
+        return items.get(2);
+    }
+
+    private static List<?> asList(Object value, String tag) {
+        if (!(value instanceof List<?> items)) {
+            throw new WireFormatException("wire-codec: malformed " + tag + " tag");
+        }
+
+        return items;
+    }
+
+    private static String asString(Object value, String tag) {
+        if (!(value instanceof String text)) {
+            throw new WireFormatException("wire-codec: malformed " + tag + " tag");
+        }
+
+        return text;
+    }
+
+    private static Number asNumber(Object value, String tag) {
+        if (!(value instanceof Number number)) {
+            throw new WireFormatException("wire-codec: malformed " + tag + " tag");
+        }
+
+        return number;
+    }
+
     @SuppressWarnings("unchecked")
     private static Object decodeError(List<?> items, int depth) {
+        if (items.size() < 4) {
+            throw new WireFormatException("wire-codec: malformed error tag");
+        }
+
+        Object decodedProps =
+                items.size() > 4 ? decode(items.get(4), depth + 1) : new LinkedHashMap<>();
         Map<String, Object> props =
-                items.size() > 4
-                        ? (Map<String, Object>) decode(items.get(4), depth + 1)
+                decodedProps instanceof Map<?, ?>
+                        ? (Map<String, Object>) decodedProps
                         : new LinkedHashMap<>();
         Object cause = items.size() > 5 ? decode(items.get(5), depth + 1) : UNDEFINED;
 
-        return new WireError((String) items.get(2), (String) items.get(3), props, cause);
+        // Name and message default rather than throw, matching the other ports:
+        // a non-string in either slot loses only the label, while the props and
+        // the cause still carry information worth surfacing.
+        String name = items.get(2) instanceof String text ? text : "";
+        String message = items.get(3) instanceof String text ? text : "";
+
+        return new WireError(name, message, props, cause);
     }
 
     private static Object decodeBytes(List<?> items) {
-        byte[] data = Base64.getDecoder().decode((String) items.get(2));
+        byte[] data;
+
+        try {
+            data = Base64.getDecoder().decode(asString(payload(items, "bytes"), "bytes"));
+        } catch (IllegalArgumentException error) {
+            // The JDK decoder's own unwrapped IllegalArgumentException escaped
+            // Wire.decode, so the codec's rejection was not one of the codec's
+            // own error types and a caller could not catch the set.
+            throw new WireFormatException("wire-codec: invalid base64 in bytes tag");
+        }
+
         String ctor = items.size() > 3 && items.get(3) instanceof String name ? name : "Uint8Array";
 
         // A plain Uint8Array is byte[] and re-encodes to the 2-element form;

@@ -891,6 +891,7 @@ class OfflineQueue {
     get size(): number;
     enqueue<T>(entry: QueuedMutation<T>): void;
     hydrate(): Promise<(string | undefined)[]>;
+    restampIdentity(from: string | null, to: string | null): void;
     drain(predicate?: (item: QueuedMutation) => boolean): QueuedMutation[];
     requeue(items: QueuedMutation[]): void;
     drainConflict(): QueuedMutation[];
@@ -1039,7 +1040,7 @@ interface QueuedMutation<T = unknown> {
     clientId?: string;
     readonly functionPath: string;
     id?: string;
-    readonly identity?: string | null;
+    identity?: string | null;
     liveAwaiter?: boolean;
     readonly onCommit?: (commitCursor: number | undefined) => void;
     readonly precondition?: () => boolean;
@@ -1314,6 +1315,7 @@ class SubscriptionRegistry {
     add(state: SubscriptionState): void;
     remove(state: SubscriptionState): void;
     all(): SubscriptionState[];
+    clear(): void;
 }
 ```
 

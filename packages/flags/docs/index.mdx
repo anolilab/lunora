@@ -54,11 +54,13 @@ export default defineFlags({
     // Or any OpenFeature provider — a factory that receives env:
     // provider: (env) => new SomeOpenFeatureProvider({ apiKey: env.FLAGS_API_KEY }),
     // Optional: default targetingKey for every evaluation (usually the user id).
-    identify: (ctx) => ctx.auth?.userId,
+    identify: (auth) => auth.userId ?? undefined,
 });
 ```
 
-The `provider` is either a Flagship config or any factory `(env) => OpenFeatureProvider`. `identify` derives the default `targetingKey` from each request's context, so per-user targeting works without threading the key through every call.
+The `provider` is either a Flagship config or any factory `(env) => OpenFeatureProvider`. `identify` derives the default `targetingKey` from each request's auth, so per-user targeting works without threading the key through every call.
+
+Its argument is a `FlagsAuth` — `{ identity, userId }`, both `null` when the request is anonymous — **not** the function `ctx`. Return `undefined` (not `null`) for "no targeting key", which is why the `?? undefined` matters: `auth.userId` alone is `string | null`, and the property is typed `string | undefined`.
 
 ## Built-in providers
 
@@ -107,16 +109,13 @@ Flags ride every ctx (query, mutation, and action) like `ctx.kv`. Each typed acc
 ```ts
 import { query } from "./_generated/server";
 
-export const dashboard = query({
-    args: {},
-    handler: async (ctx) => {
-        const darkMode = await ctx.flags.boolean("dark-mode", false);
-        const theme = await ctx.flags.string("theme", "system");
-        const limit = await ctx.flags.number("page-size", 25);
-        const layout = await ctx.flags.object("layout", { columns: 2 });
+export const dashboard = query.query(async ({ ctx }) => {
+    const darkMode = await ctx.flags.boolean("dark-mode", false);
+    const theme = await ctx.flags.string("theme", "system");
+    const limit = await ctx.flags.number("page-size", 25);
+    const layout = await ctx.flags.object("layout", { columns: 2 });
 
-        return { darkMode, theme, limit, layout };
-    },
+    return { darkMode, theme, limit, layout };
 });
 ```
 
@@ -149,7 +148,9 @@ function Dashboard() {
 
 `useFlag(key, default)` resolves a single flag; `useFlags({ key: default, ... })` resolves a batch in one round trip.
 
-The reactive WebSocket channel is **server-trusted**. Each evaluation runs under the socket's own server-verified identity: the `targetingKey` comes from your server-side `identify(...)` (and any server-set context), never from the client. A subscriber cannot spoof targeting attributes (plan, role, …) to unlock a flag gated on them. The channel also serves **only** the flag keys codegen discovered statically from your `ctx.flags.<type>(...)` reads; an arbitrary or unknown key resolves to the supplied default, so a subscriber can't probe internal or unreleased flags.
+The reactive WebSocket channel is **server-trusted**, and therefore takes no targeting context at all. Each evaluation runs under the socket's own server-verified identity: the `targetingKey` comes from your server-side `identify(...)` (and any server-set context), never from the client. There is deliberately no per-call `context` argument on `useFlag`/`useFlags` or any of the other adapters — a subscriber could otherwise spoof targeting attributes (plan, role, …) to unlock a flag gated on them. The channel also serves **only** the flag keys codegen discovered statically from your `ctx.flags.<type>(...)` reads; an arbitrary or unknown key resolves to the supplied default, so a subscriber can't probe internal or unreleased flags.
+
+To evaluate under a context of your own, do it server-side: call `ctx.flags.<type>(key, default, context)` (or `ctx.flags.details.*`) inside a query, mutation, or action, build the context from data your server already trusts, and return the resolved value. That path is not reactive — the value refreshes when the query re-runs, not when the provider flips.
 
 ### Other frameworks
 
@@ -163,11 +164,11 @@ The same reactive contract ships in every Lunora client adapter: one import, idi
 | Svelte    | `@lunora/svelte` | `flag` / `flags`             | a readable store |
 
 ```ts
-// Vue — key and context may be refs or getters, so the subscription is reactive.
+// Vue — the key may be a ref or a getter, so the subscription is reactive.
 import { useFlag } from "@lunora/vue";
 const darkMode = useFlag("dark-mode", false); // Readonly<Ref<boolean>>
 
-// Solid — pass a plain value or an accessor for a reactive key/context.
+// Solid — pass a plain value or an accessor for a reactive key.
 import { createFlag } from "@lunora/solid";
 const darkMode = createFlag("dark-mode", false); // Accessor<boolean>
 

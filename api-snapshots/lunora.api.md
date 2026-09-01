@@ -473,6 +473,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MiddlewareContext` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MiddlewareNext` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -3861,10 +3865,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `DEFAULT_LOG_LIMIT` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
 ### `DEFAULT_REGISTRY_CACHE_TTL_MS` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4625,10 +4625,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `readShardKey` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
 ### `requestCarriesCredentials` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -5160,6 +5156,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `Middleware` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MiddlewareContext` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

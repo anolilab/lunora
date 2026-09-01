@@ -34,6 +34,13 @@ api_surface:
     - "packages/**"
     - "api-snapshots/**"
     - "scripts/api-snapshot.js"
+    # `dist-production` rides on this same filter, so its checker is listed here
+    # too — gutting DEV_MARKERS matched `frontend_lintable` (eslint still ran) but
+    # not this one, so the job that would have caught it was skipped and the
+    # required check stayed green.
+    - "scripts/check-dist-production.js"
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
     - "pnpm-lock.yaml"
     - "pnpm-workspace.yaml"
 
@@ -54,6 +61,8 @@ frontend_lintable:
 package_json_lintable:
     - "**/package.json"
     - "package.json"
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
 
 # `check-catalog-drift` + `check-peer-catalog-refs` read every workspace manifest and
 # the catalogs they reference, so a `pnpm-workspace.yaml` edit matters as much as a
@@ -64,6 +73,15 @@ dependency_manifests:
     - "pnpm-workspace.yaml"
     - "scripts/check-catalog-drift.js"
     - "scripts/check-peer-catalog-refs.js"
+    # The same job also holds the PR-title/commitlint type-list comparison, so its
+    # three inputs gate it. Without them a PR that edits only the workflow's `types:`
+    # block matches `yaml_lintable` (yamllint still runs) and nothing that would
+    # notice the drift.
+    - "commitlint.config.cjs"
+    - "scripts/check-pr-title-types.js"
+    - ".github/workflows/semantic-pull-request.yml"
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
 
 # Files a generator owns are regenerated and diffed. The generators read package
 # manifests and project metadata, so any of those can stale a committed output.
@@ -99,9 +117,8 @@ e2e:
     - "tests/e2e/**"
     - "packages/**"
     - "pnpm-lock.yaml"
-
-codecov:
-    - "codecov.yml"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
 
 # CodSpeed benchmarks: anything that can change a bench result or the selection.
 # `vis affected test:bench` narrows further inside the job; this gate only exists so
@@ -121,6 +138,8 @@ registry_sync:
     - "packages/auth-ui/**"
     - "registry/**"
     - "scripts/sync-auth-ui-registry.mjs"
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
 
 # The template scaffold+install+build+typecheck matrix: too slow for every PR, but the
 # only gate proving `lunora init` still installs and that the copy-in auth-ui payload
@@ -164,6 +183,8 @@ templates:
     - "scripts/template-build-smoke.sh"
     - "pnpm-lock.yaml"
     - "pnpm-workspace.yaml"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
 
 # packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES in
 # packages/platform/src/capabilities.ts. Separate from `packages` per the self-listing

@@ -2,7 +2,7 @@ import type { AdvisorExportSink } from "@lunora/advisor";
 import type { CallExpression, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { listSecurityScanFiles } from "./ast";
 
 /** The three CDC export-sink factories the runtime ships (plan 170). */
 const SINK_FACTORIES = new Set<AdvisorExportSink["factory"]>(["defineExportSink", "r2Sink", "webhookExportSink"]);
@@ -66,7 +66,9 @@ const analyzeConfig = (literal: ObjectLiteralExpression): ConfigFacts => {
 
 /**
  * Discover CDC export-sink constructions (`defineExportSink` / `webhookExportSink`
- * / `r2Sink`) under the lunora source directory — the `export_sink_misconfigured`
+ * / `r2Sink`) across the security scan set — `lunora/` plus the worker entry,
+ * where sinks are actually declared (see {@link listSecurityScanFiles}) — the
+ * `export_sink_misconfigured`
  * lint input. Each records which config keys were present (and which were an empty
  * string) so the lint can flag a sink missing a required field. A call whose first
  * argument is not an object literal (a variable, a spread) is recorded as
@@ -75,9 +77,8 @@ const analyzeConfig = (literal: ObjectLiteralExpression): ConfigFacts => {
 const discoverExportSinks = (project: Project, lunoraDirectory: string): AdvisorExportSink[] => {
     const sinks: AdvisorExportSink[] = [];
 
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
+    for (const { displayPath, filePath } of listSecurityScanFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
             const factory = sinkFactoryOf(call);
@@ -94,7 +95,7 @@ const discoverExportSinks = (project: Project, lunoraDirectory: string): Advisor
                 analyzable: facts.analyzable,
                 emptyKeys: facts.emptyKeys,
                 factory,
-                file: relativePath,
+                file: displayPath,
                 line: call.getStartLineNumber(),
                 presentKeys: facts.presentKeys,
             });

@@ -1265,3 +1265,91 @@ describe("lunoraClient — identity-change coordinator restart promotes immediat
         }
     });
 });
+
+describe("lunoraClient — a follower throws only on the surfaces an app calls directly", () => {
+    it("throws from the app-called socket surfaces and stays inert on the framework-called ones", async () => {
+        expect.assertions(8);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL });
+
+        try {
+            // Startup claim window: no leader is known yet, so this tab is on its
+            // way to self-promoting. That defer is legitimate and self-healing
+            // (`onBecomeLeader` replays every registered subscription), so it must
+            // NOT throw — a naive `!isLeader()` guard would break every single-tab
+            // `crossTabSync` app for the first `leaderTimeout` of its life.
+            expect(() => {
+                client.subscribe(fnRef("q:list"), {}, () => undefined)();
+            }).not.toThrow();
+
+            const leader = new BroadcastChannel(clientChannel(client));
+
+            leader.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
+            await delay(30);
+
+            // Now another tab demonstrably owns the sockets. The cross-tab channel
+            // is leader→follower only (see `WsFollowerMessage`), so none of these
+            // could ever reach the server; each used to return a handle that looked
+            // live, fired nothing, and raised nothing.
+            // Only the surfaces an APP calls directly throw. `subscribe`,
+            // `subscribeShape` and `acquireConnectionContext` are all reached from
+            // framework code the app cannot opt out of — a `useQuery`, every
+            // `usePresence` adapter, `@lunora/db`'s shape sync — so a throw there
+            // unwinds the whole tab instead of degrading one feature.
+            expect(() => client.subscribe(fnRef("q:list"), {}, () => undefined)).not.toThrow();
+            expect(() => client.subscribeShape({ name: "todos" }, () => undefined)).not.toThrow();
+            expect(() => client.acquireConnectionContext({ roomId: "r" })).not.toThrow();
+
+            expect(() => client.whisperSubscribe("typing", () => undefined)).toThrow(/cross-tab follower/);
+            expect(() => {
+                client.whisper("typing", { at: 1 });
+            }).toThrow(/cross-tab follower/);
+            expect(() => {
+                client.setConnectionContext({ roomId: "r" });
+            }).toThrow(/cross-tab follower/);
+
+            // The HTTP surfaces are unaffected on every tab.
+            await expect(client.query(fnRef("q:list"), {})).resolves.toStrictEqual({});
+
+            leader.close();
+        } finally {
+            client.close();
+        }
+    });
+
+    it("delivers the leader's broadcast to a follower that subscribed while the leader was already known", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL });
+
+        try {
+            const leader = new BroadcastChannel(clientChannel(client));
+
+            // Establish the leader FIRST, so this tab is a settled follower by the
+            // time it subscribes — the ordering the other follower tests skip, and
+            // the one under which a guard on `subscribe` silently kills the relay.
+            leader.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
+            await delay(30);
+
+            const seen: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), { channel: "general" }, (value) => seen.push(value));
+
+            const key = SubscriptionRegistry.key("q:list", { channel: "general" });
+
+            leader.postMessage({ data: { rows: [1, 2] }, key, tabId: SMALLER_ID, type: "subscription-data" } satisfies RawLeaderMessage);
+            await delay(30);
+
+            // Registration is the whole mechanism: without it `onSubscriptionData`
+            // cannot find a `SubscriptionState` for `key` and drops the broadcast.
+            expect(seen).toHaveLength(1);
+            expect(seen[0]).toStrictEqual({ rows: [1, 2] });
+
+            leader.close();
+        } finally {
+            client.close();
+        }
+    });
+});

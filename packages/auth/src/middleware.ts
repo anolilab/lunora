@@ -249,23 +249,33 @@ export interface LunoraAuthApiContext<Auth extends LunoraAuth> {
  * Lunora's procedure context does not currently carry the raw request headers
  * (only the resolved identity — see `AuthState` in `@lunora/server`), so
  * this middleware **cannot** pre-bind headers for you and does **not** do so.
- * You MUST pass the inbound `Headers` explicitly into **every** `ctx.authApi.*`
- * call, from a transport that has them — typically an HTTP action:
+ * You MUST pass `Headers` explicitly into **every** `ctx.authApi.*` call. A
+ * procedure has no inbound `Headers` object, so rebuild one from what the
+ * transport forwarded in `args`:
  *
  * ```ts
  * // lunora/orgs.ts
- * import { httpAction } from "@lunora/server";
- * import { withAuthPlugins } from "@lunora/auth/middleware";
- * import { auth } from "./auth.js";
+ * export const createOrg = mutation
+ *     .input({ cookie: v.string(), name: v.string() })
+ *     .use(withAuthPlugins(auth))
+ *     .mutation(async ({ args, ctx }) =>
+ *         ctx.authApi.createOrganization({
+ *             body: { name: args.name },
+ *             // Rebuilt from the transport — the middleware cannot pre-bind them.
+ *             headers: new Headers({ cookie: args.cookie }),
+ *         }),
+ *     );
+ * ```
  *
- * export const createOrg = httpAction(async (ctx, request) => {
+ * `ctx.authApi` is a PROCEDURE-context surface — this middleware installs it
+ * through the builder's `.use()` chain, which `httpAction` / `httpRoute` do not
+ * have (see `HttpActionCtx` in `@lunora/server`). An HTTP action already holds
+ * the real inbound `Headers`, so call the auth instance there directly:
+ *
+ * ```ts
+ * export const createOrgHttp = httpAction(async (ctx, request) => {
  *     const { name } = await request.json();
- *
- *     // ctx.authApi is installed by withAuthPlugins(auth) on the builder.
- *     const org = await ctx.authApi.createOrganization({
- *         body: { name },
- *         headers: request.headers,
- *     });
+ *     const org = await auth.api.createOrganization({ body: { name }, headers: request.headers });
  *
  *     return Response.json(org);
  * });

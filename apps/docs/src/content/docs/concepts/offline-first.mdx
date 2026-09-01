@@ -230,7 +230,7 @@ you writing sync glue:
    (or a `resume` ack when nothing in your read-set changed) instead of a full
    snapshot, so the cached value you already rendered stays on screen and is
    patched forward.
-2. **Writes flush exactly once.** Queued mutations are deduped by `mutationKey`
+2. **Writes flush exactly once.** Queued mutations are deduped by `mutationId`
    and replayed on reconnect; the idempotency key means a retry after a flaky
    ack is a no-op server-side, not a duplicate.
 3. **Optimistic patches rebase, then settle gaplessly.** A per-call `optimistic`

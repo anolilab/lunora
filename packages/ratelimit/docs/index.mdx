@@ -18,16 +18,21 @@ runtime maps to `429 Too Many Requests` (or `403 Forbidden` for a deny-list hit)
 carrying `retryAfter` in milliseconds.
 
 ```ts
+import type { RateLimitConfigMap } from "@lunora/ratelimit";
 import { dbRateLimit } from "@lunora/ratelimit";
 
 import { mutation } from "./_generated/server";
 
+// `satisfies` is load-bearing: a bare `const` widens each `kind` to `string`,
+// and the config map needs the literal to pick the algorithm.
 const config = {
     login: { kind: "fixed window", period: 60_000, rate: 5 },
     send: { kind: "token bucket", period: 1_000, rate: 10, capacity: 20 },
-};
+} satisfies RateLimitConfigMap;
 
-export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId })).mutation(async ({ ctx }) => {
+// `key` returns `string | undefined` (omit it for a global limit), while
+// `ctx.auth.userId` is `string | null` — collapse the null yourself.
+export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId ?? "anonymous" })).mutation(async ({ ctx }) => {
     // …
 });
 ```

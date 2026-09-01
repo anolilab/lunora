@@ -92,7 +92,7 @@
             "title": "Feature flags"
         },
         {
-            "description": "Bring-your-own Postgres or MySQL to Lunora actions via Cloudflare Hyperdrive — ctx.sql over postgres.js, node-postgres, or mysql2. Includes createHyperdrive() binding reader and adapter helpers.",
+            "description": "Bring-your-own Postgres or MySQL to Lunora actions via Cloudflare Hyperdrive — a SqlClient over postgres.js, node-postgres, or mysql2. Includes createHyperdrive() binding reader and adapter helpers, plus a parameterised internalAction to copy.",
             "name": "hyperdrive",
             "title": "Hyperdrive"
         },
@@ -102,7 +102,7 @@
             "title": "Mail"
         },
         {
-            "description": "Provider-agnostic payments for Lunora — Stripe-first checkout, metered usage tracking, entitlement checks, billing portal, and subscription queries built on @lunora/payment. Scaffolds the checkout / track / check / portal / subscriptions / webhook functions. The provider adapter is wired into createShardDO (see docs).",
+            "description": "Provider-agnostic payments for Lunora — Stripe-first checkout, metered usage tracking, entitlement checks, billing portal, and subscription queries built on @lunora/payment. Scaffolds the checkout / track / check / portal / subscriptions / webhook functions plus the payment tables to declare in your schema. The provider adapter is wired into createShardDO (see docs).",
             "name": "payment",
             "title": "Payment"
         },

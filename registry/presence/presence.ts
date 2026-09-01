@@ -71,7 +71,12 @@ export const heartbeat = mutation
         roomId: v.string().meta({ schema: { maxLength: 256 } }),
         sessionId: v.string().meta({ schema: { maxLength: 256 } }),
     })
-    .use(rateLimit(limiter, "heartbeat", { key: (ctx) => ctx.auth.userId ?? "anon" }))
+    // Keyed by the authenticated caller, falling back to the server-trusted
+    // `ctx.ip` (Cloudflare's `CF-Connecting-IP`, forwarded server-side, never read
+    // from a client header). Without the `ctx.ip` hop every anonymous client
+    // shares one `"anon"` bucket, so a single one exhausts the limit for all of
+    // them — see the `ratelimit_key_spoofable_or_global` advisor lint.
+    .use(rateLimit(limiter, "heartbeat", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .mutation(async ({ args: { data, roomId, sessionId }, ctx }): Promise<{ lastSeen: number }> => {
         const lastSeen = ctx.now;
         const userId = ctx.auth.userId ?? undefined;

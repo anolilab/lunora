@@ -202,7 +202,7 @@ The generated `createShardDO(config)` factory then takes a `vectors` thunk
 mapping each index name to its binding, wired from the worker entry:
 
 ```ts
-import { createShardDO } from "./_generated/server";
+import { createShardDO } from "./_generated/shard";
 
 export const ShardDO = createShardDO({
     vectors: (env) => ({ "docs-body": env.DOCS_BODY }),

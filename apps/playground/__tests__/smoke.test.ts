@@ -65,4 +65,26 @@ describe("playground compose smoke (Phase 7)", () => {
         expect(text).toContain("r2_buckets");
         expect(text).toContain("FILES");
     });
+
+    /*
+     * A source assertion, not a behavioural one, and deliberately so: the worker
+     * entry builds its app (and its Durable Object classes) at module scope, so
+     * importing it under the node pool hangs — exercising `handleStorageAsset`
+     * for real needs the workers pool, which this app does not run. The guard it
+     * pins is one comparison, and the regression it guards against is precisely
+     * someone re-adding a condition in front of it, which a text assertion does
+     * see.
+     */
+    it("re-checks the signed content-type on every PUT, not only when one was pinned", () => {
+        expect.assertions(2);
+
+        const text = readFileSync(join(projectRoot, "src/server/index.ts"), "utf8");
+
+        // An unconditional compare. Guarding it with `verdict.contentType !== undefined`
+        // hands the choice back to the uploader whenever the URL carries no pin —
+        // and the GET branch below serves whatever was stored back from this
+        // origin, so a `text/html` body becomes stored XSS.
+        expect(text).toContain("if (contentType !== verdict.contentType) {");
+        expect(text).not.toContain("verdict.contentType !== undefined");
+    });
 });

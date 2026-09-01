@@ -6,3 +6,10 @@
 
 # Required — the worker throws "AUTH_SECRET is required" without it.
 AUTH_SECRET="replace-with-openssl-rand-hex-32"
+
+# Optional, LOCAL ONLY — pins better-auth's baseURL to the `wrangler dev` origin.
+# Never move this into `wrangler.jsonc` `vars`: those ship with the deployed
+# worker, and an explicit `http://` baseURL turns off the `Secure` flag on
+# session cookies. Left unset in production, better-auth resolves the origin
+# from each request over HTTPS, which is what you want.
+AUTH_URL="http://localhost:8787"

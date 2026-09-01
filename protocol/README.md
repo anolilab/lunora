@@ -99,10 +99,41 @@ languages do not. A port SHOULD provide lightweight wrappers (`WireBigInt`,
 `WireDate`, `WireMap`, `WireSet`, `WireUrl`, `WireBytes`, `WireError`,
 `Undefined`) so that (a) users can explicitly mark a value as a `bigint`/etc.,
 and (b) `decode` produces a value that re-`encode`s to the identical tag —
-guaranteeing `encode(decode(x)) == x` (the conformance contract). Plain
-ints/floats/dicts/lists map to JSON numbers/objects/arrays.
+guaranteeing `encode(decode(x)) == x` (the conformance contract, modulo the two
+shapes in §2.3 that are not fixed points of it). Plain ints/floats/dicts/lists
+map to JSON numbers/objects/arrays.
 
 Golden cases: [`fixtures/wire-codec.json`](./fixtures/wire-codec.json).
+
+### 2.3 Conformance fixture schema (`reencoded`, `rejected[]`)
+
+`fixtures/wire-codec.json` carries two fields beyond `cases[].encoded`, and all
+eight SDK suites are driven by them. The file's own `$comment` is the
+authoritative description; this is the summary.
+
+- **`cases[].reencoded`** — the expected re-encoding, for the shapes that are
+  legitimately NOT fixed points of `encode(decode(encoded)) == encoded`. There
+  are exactly two: a bare `[TAG]` array, which is escaped on the way back out as
+  `[TAG, "arr", [TAG]]`, and an object field holding the `undefined` tag, which
+  is dropped (matching `JSON.stringify`). When a case carries `reencoded` the
+  assertion becomes `encode(decode(encoded)) == reencoded`. Without it those two
+  shapes were untestable, so no port was held to them and four decoded them
+  differently.
+- **`rejected[]`** — wire values every conforming codec MUST refuse to decode.
+  These are data for the same reason the case list is: a rejection each suite
+  hard-codes for itself is a rejection only some suites have. The base64 entries
+  are what a lenient hand-rolled decoder lets through — the reference decodes via
+  `atob`, which fails any input whose length is 1 mod 4 once ASCII whitespace is
+  removed, so a truncated or padding-corrupted payload is an error rather than
+  valid-looking short bytes. (Whitespace INSIDE the payload is deliberately not
+  listed: `atob` strips it, so the reference accepts it, and a fixture demanding
+  rejection would be asserting against the reference.)
+
+Language-native construction checks — a native bigint `7` producing the bigint
+tag, an integer past the exact-`float64` range being refused — live in each SDK's
+own suite, keyed by [`conformance-cases.json`](./conformance-cases.json),
+because native values are not
+uniformly JSON-representable.
 
 ## 3. Stable subscription key
 
@@ -115,9 +146,19 @@ stableWireKey(v) = stableStringify(encodeWire(v))
 ```
 
 `stableStringify` is a canonical JSON encoding: **object keys sorted at every
-depth** (code-point order), arrays keep order, `null` fields are kept, and
-`undefined` object fields are dropped. Two structurally-equal arg records with
-different key insertion order collapse to one key.
+depth** (UTF-16 **code-unit** order), arrays keep order, `null` fields are kept,
+and `undefined` object fields are dropped. Two structurally-equal arg records
+with different key insertion order collapse to one key.
+
+Code-unit order, not code-point order: the reference implementation is
+`Object.keys(record).sort()`, whose default comparator compares UTF-16 code
+units. The two orders disagree for any key that starts with a surrogate — an
+emoji key sorts **before** a U+E000..U+FFFF key under code units and **after**
+it under code points. A port must therefore not use its language's natural
+string ordering if that ordering is by code point (Python `sorted`, Go
+`sort.Strings`, Rust `str` `Ord`): re-key on the UTF-16 code units first. The
+`key-order-surrogate-vs-pua` golden case below is the one that catches this;
+every other ordering case is ASCII, where the two orders agree.
 
 Golden cases: [`fixtures/stable-wire-key.json`](./fixtures/stable-wire-key.json).
 
@@ -456,7 +497,9 @@ field colon is stripped. See `packages/client/src/http-stream.ts`.
 
 An SDK is protocol-conformant when it passes, against the shared fixtures:
 
-1. `encode(decode(encoded)) == encoded` for every `wire-codec.json` case.
+1. `encode(decode(encoded)) == encoded` for every `wire-codec.json` case — or
+   `== reencoded` for the cases that carry it — and every `rejected[]` entry
+   fails to decode (§2.3).
 2. `stableWireKey` matches every `stable-wire-key.json` case.
 3. RPC request bodies and response parsing match `rpc.json`.
 4. Client WS frame builders and the server-frame consumer match `ws-frames.json`,

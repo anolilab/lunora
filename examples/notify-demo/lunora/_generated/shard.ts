@@ -30,6 +30,15 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
             "name": "by_sent",
             "type": "index"
         }
+    ],
+    "ratelimit_buckets": [
+        {
+            "fields": [
+                "key"
+            ],
+            "name": "by_key",
+            "type": "index"
+        }
     ]
 };
 
@@ -65,6 +74,39 @@ const LUNORA_TABLE_COLUMNS: Record<
             "optional": false,
             "type": "string"
         }
+    ],
+    "ratelimit_buckets": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "key",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "value",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "ts",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "prev",
+            "optional": true,
+            "type": "number"
+        }
     ]
 };
 
@@ -77,12 +119,12 @@ const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [
     {
-        "cacheKey": "nondeterministic_query_mutation:push:29:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:push:54:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in announce (push:29) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `announce` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in announce (push:54) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `announce` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -90,163 +132,11 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "announce",
             "file": "push",
             "kind": "mutation",
-            "line": 29
+            "line": 54
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
         "title": "Non-deterministic call in query/mutation handler"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:push:registerDevice",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `registerDevice` (push) has no rate limit — its name suggests an auth/abuse-sensitive endpoint, so this is high-risk. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "registerDevice",
-            "file": "push",
-            "kind": "mutation",
-            "sensitive": true
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:push:announce",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public mutation `announce` (push) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "announce",
-            "file": "push",
-            "kind": "mutation",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_mutation_without_ratelimit:push:broadcast",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
-        "detail": "Public action `broadcast` (push) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "broadcast",
-            "file": "push",
-            "kind": "action",
-            "sensitive": false
-        },
-        "name": "public_mutation_without_ratelimit",
-        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
-        "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "public_arg_uses_any:push:registerDevice:subscription",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public procedure declares a `v.any()` argument. `v.any()` accepts arbitrary untyped input from an untrusted client — defeating validation and opening injection / oversized-payload abuse.",
-        "detail": "Arg `subscription` of public procedure `registerDevice` (push:20) is `v.any()` — untrusted input with no validation. Give it a precise validator.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "argument": "subscription",
-            "exportName": "registerDevice",
-            "file": "push",
-            "line": 20
-        },
-        "name": "public_arg_uses_any",
-        "remediation": "Replace `v.any()` with a precise validator — `v.object({...})`, `v.string()`, `v.union(...)`, etc. If the shape is genuinely dynamic, model the known variants with `v.union` rather than accepting anything.",
-        "title": "Public argument uses v.any()"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:push:announce:body",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `body` of public procedure `announce` (push:27) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "body",
-            "exportName": "announce",
-            "file": "push",
-            "line": 27
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:push:announce:title",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `title` of public procedure `announce` (push:27) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "title",
-            "exportName": "announce",
-            "file": "push",
-            "line": 27
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:push:broadcast:body",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `body` of public procedure `broadcast` (push:44) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "body",
-            "exportName": "broadcast",
-            "file": "push",
-            "line": 44
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:push:broadcast:title",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `title` of public procedure `broadcast` (push:44) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "title",
-            "exportName": "broadcast",
-            "file": "push",
-            "line": 44
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
     },
     {
         "cacheKey": "procedure_without_structured_event:push:registerDevice",
@@ -322,7 +212,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "registerDevice",
@@ -347,7 +237,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "announce",
@@ -397,7 +287,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
         "usesCaptcha": false,
         "usesEmailGate": false,
         "usesMask": false,
-        "usesRateLimit": false,
+        "usesRateLimit": true,
         "usesRls": false,
         "analyzableBody": true,
         "exportName": "broadcast",
@@ -442,7 +332,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
 };
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
-const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "23c89f23e6d0e83d", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"announcements\": {\n      \"fields\": {\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"sentAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_sent\": {\n          \"fields\": [\n            \"sentAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "860713ede1f3affb", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"announcements\": {\n      \"fields\": {\n        \"body\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"sentAt\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        }\n      },\n      \"indexes\": {\n        \"by_sent\": {\n          \"fields\": [\n            \"sentAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"optional\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"optional\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"optional\": true\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -455,6 +345,7 @@ export interface ShardDOConfig {
     relationExistsPushDown?: "always" | "auto" | "never";
     /** Optional telemetry sink. When supplied, each `ctx.log.*` call is forwarded to `sink.onLog`. Pass the SAME sink you give `createWorker({ observability })` (which drives `onRpc`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
+    /** `unknown` because `@lunora/scheduler`'s `Scheduler` is not assignable to `SchedulerLike`; the shard casts it. */
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
 }
@@ -1111,6 +1002,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
             facade["announcements"] = bindTableFacade(db, "announcements");
+            facade["ratelimit_buckets"] = bindTableFacade(db, "ratelimit_buckets");
 
 
             // `ctx.trace` / `ctx.metrics`: spans and measurements to the same sink.

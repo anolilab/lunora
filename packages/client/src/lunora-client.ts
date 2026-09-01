@@ -149,6 +149,16 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const QUERY_CACHE_DEBOUNCE_MS = 250;
 
 /**
+ * How long a socket must stay open before its reconnect backoff is reset.
+ *
+ * Comfortably longer than a credential rejection takes: the server accepts the
+ * upgrade, reads the credential on the first frame, then sends `TOKEN_EXPIRED`
+ * and closes 4001 — all within a round trip. Anything still open after this has
+ * demonstrably been accepted.
+ */
+const SOCKET_STABLE_MS = 5000;
+
+/**
  * Maximum number of stream-start frames queued per connection while the
  * socket is (re)connecting. Past this cap, the oldest queued stream is
  * evicted (its consumer is failed with `STREAM_QUEUE_OVERFLOW`) so a stuck
@@ -256,6 +266,7 @@ interface ClientDebugShard {
     hasSocket: boolean;
     /** `undefined` for the default (unsharded) connection. */
     shardKey: string | undefined;
+
     /** Whether this shard's socket has ever completed a handshake — gates offline queueing. */
     wasEverConnected: boolean;
     wsState: WSState;
@@ -403,6 +414,22 @@ interface ShardConnection {
     heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
     /**
+     * The {@link LunoraClient.identityFingerprint} captured when this connection's
+     * CURRENT socket was opened (`undefined` before the first attempt).
+     *
+     * A WebSocket credential is pinned in the upgrade URL and cannot be rotated
+     * in place, so a `setAuthToken` that switches users leaves this socket
+     * authenticated as the PREVIOUS one — it keeps delivering that user's rows
+     * until something closes it, which on a client without `crossTabSync` is
+     * nothing. Reading the live fingerprint when such a frame lands stamps the
+     * previous user's data with the new user's identity; the durable read cache
+     * (on by default in browsers) then hydrates it into the new session on the
+     * next reload. Stamping what the SOCKET is authenticated as instead keeps
+     * the cache's identity gate able to reject it.
+     */
+    identity?: string | null;
+
+    /**
      * Wall-clock time (`Date.now()`) of the most recently received frame on
      * this connection's socket — ANY frame, including the plain-string
      * `lunora-pong` keepalive reply, which never reaches `handleServerMessage`'s
@@ -423,6 +450,22 @@ interface ShardConnection {
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
     socket: undefined | WebSocket;
+
+    /**
+     * Armed on `open`; resets the reconnect backoff if the socket is STILL open
+     * when it fires. Cleared on disconnect/close.
+     *
+     * `open` is not proof — the upgrade is accepted before the credential is
+     * read. The first inbound frame is not proof either for every client: the
+     * server sends no ack for the `connect` envelope, and the keepalive pong is
+     * a plain string answered by the runtime without waking the DO, so a client
+     * with no active subscription may receive no JSON frame at all.
+     *
+     * Surviving this window is the proof. A rejected credential arrives as a
+     * `TOKEN_EXPIRED` frame and a 4001 close within a round trip, well inside
+     * it, and that path clears this timer before it can fire.
+     */
+    stableTimer: ReturnType<typeof setTimeout> | undefined;
     wasEverConnected: boolean;
     wsState: WSState;
 }
@@ -1032,6 +1075,37 @@ class LunoraClient {
     >();
 
     /** Live shape subscriptions (partial replication), keyed by their wire id. */
+
+    /* eslint-disable jsdoc/check-indentation -- intentional numbered list */
+
+    /**
+     * Teardown callbacks for the admin sockets {@link LunoraClient.subscribeScheduledJobs}
+     * opens. Those run their own reconnect loop off a closure-local `closed`
+     * flag rather than `this.closed` (they predate `ensureSocket`'s guard), so
+     * without this registry a `close()` left every one of them reconnecting on
+     * its backoff forever — re-minting an ephemeral admin sub-token on each
+     * attempt when a `WsTokenProvider` is wired.
+     */
+    private readonly adminSocketTeardowns = new Set<() => void>();
+
+    /**
+     * The in-flight offline-queue replay per shard (`connectionKey`), while one
+     * is running. Two jobs:
+     *
+     * 1. It serializes overlapping flushes for the same shard — two reconnect
+     *    events in quick succession used to drain and replay concurrently.
+     * 2. It is the barrier {@link LunoraClient.mutation} waits on before sending a FRESH
+     *    write directly. The socket's `open` handler flips `wsState` to `"open"`
+     *    first and calls the flush last, so from that instant `mutation()`'s
+     *    offline gate is false and a new write raced straight to `/rpc` against
+     *    the replay of the older, queued write for the same document — the newer
+     *    one could land first and then be overwritten by the older. Ordering
+     *    inside the replay (`replaySequential`) never covered this, because the
+     *    racing write was never in the queue.
+     */
+    private readonly offlineFlushes = new Map<string, Promise<void>>();
+    /* eslint-enable jsdoc/check-indentation */
+
     private readonly shapeSubscriptions = new Map<string, ShapeSubscriptionState>();
 
     /**
@@ -1446,8 +1520,14 @@ class LunoraClient {
      * Stored per shard and replayed on every (re)connect. When a socket for the
      * shard is already open, a fresh `connect` envelope is sent immediately so the
      * server sees the new context without waiting for a reconnect.
+     *
+     * Not available on a `crossTabSync` FOLLOWER tab — the context rides the
+     * `connect` envelope of a socket a follower does not own, so it would be
+     * stored and never sent. Throws `NOT_IMPLEMENTED` there.
      */
     public setConnectionContext(context: Record<string, unknown> | undefined, options: { shardKey?: string } = {}): void {
+        this.assertLeaderOwnedSurface("setConnectionContext");
+
         const key = connectionKey(options.shardKey);
 
         if (context === undefined) {
@@ -1474,6 +1554,19 @@ class LunoraClient {
      * a double release can't drop a different holder).
      */
     public acquireConnectionContext(context: Record<string, unknown>, options: { shardKey?: string } = {}): Unsubscribe {
+        // Inert on a follower, NOT a throw. Every `usePresence` /
+        // `createPresence` / `presence` adapter in the repo calls this from a
+        // component effect the app cannot opt out of, so throwing unwinds the
+        // whole tab (a React error boundary, a failed Svelte/Solid/Vue setup)
+        // rather than degrading presence. The call could never reach the server
+        // from a follower anyway — the cross-tab channel is leader-to-follower
+        // only — so an inert release is the honest result. `whisper*` and
+        // `setConnectionContext` still throw: those are only ever called by app
+        // code, which can handle it.
+        if (this.followsAnotherTab()) {
+            return () => undefined;
+        }
+
         const key = connectionKey(options.shardKey);
         const holder = { context };
         const holders = this.connectionContextHolders.get(key);
@@ -1535,8 +1628,15 @@ class LunoraClient {
      * do not put data on a whisper topic that some shard members shouldn't see,
      * and don't trust a whisper's `data` as authorization. Use a query/mutation
      * (with RLS) for anything privileged; whispers are for transient awareness.
+     *
+     * Not available on a `crossTabSync` FOLLOWER tab — whisper frames are not
+     * relayed over the cross-tab channel, so this throws `NOT_IMPLEMENTED`
+     * there rather than registering a handler nothing can ever reach. See
+     * {@link LunoraClientOptions.crossTabSync}.
      */
     public whisperSubscribe(topic: string, handler: (data: unknown, from?: string) => void, options: { shardKey?: string } = {}): Unsubscribe {
+        this.assertLeaderOwnedSurface("whisperSubscribe");
+
         const key = connectionKey(options.shardKey);
         let byTopic = this.whisperHandlers.get(key);
 
@@ -1598,8 +1698,15 @@ class LunoraClient {
      * queued), and the server silently drops it if the sender exceeds its
      * whisper rate budget. The sender never receives its own whisper. Omitting
      * `data` delivers JSON `null` to receivers (not `undefined`).
+     *
+     * That best-effort drop is for a socket that is momentarily down. A
+     * `crossTabSync` FOLLOWER tab has no socket and never will (see
+     * {@link LunoraClientOptions.crossTabSync}), so every whisper from it would
+     * be dropped forever — it throws `NOT_IMPLEMENTED` instead.
      */
     public whisper(topic: string, data?: unknown, options: { shardKey?: string } = {}): void {
+        this.assertLeaderOwnedSurface("whisper");
+
         this.ensureSocket(options.shardKey);
 
         const conn = this.getConnection(options.shardKey);
@@ -2019,6 +2126,8 @@ class LunoraClient {
         return demuxBatchResults(body.results ?? [], calls.length);
     }
 
+    /* eslint-disable jsdoc/check-indentation, no-secrets/no-secrets -- intentional bullet list; the back-ticked `Promise<ReturnOf<F>>` type is prose, not a credential */
+
     /**
      * Invoke a mutation. Errors propagate as rejections.
      *
@@ -2028,7 +2137,24 @@ class LunoraClient {
      * Mutations issued before the very first WS connect to a shard fail fast.
      * Opt into queueing-before-first-connect via
      * `OfflineQueueOptions.queueBeforeFirstConnect`.
+     *
+     * **Return-value caveat — the queued paths do not carry the server's result.**
+     * The declared `Promise<ReturnOf<F>>` only holds when the write goes straight
+     * to the server. Once a write is queued:
+     *
+     * - with a durable `outbox` configured, this resolves **immediately with
+     *   `undefined`** (typed as `ReturnOf<F>`) the moment the write is handed to
+     *   the outbox — the replay happens later, out of band, with no awaiter;
+     * - with the built-in offline queue, it stays pending until the replay lands
+     *   and then resolves with the replayed call's value.
+     *
+     * So `const id = await client.mutation(api.todos.create, …)` is `undefined`
+     * for every write issued while offline under an outbox. Generate ids
+     * client-side (or read them back from a subscription) rather than depending
+     * on a mutation's return value in an offline-capable app —
+     * {@link LunoraClient.importRows} documents the same caveat for its counts.
      */
+    /* eslint-enable jsdoc/check-indentation, no-secrets/no-secrets */
     public async mutation<F extends FunctionReference>(
         function_: F,
         args: ArgsOf<F>,
@@ -2061,6 +2187,20 @@ class LunoraClient {
 
         if (options.optimisticUpdate) {
             this.applyOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks, optimisticConfirms);
+        }
+
+        // Ordering barrier: a post-reconnect replay of THIS shard's queued writes
+        // may be in flight. `onOpen` sets `wsState = "open"` before it starts the
+        // flush, so without this the gate below is already false and a brand-new
+        // write would race the replay of an older, queued write to the same
+        // document — last-writer-wins then silently resurrects the older value.
+        // Undefined (no replay running) is the overwhelmingly common case and
+        // costs nothing; the gate is re-read AFTER the wait so a socket that
+        // dropped again in the meantime queues this write instead of sending it.
+        const replaying = this.offlineFlushes.get(connectionKey(options.shardKey));
+
+        if (replaying !== undefined) {
+            await replaying;
         }
 
         // Queue while offline (only mutations — queries fail fast). We also
@@ -2453,9 +2593,9 @@ class LunoraClient {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let closed = false;
 
-        /** Arm the next reconnect attempt, unless `unsubscribe()` already ran. */
+        /** Arm the next reconnect attempt, unless `unsubscribe()` — or `close()` — already ran. */
         const scheduleReconnect = (): void => {
-            if (closed) {
+            if (closed || this.closed) {
                 return;
             }
 
@@ -2482,14 +2622,18 @@ class LunoraClient {
                         const message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
 
                         if (message.type === "jobs" && Array.isArray(message.records)) {
+                            // A payload frame is the proof of a live, ACCEPTED
+                            // socket that `open` alone never was: the upgrade
+                            // succeeds before the admin credential is checked,
+                            // so resetting on `open` made a rejected token
+                            // reconnect at the initial delay forever instead of
+                            // backing off (mirrors the shard socket's fix).
+                            reconnect.reset();
                             onJobs(message.records);
                         }
                     } catch {
                         /* a non-JSON frame — ignore */
                     }
-                },
-                onOpen: () => {
-                    reconnect.reset();
                 },
             });
         };
@@ -2536,11 +2680,12 @@ class LunoraClient {
 
         connect();
 
-        return () => {
+        const teardown = (): void => {
             closed = true;
 
             if (timer !== undefined) {
                 clearTimeout(timer);
+                timer = undefined;
             }
 
             if (conn.connectTimer !== undefined) {
@@ -2551,6 +2696,17 @@ class LunoraClient {
             this.stopHeartbeat(conn);
 
             conn.socket?.close();
+            conn.socket = undefined;
+        };
+
+        // Registered so `close()` stops this socket too — its reconnect loop is
+        // driven by the closure-local `closed` flag above, which nothing outside
+        // the returned unsubscribe could ever set.
+        this.adminSocketTeardowns.add(teardown);
+
+        return () => {
+            this.adminSocketTeardowns.delete(teardown);
+            teardown();
         };
     }
 
@@ -2658,6 +2814,11 @@ class LunoraClient {
      * `DELETE /_lunora/admin/storage?key=…` endpoint — the worker must be built
      * with a `storageDelete` function and `adminToken`. Powers the studio file
      * browser's per-row delete; resolves `{ deleted, key }`.
+     *
+     * An absent `deleted` field reads as `false`, matching every sibling admin
+     * verb (`runCronJob`'s `ran`, …): the studio renders this value as the row's
+     * outcome, so defaulting a missing field to success would report a delete
+     * that a mismatched/older worker never performed.
      */
     public async deleteStorageObject(key: string, options?: { bucket?: string }): Promise<{ deleted: boolean; key: string }> {
         this.assertOpen();
@@ -2665,7 +2826,7 @@ class LunoraClient {
         const path = `${STORAGE_PATH}?key=${encodeURIComponent(key)}${bucketQuery(options?.bucket)}`;
         const body = (await this.adminFetch(path, "DELETE")) as { deleted?: boolean; key?: string };
 
-        return { deleted: body.deleted ?? true, key: body.key ?? key };
+        return { deleted: body.deleted === true, key: body.key ?? key };
     }
 
     /**
@@ -3211,6 +3372,20 @@ class LunoraClient {
 
     // --- Subscriptions ------------------------------------------------------
 
+    /**
+     * Subscribe to a live query. The callback fires with the current value (from
+     * the durable read cache, when one is hydrated) and again on every server
+     * frame; the returned function unsubscribes.
+     *
+     * Subscriptions are deduped by `(functionPath, args, shardKey)` — a second
+     * `subscribe` for the same triple joins the existing registration and shares
+     * its value, cursor and optimistic layers.
+     *
+     * Not available on a `crossTabSync` FOLLOWER tab: the cross-tab channel only
+     * carries the LEADER's own subscriptions outward, so a follower would receive
+     * this query's frames only if the leader happened to hold it too. Throws
+     * `NOT_IMPLEMENTED` there — see {@link LunoraClientOptions.crossTabSync}.
+     */
     public subscribe<F extends FunctionReference>(
         function_: F,
         args: ArgsOf<F>,
@@ -3219,6 +3394,14 @@ class LunoraClient {
     ): Unsubscribe {
         this.assertOpen();
 
+        // NOT guarded by `assertLeaderOwnedSurface`, unlike the other
+        // socket-backed surfaces: a follower's `subscribe` is exactly how the
+        // cross-tab relay works. The registration below is what puts a
+        // `SubscriptionState` in `this.subscriptions`, and `onSubscriptionData`
+        // drops any broadcast whose key it cannot find there — so refusing a
+        // follower's `subscribe` would not merely fail that call, it would make
+        // the leader's entire broadcast path dead code and break every
+        // `useQuery` in every non-leader tab.
         const argsRecord = (args ?? {}) as Record<string, unknown>;
         const key = SubscriptionRegistry.key(function_.__lunoraRef, argsRecord, options.shardKey);
 
@@ -3308,6 +3491,11 @@ class LunoraClient {
      * Unlike {@link subscribe}, shape subscriptions are NOT deduped by
      * (name, args): the server resolves them under the socket's verified identity,
      * so every call gets its own id + view. The returned function unsubscribes.
+     *
+     * Not available on a `crossTabSync` FOLLOWER tab: shape pokes are not part of
+     * the leader→follower broadcast set, so a follower's shape could never
+     * resolve. Throws `NOT_IMPLEMENTED` there — see
+     * {@link LunoraClientOptions.crossTabSync}.
      */
     public subscribeShape(
         shape: { args?: Record<string, unknown>; name: string },
@@ -3315,6 +3503,15 @@ class LunoraClient {
         options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         this.assertOpen();
+
+        // Inert on a follower, for the same reason as
+        // `acquireConnectionContext`: `@lunora/db`'s shape-backed
+        // `createCollection` calls this from its sync path, so a throw takes out
+        // the collection rather than degrading it. The leader broadcasts nothing
+        // for shapes, so a follower's handle can only ever be inert.
+        if (this.followsAnotherTab()) {
+            return () => undefined;
+        }
 
         this.nextShapeId += 1;
         const id = `shape_${this.nextShapeId.toString()}`;
@@ -3542,6 +3739,14 @@ class LunoraClient {
             this.teardownConnection(conn);
         }
 
+        // Admin sockets (`subscribeScheduledJobs`) are not in `connections` and
+        // run their own reconnect loop — stop each one explicitly.
+        for (const teardown of this.adminSocketTeardowns) {
+            teardown();
+        }
+
+        this.adminSocketTeardowns.clear();
+
         this.offlineQueue.clear();
         this.queuedIdentities.clear();
 
@@ -3573,6 +3778,19 @@ class LunoraClient {
         this.shapeSubscriptions.clear();
         this.pokeBuffers.clear();
 
+        // The three registries the comment above always claimed to cover but
+        // never did. Each `SubscriptionState` holds three callback sets
+        // (`callbacks`, `errorCallbacks`, `checkpointCallbacks` — React state
+        // setters and `@lunora/db` collection closures); `clientQueryStore`
+        // holds a subscriber set per client-query ref; `hydratedQueryCache`
+        // holds the whole restored read cache. All three survived `close()`
+        // for as long as the client object stayed reachable — which, for a
+        // client held in a module-level singleton or a React context, is the
+        // lifetime of the page.
+        this.subscriptions.clear();
+        this.clientQueryStore.clear();
+        this.hydratedQueryCache.clear();
+
         // Stop cross-tab coordination and release the BroadcastChannel.
         this.tabCoordinator?.stop();
         this.tabCoordinator = undefined;
@@ -3586,25 +3804,124 @@ class LunoraClient {
     }
 
     /**
+     * `true` when this tab is a cross-tab FOLLOWER of a live leader — i.e. it
+     * will not open a socket of its own and another tab is known to hold one.
+     *
+     * Deliberately NOT just `!isLeader()`. Every `crossTabSync` client is a
+     * non-leader for the first `leaderTimeout` of its life, while its
+     * claim-leadership probe is outstanding; a lone tab self-promotes at the end
+     * of that window and `onBecomeLeader` opens the sockets and replays every
+     * registered subscription. That window is a legitimate, self-healing defer,
+     * not a failure. A KNOWN leader on another tab is the state that never heals.
+     */
+    private followsAnotherTab(): boolean {
+        const coordinator = this.tabCoordinator;
+
+        if (coordinator === undefined || coordinator.isLeader()) {
+            return false;
+        }
+
+        const leader = coordinator.leaderTabId;
+
+        return leader !== undefined && leader !== coordinator.id;
+    }
+
+    /**
+     * Reject a call that needs a socket this tab will never have.
+     *
+     * The cross-tab protocol is one-directional: a leader broadcasts
+     * `subscription-data` / `-error` / `-settled` / `connection-status` to
+     * followers, and a follower has no frame with which to tell the leader what
+     * it needs (see `cross-tab.ts`'s `WsFollowerMessage`, which is exactly
+     * heartbeat / claim-leadership / yield-leadership). `subscribeShape` /
+     * `whisper*` / `setConnectionContext` / `acquireConnectionContext` — none of
+     * which the leader broadcasts at all — therefore never worked on a follower
+     * under any circumstances: each returned a handle that looked live, fired no
+     * callback, raised no error, and reported `connectionStatus() ===
+     * "connected"` (mirrored from the leader).
+     *
+     * `subscribe` is deliberately NOT in that set. A follower's `subscribe`
+     * registers the key the leader's broadcast is matched against, so it is the
+     * mechanism the relay is built on rather than a surface that silently fails.
+     * A follower sees a query only while the leader holds the same
+     * `(fn, args, shardKey)` — that is the documented shape of the option, not a
+     * defect.
+     *
+     * `stream()` reaches the same outcome by a different route: it fails the
+     * handle it returns rather than throwing at the call. See
+     * {@link LunoraClientOptions.crossTabSync} for what the option does and does
+     * not cover.
+     */
+    private assertLeaderOwnedSurface(surface: string): void {
+        if (!this.followsAnotherTab()) {
+            return;
+        }
+
+        throw new LunoraError(
+            "NOT_IMPLEMENTED",
+            `LunoraClient: \`${surface}\` is unavailable on a cross-tab follower tab. ` +
+                `The \`crossTabSync\` channel only carries data from the leader tab outward, so this call could never reach the server. ` +
+                `Turn off \`crossTabSync\`, or keep \`${surface}\` on the leader tab.`,
+        );
+    }
+
+    /**
+     * Clear every timer a {@link ShardConnection} can have armed.
+     *
+     * One function because both teardown paths must clear all three and a fourth
+     * timer would otherwise have to be remembered in two places — which is how a
+     * leak gets added rather than written.
+     */
+    // eslint-disable-next-line class-methods-use-this -- cohesive connection helper; pairs with the teardown paths that call it
+    private clearConnectionTimers(conn: ShardConnection): void {
+        /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place, as its callers do */
+        clearTimeout(conn.reconnectTimer);
+        clearTimeout(conn.connectTimer);
+        clearTimeout(conn.stableTimer);
+        conn.reconnectTimer = undefined;
+        conn.connectTimer = undefined;
+        conn.stableTimer = undefined;
+        /* eslint-enable no-param-reassign */
+    }
+
+    /**
      * Tear down one {@link ShardConnection}'s live state: clear its reconnect/
      * connect timers, stop its heartbeat, and close its socket (if any).
      * Shared by `close()` (terminal) and the cross-tab `onStopBeingLeader`
      * handler (demoted, but still alive) so a demoted leader can't leak a
      * pending `reconnectTimer` or an open socket's `heartbeatTimer` the way
      * an inline `conn.socket?.close()` — which skips both — used to.
+     *
+     * Settles this shard's in-flight streams first. The teardown clears
+     * `conn.socket` BEFORE the real `close` event fires, so that event trips
+     * `openManagedSocket`'s identity guard (`conn.socket !== socket`) and
+     * returns — meaning `handleDisconnect`, the only other place that settles a
+     * shard's streams, never runs for this connection again. `close()` already
+     * failed and cleared `this.streams` before it gets here, so this is a no-op
+     * on that path; the cross-tab demotion path is the one where a consumer's
+     * `for await` used to block forever with no error and no completion.
      */
     private teardownConnection(conn: ShardConnection): void {
         /* eslint-disable no-param-reassign -- mutate the shared, long-lived ShardConnection record so every timer/socket field observes the same teardown (matches `handleDisconnect`'s established pattern in this file) */
-        if (conn.reconnectTimer !== undefined) {
-            clearTimeout(conn.reconnectTimer);
-            conn.reconnectTimer = undefined;
+        const streamKey = connectionKey(conn.shardKey);
+
+        for (const [id, stream] of this.streams) {
+            if (connectionKey(stream.shardKey) !== streamKey) {
+                continue;
+            }
+
+            stream.handle.fail(new LunoraError("STREAM_DISCONNECTED", "stream terminated: the connection carrying it was torn down"));
+            this.streams.delete(id);
         }
 
-        if (conn.connectTimer !== undefined) {
-            clearTimeout(conn.connectTimer);
-            conn.connectTimer = undefined;
-        }
-
+        // Every consumer these frames belonged to was just failed above, and the
+        // socket they were waiting on is going away — drop them rather than
+        // leaving them attached to a connection record the caller may reuse.
+        // Queued unsubscribes go the same way: the server drops a socket's
+        // subscriptions when it closes, so there is nothing left to tell it.
+        conn.pendingStreams = undefined;
+        conn.pendingUnsubscribes = [];
+        this.clearConnectionTimers(conn);
         this.stopHeartbeat(conn);
 
         if (conn.socket) {
@@ -4082,8 +4399,19 @@ class LunoraClient {
 
         const key = queryCacheKey(state.fn.__lunoraRef, state.argsKey, state.shardKey);
 
+        // Stamp the identity the delivering SOCKET is authenticated as, not the
+        // one the client currently advertises — see `ShardConnection.identity`.
+        // After a `setAuthToken` user switch the previous user's socket is still
+        // open (nothing closes it: the WS credential lives in the upgrade URL and
+        // only `setWsToken` bounces it), so its frames would otherwise be
+        // persisted under the NEW user's stamp and hydrate into their session on
+        // the next reload. A follower tab holds no connection of its own; its
+        // values arrive over the identity-checked cross-tab channel, so the live
+        // fingerprint is the right stamp there.
+        const socketIdentity = this.getConnection(state.shardKey)?.identity;
+
         this.pendingCacheWrites.set(key, {
-            identity: this.identityFingerprint(),
+            identity: socketIdentity === undefined ? this.identityFingerprint() : socketIdentity,
             serverCursor: state.serverCursor,
             ts: Date.now(),
             value: authoritative,
@@ -4328,6 +4656,7 @@ class LunoraClient {
                 reconnectTimer: undefined,
                 shardKey,
                 socket: undefined,
+                stableTimer: undefined,
                 wasEverConnected: false,
                 wsState: "idle",
             };
@@ -4645,8 +4974,14 @@ class LunoraClient {
             return;
         }
 
-        // When cross-tab sync is active and this tab is not the WS leader,
-        // skip opening sockets — the leader tab owns all connections.
+        // When cross-tab sync is active and this tab is not the WS leader, skip
+        // opening sockets — the leader tab owns all connections. Every public
+        // surface that needs one is gated by `assertLeaderOwnedSurface` ahead of
+        // this point, so reaching here as a follower means the caller is one of
+        // the paths that legitimately no-ops (a reconnect timer, a hydrated
+        // queue's shard warm-up), or this tab is still inside its startup
+        // leadership-claim window and `onBecomeLeader` will open the socket and
+        // replay every registered subscription when it self-promotes.
         if (this.tabCoordinator && !this.tabCoordinator.isLeader()) {
             return;
         }
@@ -4728,7 +5063,8 @@ class LunoraClient {
         handlers: {
             onClose: (event?: { code?: number }) => void;
             onMessage: (event: MessageEvent) => void;
-            onOpen: () => void;
+            /** Optional: the scheduled-jobs socket has nothing to do on `open` (its backoff resets on the first payload frame, not here). */
+            onOpen?: () => void;
         },
     ): void {
         const { WebSocketImpl } = this;
@@ -4817,7 +5153,7 @@ class LunoraClient {
             // disconnect/reconnect cycle.
             conn.lastFrameAt = Date.now();
 
-            handlers.onOpen();
+            handlers.onOpen?.();
 
             this.startHeartbeat(conn, disconnect);
         });
@@ -4877,6 +5213,13 @@ class LunoraClient {
             return;
         }
 
+        // Pin the identity this socket is being upgraded under — see
+        // `ShardConnection.identity`. Captured here (not at frame time) because
+        // the credential in the upgrade URL is what the server authenticates,
+        // and it can't change for the life of the socket.
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.identity = this.identityFingerprint();
+
         this.openManagedSocket(conn, this.wsUrlFor(shardKey, token), this.connectTimeoutMs, {
             onClose: (event) => {
                 // Close code 4001 is the server's `token_expired` signal: notify
@@ -4901,8 +5244,26 @@ class LunoraClient {
                 /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
                 conn.wsState = "open";
                 conn.wasEverConnected = true;
+
+                // See `ShardConnection.stableTimer` for why `open` is not proof.
+                clearTimeout(conn.stableTimer);
+                conn.stableTimer = setTimeout(() => {
+                    // Belt-and-braces: every transition out of `"open"` clears
+                    // this timer first, so this cannot currently be false.
+                    if (conn.wsState === "open") {
+                        conn.reconnect.reset();
+                    }
+                }, SOCKET_STABLE_MS);
                 /* eslint-enable no-param-reassign */
-                conn.reconnect.reset();
+                // NOT `conn.reconnect.reset()` — an upgrade is not proof of a
+                // usable connection. The server accepts the upgrade before it
+                // ever looks at the credential and only drops an expired one on
+                // the first frame that follows, so resetting here turns a lapsed
+                // token into a fixed-interval reconnect storm at the INITIAL
+                // delay that never backs off: open, `connect`, `TOKEN_EXPIRED`,
+                // close 4001, repeat. The reset now happens in
+                // `handleServerMessage` when a non-`error` frame proves the
+                // socket is live (see there).
                 this.emitConnectionStatus();
 
                 // Announce the connection (and its app context) before resubscribing,
@@ -5033,12 +5394,12 @@ class LunoraClient {
         /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
         this.stopHeartbeat(conn);
 
-        // Cancel the fail-fast connect timer: a `close`/`error` reached us before
-        // (or because of) the timeout, so the reconnect path below owns recovery.
-        if (conn.connectTimer !== undefined) {
-            clearTimeout(conn.connectTimer);
-            conn.connectTimer = undefined;
-        }
+        // The connect timer's deadline has been overtaken by this close, and the
+        // socket did not survive its stability window so it never earned a
+        // backoff reset — that non-reset is the storm case the delay damps.
+        // `reconnectTimer` is cleared here too and re-armed unconditionally at
+        // the end of this method.
+        this.clearConnectionTimers(conn);
 
         conn.socket = undefined;
         conn.wsState = "idle";
@@ -5259,6 +5620,16 @@ class LunoraClient {
             message = JSON.parse(text) as ServerMessage;
         } catch {
             return;
+        }
+
+        // A parsed frame that is not an `error` is the first hard proof that this
+        // socket is both open AND accepted — the point where the reconnect
+        // backoff may safely restart. An `error` frame is excluded on purpose:
+        // the server's `TOKEN_EXPIRED` rejection arrives as one, immediately
+        // before it closes with 4001, so counting it would restore the reconnect
+        // storm this moved the reset out of `onOpen` to fix.
+        if (message.type !== "error") {
+            this.getConnection(shardKey)?.reconnect.reset();
         }
 
         switch (message.type) {
@@ -5724,7 +6095,13 @@ class LunoraClient {
         this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
 
         if (message.lastMutationId !== undefined) {
-            state.lastMutationId = message.lastMutationId;
+            // `Math.max`, like the `data`-frame and cross-tab `settled` siblings.
+            // The server's watermark is monotonic in normal operation, but it
+            // restarts from a lower value whenever the `__client_watermark` row
+            // is reset (a recycled DO, a PITR restore, the shard's own watermark
+            // recovery path) — a bare assignment would then walk this gate
+            // BACKWARDS and re-open an overlay a later frame already confirmed.
+            state.lastMutationId = Math.max(state.lastMutationId ?? 0, message.lastMutationId);
         }
 
         // Fan out to every registered subscriber (shared state — see
@@ -6016,20 +6393,34 @@ class LunoraClient {
         this.clearQueryCacheForIdentityChange();
     }
 
+    /* eslint-disable no-secrets/no-secrets -- the back-ticked method name in the prose below, not a credential */
+
     /**
-     * Migrate every live identity stamp from `from` to `to` — used when the auth
+     * Migrate every identity stamp from `from` to `to` — used when the auth
      * identity label changes but the underlying credential (token) does NOT, e.g.
      * the user id resolves a tick after the token was set. The in-memory
      * `queuedIdentities` map is the flush-time source of truth, so re-stamping it
      * keeps the in-flight writes replayable under the new (more stable) identity
      * instead of the flush guard discarding them as a mismatch.
+     *
+     * That map alone was not enough: it is consumed and DELETED on the first
+     * flush attempt (`passesReplayIdentityGate`), while the queue entry and its
+     * persisted record keep the original stamp. So a reload, or a requeue after a
+     * transient failure, fell back to the old token hash — and once the token had
+     * been refreshed, `isSameCredentialUnderTokenHash` no longer recognised it
+     * and the write was rejected `OFFLINE_IDENTITY_CHANGED` for the very user
+     * `setAuthToken`'s sticky-`subject` contract promises to protect. The queue's
+     * own re-stamp covers both the entry and its durable record.
      */
+    /* eslint-enable no-secrets/no-secrets */
     private restampQueuedIdentity(from: string | null, to: string | null): void {
         for (const [id, stamp] of this.queuedIdentities) {
             if (stamp === from) {
                 this.queuedIdentities.set(id, to);
             }
         }
+
+        this.offlineQueue.restampIdentity(from, to);
     }
 
     /**
@@ -6102,7 +6493,50 @@ class LunoraClient {
         }
     }
 
+    /**
+     * Replay a shard's queued writes, serialized per shard and published as
+     * {@link offlineFlushes} so a concurrent `mutation()` can wait behind it.
+     * Never rejects: every entry's outcome is settled individually inside
+     * {@link drainOfflineQueue}, and a poisoned chain would strand every later
+     * flush AND every write waiting on the barrier.
+     */
     private async flushOfflineQueue(shardKey: string | undefined): Promise<void> {
+        const key = connectionKey(shardKey);
+        const previous = this.offlineFlushes.get(key);
+
+        // Nothing queued at all (the overwhelmingly common reconnect) — both
+        // drains below would yield nothing, so return without publishing a
+        // barrier. Otherwise every `mutation()` issued right after a socket
+        // opened would wait a turn on an empty replay.
+        if (previous === undefined && this.offlineQueue.size === 0) {
+            return;
+        }
+
+        // An async IIFE rather than `.then()`: this is a sequencing barrier with
+        // no value to pass along, and chaining off `previous` is what serializes
+        // overlapping flushes for the same shard.
+        const flush = (async () => {
+            await (previous ?? Promise.resolve());
+
+            try {
+                await this.drainOfflineQueue(shardKey);
+            } catch {
+                /* per-item verdicts are settled inside the drain — never poison the chain */
+            }
+        })();
+
+        this.offlineFlushes.set(key, flush);
+
+        await flush;
+
+        // Only the newest chain link owns the slot: a flush queued behind this
+        // one has already replaced it and must stay visible to the barrier.
+        if (this.offlineFlushes.get(key) === flush) {
+            this.offlineFlushes.delete(key);
+        }
+    }
+
+    private async drainOfflineQueue(shardKey: string | undefined): Promise<void> {
         // Drop stale writes whose precondition no longer holds before draining
         // the remaining valid mutations for replay. Each conflicted entry is
         // rejected with `OFFLINE_PRECONDITION_FAILED` inline.

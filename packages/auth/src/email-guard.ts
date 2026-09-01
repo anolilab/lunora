@@ -85,10 +85,18 @@ interface EmailGateConfig {
 /** Options for {@link emailGateMiddleware}: the base gate config plus how to read the email from `ctx`. */
 interface EmailGateMiddlewareOptions<Context> extends EmailGateConfig {
     /**
-     * Selector that pulls the signup email from `ctx`. The procedure context
-     * carries only the resolved identity, not the raw request body, so route the
-     * email through the function `args` and read it out here (mirrors
-     * `verifyTurnstileMiddleware`'s `token` selector).
+     * Selector that pulls the signup email off `ctx`. The procedure context
+     * carries only the resolved identity, not the raw request body, so the email
+     * travels in the function `args` — which the builder surfaces to middleware
+     * as `ctx.args` (validated, frozen). Mirrors `verifyTurnstileMiddleware`'s
+     * `token` selector:
+     *
+     * ```ts
+     * export const signUp = mutation
+     *     .input({ email: v.string() })
+     *     .use(emailGateMiddleware({ email: (ctx) => ctx.args.email }))
+     *     .mutation(async ({ args, ctx }) => { … });
+     * ```
      */
     email: (context: Context) => string | undefined;
 
@@ -251,7 +259,8 @@ const assertEmailAllowed = async (email: string, config: EmailGateConfig = {}): 
 /**
  * Lunora procedure middleware that gates a non-auth, signup-shaped
  * `mutation`/`action` on the email-domain policy. Attach it with `.use()`; it
- * reads the email from `ctx` via the `email` selector (route it through `args`)
+ * reads the email from `ctx` via the `email` selector (declare it with
+ * `.input(...)` and read it back as `ctx.args.email`)
  * and runs {@link assertEmailAllowed}, which throws a coded {@link LunoraError}
  * (`EMAIL_DOMAIN_BLOCKED` / `EMAIL_UNDELIVERABLE` / `VALIDATION_ERROR`) the
  * runtime maps to the matching status.

@@ -268,15 +268,32 @@ public final class LunoraClient {
 
     // MARK: - RPC
 
-    /// Builds the `POST /_lunora/rpc` body. `shardKey` is omitted when nil,
-    /// which routes to the default shard.
+    /// Builds the `POST /_lunora/rpc` body. `shardKey` is omitted when nil or
+    /// empty, which routes to the default shard.
+    ///
+    /// Empty means ABSENT, not "the shard named `\"\"`". The runtime disagrees —
+    /// it takes any string as a named shard and routes `""` to its own Durable
+    /// Object — while this client treats `""` and nil as one shard everywhere it
+    /// matches a subscription or drains the queue (``lunoraSameShard``). Sending
+    /// it split those two views: a single-call replay of a write queued with
+    /// `""` landed on a different Durable Object than a BATCHED replay of the
+    /// same write (``LunoraSubmit`` already omitted it), and the optimistic
+    /// overlay tracked neither.
     public static func buildRPCBody(functionPath: String, args: Any?, shardKey: String? = nil) throws -> [String: Any] {
         var body: [String: Any] = [
             "args": try Wire.encode(args ?? [String: Any]()),
             "functionPath": functionPath,
         ]
-        if let shardKey { body["shardKey"] = shardKey }
+        if let key = namedShard(shardKey) { body["shardKey"] = key }
         return body
+    }
+
+    /// The shard key as the wire carries it: nil for the default shard, which an
+    /// empty string also names. One place, so the RPC body and the socket URL
+    /// cannot drift apart again.
+    static func namedShard(_ shardKey: String?) -> String? {
+        guard let shardKey, !shardKey.isEmpty else { return nil }
+        return shardKey
     }
 
     /// Returns the decoded result, or throws ``LunoraAPIError``.
@@ -285,7 +302,7 @@ public final class LunoraClient {
     /// §4.2 says a non-2xx whose body carries no `error` envelope surfaces as an
     /// INTERNAL transport error. Without it a 502 with body `{"message":"…"}`
     /// returns nil and throws nothing — the caller believes its mutation committed.
-    public static func parseRPCResponse(_ body: [String: Any], status: Int = 200) throws -> Any {
+    public static func parseRPCResponse(_ body: [String: Any], status: Int) throws -> Any {
         if let envelope = body["error"] as? [String: Any] {
             let data = envelope["data"].flatMap { $0 is NSNull ? nil : try? Wire.decode($0) }
             throw LunoraAPIError(
@@ -930,7 +947,8 @@ public final class LunoraClient {
         }
 
         var params: [String] = []
-        if let shardKey { params.append("shard=\(percentEncode(shardKey))") }
+        // Empty is absent, matching `buildRPCBody` — see its comment.
+        if let key = LunoraClient.namedShard(shardKey) { params.append("shard=\(percentEncode(key))") }
         if let token { params.append("token=\(percentEncode(token))") }
         if params.isEmpty { return endpoint }
 

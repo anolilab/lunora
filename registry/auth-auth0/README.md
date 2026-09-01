@@ -49,16 +49,18 @@ wrangler secret put AUTH0_CLIENT_SECRET
 Add the `auth0` plugin to the `plugins` array in `lunora/auth/index.ts` (scaffolded by the base item):
 
 ```ts
-// lunora/auth/index.ts
+// lunora/auth/index.ts — ADD to what the base `auth` item scaffolded; don't replace it.
 import { auth0 } from "./auth0.js";
 
 export const buildAuth = (env: AuthEnv): LunoraAuth =>
     createAuth({
-        baseURL: env.BETTER_AUTH_URL,
-        database: env.DB as never,
-        emailAndPassword: { enabled: true },
-        secret: env.BETTER_AUTH_SECRET,
-        plugins: [auth0(env)],
+        // ... everything the base item already set (baseURL, database, emailAndPassword,
+        // emailVerification, secret) stays exactly as it is. In particular keep
+        // `database: lunoraD1Adapter(env.DB as never)` — passing raw `env.DB` makes
+        // better-auth resolve its Kysely adapter through a runtime `await import(...)`
+        // that never settles under the Cloudflare Vite worker runner, hanging every
+        // auth request in `lunora dev`.
+        plugins: [uiConfig(), auth0(env)],
     });
 ```
 
