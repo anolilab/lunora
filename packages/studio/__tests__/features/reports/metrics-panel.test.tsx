@@ -66,6 +66,31 @@ describe("metricsPanel", () => {
         expect(cache.textContent).toBe("no cache configured");
     });
 
+    it("renders a snapshot whose payload carries no cache key at all", async () => {
+        expect.assertions(3);
+
+        // NOT `cache: null` — the key is absent, as an older shard sends it. The
+        // stats read `metrics.cache === null`, which is false for `undefined`, so
+        // they took the "present" branch and dereferenced nothing.
+        const noCacheKey: ShardMetrics = {
+            databaseSize: 1_572_864,
+            errors: 1,
+            requests: 10,
+            shard: "__root__",
+            sinceMs: 1_700_000_000_000,
+            uptimeMs: 65_000,
+        };
+
+        expect("cache" in noCacheKey).toBe(false);
+
+        render(renderPanel(createClient(noCacheKey)));
+
+        const cache = await screen.findByTestId("mt-cache");
+
+        expect(cache.textContent).toBe("no cache configured");
+        expect(screen.getByTestId("mt-db-size").textContent).toBe("1.5 MB");
+    });
+
     it("re-seeds on a debounced shard-key change", async () => {
         expect.assertions(1);
 

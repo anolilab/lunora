@@ -42,6 +42,7 @@ import { Skeleton } from "../components/ui/skeleton";
 // every other feature panel is a route-level `React.lazy` boundary defined below
 // so it — and its heavy deps (`@xyflow/react`, `recharts`, the SQL editor, the
 // data grid) — loads in its own on-demand `chunk-*.js`, not in Home's first load.
+import type { AnalyticsPanelProps } from "../features/analytics/analytics-panel";
 import { HomePanel } from "../features/home/home-panel";
 import OperationConsole from "../features/logs/operation-console";
 import type { SchedulePanelProps } from "../features/logs/schedule-panel";
@@ -152,6 +153,16 @@ const VectorBrowser = lazyNamed(() => import("../features/vectors/vector-browser
 const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"));
 
 interface StudioProps {
+    /**
+     * Run one Analytics Engine SQL statement for the Analytics tab. There is no
+     * default: the AE SQL API authenticates with an account-scoped Cloudflare API
+     * token, and inlining one into this browser bundle would leak it to anyone who
+     * views source. Supply a runner that proxies the statement through your own
+     * worker (which holds the token server-side). Without it the Analytics tab
+     * renders an empty state and issues no request.
+     */
+    readonly analyticsQuery?: AnalyticsPanelProps["runQuery"];
+
     /**
      * URL path prefix the studio is mounted under, passed to the router as its
      * `basepath`. Defaults to `/` (mounted at the origin root). The `@lunora/vite`
@@ -990,6 +1001,7 @@ const NotFoundRedirect = (): null => {
  * rebuilt only when those change.
  */
 const buildRouter = ({
+    analyticsQuery,
     basePath,
     dataEditable = false,
     functions,
@@ -1006,7 +1018,7 @@ const buildRouter = ({
 
     const panels: Record<StudioTab, ReactElement> = {
         agents: <AgentsPanel initialShardKey={initialShardKey} />,
-        analytics: <AnalyticsPanel />,
+        analytics: <AnalyticsPanel runQuery={analyticsQuery} />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
         authAudit: <AuthAuditPanel />,
@@ -1113,6 +1125,7 @@ const buildRouter = ({
  * so navigation state survives unrelated re-renders.
  */
 const StudioShell = ({
+    analyticsQuery,
     basePath,
     chrome,
     dataEditable,
@@ -1130,6 +1143,7 @@ const StudioShell = ({
     // individual props, not the unstable `props` identity), so navigation state
     // survives unrelated re-renders.
     const router = buildRouter({
+        analyticsQuery,
         basePath,
         dataEditable,
         functions,
@@ -1160,41 +1174,14 @@ const StudioShell = ({
  * (`StudioApp` owns one for the top bar too) or the shared default — instead
  * of nesting a second, redundant provider.
  */
-export const Studio = ({
-    basePath,
-    chrome,
-    dataEditable,
-    functions,
-    i18n,
-    initialShardKey,
-    locale,
-    openApiSpec,
-    openRpcSpec,
-    runAsIdentity,
-    schemaEditable,
-    scheduledCancel,
-    scheduledCron,
-    scheduledLoad,
-}: StudioProps): ReactElement => {
+export const Studio = ({ i18n, locale, ...shellProps }: StudioProps): ReactElement => {
     // The header's <ThemeToggle> needs a theme context. `StudioApp` mounts one;
     // a bare `<Studio>` embed (a public export) gets its own here — inherit-or-own,
     // exactly like the i18n provider below.
     const shell = (
         <EnsureThemeProvider>
-            <StudioShell
-                basePath={basePath}
-                chrome={chrome}
-                dataEditable={dataEditable}
-                functions={functions}
-                initialShardKey={initialShardKey}
-                openApiSpec={openApiSpec}
-                openRpcSpec={openRpcSpec}
-                runAsIdentity={runAsIdentity}
-                scheduledCancel={scheduledCancel}
-                scheduledCron={scheduledCron}
-                scheduledLoad={scheduledLoad}
-                schemaEditable={schemaEditable}
-            />
+            {/* eslint-disable-next-line react/jsx-props-no-spreading -- forwarding a closed, typed prop set: hand-writing this list is how `scheduledCron` went missing one layer up. The spread still lands as individual props, so the shell's own memoisation keys on each one, not on this object's identity. */}
+            <StudioShell {...shellProps} />
         </EnsureThemeProvider>
     );
 

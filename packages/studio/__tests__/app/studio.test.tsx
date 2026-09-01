@@ -1,6 +1,7 @@
+import type { AnalyticsSqlResult } from "@lunora/bindings/analytics";
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { Studio } from "../../src/app/studio";
 import type {
@@ -277,6 +278,32 @@ describe("studio", () => {
         const scheduledJobs = await screen.findByTestId("lunora-scheduled-jobs", undefined, { timeout: 5000 });
 
         expect(scheduledJobs).toBeDefined();
+    });
+
+    it("runs the Analytics tab against the host-supplied analyticsQuery", async () => {
+        // `waitFor` retries the assertion, so the count is not fixed.
+        expect.hasAssertions();
+
+        const analyticsQuery = vi.fn<(sql: string) => Promise<AnalyticsSqlResult>>(async () => {
+            return { columns: [], rowCount: 0, rows: [] };
+        });
+
+        render(
+            <LunoraProvider client={createClient().asClient}>
+                <Studio analyticsQuery={analyticsQuery} />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("dash-tab-analytics", undefined, { timeout: 5000 }));
+
+        // Without a runner the panel renders its "not wired up" empty state and
+        // never fetches — the tab had no prop path to one at all.
+        await waitFor(
+            () => {
+                expect(analyticsQuery).toHaveBeenCalledWith(expect.stringContaining("FROM ANALYTICS"));
+            },
+            { timeout: 5000 },
+        );
     });
 
     it("renders the Security Advisor when the Security sub-page is selected", async () => {

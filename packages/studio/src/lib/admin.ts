@@ -232,7 +232,17 @@ export interface CacheStats {
 
 /** Health snapshot returned by `__lunora_admin__:getMetrics` for one shard. */
 export interface ShardMetrics {
-    cache: CacheStats | null;
+    /**
+     * Reactive-cache stats. `null` is the shard saying "no cache configured";
+     * **absent** is a payload that carries no `cache` key at all — an older shard,
+     * or any response shaped before the field existed.
+     *
+     * Optional on purpose: this arrives as untrusted JSON off the admin wire and
+     * `useAdminQuery` casts it straight to this type, so declaring it required
+     * made the type lie and let consumers write `cache === null` and then
+     * dereference `undefined`. Optional makes the compiler reject that.
+     */
+    cache?: CacheStats | null;
     databaseSize: null | number;
     errors: number;
     requests: number;

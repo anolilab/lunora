@@ -31,16 +31,8 @@ export const mountStudio = (options: MountStudioOptions = {}): Root => {
 
     const root = createRoot(element);
 
-    root.render(
-        <StudioApp
-            adminToken={appProps.adminToken}
-            basePath={appProps.basePath}
-            baseUrl={appProps.baseUrl}
-            locale={appProps.locale}
-            rulesInstalled={appProps.rulesInstalled}
-            studio={appProps.studio}
-        />,
-    );
+    // eslint-disable-next-line react/jsx-props-no-spreading -- forwarding a closed, typed prop set: the hand-written list this replaces dropped `client`, so `mountStudio({ client })` type-checked and mounted an unauthenticated studio. Spreading is what makes every present and future `StudioAppProps` key arrive by construction.
+    root.render(<StudioApp {...appProps} />);
 
     return root;
 };

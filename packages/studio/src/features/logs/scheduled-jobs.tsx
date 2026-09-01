@@ -176,7 +176,7 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
                             <TableBody>
                                 {jobs.map((job) => (
                                     <TableRow data-testid={`sj-row-${job.id}`} key={job.id}>
-                                        <TableCell className="font-mono text-xs">{job.functionPath}</TableCell>
+                                        <TableCell className="font-mono text-xs">{job.workflow ?? job.functionPath}</TableCell>
                                         <TableCell className="text-muted-foreground tabular-nums">{formatScheduledFor(job.scheduledFor)}</TableCell>
                                         <TableCell className="font-mono text-xs">{job.pool ?? ""}</TableCell>
                                         <TableCell className="tabular-nums">{job.attempts ?? 0}</TableCell>
