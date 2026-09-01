@@ -174,7 +174,9 @@ export const markVerified = internalMutation
         await context.db.patch(id, {
             ...(customHostnameId === undefined ? {} : { customHostnameId }),
             updatedAt: context.now,
-            verifiedAt: verified ? context.now : undefined,
+            // `null`, not `undefined`: the store refuses an explicitly-undefined patch
+            // outright, so a FAILED re-verification threw instead of clearing the stamp.
+            verifiedAt: verified ? context.now : null,
         });
     });
 
