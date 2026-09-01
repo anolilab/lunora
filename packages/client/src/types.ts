@@ -906,9 +906,27 @@ export interface User {
 }
 
 /**
+ * Per-job retry policy carried on a {@link ScheduleRecord}. Mirrors
+ * `@lunora/scheduler`'s `RetryPolicy`; absent means the scheduler's defaults.
+ */
+export interface ScheduleRetryPolicy {
+    /** Backoff growth across attempts. Default `"exponential"`. */
+    backoff?: "exponential" | "linear";
+    /** Base delay in milliseconds for the first retry. Default `30_000`. */
+    baseMs?: number;
+    /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
+    maxAttempts?: number;
+    /** Optional ceiling clamping the computed backoff delay. */
+    maxMs?: number;
+}
+
+/**
  * One pending scheduled function, as returned by the worker's
- * `GET /_lunora/admin/scheduled` endpoint. Mirrors `@lunora/scheduler`'s
- * `ScheduleRecord` structurally so the client carries no dependency on it.
+ * `GET /_lunora/admin/scheduled` endpoint. The route is a byte-for-byte proxy of
+ * the SchedulerDO's own `/list`, so this mirrors `@lunora/scheduler`'s
+ * `ScheduleRecord` field-for-field — structurally, so the client carries no
+ * dependency on it. `packages/client/__tests__/structural-mirrors.test.ts` fails
+ * when the two drift.
  */
 export interface ScheduleRecord {
     args: Record<string, unknown>;
@@ -921,12 +939,30 @@ export interface ScheduleRecord {
      */
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+
+    /**
+     * The `ns:fn` path dispatched on fire. Absent when the job targets a durable
+     * workflow/agent instead — exactly one of `functionPath` /
+     * {@link ScheduleRecord.workflow} is set, so a view rendering a job's target
+     * must fall back to `workflow` rather than assuming a path.
+     */
+    functionPath?: string;
     id: string;
+    /** Scheduler/workpool instance the job was enqueued through. Absent for the default instance. */
+    instanceName?: string;
     /** Logical workpool the job is routed to (concurrency-gated), when any. */
     pool?: string;
+    /** Per-job retry policy; absent means the scheduler's built-in defaults. */
+    retry?: ScheduleRetryPolicy;
     scheduledFor: number;
     shardKey?: string;
+
+    /**
+     * The `WORKFLOW_*`/`AGENT_*` binding a fresh durable instance is started from
+     * on fire (the {@link ScheduleRecord.args} become its `params`). Set instead
+     * of {@link ScheduleRecord.functionPath}.
+     */
+    workflow?: string;
 }
 
 /**

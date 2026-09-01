@@ -1,19 +1,33 @@
 /**
- * Opaque reference to a Lunora function. Mirrors the `FunctionReference` shape
- * emitted by `@lunora/codegen` (and consumed by `@lunora/client`). We avoid a
- * direct dependency to keep this package usable from the codegen pipeline
- * itself.
- *
- * The runtime identifier lives in `__lunoraRef` — this MUST stay in lockstep
- * with the codegen emit + `@lunora/client`'s `FunctionReference`.
+ * The registered function kinds a {@link FunctionReference} can describe.
+ * Mirrors `@lunora/client`'s `FunctionKind`.
  */
-export interface FunctionReference {
+export type FunctionKind = "action" | "mutation" | "query" | "stream";
+
+/**
+ * Opaque reference to a Lunora function. Structural mirror of the
+ * `FunctionReference` emitted by `@lunora/codegen` into `_generated/api.ts`
+ * (and declared by `@lunora/client`). We avoid a direct dependency to keep this
+ * package usable from the codegen pipeline itself.
+ *
+ * The runtime identifier lives in `__lunoraRef`; `__lunoraPhantom` is the
+ * type-only carrier the generated declarations decorate a reference with, and
+ * is what {@link ArgsOf} reads. Both names MUST stay in lockstep with the
+ * codegen emit + `@lunora/client` — `packages/client/__tests__/structural-mirrors.test.ts`
+ * fails the build when either side moves.
+ */
+export interface FunctionReference<Kind extends FunctionKind = FunctionKind, Args = unknown, Return = unknown> {
+    /**
+     * Phantom marker carrying the `Kind`/`Args`/`Return` type parameters for
+     * inference. Never present at runtime; declared as a covariant (output)
+     * position so a concrete reference stays assignable to a widened one.
+     */
+    readonly __lunoraPhantom?: { args: Args; kind: Kind; returns: Return };
     readonly __lunoraRef: string;
-    /** Marker phantom type — discriminates queries / mutations / actions. */
-    readonly _kind?: "query" | "mutation" | "action";
 }
 
-export type ArgsOf<F extends FunctionReference> = F extends { _args?: infer A } ? A : Record<string, unknown>;
+/** Extract the args type from a {@link FunctionReference}. */
+export type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R> ? A : never;
 
 /**
  * Typed reference to a Lunora durable workflow — either the generated
@@ -50,11 +64,11 @@ export type CronTargetArgs<T extends CronTarget> = T extends WorkflowReference<i
 
 /**
  * The arguments a one-shot schedule target ({@link Scheduler.runAfter} /
- * {@link Scheduler.runAt}) accepts. Unlike {@link CronTargetArgs} it preserves a
- * {@link FunctionReference}'s inferred `args` (via {@link ArgsOf}) as well as a
- * {@link WorkflowReference}'s inferred `params`, so scheduling a plain function
- * keeps its today's arg checking while scheduling a workflow/agent infers its
- * `params`.
+ * {@link Scheduler.runAt}) accepts. Unlike {@link CronTargetArgs} it resolves a
+ * {@link FunctionReference}'s `args` through {@link ArgsOf} as well as a
+ * {@link WorkflowReference}'s `params`, so scheduling a generated function
+ * reference is arg-checked against that function's validator while scheduling a
+ * workflow/agent is checked against its `params`.
  */
 export type ScheduleTargetArgs<T extends CronTarget> =
     T extends WorkflowReference<infer Params> ? Params : T extends FunctionReference ? ArgsOf<T> : Record<string, unknown>;

@@ -217,13 +217,18 @@ const createFakeScheduler = (
         pending.delete(job.id);
 
         const registry = getFunctionRegistry();
-        const entry = registry.get(job.functionPath);
+        // `functionPath` is absent when the job targets a durable workflow/agent
+        // (exactly one of `functionPath` / `workflow` is set). This fake dispatches
+        // registered functions only, so a workflow-targeted job has nothing to look
+        // up — treat it as unknown and warn, rather than indexing the registry with
+        // `undefined`.
+        const entry = job.functionPath === undefined ? undefined : registry.get(job.functionPath);
 
         if (entry === undefined) {
             // Unknown function path — match prod behaviour (silently no-op rather
             // than crashing the test), but surface a warning so devs notice typos.
             // eslint-disable-next-line no-console -- deliberate test-time warning; no logger on this surface
-            console.warn(`[fake-scheduler] unknown functionPath "${job.functionPath}" — job ${job.id} dropped`);
+            console.warn(`[fake-scheduler] unknown functionPath "${job.functionPath ?? "(workflow-targeted)"}" — job ${job.id} dropped`);
 
             return;
         }
@@ -236,7 +241,7 @@ const createFakeScheduler = (
         } else {
             // eslint-disable-next-line no-console -- deliberate test-time warning
             console.warn(
-                `[fake-scheduler] functionPath "${job.functionPath}" is a ${entry.kind} — only mutations and actions can be scheduled; job ${job.id} dropped`,
+                `[fake-scheduler] functionPath "${job.functionPath ?? "(workflow-targeted)"}" is a ${entry.kind} — only mutations and actions can be scheduled; job ${job.id} dropped`,
             );
         }
     };
@@ -298,7 +303,7 @@ const createFakeScheduler = (
                     // dead-letter park. Isolate the failure (the sweep continues
                     // to the remaining jobs) but never swallow it: record so the
                     // sweep can surface it.
-                    const failure: ScheduledJobFailure = { args: job.args, error, functionPath: job.functionPath, id: job.id };
+                    const failure: ScheduledJobFailure = { args: job.args, error, functionPath: job.functionPath ?? "", id: job.id };
 
                     failed.push(failure);
                     recordedFailures.push(failure);

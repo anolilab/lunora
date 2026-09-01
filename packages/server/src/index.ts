@@ -156,6 +156,7 @@ export type {
     RegisteredStream,
     RelationDefinition,
     RestCacheConfig,
+    RetryPolicy,
     RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,

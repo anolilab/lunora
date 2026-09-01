@@ -9,21 +9,36 @@
 import type { InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
 /**
- * Opaque reference to a Lunora function. Mirrors the `FunctionReference` shape
- * emitted by `@lunora/codegen` (and consumed by `@lunora/client`). We avoid a
- * direct dependency to keep this package usable from the codegen pipeline
- * itself — identical rationale to `@lunora/scheduler`'s copy.
- *
- * The runtime identifier lives in `__lunoraRef` — this MUST stay in lockstep
- * with the codegen emit + `@lunora/client`'s `FunctionReference`.
+ * The registered function kinds a {@link FunctionReference} can describe.
+ * Mirrors `@lunora/client`'s `FunctionKind`.
  */
-export interface FunctionReference {
+export type FunctionKind = "action" | "mutation" | "query" | "stream";
+
+/**
+ * Opaque reference to a Lunora function. Structural mirror of the
+ * `FunctionReference` emitted by `@lunora/codegen` into `_generated/api.ts`
+ * (and declared by `@lunora/client`). We avoid a direct dependency to keep this
+ * package usable from the codegen pipeline itself — identical rationale to
+ * `@lunora/scheduler`'s copy.
+ *
+ * The runtime identifier lives in `__lunoraRef`; `__lunoraPhantom` is the
+ * type-only carrier the generated declarations decorate a reference with, and
+ * is what {@link ArgsOf} reads. Both names MUST stay in lockstep with the
+ * codegen emit + `@lunora/client` — `packages/client/__tests__/structural-mirrors.test.ts`
+ * fails the build when either side moves.
+ */
+export interface FunctionReference<Kind extends FunctionKind = FunctionKind, Args = unknown, Return = unknown> {
+    /**
+     * Phantom marker carrying the `Kind`/`Args`/`Return` type parameters for
+     * inference. Never present at runtime; declared as a covariant (output)
+     * position so a concrete reference stays assignable to a widened one.
+     */
+    readonly __lunoraPhantom?: { args: Args; kind: Kind; returns: Return };
     readonly __lunoraRef: string;
-    /** Marker phantom type — discriminates queries / mutations / actions. */
-    readonly _kind?: "query" | "mutation" | "action";
 }
 
-export type ArgsOf<F extends FunctionReference> = F extends { _args?: infer A } ? A : Record<string, unknown>;
+/** Extract the args type from a {@link FunctionReference}. */
+export type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R> ? A : never;
 
 // --- Structural mirror of the Cloudflare Workflows runtime ----------------
 

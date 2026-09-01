@@ -72,7 +72,12 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
     }
 
     const enqueue = async <F extends FunctionReference>(function_: F, args: ArgsOf<F>, enqueueOptions: QueueEnqueueOptions = {}): Promise<void> => {
-        const job: QueueJob = { args, functionPath: function_.__lunoraRef, shardKey: enqueueOptions.shardKey };
+        // The wire payload is a plain JSON bag; `ArgsOf<F>` is the reference's own
+        // args object, which TS cannot prove is a `Record<string, unknown>` even
+        // though every generated args type is one. Cast at the serialisation
+        // boundary rather than loosening the parameter, which is what makes the
+        // call site arg-checked at all.
+        const job: QueueJob = { args: args as Record<string, unknown>, functionPath: function_.__lunoraRef, shardKey: enqueueOptions.shardKey };
         const sendOptions = enqueueOptions.delaySeconds === undefined ? undefined : { delaySeconds: enqueueOptions.delaySeconds };
 
         await options.queue.send(job, sendOptions);
