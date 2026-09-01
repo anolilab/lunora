@@ -2417,3 +2417,60 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         expect(forwards[0]?.userId).toBeNull(); // forged x-lunora-userid stripped (anonymous upgrade)
     });
 });
+
+describe("createWorker — voice-session upgrade", () => {
+    /** Records the `x-lunora-*` headers the voice DO actually receives. */
+    const voiceNamespace = (seen: { headers: string[]; name: string }[]): ShardNamespaceLike => {
+        return {
+            get: (id) => {
+                const name = (id as { __name: string }).__name;
+
+                return {
+                    fetch: async (request: Request) => {
+                        seen.push({ headers: [...request.headers.keys()].filter((key) => key.startsWith("x-lunora-")), name });
+
+                        return new Response(null, { status: 101 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+    };
+
+    it("strips every forged x-lunora-* header from the voice upgrade before forwarding", async () => {
+        expect.assertions(2);
+
+        const seen: { headers: string[]; name: string }[] = [];
+        const namespace = voiceNamespace(seen);
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            shardDO: namespace,
+            voiceAgents: { support: namespace },
+        });
+
+        // Six forged headers, not three: a strip that deletes from a LIVE `Headers`
+        // iterator skips every second entry, and because iteration is sorted the
+        // attacker picks which one survives by padding with decoys. The decoys are
+        // named so `x-lunora-system` — the trusted-server-dispatch flag — is one of
+        // the survivors under the broken loop.
+        const forged = new Request("https://app.example/_lunora/voice/support?threadKey=t1", {
+            headers: {
+                Upgrade: "websocket",
+                "x-lunora-aaa": "1",
+                "x-lunora-bbb": "1",
+                "x-lunora-ccc": "1",
+                "x-lunora-ddd": "1",
+                "x-lunora-shard-binding": "EVIL",
+                "x-lunora-system": "1",
+            },
+        });
+
+        await worker.fetch(forged, {}, fakeContext);
+
+        expect(seen).toHaveLength(1);
+        // Anonymous upgrade: nothing server-minted is re-set, so NOTHING may survive.
+        expect(seen[0]?.headers).toStrictEqual([]);
+    });
+});

@@ -2189,6 +2189,38 @@ const setIdentityHeaders = (headers: Headers, forwardedHeaders: Record<string, s
 };
 
 /**
+ * Clone an upgrade request's headers with EVERY client-supplied `x-lunora-*`
+ * header stripped, then the server-minted identity trio re-set.
+ *
+ * SECURITY: the DOs trust `x-lunora-*` verbatim (identity trio;
+ * `x-lunora-shard-binding`, used to address relay siblings via `env[binding]`;
+ * `x-lunora-system` / `-client-ip` on the RPC path), so a forged copy that
+ * survives the strip is a privilege escalation. Every upgrade path shares this
+ * one implementation — two hand-rolled copies had already diverged, one of them
+ * deleting from a LIVE `Headers` iterator, which skips entries and left forged
+ * headers standing. The keys are snapshotted before deleting for exactly that
+ * reason. Non-`x-lunora-` headers (crucially `Upgrade: websocket`) are preserved.
+ */
+const buildUpgradeHeaders = (request: Request, forwardedHeaders: Record<string, string>): Headers => {
+    const headers = new Headers(request.headers);
+
+    // NOTE: the snapshot must stay in its own binding. Spreading inline in the
+    // `for…of` trips `unicorn/no-useless-spread`, whose autofix drops the spread
+    // and restores the live-iterator bug.
+    const clientHeaderNames = [...headers.keys()];
+
+    for (const name of clientHeaderNames) {
+        if (name.startsWith("x-lunora-")) {
+            headers.delete(name);
+        }
+    }
+
+    setIdentityHeaders(headers, forwardedHeaders);
+
+    return headers;
+};
+
+/**
  * Constant-time-ish bearer check used by the admin endpoints. We accept the
  * token as a verbatim string match because the worker's existing
  * `Authorization` header handling is also plain — the per-shard gate is what
@@ -2741,6 +2773,35 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    /** The `<CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
+    interface NotConfiguredError {
+        code: string;
+        message: string;
+    }
+
+    // --- Shared admin-endpoint helpers --------------------------------------
+    // Every admin route shares the same "valid bearer, else 403; required option
+    // configured, else <CODE>_NOT_CONFIGURED 400" preamble. Centralizing it keeps
+    // the gate uniform — a change to the auth posture touches one place.
+
+    /** Throw 403 unless the request carries a valid admin bearer. */
+    const assertAdminAuthorized = (request: Request): void => {
+        if (!requestIsAdmin(request)) {
+            throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+    };
+
+    /** Assert admin auth, then assert a worker option is configured; return it (narrowed non-undefined). */
+    const requireAdminOption = <T>(request: Request, value: T | undefined, notConfigured: NotConfiguredError): T => {
+        assertAdminAuthorized(request);
+
+        if (value === undefined) {
+            throw new LunoraError(notConfigured.message, { code: notConfigured.code, status: 400 });
+        }
+
+        return value;
+    };
+
     /**
      * Dispatch every code-defined cron job declared under the firing expression,
      * collecting per-job failures into `errors` so one failing job neither aborts
@@ -2771,9 +2832,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * `/_lunora/admin/*` mutations.
      */
     const handleRunCronJob = async (request: Request, env: unknown): Promise<Response> => {
-        if (!requestIsAdmin(request)) {
-            throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
+        assertAdminAuthorized(request);
 
         assertMethod(request, "POST", "cron-jobs run");
 
@@ -2946,35 +3005,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         await releasePoolSlot(candidate);
 
         return response;
-    };
-
-    /** The `<CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
-    interface NotConfiguredError {
-        code: string;
-        message: string;
-    }
-
-    // --- Shared admin-endpoint helpers --------------------------------------
-    // Every admin route shares the same "valid bearer, else 403; required option
-    // configured, else <CODE>_NOT_CONFIGURED 400" preamble. Centralizing it keeps
-    // the gate uniform — a change to the auth posture touches one place.
-
-    /** Throw 403 unless the request carries a valid admin bearer. */
-    const assertAdminAuthorized = (request: Request): void => {
-        if (!requestIsAdmin(request)) {
-            throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-    };
-
-    /** Assert admin auth, then assert a worker option is configured; return it (narrowed non-undefined). */
-    const requireAdminOption = <T>(request: Request, value: T | undefined, notConfigured: NotConfiguredError): T => {
-        assertAdminAuthorized(request);
-
-        if (value === undefined) {
-            throw new LunoraError(notConfigured.message, { code: notConfigured.code, status: 400 });
-        }
-
-        return value;
     };
 
     // The `__lunora_admin__:getAuthAuditLog` handler. Unlike the shard-forwarded
@@ -3520,23 +3550,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // an anonymous caller could forge `x-lunora-userid` and, because the
         // resolved-anonymous path never overwrites it, spoof a verified identity on
         // the socket. Only an authenticated `resolveForwardContext` result may set them.
-        const upgradeHeaders = new Headers(request.headers);
-        // SECURITY: strip every client-supplied x-lunora-* header before re-setting
-        // server-minted values. The DO trusts these verbatim (identity trio;
-        // x-lunora-shard-binding, learned per-fetch and used to address relay
-        // siblings via env[binding]; x-lunora-system/-client-ip on the RPC path).
-        // The WS-handshake headers are non-x-lunora- and are preserved.
-        // Snapshot the keys before deleting: mutating a Headers object during
-        // live `.keys()` iteration skips entries, leaving forged headers behind.
-        const clientHeaderNames = [...upgradeHeaders.keys()];
-
-        for (const name of clientHeaderNames) {
-            if (name.startsWith("x-lunora-")) {
-                upgradeHeaders.delete(name);
-            }
-        }
-
-        setIdentityHeaders(upgradeHeaders, forwardedHeaders);
+        const upgradeHeaders = buildUpgradeHeaders(request, forwardedHeaders);
 
         // Relay tier (plan 075 Phase 2): when the shard is promoted, route this NEW
         // connection to one of its relays so the owner sheds connection + fan-out
@@ -3655,22 +3669,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             guardUnauthenticatedShardAccess("shard");
         }
 
-        // SECURITY: strip EVERY client-supplied `x-lunora-*` header before
-        // re-setting the server-minted ones — the same blanket strip the main WS
-        // path does, not just the identity trio `setIdentityHeaders` overwrites.
-        // The voice DO ignores the rest today, but a divergence here is exactly
-        // how a future `x-lunora-system` read on this path becomes forgeable.
-        // Snapshot the keys before deleting: mutating a Headers object during
-        // live `.keys()` iteration skips entries, leaving forged headers behind.
-        const upgradeHeaders = new Headers(request.headers);
-
-        for (const name of upgradeHeaders.keys()) {
-            if (name.startsWith("x-lunora-")) {
-                upgradeHeaders.delete(name);
-            }
-        }
-
-        setIdentityHeaders(upgradeHeaders, forwardedHeaders);
+        const upgradeHeaders = buildUpgradeHeaders(request, forwardedHeaders);
 
         return forwardToShard(namespace, threadKey, new Request(request, { headers: upgradeHeaders }));
     };

@@ -22,6 +22,19 @@ const hmacSha256Base64 = async (keyBytes: BufferSource, payload: string): Promis
 };
 
 /**
+ * Fail closed on an empty/missing webhook secret. A zero-length HMAC key is attacker-known, so a
+ * deployment whose secret is bound-but-empty (an unset `.dev.vars` line, a wrangler var set to `""`,
+ * a CI secret that resolved empty) would otherwise accept forged events. Every adapter's
+ * verification path routes through this one check — some SDKs (Stripe's included) do not validate
+ * the secret themselves, and on some runtimes an empty key merely happens to make `importKey` throw.
+ */
+export const assertWebhookSecret = (secret: string): void => {
+    if (!secret) {
+        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
+    }
+};
+
+/**
  * Constant-time string comparison to avoid leaking byte positions via timing.
  *
  * Re-exported from `shared/constant-time-equal` rather than defined here. The
@@ -68,10 +81,7 @@ export interface VerifyStandardWebhookInput {
  * entries, with a replay-window check. Throws a {@link LunoraPaymentError} on any failure.
  */
 export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): Promise<void> => {
-    // Fail closed on an empty/missing secret: a zero-length HMAC key is attacker-known and forgeable.
-    if (!input.secret) {
-        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
-    }
+    assertWebhookSecret(input.secret);
 
     const toleranceSeconds = input.toleranceSeconds ?? 300;
     const nowMs = input.now ?? Date.now();
@@ -127,10 +137,7 @@ export interface VerifyCreemSignatureInput {
  * replay-window check. Throws a {@link LunoraPaymentError} on any failure.
  */
 export const verifyCreemSignature = async (input: VerifyCreemSignatureInput): Promise<void> => {
-    // Fail closed on an empty/missing secret: a zero-length HMAC key is attacker-known and forgeable.
-    if (!input.secret) {
-        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
-    }
+    assertWebhookSecret(input.secret);
 
     if (!input.signature) {
         throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "missing creem-signature header");

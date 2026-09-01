@@ -32,6 +32,7 @@ import type {
     SubscriptionState,
     WebhookAction,
 } from "../types";
+import { assertWebhookSecret } from "../webhook";
 import stateToEventType from "./subscription-event";
 
 /**
@@ -358,6 +359,10 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         identifier: "stripe",
 
         parseWebhook: async ({ headers, payload }: WebhookInput): Promise<WebhookAction> => {
+            // The Stripe SDK does not check the secret itself, so a bound-but-empty
+            // `STRIPE_WEBHOOK_SECRET` would verify against an attacker-known zero-length key.
+            assertWebhookSecret(webhookSecret);
+
             const signatureHeader = headers.get("stripe-signature") ?? "";
 
             let event: Stripe.Event;
