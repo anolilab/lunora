@@ -1,3 +1,19 @@
+## @lunora/do [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.111...@lunora/do@1.0.0-alpha.112) (2026-09-01)
+
+### ⚠ BREAKING CHANGES
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests (#541)
+
+### Bug Fixes
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests ([#541](https://github.com/anolilab/lunora/issues/541)) ([dfc2d4d](https://github.com/anolilab/lunora/commit/dfc2d4d07bf8f67214122dc7f14d83a9b1533d07))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.51
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.50
+
 ## @lunora/do [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.110...@lunora/do@1.0.0-alpha.111) (2026-09-01)
 
 ### ⚠ BREAKING CHANGES
