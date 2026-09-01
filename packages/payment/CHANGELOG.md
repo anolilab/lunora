@@ -1,3 +1,18 @@
+## @lunora/payment [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.98...@lunora/payment@1.0.0-alpha.99) (2026-09-01)
+
+### ⚠ BREAKING CHANGES
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests (#541)
+
+### Bug Fixes
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests ([#541](https://github.com/anolilab/lunora/issues/541)) ([dfc2d4d](https://github.com/anolilab/lunora/commit/dfc2d4d07bf8f67214122dc7f14d83a9b1533d07))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.97
+
 ## @lunora/payment [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.97...@lunora/payment@1.0.0-alpha.98) (2026-09-01)
 
 ### ⚠ BREAKING CHANGES
