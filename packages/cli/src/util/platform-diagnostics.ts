@@ -8,10 +8,17 @@
  * them ships that mismatch to production, which is the failure the whole target
  * seam exists to prevent.
  *
- * Shared rather than copied because there are four such paths (`codegen`,
- * `prepare`, the dev watcher, and the Vite plugin's own equivalent), and a
- * reporting rule that lives in four places is a rule that ends up applied in
- * three.
+ * Shared rather than copied because five paths report through it — `codegen`,
+ * `deploy`, `verify` and the dev watcher here, plus the Vite plugin's own
+ * inlined equivalent in `@lunora/vite` — and a reporting rule that lives in five
+ * places is a rule that ends up applied in four. `verify` was the one it ended
+ * up not applied in: it resolves and validates the deploy target, runs codegen
+ * with it, and used to drop the diagnostics on the floor.
+ *
+ * Two further `runCodegen` calls deliberately stay silent, and both are covered
+ * elsewhere: `dev`'s pre-sidecar warm-up (the codegen watcher it starts reports
+ * the same run moments later) and `advisor`, which passes no target at all and
+ * reports schema advisories rather than gating a deploy.
  */
 import type { PlatformDiagnostic } from "@lunora/codegen";
 

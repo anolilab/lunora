@@ -1804,6 +1804,17 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
  * `defineStorageRule({ bucket })`. Drives the generated `StorageBucketName` union
  * so `ctx.storage.bucket(name)` is autocompleted + checked (and a rule's bucket
  * is reachable even when no column references it). Sorted, `"default"` first.
+ *
+ * **This union is an autocomplete aid, never a validation artifact.** Neither
+ * seed is the set of buckets the worker actually registers — that comes from
+ * `.storage({ bucket, buckets })`, a runtime object codegen does not discover.
+ * And because `ruleBuckets` is one of the seeds, the union cannot ever disagree
+ * with a rule: a typo'd `defineStorageRule({ bucket })` adds itself to the list
+ * of "valid" names. Dropping that seed would not make the union a check either,
+ * only a differently-wrong list that rejects legitimate `buckets` keys no
+ * `v.storage()` column happens to mention. A rule naming an unaddressable
+ * bucket is caught where the registered set is actually known: per request, by
+ * `assertRuleBucketsReachable` in `@lunora/server`'s `storage/middleware`.
  */
 const buildStorageBucketNames = (schema: SchemaIR, ruleBuckets: ReadonlyArray<string> = []): string[] => {
     const named = new Set<string>();
@@ -1867,6 +1878,8 @@ interface EmitServerOptions {
     hasPipelines?: boolean;
     /** A `lunora/` source uses `@lunora/bindings/r2sql` / `ctx.r2sql` — wires `ctx.r2sql` onto ActionCtx only. */
     hasR2sql?: boolean;
+    /** The target platform supports a vector store. `false` withholds `ctx.vectors` even when the schema declares an index. */
+    hasVectors?: boolean;
     /** A `lunora/` source uses `@lunora/x402/pay` / `ctx.x402` — wires the agent-wallet pay rail onto ActionCtx only. */
     hasX402?: boolean;
 
@@ -1897,6 +1910,7 @@ const emitServer = ({
     hasAi = false,
     hasAnalytics = false,
     hasBrowser = false,
+    hasVectors = true,
     hasFlags = false,
     hasHyperdrive = false,
     hasImages = false,
@@ -2058,7 +2072,13 @@ export type Env = CloudflareBindings;`;
     // for schema-agnostic consumers.
     // Same source the `VectorIndexName` union is emitted from, so the narrowed
     // ctx field and the union it references appear together or not at all.
-    const hasVectorIndexes = (schema?.vectorIndexes.length ?? 0) > 0;
+    // `hasVectors` is the platform gate's verdict; the index count is the app's
+    // declaration. BOTH are required, because a `.vectorize()` column declares
+    // the feature without importing anything — so the `featureUsage.vectors`
+    // arm never sees it, and a host rating `vectorStore: "unsupported"` used to
+    // get the whole surface emitted with no diagnostic. Defaults to `true` so a
+    // caller that does not gate (tests, the shard emitter) is unchanged.
+    const hasVectorIndexes = hasVectors && (schema?.vectorIndexes.length ?? 0) > 0;
     const vectorsOmit = hasVectorIndexes ? ` | "vectors"` : "";
     const vectorsWriterContextField = hasVectorIndexes ? `\n    readonly vectors: VectorSearch<VectorIndexName>;` : "";
     const vectorsReaderContextField = hasVectorIndexes ? `\n    readonly vectors: VectorSearchReader<VectorIndexName>;` : "";
