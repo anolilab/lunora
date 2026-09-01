@@ -12,9 +12,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ### `ArgsOf` (type)
 
 ```ts
-type ArgsOf<F extends FunctionReference> = F extends {
-    _args?: infer A;
-} ? A : Record<string, unknown>;
+type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R> ? A : never;
 ```
 
 ### `CRON_SCHEDULE_KINDS` (const)
@@ -58,7 +56,7 @@ type CronScheduleKind = "daily" | "hourly" | "interval" | "monthly" | "weekly";
 ### `CronTarget` (type)
 
 ```ts
-type CronTarget = FunctionReference | WorkflowReference;
+type CronTarget = SchedulableReference | WorkflowReference;
 ```
 
 ### `CronTriggerOptions` (interface)
@@ -135,12 +133,22 @@ interface EnqueueOptions {
 }
 ```
 
+### `FunctionKind` (type)
+
+```ts
+type FunctionKind = "action" | "mutation" | "query" | "stream";
+```
+
 ### `FunctionReference` (interface)
 
 ```ts
-interface FunctionReference {
+interface FunctionReference<Kind extends FunctionKind = FunctionKind, Args = unknown, Return = unknown> {
+    readonly __lunoraPhantom?: {
+        args: Args;
+        kind: Kind;
+        returns: Return;
+    };
     readonly __lunoraRef: string;
-    readonly _kind?: "query" | "mutation" | "action";
 }
 ```
 
@@ -289,7 +297,7 @@ interface QueueSendRequestLike<Body = unknown> {
 
 ```ts
 interface QueueWorkpool {
-    enqueue: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: QueueEnqueueOptions) => Promise<void>;
+    enqueue: <F extends SchedulableReference>(function_: F, args: ArgsOf<F>, options?: QueueEnqueueOptions) => Promise<void>;
     enqueueBatch: (jobs: ReadonlyArray<{
         args?: Record<string, unknown>;
         ref: FunctionReference;
@@ -474,7 +482,7 @@ interface Workpool {
     cancel: (id: string) => Promise<{
         cancelled: boolean;
     }>;
-    enqueue: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: EnqueueOptions) => Promise<{
+    enqueue: <F extends SchedulableReference>(function_: F, args: ArgsOf<F>, options?: EnqueueOptions) => Promise<{
         id: string;
         scheduledFor: number;
     }>;

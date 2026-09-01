@@ -22,6 +22,7 @@ export { createRunStep, validateStepArgs } from "./run-step";
 export type {
     ArgsOf,
     BranchCompensationParams,
+    FunctionKind,
     FunctionReference,
     InferStepArgs,
     LunoraWorkflowsOptions,

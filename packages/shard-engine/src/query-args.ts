@@ -14,11 +14,21 @@
  * Everything here is I/O-free and dialect-agnostic: the seek predicate is
  * emitted as a {@link WhereInput} so the shared drizzle compiler
  * (`compileWhereSql`) renders it per dialect.
+ *
+ * One thing it is NOT free of is the dialect's NULL ordering. A keyset seek has
+ * to place NULLs exactly where the ORDER BY does or a nullable ordered column
+ * cannot be paged at all. {@link pivotCondition} fixes ONE placement for every
+ * dialect — the SQLite/MySQL default, NULLs first ascending and last descending
+ * — rather than branching on the engine, because the seek tree it returns is
+ * compiled by a shared dialect-blind compiler. Postgres defaults the other way,
+ * so `@lunora/sql-store` writes the placement out as an explicit
+ * `NULLS FIRST`/`NULLS LAST` on the nullable keys of its ORDER BY; see
+ * `compileOrderBySql` there.
  */
 import { LunoraError } from "@lunora/errors";
 
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import type { OrderByInput, OrderKey, SortDirection } from "./schema-types";
+import type { OrderByInput, OrderKey, SortDirection, ValidatorLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
 
 /** The implicit tiebreak appended to every sort so the order is total. */
@@ -46,21 +56,64 @@ const tiebreakDirectionFor = (keys: ReadonlyArray<{ direction?: string }>): Sort
 const ID_FIELDS = new Set(["_id", "id"]);
 
 /**
+ * Framework columns the store stamps on every row. Never null, whatever a shape
+ * lookup would say — they are not IN the shape, so without this they would read
+ * as "unknown" and take {@link columnIsNullable}'s conservative branch.
+ */
+const NEVER_NULL_FIELDS = new Set(["_creationTime", "_id", "id"]);
+
+/**
+ * Can an ordered column hold SQL NULL? This is what gates {@link pivotCondition}'s
+ * `OR col IS NULL` arm, and that arm is what turns an index seek into a table
+ * scan — so the answer has to come from the schema, not from a guess.
+ *
+ * Two spellings make a column nullable, and both have to be read: `.nullable()`
+ * clears `column.notNull` and keeps the base kind, while `v.optional(inner)`
+ * wraps it in a fresh `"optional"` validator whose own column meta is the
+ * DEFAULT `notNull: true` — so an optional column that only checked `notNull`
+ * would read as non-nullable and lose exactly the rows this arm exists for.
+ *
+ * A field the shape does not declare answers `true` (emit the arm, take the
+ * slow plan). Both stores read undeclared fields out of a JSON document, where
+ * "absent" comes back as NULL, so `true` is the accurate answer as well as the
+ * safe one — omitting the arm silently drops rows, emitting it only costs. Every
+ * in-repo caller passes the shape, and every ordered field a user can name in a
+ * typed `orderBy` is declared in it, so this branch is a floor rather than a path.
+ */
+const columnIsNullable = (field: string, shape: Record<string, ValidatorLike> | undefined): boolean => {
+    if (NEVER_NULL_FIELDS.has(field)) {
+        return false;
+    }
+
+    const validator = shape?.[field];
+
+    if (validator === undefined) {
+        return true;
+    }
+
+    return validator.kind === "optional" || validator._meta?.column?.notNull === false;
+};
+
+/**
  * Flatten the `{ field: dir }[]` authoring form into an ordered list of sort
  * keys. An absent or empty `orderBy` defaults to creation order, matching the
  * legacy reader.
+ *
+ * `shape` is the ordered table's declared columns, used only to stamp each key's
+ * `nullable` — see {@link columnIsNullable}. Omitting it makes every user column
+ * read as nullable, which is correct but costs the slow seek plan on every page.
  */
-const normalizeOrderKeys = (orderBy: OrderByInput[] | undefined): OrderKey[] => {
+const normalizeOrderKeys = (orderBy: OrderByInput[] | undefined, shape?: Record<string, ValidatorLike>): OrderKey[] => {
     const keys: OrderKey[] = [];
 
     for (const entry of orderBy ?? []) {
         for (const [field, direction] of Object.entries(entry)) {
-            keys.push({ direction, field });
+            keys.push({ direction, field, nullable: columnIsNullable(field, shape) });
         }
     }
 
     if (keys.length === 0) {
-        return [{ direction: "asc", field: "_creationTime" }];
+        return [{ direction: "asc", field: "_creationTime", nullable: false }];
     }
 
     return keys;
@@ -124,7 +177,17 @@ const CURSOR_PREFIX = "~2";
  * unique terminal column.
  */
 const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string => {
-    const values = keys.map((key) => record[key.field]);
+    // Absent and `null` are one thing to a keyset seek — both mean "this row sorts
+    // in the NULL group" — so they are collapsed HERE, at the one place a cursor
+    // value is produced, rather than downstream. Without this an optional column
+    // missing from a document puts a genuine `undefined` in the cursor:
+    // `encodeWire` tags it in array position, `decodeWire` restores it, and it
+    // reaches the driver as a bound `undefined`. Normalising here also keeps the
+    // shared `where` compiler free of any `undefined` handling, so a user's
+    // `where: { col: { eq: undefined } }` keeps failing loudly instead of
+    // quietly becoming `col IS NULL`.
+    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the domain value a cursor carries, not a JS absence
+    const values: unknown[] = keys.map((key) => record[key.field] ?? null);
 
     values.push(record["_id"]);
 
@@ -171,18 +234,109 @@ const decodeCursor = (cursor: string): unknown[] => {
         throw invalidCursor();
     }
 
-    return decoded;
+    // Collapse a legacy `undefined` to SQL NULL here, where the cursor is read,
+    // rather than at each place a value is used. `encodeCursor` normalises at
+    // mint time, but a cursor minted BEFORE that carries a real `undefined`
+    // (`encodeWire` tags array-position `undefined`, `decodeWire` restores it)
+    // and the prefix is unchanged, so those cursors are still accepted. Handling
+    // it only at the pivot was not enough: a multi-key seek also builds prefix
+    // predicates as `{ eq: value }`, and the shared `where` compiler binds
+    // `undefined` verbatim rather than treating it as NULL — deliberately, so a
+    // dropped variable in a user's query fails loudly instead of matching every
+    // null row.
+    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the domain value a cursor carries
+    return (decoded as unknown[]).map((value: unknown) => value ?? null);
+};
+
+/**
+ * The pivot comparison for ONE column of the lexicographic seek: the rows on the
+ * wanted side of `value` under this column's direction.
+ *
+ * `wantLater` is which side is being sought — `true` for the strict "after"
+ * seek, `false` for the mirrored "at or before" bound. `inclusive` applies to the
+ * terminal column only, so a page's own end cursor stays inside the page it
+ * terminates.
+ *
+ * NULL is why this is not a comparator lookup. `col > NULL` and `col < NULL` are
+ * both UNKNOWN, so no comparator expresses either side of a NULL pivot, and none
+ * matches a NULL row sitting on the far side of a non-null pivot — a nullable
+ * ordered column cannot be paged without writing the ordering's NULL placement
+ * out. The placement assumed here is the SQLite/MySQL default — NULLs FIRST
+ * ascending, LAST descending — and every ORDER BY builder that pairs with this
+ * seek has to agree with it (Postgres does not by default, so `sql-store` states
+ * it explicitly). Hence a non-null row is on the wanted side of a NULL pivot exactly when
+ * `ascending === wantLater`, and NULL rows are on the wanted side of a non-null
+ * pivot exactly when it is not.
+ *
+ * `undefined` is the same pivot as `null`: a column absent from a document reads
+ * back as SQL NULL, and {@link encodeCursor} takes the ordered field verbatim, so
+ * an absent one arrives here as `undefined`.
+ */
+const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, inclusive: boolean): WhereInput => {
+    const { field } = column;
+    const nonNullWanted = (column.direction !== "desc") === wantLater;
+
+    // Only `null`: both a fresh cursor (normalised at mint) and a legacy one
+    // (normalised in `decodeCursor`) carry SQL NULL by the time they reach here.
+    if (value === null) {
+        if (nonNullWanted) {
+            // Inclusive at a NULL pivot is "the non-nulls, plus the NULL group itself" — every row.
+            return inclusive ? { OR: [{ [field]: { isNull: false } }, { [field]: { isNull: true } }] } : { [field]: { isNull: false } };
+        }
+
+        // Nothing sorts past NULL on this side; inclusive still keeps the NULL group.
+        return inclusive ? { [field]: { isNull: true } } : { OR: [] };
+    }
+
+    let operator = nonNullWanted ? "gt" : "lt";
+
+    if (inclusive) {
+        operator = nonNullWanted ? "gte" : "lte";
+    }
+
+    const comparison: WhereInput = { [field]: { [operator]: value } };
+
+    if (nonNullWanted || !column.nullable) {
+        return comparison;
+    }
+
+    // The NULL rows sort on the wanted side of this pivot and no comparator can reach them.
+    //
+    // Gated on `nullable` because the arm is expensive, not merely redundant: a
+    // second disjunct on the pivot column is not answerable from the same index
+    // range, so the planner drops the seek for a full scan (or a `MULTI-INDEX OR`
+    // plus a temp B-tree for the ORDER BY). That turns a page from O(page) into
+    // O(table) and full pagination from O(n) into O(n^2). Measured on
+    // `node:sqlite`, 50k rows, `ORDER BY priority DESC, id DESC LIMIT 20` over a
+    // covering `(priority, id)` index: 9.3us seeking, 469us scanning. On the DO's
+    // `json_extract` expression index the same shape went 23us -> 5033us.
+    //
+    // `nonNullWanted` is `(direction !== "desc") === wantLater`, so the arm lands
+    // on EVERY `desc` pivot of the forward seek — "newest first", the dominant
+    // read shape — which is why an unconditional arm was not a corner case.
+    return { OR: [comparison, { [field]: { isNull: true } }] };
 };
 
 /**
  * Shared lexicographic-seek builder behind {@link buildSeekWhere} /
  * {@link buildSeekBeforeWhere}: one disjunct per pivot column, each ANDing the
- * prefix equalities with the pivot comparison `operatorFor` chooses.
+ * prefix equalities with the pivot comparison for the side being sought.
  */
-const buildSeek = (keys: OrderKey[], cursorValues: unknown[], operatorFor: (direction: SortDirection, isFinal: boolean) => string): WhereInput => {
+const buildSeek = (keys: OrderKey[], cursorValues: unknown[], wantLater: boolean, inclusiveFinal: boolean): WhereInput => {
     const columns: OrderKey[] = keys.some((key) => ID_FIELDS.has(key.field))
         ? keys
-        : [...keys, { direction: tiebreakDirectionFor(keys), field: TIEBREAK_FIELD }];
+        : // `id` is minted by the store on every row, so the tiebreak is never nullable.
+          [...keys, { direction: tiebreakDirectionFor(keys), field: TIEBREAK_FIELD, nullable: false }];
+
+    // Every position the loop below reads must exist. A truncated cursor would
+    // otherwise index past the end, and those missing positions read as
+    // `undefined` — which `pivotCondition` deliberately accepts as SQL NULL for
+    // pre-normalisation cursors. The two together would turn a malformed cursor
+    // into a silent seek against the NULL group rather than the typed 400 a
+    // client-supplied value deserves.
+    if (cursorValues.length < columns.length) {
+        throw invalidCursor();
+    }
 
     const branches: WhereInput[] = [];
 
@@ -193,9 +347,7 @@ const buildSeek = (keys: OrderKey[], cursorValues: unknown[], operatorFor: (dire
             conditions.push({ [prefixColumn.field]: { eq: cursorValues[prefix] } });
         }
 
-        const operator = operatorFor(pivotColumn.direction, pivot === columns.length - 1);
-
-        conditions.push({ [pivotColumn.field]: { [operator]: cursorValues[pivot] } });
+        conditions.push(pivotCondition(pivotColumn, cursorValues[pivot], wantLater, inclusiveFinal && pivot === columns.length - 1));
 
         // Wrap multi-condition branches so each disjunct is explicitly grouped
         // rather than leaning on SQL's AND-over-OR precedence.
@@ -211,24 +363,10 @@ const buildSeek = (keys: OrderKey[], cursorValues: unknown[], operatorFor: (dire
  * Build the `where` tree that selects rows strictly after the cursor under the
  * given sort. For keys `[a ASC, b DESC]` (plus the id tiebreak) it expands to
  * the lexicographic seek `(a > ?) OR (a = ? AND b < ?) OR (a = ? AND b = ? AND id > ?)`,
- * letting the shared compiler render it per dialect.
+ * letting the shared compiler render it per dialect. A key whose `nullable` is
+ * set swaps its comparator for the NULL-aware form — see {@link pivotCondition}.
  */
-const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput =>
-    buildSeek(keys, cursorValues, (direction) => (direction === "desc" ? "lt" : "gt"));
-
-/**
- * The per-column comparator {@link buildSeekBeforeWhere} emits: every column
- * runs in the mirror direction of the strict seek (asc → `lt`, desc → `gt`),
- * except the final id tiebreak which is inclusive (`lte`/`gte`) so the boundary
- * row stays inside the page.
- */
-const seekBeforeOperator = (direction: SortDirection, isFinal: boolean): string => {
-    if (direction === "desc") {
-        return isFinal ? "gte" : "gt";
-    }
-
-    return isFinal ? "lte" : "lt";
-};
+const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => buildSeek(keys, cursorValues, true, false);
 
 /**
  * Build the `where` tree that selects rows at-or-before the cursor under the
@@ -241,7 +379,7 @@ const seekBeforeOperator = (direction: SortDirection, isFinal: boolean): string 
  * the page it terminates. Reactive pagination uses this for a page's fixed end
  * cursor; the shared compiler renders it per dialect.
  */
-const buildSeekBeforeWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => buildSeek(keys, cursorValues, seekBeforeOperator);
+const buildSeekBeforeWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => buildSeek(keys, cursorValues, false, true);
 
 /** System fields a `select` projection always retains so cursors + by-id reuse keep working. */
 const SELECT_SYSTEM_FIELDS = ["_id", "_creationTime"] as const;

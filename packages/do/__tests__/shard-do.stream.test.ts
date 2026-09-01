@@ -177,6 +177,47 @@ describe("shardDO streaming queries", () => {
         expect([...(received?.seed as Uint8Array)]).toEqual([9, 8, 7]);
     });
 
+    it("malformed wire args error the stream instead of killing the socket", async () => {
+        expect.assertions(4);
+
+        const shard = new StreamShard(state, {});
+
+        shard.registered.set("metrics:echo", async function* echoGen() {
+            yield { ok: true };
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+
+        // Past `MAX_BIGINT_DIGITS`, so `decodeWire` throws a `RangeError`. It used
+        // to be called during ARGUMENT EVALUATION of `handleStream(...)` — before
+        // the promise existed, so the trailing `.catch()` could not see it — and
+        // neither `handleWebSocketMessage` nor `webSocketMessage` wraps this, so
+        // one malformed frame was fatal to the whole hibernatable socket.
+        const overlong = { cursor: ["$lunora.wire$", "bigint", "1".repeat(2000)] };
+
+        await expect(
+            shard.driveMessage(ws, {
+                id: "stream_bad",
+                query: { args: overlong, functionPath: "metrics:echo" },
+                type: "stream",
+            } as never),
+        ).resolves.toBeUndefined();
+
+        const errors = parseFrames(ws).filter((frame) => frame.type === "error");
+
+        expect(errors).toHaveLength(1);
+        // The same answer the `subscribe` / `shape_subscribe` branches give.
+        expect((errors[0]?.error as { code?: string } | undefined)?.code).toBe("BAD_SUBSCRIPTION_ARGS");
+
+        // And the socket is still live: a well-formed stream on it still runs.
+        await shard.driveMessage(ws, { id: "stream_ok", query: { functionPath: "metrics:echo" }, type: "stream" });
+        await waitForTerminator(ws);
+
+        expect(parseFrames(ws).some((frame) => frame.type === "complete")).toBe(true);
+    });
+
     it("client unsubscribe mid-stream aborts the iterator and stops further chunks", async () => {
         expect.assertions(3);
 

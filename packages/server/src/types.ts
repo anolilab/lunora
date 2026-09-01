@@ -818,14 +818,28 @@ interface ScheduledFunctionDoc {
     attempts?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
-    /** Fully-qualified path of the function to invoke. */
-    functionPath: string;
+
+    /**
+     * Fully-qualified `ns:fn` path of the function to invoke. Absent when the job
+     * targets a durable workflow/agent instead — exactly one of `functionPath` /
+     * {@link ScheduledFunctionDoc.workflow} is set on any given row.
+     */
+    functionPath?: string;
     /** The job's id (the `_scheduled_functions` row id). */
     id: string;
+    /** Logical workpool the job is concurrency-gated by, when any. */
+    pool?: string;
     /** When the job is scheduled to fire (epoch ms). */
     scheduledFor: number;
     /** Routing hint forwarded so dispatch lands on the right shard. */
     shardKey?: string;
+
+    /**
+     * The `WORKFLOW_*`/`AGENT_*` binding a fresh durable instance is started from
+     * on fire (the {@link ScheduledFunctionDoc.args} become its `params`). Set
+     * instead of {@link ScheduledFunctionDoc.functionPath}.
+     */
+    workflow?: string;
 }
 
 /** Maps each system table name to the document shape its reads return. */
@@ -1291,22 +1305,54 @@ interface AuthState {
 
 /**
  * A pending scheduled invocation as surfaced by {@link Scheduler.list} /
- * {@link Scheduler.get}. A clean public mirror of `@lunora/scheduler`'s internal
- * `ScheduleRecord` — re-declared here so the public ctx surface carries no
- * dependency on the scheduler package's internal types.
+ * {@link Scheduler.get}. A clean public mirror of `@lunora/scheduler`'s
+ * `ScheduleRecord`, re-declared so the public ctx surface names its own type
+ * rather than re-exporting the scheduler's. It must stay field-for-field
+ * identical: `__tests__/scheduler-mirror.test.ts` asserts mutual assignability
+ * against the real `ScheduleRecord` and fails `lint:types` if either side moves.
  */
+interface RetryPolicy {
+    /** Backoff growth across attempts. Default `"exponential"`. */
+    backoff?: "exponential" | "linear";
+    /** Base delay in milliseconds for the first retry. Default `30_000`. */
+    baseMs?: number;
+    /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
+    maxAttempts?: number;
+    /** Optional ceiling clamping the computed backoff delay. */
+    maxMs?: number;
+}
+
 interface ScheduledJob {
     args: Record<string, unknown>;
     /** Number of dispatch attempts already made (absent until the first retry). */
     attempts?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
-    functionPath: string;
+
+    /**
+     * The `ns:fn` path of the function to dispatch on fire. Absent when the job
+     * targets a durable workflow/agent instead — see {@link ScheduledJob.workflow}.
+     * Exactly one of `functionPath` / `workflow` is set.
+     */
+    functionPath?: string;
     id: string;
+    /** Scheduler/workpool instance the job was enqueued through. Absent for the default instance. */
+    instanceName?: string;
+    /** Logical workpool the job is concurrency-gated by. Absent for plain `runAfter`/`runAt` jobs. */
+    pool?: string;
+    /** Per-job retry policy; absent means the scheduler's built-in defaults. */
+    retry?: RetryPolicy;
     /** When the job is scheduled to fire (epoch ms). */
     scheduledFor: number;
     /** Routing hint forwarded so dispatch lands on the right shard. */
     shardKey?: string;
+
+    /**
+     * The `WORKFLOW_*`/`AGENT_*` binding name a fresh durable instance is started
+     * from on fire (the {@link ScheduledJob.args} become its `params`). Set
+     * instead of {@link ScheduledJob.functionPath}.
+     */
+    workflow?: string;
 }
 
 /**
@@ -2542,6 +2588,7 @@ export type {
     RegisteredStream,
     RelationDefinition,
     RestCacheConfig,
+    RetryPolicy,
     RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,

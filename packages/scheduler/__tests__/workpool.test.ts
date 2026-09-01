@@ -445,7 +445,7 @@ describe("schedulerDO — configurable retry policy", () => {
     });
 });
 
-const fnRef: FunctionReference = { __lunoraRef: "stripe.sync" };
+const fnRef: FunctionReference<"mutation"> = { __lunoraRef: "stripe.sync" };
 
 const fakeNamespace = (
     responses: Record<string, unknown> = {},

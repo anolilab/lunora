@@ -31,10 +31,13 @@ interface RunContextOptions<Params> {
 /** Assemble the {@link WorkflowRunContext} passed to a `defineWorkflow` handler. */
 const createWorkflowRunContext = <Params = Record<string, unknown>>(options: RunContextOptions<Params>): WorkflowRunContext<Params> => {
     const log = createDispatchLogger(`[workflow:${options.exportName}]`);
-    // The shared runner's `ctx.run` is loosely typed (`Record<string, unknown>`
-    // args); workflow's `WorkflowRunFunction` keeps the precise `ArgsOf<F>`
-    // inference, so cast — the runtime dispatch is identical, only the arg type
-    // narrows. (The `FunctionReference`/`ArgsOf` types stay per-package by design.)
+    // `@lunora/dispatch`'s runner is deliberately loose at the boundary (its
+    // `ArgsOf` collapses to `Record<string, unknown>`); this package's
+    // `WorkflowRunFunction` reads the reference's `__lunoraPhantom` instead, so a
+    // call is checked against the target function's own args. The runtime
+    // dispatch is identical — only the arg type narrows — hence the cast. (The
+    // `FunctionReference`/`ArgsOf` types stay per-package by design; the mirror
+    // is pinned by `packages/client/__tests__/structural-mirrors.test.ts`.)
     const run = createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction;
 
     // Resolve a child workflow's `WORKFLOW_*` binding from its export name via the

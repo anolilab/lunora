@@ -1431,6 +1431,7 @@ type OrderByInput = Record<string, SortDirection>;
 interface OrderKey {
     direction: SortDirection;
     field: string;
+    nullable: boolean;
 }
 ```
 
@@ -2320,10 +2321,12 @@ interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+    functionPath?: string;
     id: string;
+    pool?: string;
     scheduledFor: number;
     shardKey?: string;
+    workflow?: string;
 }
 ```
 
@@ -4060,7 +4063,7 @@ const normalizeIdStructurally: (schema: SchemaLike, tableName: string, id: strin
 ### `normalizeOrderKeys` (const)
 
 ```ts
-const normalizeOrderKeys: (orderBy: OrderByInput[] | undefined) => OrderKey[];
+const normalizeOrderKeys: (orderBy: OrderByInput[] | undefined, shape?: Record<string, ValidatorLike>) => OrderKey[];
 ```
 
 ### `normalizeSourceDocument` (const)
@@ -4272,7 +4275,7 @@ const readExternalSourceBaseline: (sql: SqlExec, table: string, columns?: Readon
 ### `readGlobalShapeSnapshot` (const)
 
 ```ts
-const readGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: string) => Map<string, string>;
+const readGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: string) => Map<string, string> | undefined;
 ```
 
 ### `readIdempotent` (const)

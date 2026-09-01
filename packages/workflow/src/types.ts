@@ -6,24 +6,10 @@
  * kept in lockstep with `@cloudflare/workers-types`' `Workflow` /
  * `WorkflowInstance` / `WorkflowStep` / `WorkflowEvent` declarations.
  */
+
 import type { InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
-/**
- * Opaque reference to a Lunora function. Mirrors the `FunctionReference` shape
- * emitted by `@lunora/codegen` (and consumed by `@lunora/client`). We avoid a
- * direct dependency to keep this package usable from the codegen pipeline
- * itself — identical rationale to `@lunora/scheduler`'s copy.
- *
- * The runtime identifier lives in `__lunoraRef` — this MUST stay in lockstep
- * with the codegen emit + `@lunora/client`'s `FunctionReference`.
- */
-export interface FunctionReference {
-    readonly __lunoraRef: string;
-    /** Marker phantom type — discriminates queries / mutations / actions. */
-    readonly _kind?: "query" | "mutation" | "action";
-}
-
-export type ArgsOf<F extends FunctionReference> = F extends { _args?: infer A } ? A : Record<string, unknown>;
+import type { ArgsOf, FunctionReference } from "../../../shared/function-reference";
 
 // --- Structural mirror of the Cloudflare Workflows runtime ----------------
 
@@ -546,3 +532,6 @@ export interface LunoraWorkflowsOptions {
      */
     bindings: Record<string, WorkflowBindingLike>;
 }
+
+// Re-exported so consumers keep naming these through this package.
+export type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/function-reference";

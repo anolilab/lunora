@@ -117,6 +117,19 @@ const compileContains = <T>(reference: T, value: unknown, strategy: WhereSqlStra
     return strategy.containsExpr ? strategy.containsExpr(reference, term) : fragments.contains(reference, term);
 };
 
+/**
+ * SQL NULL is `null` here and ONLY `null`.
+ *
+ * `undefined` is deliberately not folded into it. A JS absence in a predicate is
+ * a mistake — a dropped variable, a typo'd destructure, an RLS policy that built
+ * `{ ownerId: undefined }` — and folding it would turn that into `ownerId IS
+ * NULL`, quietly matching every ownerless row instead of failing. It binds a
+ * placeholder the driver rejects, so the mistake surfaces where it was made.
+ *
+ * The keyset cursor is the one place a legitimately absent value exists;
+ * `encodeCursor` collapses it to `null` at the source so this shared compiler
+ * needs no `undefined` awareness at all.
+ */
 const compileComparator = <T>(
     reference: T,
     operator: string,
@@ -125,9 +138,22 @@ const compileComparator = <T>(
     strategy: WhereSqlStrategy<T>,
     fragments: WhereFragments<T>,
 ): T => {
-    // `= NULL` / `<> NULL` never match; map null comparisons to IS [NOT] NULL.
+    // user's `where: { col: { eq: undefined } }` still fails loudly at the driver instead of quietly matching every null row.
     if (value === null) {
-        return fragments.nullCheck(reference, operator === "ne");
+        // `= NULL` / `<> NULL` never match, so THOSE two map to IS [NOT] NULL.
+        if (operator === "eq" || operator === "ne") {
+            return fragments.nullCheck(reference, operator === "ne");
+        }
+
+        // Every other comparator is UNKNOWN against NULL — `x > NULL` matches
+        // nothing — and that is what this emits. It used to fold the range
+        // comparators into `IS NULL` too, which is not a weaker answer but the
+        // OPPOSITE one: `col > NULL` matched every null row instead of none. A
+        // keyset seek over a nullable ordered column (`buildSeekWhere` emits
+        // `{ gt: <cursor value> }`, and a nullable column puts `null` there) then
+        // produced a page-2 predicate subsumed by its own first disjunct, so page
+        // 2 repeated page 1 forever and every non-null row was unreachable.
+        return fragments.constant(false);
     }
 
     return fragments.binary(reference, comparator, strategy.serialize(value));

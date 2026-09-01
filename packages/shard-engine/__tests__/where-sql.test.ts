@@ -85,6 +85,25 @@ describe("compileWhereSql — per-engine rendering", () => {
         });
     });
 
+    it("does NOT treat `undefined` as SQL NULL, so a dropped variable fails loudly", () => {
+        expect.assertions(2);
+
+        // `undefined` is a JS absence, not SQL NULL. Folding it into `IS NULL`
+        // would turn `where: { status: { eq: someVarThatIsUndefined } }` — a
+        // dropped variable, a typo'd destructure — into a query that silently
+        // matches every null row. It binds a placeholder instead, so the driver
+        // rejects it at the boundary where the mistake is still visible.
+        //
+        // The keyset cursor is the one producer of a legitimately absent ordered
+        // value, and `encodeCursor` collapses that to `null` at the source rather
+        // than teaching this shared compiler about `undefined`.
+        // The property is "not IS NULL", not a particular rendering: an unusable
+        // comparison is caught at the driver either way, and pinning the exact
+        // broken SQL would make this brittle without making it stronger.
+        expect(render({ status: { eq: undefined } }, "postgres").sql).not.toContain("IS NULL");
+        expect(render({ status: undefined }, "postgres").sql).not.toContain("IS NULL");
+    });
+
     it("preserves global placeholder numbering across nested OR / NOT / IN groups (Postgres)", () => {
         expect.assertions(1);
 

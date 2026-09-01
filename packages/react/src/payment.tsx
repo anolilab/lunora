@@ -4,18 +4,28 @@ import type { ReactNode } from "react";
 import { useCallback, useState } from "react";
 
 /**
+ * Stable provider identifier. Mirror of `@lunora/payment`'s `ProviderId` — the
+ * value is persisted verbatim, so an app branching on it must see every provider
+ * that has an adapter, not just the two that shipped first.
+ */
+type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
+
+/**
  * Client-safe mirror of `@lunora/payment`'s `Subscription`. Re-declared here
  * (rather than imported) so this React entry never pulls in the server-only
- * `@lunora/payment` module graph — the kit stays React + DOM only. Keep this in
- * sync with `packages/payment/src/types.ts`.
+ * `@lunora/payment` module graph — the kit stays React + DOM only.
+ * `__tests__/payment-mirror.test.ts` fails when this drifts from
+ * `packages/payment/src/types.ts`.
  */
 interface Subscription {
     readonly cancelAtPeriodEnd: boolean;
     readonly createdAt: number;
     readonly currentPeriodEnd?: number;
+    /** Start of the current billing period — the window metered usage is summed over. */
+    readonly currentPeriodStart?: number;
     readonly id: string;
     readonly priceId: string;
-    readonly provider: "polar" | "stripe";
+    readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
     readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";
@@ -197,6 +207,6 @@ const CustomerPortalButton = ({ onPortal, ...rest }: CustomerPortalButtonProps):
     );
 };
 
-export type { CheckoutButtonProps, CustomerPortalButtonProps, RedirectTarget, RedirectTrigger, Subscription, UseCheckoutResult };
+export type { CheckoutButtonProps, CustomerPortalButtonProps, ProviderId, RedirectTarget, RedirectTrigger, Subscription, UseCheckoutResult };
 // eslint-disable-next-line react-refresh/only-export-components -- useCheckout is the shared hook these buttons build on and is part of the kit's public API; colocating it with the buttons keeps the payment surface in one module (same pattern as useLunora alongside LunoraProvider).
 export { CheckoutButton, CustomerPortalButton, useCheckout };

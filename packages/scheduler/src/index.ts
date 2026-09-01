@@ -17,6 +17,7 @@ export type {
     DurableObjectNamespaceLike,
     DurableObjectStubLike,
     EnqueueOptions,
+    FunctionKind,
     FunctionReference,
     HttpDispatcherOptions,
     LunoraSchedulerOptions,

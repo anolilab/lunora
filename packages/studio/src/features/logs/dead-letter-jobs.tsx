@@ -129,7 +129,7 @@ export const DeadLetterJobs = ({ loadJobs, removeJob, retryJob }: DeadLetterJobs
                             <TableBody>
                                 {jobs.map((job) => (
                                     <TableRow data-testid={`dlq-row-${job.id}`} key={job.id}>
-                                        <TableCell className="font-mono text-xs">{job.functionPath}</TableCell>
+                                        <TableCell className="font-mono text-xs">{job.workflow ?? job.functionPath}</TableCell>
                                         <TableCell className="tabular-nums">{job.attempts ?? 0}</TableCell>
                                         <TableCell className="text-muted-foreground tabular-nums">{formatScheduledFor(job.scheduledFor)}</TableCell>
                                         <TableCell className="font-mono text-xs">{job.pool ?? ""}</TableCell>

@@ -1,5 +1,5 @@
 import type { Middleware, MiddlewareNext } from "@lunora/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { rateLimit } from "../src/middleware";
 import { RateLimiter } from "../src/rate-limiter";
@@ -145,5 +145,82 @@ describe("rateLimit middleware", () => {
         expect(error.name).toBe("LunoraError");
         expect(error.code).toBe("INTERNAL");
         expect(error.message).toMatch(/createReadOnlyDbStore/u);
+    });
+
+    // A store outage is NOT a LunoraError, so it falls past the INTERNAL rethrow and
+    // reaches the failure policy — the only path that reads `options.failOpen`.
+    const outageLimiter = (): RateLimiter =>
+        new RateLimiter({
+            config: { api: { kind: "token bucket", period: 1000, rate: 1 } },
+            now: () => 0,
+            store: {
+                delete: () => {
+                    throw new Error("store offline");
+                },
+                get: () => {
+                    throw new Error("store offline");
+                },
+                set: () => {
+                    throw new Error("store offline");
+                },
+            },
+        });
+
+    it("fails closed by default on a store outage, denying with 503", async () => {
+        expect.assertions(5);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const middleware = rateLimit<Context>(outageLimiter(), "api");
+
+            const error = await catchError(() => invoke(middleware, {}));
+
+            expect(error.name).toBe("LunoraError");
+            expect(error.code).toBe("SERVICE_UNAVAILABLE");
+            expect(error.status).toBe(503);
+            expect((error as { cause?: Error }).cause).toMatchObject({ message: "store offline" });
+            // The outage is only observable through console.error — nothing else reports it.
+            expect(logged).toHaveBeenCalledWith(expect.stringContaining('rateLimit("api") threw; failing closed'), expect.anything());
+        } finally {
+            logged.mockRestore();
+        }
+    });
+
+    it("admits the request under failOpen on a store outage", async () => {
+        expect.assertions(3);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const middleware = rateLimit<Context>(outageLimiter(), "api", { failOpen: true });
+
+            const { called, result } = await invoke(middleware, {});
+
+            expect(called).toBe(true);
+            expect(result).toBe(SENTINEL);
+            expect(logged).toHaveBeenCalledWith(expect.stringContaining('rateLimit("api") threw; failing open'), expect.anything());
+        } finally {
+            logged.mockRestore();
+        }
+    });
+
+    it("fails closed when the limiter RESOLVER itself throws", async () => {
+        expect.assertions(2);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const middleware = rateLimit<Context>(() => {
+                throw new Error("db binding missing");
+            }, "api");
+
+            const error = await catchError(() => invoke(middleware, {}));
+
+            expect(error.status).toBe(503);
+            expect((error as { cause?: Error }).cause).toMatchObject({ message: "db binding missing" });
+        } finally {
+            logged.mockRestore();
+        }
     });
 });

@@ -1,19 +1,12 @@
 /**
- * Opaque reference to a Lunora function. Mirrors the `FunctionReference` shape
- * emitted by `@lunora/codegen` (and consumed by `@lunora/client`). We avoid a
- * direct dependency to keep this package usable from the codegen pipeline
- * itself.
- *
- * The runtime identifier lives in `__lunoraRef` — this MUST stay in lockstep
- * with the codegen emit + `@lunora/client`'s `FunctionReference`.
+ * The registered function kinds a {@link FunctionReference} can describe.
+ * Mirrors `@lunora/client`'s `FunctionKind`.
  */
-export interface FunctionReference {
-    readonly __lunoraRef: string;
-    /** Marker phantom type — discriminates queries / mutations / actions. */
-    readonly _kind?: "query" | "mutation" | "action";
-}
 
-export type ArgsOf<F extends FunctionReference> = F extends { _args?: infer A } ? A : Record<string, unknown>;
+import type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/function-reference";
+
+// Re-exported so consumers keep naming these through this package.
+export type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/function-reference";
 
 /**
  * Typed reference to a Lunora durable workflow — either the generated
@@ -42,22 +35,34 @@ export interface WorkflowReference<Params = Record<string, unknown>> {
     readonly name?: string;
 }
 
+/**
+ * A function reference a scheduler or workpool may target.
+ *
+ * `stream` is excluded deliberately, and the exclusion is load-bearing rather
+ * than tidiness: a scheduled job is dispatched as an ordinary `/rpc` call, and
+ * the function runner cannot execute a stream function (see
+ * `create-worker.ts`'s registry note). Accepting one compiles a job that is
+ * guaranteed to fail when its alarm fires, long after the call site that
+ * scheduled it.
+ */
+export type SchedulableReference<Args = unknown, Return = unknown> = FunctionReference<Exclude<FunctionKind, "stream">, Args, Return>;
+
 /** A cron job's target: either a one-shot function dispatch or a durable workflow start. */
-export type CronTarget = FunctionReference | WorkflowReference;
+export type CronTarget = SchedulableReference | WorkflowReference;
 
 /** The arguments a cron's target accepts: a workflow's inferred `params`, else an open record (function args aren't inferred). */
 export type CronTargetArgs<T extends CronTarget> = T extends WorkflowReference<infer Params> ? Params : Record<string, unknown>;
 
 /**
  * The arguments a one-shot schedule target ({@link Scheduler.runAfter} /
- * {@link Scheduler.runAt}) accepts. Unlike {@link CronTargetArgs} it preserves a
- * {@link FunctionReference}'s inferred `args` (via {@link ArgsOf}) as well as a
- * {@link WorkflowReference}'s inferred `params`, so scheduling a plain function
- * keeps its today's arg checking while scheduling a workflow/agent infers its
- * `params`.
+ * {@link Scheduler.runAt}) accepts. Unlike {@link CronTargetArgs} it resolves a
+ * {@link FunctionReference}'s `args` through {@link ArgsOf} as well as a
+ * {@link WorkflowReference}'s `params`, so scheduling a generated function
+ * reference is arg-checked against that function's validator while scheduling a
+ * workflow/agent is checked against its `params`.
  */
 export type ScheduleTargetArgs<T extends CronTarget> =
-    T extends WorkflowReference<infer Params> ? Params : T extends FunctionReference ? ArgsOf<T> : Record<string, unknown>;
+    T extends WorkflowReference<infer Params> ? Params : T extends SchedulableReference ? ArgsOf<T> : Record<string, unknown>;
 
 /** Narrow a {@link CronTarget} to a {@link WorkflowReference} by its runtime brand. */
 export const isWorkflowReference = (target: unknown): target is WorkflowReference =>
@@ -303,7 +308,7 @@ export interface Workpool {
      * and the time it was scheduled for (it may not run immediately if the pool
      * is at capacity).
      */
-    enqueue: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: EnqueueOptions) => Promise<{ id: string; scheduledFor: number }>;
+    enqueue: <F extends SchedulableReference>(function_: F, args: ArgsOf<F>, options?: EnqueueOptions) => Promise<{ id: string; scheduledFor: number }>;
     /** The pool's name (the `pool:<name>` storage key suffix). */
     readonly name: string;
     /** Inspect the pool's current state — `inFlight` slots used and the configured `maxConcurrency`. */
@@ -389,7 +394,7 @@ export interface QueueWorkpoolOptions {
  */
 export interface QueueWorkpool {
     /** Enqueue a single `fn(args)` dispatch. */
-    enqueue: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: QueueEnqueueOptions) => Promise<void>;
+    enqueue: <F extends SchedulableReference>(function_: F, args: ArgsOf<F>, options?: QueueEnqueueOptions) => Promise<void>;
     /** Enqueue many dispatches in one `sendBatch`. Each job names its function `ref`. */
     enqueueBatch: (
         jobs: ReadonlyArray<{ args?: Record<string, unknown>; ref: FunctionReference; shardKey?: string }>,

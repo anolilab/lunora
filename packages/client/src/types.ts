@@ -1,28 +1,6 @@
-/** The registered function kinds a {@link FunctionReference} can describe. `stream` is a query that yields multiple frames over the WS. */
-export type FunctionKind = "action" | "mutation" | "query" | "stream";
+import type { FunctionReference } from "../../../shared/function-reference";
 
-/**
- * Opaque reference to a registered function emitted by `@lunora/codegen`.
- *
- * At runtime it carries the `<file>:<function>` identifier in `__lunoraRef`.
- * Generated declarations decorate this with phantom type parameters so the
- * client can infer args / return values per call site.
- */
-export interface FunctionReference<Kind extends FunctionKind = FunctionKind, Args = unknown, Return = unknown> {
-    /**
-     * Phantom marker carrying the `Kind`/`Args`/`Return` type parameters for
-     * inference. Never present at runtime; declared as a covariant (output)
-     * position so a concrete reference stays assignable to a widened one.
-     */
-    readonly __lunoraPhantom?: { args: Args; kind: Kind; returns: Return };
-    readonly __lunoraRef: string;
-}
-
-/** Extract the args type from a {@link FunctionReference}. */
-export type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R> ? A : never;
-
-/** Extract the return type from a {@link FunctionReference}. */
-export type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
+export type { ArgsOf, FunctionKind, FunctionReference, ReturnOf } from "../../../shared/function-reference";
 
 /**
  * Typed reference to an HTTP-SSE stream route (`httpRoute.<verb>(path).stream()`)
@@ -906,9 +884,27 @@ export interface User {
 }
 
 /**
+ * Per-job retry policy carried on a {@link ScheduleRecord}. Mirrors
+ * `@lunora/scheduler`'s `RetryPolicy`; absent means the scheduler's defaults.
+ */
+export interface ScheduleRetryPolicy {
+    /** Backoff growth across attempts. Default `"exponential"`. */
+    backoff?: "exponential" | "linear";
+    /** Base delay in milliseconds for the first retry. Default `30_000`. */
+    baseMs?: number;
+    /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
+    maxAttempts?: number;
+    /** Optional ceiling clamping the computed backoff delay. */
+    maxMs?: number;
+}
+
+/**
  * One pending scheduled function, as returned by the worker's
- * `GET /_lunora/admin/scheduled` endpoint. Mirrors `@lunora/scheduler`'s
- * `ScheduleRecord` structurally so the client carries no dependency on it.
+ * `GET /_lunora/admin/scheduled` endpoint. The route is a byte-for-byte proxy of
+ * the SchedulerDO's own `/list`, so this mirrors `@lunora/scheduler`'s
+ * `ScheduleRecord` field-for-field — structurally, so the client carries no
+ * dependency on it. `packages/client/__tests__/structural-mirrors.test.ts` fails
+ * when the two drift.
  */
 export interface ScheduleRecord {
     args: Record<string, unknown>;
@@ -921,12 +917,30 @@ export interface ScheduleRecord {
      */
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+
+    /**
+     * The `ns:fn` path dispatched on fire. Absent when the job targets a durable
+     * workflow/agent instead — exactly one of `functionPath` /
+     * {@link ScheduleRecord.workflow} is set, so a view rendering a job's target
+     * must fall back to `workflow` rather than assuming a path.
+     */
+    functionPath?: string;
     id: string;
+    /** Scheduler/workpool instance the job was enqueued through. Absent for the default instance. */
+    instanceName?: string;
     /** Logical workpool the job is routed to (concurrency-gated), when any. */
     pool?: string;
+    /** Per-job retry policy; absent means the scheduler's built-in defaults. */
+    retry?: ScheduleRetryPolicy;
     scheduledFor: number;
     shardKey?: string;
+
+    /**
+     * The `WORKFLOW_*`/`AGENT_*` binding a fresh durable instance is started from
+     * on fire (the {@link ScheduleRecord.args} become its `params`). Set instead
+     * of {@link ScheduleRecord.functionPath}.
+     */
+    workflow?: string;
 }
 
 /**

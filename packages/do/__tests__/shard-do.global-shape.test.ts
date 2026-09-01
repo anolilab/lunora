@@ -284,6 +284,44 @@ describe("shardDO global-shape poll tier", () => {
         expect(alarmBox.scheduled).toBeNull();
     });
 
+    it("reports an over-cap durable snapshot even though it is the first durable write", async () => {
+        expect.assertions(3);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+        sockets.push(ws);
+
+        // Under the ROW cap but past the CHARACTER cap: few rows, very wide ones.
+        // That is the shape whose report was swallowed — `writeGlobalShapeSnapshot`
+        // refuses it on its very FIRST durable write, so the availability flag the
+        // log used to be gated on had never been set true, and the message naming
+        // the subscription surfaced only if a later hibernation eviction happened
+        // to flip it.
+        shard.rows = Array.from({ length: 12 }, (_, index) => {
+            return { doc: { _id: `w${String(index)}`, blob: "x".repeat(100_000) }, id: `w${String(index)}` };
+        });
+
+        // A durable connection id is what makes the persist attempt happen at all
+        // — `saveGlobalSnapshot` no-ops without one, which is the in-memory-only
+        // harness mode.
+        ws.attachment = { connectionId: "conn-1", subs: {} };
+
+        await subscribeShape(shard, ws);
+
+        // The subscription itself still succeeds — the in-memory baseline carries
+        // it, which is exactly why the failed persist was invisible.
+        expect(frameTypes(ws)).toContain("pokeStart");
+
+        // `logs` is private and there is no public drain on this surface — the
+        // recorded diagnostic IS the observable behaviour being asserted.
+        const recorded = (shard as unknown as { logs: { entries: () => { functionPath?: string; message: string }[] } }).logs.entries();
+        const snapshotErrors = recorded.filter((entry) => (entry.functionPath ?? "").startsWith("shape:snapshot:"));
+
+        expect(snapshotErrors).toHaveLength(1);
+        expect(snapshotErrors[0]?.message).toContain("past the");
+    });
+
     it("pokes only the diff (insert / update / delete) on an alarm tick", async () => {
         expect.assertions(2);
 
@@ -388,6 +426,53 @@ describe("shardDO global-shape poll tier", () => {
         // without persistence the empty cold cache would miss it (phantom row).
         expect(frameTypes(ws)).toStrictEqual(["pokeStart", "pokePart", "pokeEnd"]);
         expect(pokeOps(ws)).toStrictEqual([{ key: "t2", op: "delete", table: "things" }]);
+    });
+
+    it("a lost durable baseline re-seeds with `reset` instead of diffing against an empty one", async () => {
+        expect.assertions(3);
+
+        migrateGlobalShapeSnapshot(harness.sql);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-1", subs: {} };
+        sockets.push(ws);
+
+        shard.rows = [
+            { doc: { _id: "t1", label: "a" }, id: "t1" },
+            { doc: { _id: "t2", label: "b" }, id: "t2" },
+        ];
+        await subscribeShape(shard, ws);
+
+        // The baseline row is GONE while the subscription is still live — what a
+        // swallowed persist failure leaves behind (the snapshot write threw, the
+        // in-memory cache advanced past it anyway, and the eviction took that copy
+        // with it). Deleting the row reproduces that state exactly.
+        harness.sql.exec(`DELETE FROM "__global_shape_snapshot"`);
+
+        const woken = new GlobalShapeShard(makeState([ws]), {});
+
+        // t2 left the global backend while the DO slept.
+        woken.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        ws.sent.length = 0;
+
+        await woken.alarm();
+
+        // Diffing against a fabricated empty baseline can emit an `insert` for
+        // every surviving row and a `delete` for none, so t2 would have stayed on
+        // the client for the life of the tab. `reset` is the one frame that drops
+        // what the client still holds.
+        expect(partResets(ws)).toStrictEqual([true]);
+        expect(pokeOps(ws)).toStrictEqual([{ key: "t1", op: "insert", table: "things", value: expect.objectContaining({ _id: "t1", label: "a" }) }]);
+
+        // And the recovered baseline persists, so the next tick is an ordinary diff again.
+        ws.sent.length = 0;
+        woken.rows = [];
+        await woken.alarm();
+
+        expect(pokeOps(ws)).toStrictEqual([{ key: "t1", op: "delete", table: "things" }]);
     });
 
     it("does not re-arm the alarm once the global shape is unsubscribed", async () => {

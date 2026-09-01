@@ -20,6 +20,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 import type { SchemaLike } from "@lunora/shard-engine";
+import { sqliteEncode } from "@lunora/sql-store";
 
 import { encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { D1Exec } from "./d1-ctx-db";
@@ -57,8 +58,10 @@ interface GlobalTablePage {
  * `column = value` (or `column IS NULL` when `value` is nullish). `column` is a
  * displayed column name, validated against the table's columns and mapped to its
  * physical column (`_id` → `id`) before it is quoted; `value` is the **raw stored
- * value** the facet returned (a SQLite scalar), bound as a parameter and never
- * interpolated. AND-combined with the other clauses.
+ * value** the facet returned (a SQLite scalar — including a BLOB, which reaches
+ * here as bytes because the facet payload is wire-encoded), normalised by
+ * {@link sqliteEncode} and bound as a parameter, never interpolated.
+ * AND-combined with the other clauses.
  */
 interface GlobalFilterClause {
     column: string;
@@ -174,8 +177,12 @@ const physicalColumnName = (schema: SchemaLike, table: string, displayColumn: st
  * global read/facet paths. Each clause's column is validated against the table's
  * displayed columns (typed 404 if unknown) and mapped to its physical, quoted
  * identifier; a nullish value compiles to `IS NULL` (SQL's `= NULL` never
- * matches), everything else to `= ?` with the raw value bound. No clauses yields
- * an empty `where`, so callers append it unconditionally.
+ * matches), everything else to `= ?` with the value bound through
+ * {@link sqliteEncode}. That encode is the identity on the strings and numbers a
+ * stored scalar almost always is; it earns its place on the BLOB case, where the
+ * wire decode can hand back either an `ArrayBuffer` or a view of one and only one
+ * of those binds. No clauses yields an empty `where`, so callers append it
+ * unconditionally.
  */
 const buildEqPredicate = (
     schema: SchemaLike,
@@ -206,7 +213,7 @@ const buildEqPredicate = (
             clauses.push(`${quoted} IS NULL`);
         } else {
             clauses.push(`${quoted} = ?`);
-            params.push(filter.value);
+            params.push(sqliteEncode(filter.value));
         }
     }
 
@@ -353,6 +360,12 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
  * redacted `•••` bucket — mirroring the page browser's value redaction so the
  * facet can't leak credentials. The returned `value` is the raw stored scalar, so
  * a click feeds it straight back as an eq filter.
+ *
+ * The payload is wire-encoded on the way out, like the page read's rows: a BLOB
+ * column's stored value is bytes, and `Response.json` flattens those to `{}` —
+ * which is not a display glitch but a broken drill-down, since the flattened
+ * value is what the click sends back as the filter. `needsWireEncoding` leaves a
+ * facet over an ordinary text/numeric column untouched.
  */
 const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: FacetGlobalColumnOptions): Promise<GlobalFacetResult> => {
     const { column, table } = options;
@@ -388,12 +401,11 @@ const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: Face
     const truncated = rows.length > limit;
     const kept = truncated ? rows.slice(0, limit) : rows;
 
-    return {
-        truncated,
-        values: kept.map((row) => {
-            return { count: Number(row["count"]), value: row["value"] };
-        }),
-    };
+    const values = kept.map((row) => {
+        return { count: Number(row["count"]), value: row["value"] };
+    });
+
+    return { truncated, values: needsWireEncoding(values) ? (encodeWire(values) as GlobalFacetValue[]) : values };
 };
 
 export { facetGlobalColumn, listGlobalTables, readGlobalTablePage };

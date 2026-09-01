@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { createClientQuery } from "../src/client-query-store";
 import { isConflictError } from "../src/errors";
 import type { OptimisticUpdate } from "../src/local-store";
@@ -3160,6 +3160,60 @@ describe("lunoraClient", () => {
             expect(parsed.searchParams.get("table")).toBe("organizations");
             expect(parsed.searchParams.get("limit")).toBe("10");
             expect(parsed.searchParams.get("offset")).toBe("5");
+        });
+
+        it("readGlobalTablePage decodes the wire-encoded page the worker sends", async () => {
+            expect.assertions(2);
+
+            // Exactly what `readGlobalTablePage` in `@lunora/d1` puts on the wire:
+            // JSON cannot carry a `v.bigint()` column at all and flattens a
+            // `v.bytes()` one to `{}`, so the worker tags them. Without a decode on
+            // this side the studio grid renders the raw 3-element tagged array.
+            const page = encodeWire({
+                columns: ["_id", "cents", "blob"],
+                rows: [{ _id: "l1", blob: new Uint8Array([7, 8, 9]).buffer, cents: 9_007_199_254_740_993n }],
+                total: 1,
+            });
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse(page),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const decoded = await client.readGlobalTablePage({ table: "ledger" });
+
+            expect(decoded.rows[0]?.["cents"]).toBe(9_007_199_254_740_993n);
+            expect([...new Uint8Array(decoded.rows[0]?.["blob"] as ArrayBuffer)]).toStrictEqual([7, 8, 9]);
+        });
+
+        it("facetGlobalColumn decodes the facet values and wire-encodes the filters it sends back", async () => {
+            expect.assertions(3);
+
+            const facet = encodeWire({ truncated: false, values: [{ count: 1, value: new Uint8Array([7, 8, 9]) }] });
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(facet));
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const decoded = await client.facetGlobalColumn({
+                column: "blob",
+                filters: [{ column: "blob", value: new Uint8Array([1, 2]) }],
+                table: "ledger",
+            });
+
+            expect([...(decoded.values[0]?.value as Uint8Array)]).toStrictEqual([7, 8, 9]);
+
+            const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+            const filters = new URL(requestUrl).searchParams.get("filters");
+
+            // The value a click sends back is the one the facet just handed over,
+            // so it has to survive the outbound leg too: a bare `JSON.stringify`
+            // empties bytes to `{}` and the drill-down then matches nothing.
+            expect(filters).toBe(JSON.stringify(encodeWire([{ column: "blob", value: new Uint8Array([1, 2]) }])));
+            expect(filters).not.toContain("{}");
         });
     });
 

@@ -107,6 +107,7 @@ export type {
     RpcEnvelope,
     RpcResponseBody,
     ScheduleRecord,
+    ScheduleRetryPolicy,
     SchedulerPoolStatus,
     SchedulerStatus,
     ServerMessage,

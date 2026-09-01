@@ -357,6 +357,22 @@ describe("stripe adapter", () => {
         await expect(adapter.parseWebhook({ headers: { get: () => null }, payload: "{}" })).rejects.toMatchObject({ code: "WEBHOOK_SIGNATURE_INVALID" });
     });
 
+    it("rejects a webhook when the configured secret is empty", async () => {
+        expect.assertions(1);
+
+        // A bound-but-empty `STRIPE_WEBHOOK_SECRET` (an unset `.dev.vars` line, a wrangler var set
+        // to `""`). The Stripe SDK does not validate the secret, so without the guard this event —
+        // which the fake verifier happily parses — would be accepted and granted entitlements.
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "" });
+
+        await expect(
+            adapter.parseWebhook({
+                headers: webhookHeaders,
+                payload: JSON.stringify({ data: { object: {} }, id: "evt_1", type: "checkout.session.completed" }),
+            }),
+        ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    });
+
     it("reports usage as a meter event keyed on the customer and idempotency key", async () => {
         expect.assertions(4);
 

@@ -126,6 +126,7 @@ import type {
     ServerDefaultContextLike,
     TableDefinitionLike,
     TableReaderLike,
+    ValidatorLike,
 } from "./schema-types";
 import { isProjectedKind } from "./sql-projection";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
@@ -1216,17 +1217,28 @@ const compileOrderBySql = (keys: OrderKey[]): SQL => {
 /** Invert the reader's staged SQL comparators back into `where`-tree operators. */
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
 
-/** Order keys for a paginated stage: the staged index, else creation order, in the staged direction. */
-const paginateOrderKeys = (stage: QueryStage): OrderKey[] => {
+/**
+ * Order keys for a paginated stage: the staged index, else creation order, in the
+ * staged direction.
+ *
+ * `shape` is the table's declared columns; it decides each key's `nullable`, which
+ * is what gates the seek's `OR col IS NULL` arm (see `pivotCondition`). Routed
+ * through `normalizeOrderKeys` so the fluent reader and the object-form `findMany`
+ * answer that question the same way.
+ */
+const paginateOrderKeys = (stage: QueryStage, shape: Record<string, ValidatorLike>): OrderKey[] => {
     const direction = stage.order;
 
     if (stage.indexFields.length > 0) {
-        return stage.indexFields.map((field) => {
-            return { direction, field };
-        });
+        return normalizeOrderKeys(
+            stage.indexFields.map((field) => {
+                return { [field]: direction };
+            }),
+            shape,
+        );
     }
 
-    return [{ direction, field: "_creationTime" }];
+    return normalizeOrderKeys([{ _creationTime: direction }], shape);
 };
 
 /**
@@ -1295,6 +1307,8 @@ const scanDocs = (rows: Record<string, unknown>[], filters: QueryStage["inMemory
 const paginateStage = (
     sql: SqlExec,
     tableName: string,
+    /** The table's declared columns — decides which ordered keys are nullable. */
+    shape: Record<string, ValidatorLike>,
     stage: QueryStage,
     options: PaginationOptions,
     scopeCondition?: TextFragment,
@@ -1302,7 +1316,7 @@ const paginateStage = (
     onScanned: (count: number) => void = () => undefined,
 ): QueryPage => {
     const numberItems = Math.max(0, Math.floor(options.numItems));
-    const orderKeys = paginateOrderKeys(stage);
+    const orderKeys = paginateOrderKeys(stage, shape);
     // A cursor is always a non-empty base64 string, so truthiness distinguishes
     // a bounded page (endCursor set) from the legacy open-ended one (null/omitted).
     const bounded = typeof options.endCursor === "string";
@@ -1742,7 +1756,7 @@ const buildReader = (
                 throw new LunoraError("INTERNAL", "pagination is not supported on geo queries; use .take(n) or .collect()");
             }
 
-            const page = paginateStage(sql, tableName, stage, options, scopeConditionText, (count) => {
+            const page = paginateStage(sql, tableName, tableDefinition.shape, stage, options, scopeConditionText, (count) => {
                 scanned = count;
             });
 
@@ -3321,7 +3335,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 onRead(tableName);
             }
 
-            const orderKeys = normalizeOrderKeys(args.orderBy);
+            const orderKeys = normalizeOrderKeys(args.orderBy, findManyDefinition.shape);
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
             // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge

@@ -6,6 +6,7 @@
  * admin gate, option registry, and request helpers through injected deps, so the
  * module imports no runtime values from `create-worker` (only its types).
  */
+import { decodeWire } from "../../../shared/wire-codec";
 import type { CronJobDispatch, CronJobInfo, FunctionDescriptor, FunctionRegistryLike, GlobalFilterClause, GlobalIntrospector } from "./create-worker";
 import { describeArguments } from "./describe-args";
 import { LunoraError } from "./errors";
@@ -25,6 +26,14 @@ const GLOBAL_FACET_PATH = "/_lunora/admin/global/facet";
  * absent / malformed / non-array input yields `undefined` (no filtering) rather
  * than a 400, and each entry is kept only when its `column` is a string; the
  * value is bound server-side so a bad shape can never inject SQL.
+ *
+ * The values are wire-decoded, because the facet that produced them is
+ * wire-encoded: a `v.bytes()` value the client just decoded back into an
+ * `ArrayBuffer` would otherwise arrive here as `{}` and drill down to nothing.
+ * `decodeWire` is the identity for plain-JSON values, so an ordinary string or
+ * number filter is unaffected; a malformed tagged payload throws, and this
+ * function's contract is to degrade to "no filtering" rather than 400, so it is
+ * caught alongside the parse.
  * @returns the parsed filter clauses, or `undefined` when absent/malformed.
  */
 const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | undefined => {
@@ -35,7 +44,7 @@ const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | und
     let parsed: unknown;
 
     try {
-        parsed = JSON.parse(raw);
+        parsed = decodeWire(JSON.parse(raw));
     } catch {
         return undefined;
     }

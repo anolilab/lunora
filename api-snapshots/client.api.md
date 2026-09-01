@@ -815,9 +815,7 @@ interface LunoraClientOptions {
 
 ### `LunoraErrorCode` (type)
 
-```ts
-type LunoraErrorCode = (typeof LUNORA_ERROR_CODES)[number];
-```
+Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `MutationCallOptions` (interface)
 
@@ -1138,11 +1136,25 @@ interface ScheduleRecord {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+    functionPath?: string;
     id: string;
+    instanceName?: string;
     pool?: string;
+    retry?: ScheduleRetryPolicy;
     scheduledFor: number;
     shardKey?: string;
+    workflow?: string;
+}
+```
+
+### `ScheduleRetryPolicy` (interface)
+
+```ts
+interface ScheduleRetryPolicy {
+    backoff?: "exponential" | "linear";
+    baseMs?: number;
+    maxAttempts?: number;
+    maxMs?: number;
 }
 ```
 

@@ -5,6 +5,18 @@ import { decodeWire } from "../../../shared/wire-codec";
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "../src/introspect";
 import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
+/**
+ * Put a payload through the studio's JSON transport and back — what
+ * `Response.json` on the worker and `decodeWire` on the client do between them.
+ * Not a deep clone: the point is that the JSON hop is lossy for `bigint` and
+ * bytes unless the payload was wire-encoded first.
+ */
+const overJson = (payload: unknown): unknown => {
+    const wire = JSON.stringify(payload);
+
+    return decodeWire(JSON.parse(wire));
+};
+
 const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
     return {
         _meta: { column: { notNull: true, ...column } },
@@ -254,6 +266,58 @@ describe("d1 introspect", () => {
                     { count: 1, value: 0 },
                 ]),
             );
+        });
+
+        it("a bytes facet survives JSON transport instead of flattening to {}", async () => {
+            expect.assertions(1);
+
+            const wireSchema: SchemaLike = {
+                tables: {
+                    ledger: {
+                        indexes: [],
+                        shape: { blob: col("bytes"), cents: col("bigint") },
+                        shardMode: { kind: "global" } as never,
+                    },
+                },
+            };
+
+            harness.ddl(`CREATE TABLE "ledger" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "blob" BLOB, "cents" TEXT)`);
+            await harness.exec.run(`INSERT INTO "ledger" VALUES ('l1', 1, X'070809', '1')`, []);
+
+            const facet = await facetGlobalColumn(harness.exec, wireSchema, { column: "blob", table: "ledger" });
+            const overTheWire = overJson(facet) as { values: { count: number; value: unknown }[] };
+
+            expect([...new Uint8Array(overTheWire.values[0]?.value as ArrayBuffer)]).toStrictEqual([7, 8, 9]);
+        });
+
+        it("a bytes facet value drills back down through the eq filter it came from", async () => {
+            expect.assertions(2);
+
+            const wireSchema: SchemaLike = {
+                tables: {
+                    ledger: {
+                        indexes: [],
+                        shape: { blob: col("bytes"), cents: col("bigint") },
+                        shardMode: { kind: "global" } as never,
+                    },
+                },
+            };
+
+            harness.ddl(`CREATE TABLE "ledger" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "blob" BLOB, "cents" TEXT)`);
+            await harness.exec.run(`INSERT INTO "ledger" VALUES ('l1', 1, X'070809', '1'), ('l2', 2, X'0a', '5')`, []);
+
+            const facet = await facetGlobalColumn(harness.exec, wireSchema, { column: "blob", table: "ledger" });
+            const clicked = (overJson(facet) as { values: { value: unknown }[] }).values.find(
+                (entry) => [...new Uint8Array(entry.value as ArrayBuffer)].join(",") === "7,8,9",
+            );
+
+            // The whole reason the facet's value is the STORED scalar is that a
+            // click sends it straight back as a filter. Flattened to `{}` by JSON
+            // it bound an empty object and matched nothing.
+            const page = await readGlobalTablePage(harness.exec, wireSchema, { filters: [{ column: "blob", value: clicked?.value }], table: "ledger" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows[0]?.["_id"]).toBe("l1");
         });
 
         it("reflects the active view (eq filters)", async () => {

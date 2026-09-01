@@ -1085,12 +1085,12 @@ const MESSAGE_IDS = [
     "Showing a partial request/error history — one or more shards have more data than the trend chart can display.",
     // Analytics Engine usage panel.
     "Analytics",
-    "Analytics is not configured.",
+    "Analytics usage panels are not wired up.",
     "Hot shards",
     "Latency p50 / p95 per function",
     "No data points yet.",
     "Request volume per function",
-    "Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN (Analytics Read) in your .dev.vars to enable usage panels.",
+    "Analytics Engine reads need an account-scoped Cloudflare API token, which cannot be shipped to a browser. The host must pass studio.analyticsQuery — a runner that proxies the SQL through your worker — to enable these panels.",
     "Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards.",
     // Storage access rules view.
     "(whole bucket)",

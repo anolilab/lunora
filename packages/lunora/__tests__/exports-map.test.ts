@@ -34,6 +34,22 @@ describe("package.json exports-map integrity", () => {
         }
     });
 
+    // `it.each([])` registers ZERO tests and still reports green. `conditionalEntries` keeps only
+    // object-valued entries, so flipping any subpath to the (perfectly valid) string shorthand
+    // `"./server": "./dist/server.mjs"` empties it and silently deletes all three gates below.
+    it("keeps every subpath conditional, so the per-subpath gates below actually register", () => {
+        expect.assertions(3);
+
+        const shorthand = Object.entries(packageJson.exports)
+            .filter(([subpath, value]) => subpath !== "./package.json" && typeof value !== "object")
+            .map(([subpath]) => subpath);
+
+        expect(shorthand).toStrictEqual([]);
+        expect(conditionalEntries).toHaveLength(Object.keys(packageJson.exports).length - 1);
+        // Floor: the load-bearing subpaths codegen emits against must each contribute a case.
+        expect(conditionalEntries.length).toBeGreaterThanOrEqual(9);
+    });
+
     it.each(conditionalEntries)("%s resolves to real files in dist", (subpath, entry) => {
         expect.assertions(2);
 

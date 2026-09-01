@@ -1815,6 +1815,17 @@ interface RelationDefinition {
 type RestCacheConfig = RestCachePolicy;
 ```
 
+### `RetryPolicy` (interface)
+
+```ts
+interface RetryPolicy {
+    backoff?: "exponential" | "linear";
+    baseMs?: number;
+    maxAttempts?: number;
+    maxMs?: number;
+}
+```
+
 ### `RlsOptions` (interface)
 
 ```ts
@@ -1856,10 +1867,12 @@ interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+    functionPath?: string;
     id: string;
+    pool?: string;
     scheduledFor: number;
     shardKey?: string;
+    workflow?: string;
 }
 ```
 
@@ -1870,10 +1883,14 @@ interface ScheduledJob {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+    functionPath?: string;
     id: string;
+    instanceName?: string;
+    pool?: string;
+    retry?: RetryPolicy;
     scheduledFor: number;
     shardKey?: string;
+    workflow?: string;
 }
 ```
 
@@ -4728,6 +4745,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `RestCacheConfig` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RetryPolicy` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
