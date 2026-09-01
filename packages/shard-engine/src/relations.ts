@@ -87,6 +87,31 @@ const fanOutScalarCounts = async (
     return new Map(pairs);
 };
 
+/**
+ * Parent keys above which a capped relation stops fanning out and goes back to
+ * one batched read plus a post-fetch slice.
+ *
+ * The fan-out is the only shape that can bound a per-parent `limit` (see
+ * `loadMany`), but it costs one read per parent, and on a `fetcher` backed by
+ * D1 or Hyperdrive every read is a Workers SUBREQUEST. Those are capped per
+ * request — 1000 paid, 50 free — and exceeding the cap is a hard failure, not a
+ * slow page: `findMany({ limit: 200, with: { comments: { limit: 3 } } })` would
+ * spend 200 of them on one relation, and a nested `with` multiplies.
+ *
+ * 32 is picked off the FREE-tier cap, not the paid one, and it is deliberately
+ * below the width the fan-out was measured at (100 parents, 62x): a page wider
+ * than this gives the speed-up back rather than risk a hard failure, because a
+ * slow page beats one that cannot run. Both branches return the same rows — the
+ * batched one over-fetches and slices, which is the behaviour that shipped
+ * before the fan-out — so what is traded away is the tightness of the bound,
+ * never correctness.
+ *
+ * The bound also contains the nesting: a level-2 fan-out sees at most
+ * `MAX_FANOUT_READS * cap` parents, so a large `cap` puts the inner level over
+ * the threshold and back onto one read instead of multiplying.
+ */
+const MAX_FANOUT_READS = 32;
+
 /** Distinct, non-nullish values of `field` across `rows`, preserving first-seen order. */
 const distinctValues = (rows: Record<string, unknown>[], field: string): unknown[] => {
     const seen = new Set<unknown>();
@@ -194,37 +219,72 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             return;
         }
 
-        const fkFilter: WhereInput = { [relation.field]: { in: referenceValues } };
-        const where: WhereInput = nested.where ? { AND: [nested.where, fkFilter] } : fkFilter;
+        const cap = typeof nested.limit === "number" ? Math.max(0, Math.floor(nested.limit)) : undefined;
+
         // RLS: the child table's read policy rides `baseWhere` (same as a
         // top-level read); `relationBaseWhere` threads on for nested `with`.
-        const { page } = await fetcher(relation.table, {
-            baseWhere: relationBaseWhere?.(relation.table),
-            orderBy: nested.orderBy,
-            relationBaseWhere,
-            relationMask,
-            where,
-            with: nested.with,
-        });
+        const fetchWhere = async (where: WhereInput, limit: number | undefined): Promise<Record<string, unknown>[]> => {
+            const { page } = await fetcher(relation.table, {
+                baseWhere: relationBaseWhere?.(relation.table),
+                limit,
+                orderBy: nested.orderBy,
+                relationBaseWhere,
+                relationMask,
+                where: nested.where ? { AND: [nested.where, where] } : where,
+                with: nested.with,
+            });
+
+            return page;
+        };
+
+        /**
+         * `with: { rel: { limit: n } }` bounds the fetch, not just the result.
+         *
+         * One batched `IN (...)` read cannot: a single `LIMIT` over the whole
+         * batch has no way to give each parent its own n — the first parent's
+         * children would consume the budget and later parents would come back
+         * empty. So a capped relation fans out one bounded read per parent key
+         * instead, in parallel, the same shape `fanOutScalarCounts` already uses
+         * for `_count` on the backends whose grouped count has to degrade.
+         *
+         * Slicing after an unbounded fetch (what this did) meant a 100-parent
+         * page asking for 5 children each materialized EVERY child of all 100
+         * parents and threw away all but 500 rows — unbounded in exactly the way
+         * a `limit` reads as preventing.
+         *
+         * ponytail: P bounded reads instead of 1 unbounded one, and only up to
+         * {@link MAX_FANOUT_READS} of them. A window function
+         * (`ROW_NUMBER() OVER (PARTITION BY fk ...)`) would do it in one, but the
+         * injected `fetcher` is a `findMany`-shaped interface with no way to say
+         * that — which is the point at which it would be worth widening.
+         */
+        const pages =
+            cap === undefined || referenceValues.length > MAX_FANOUT_READS
+                ? [await fetchWhere({ [relation.field]: { in: referenceValues } }, undefined)]
+                : await Promise.all(referenceValues.map(async (value) => (cap === 0 ? [] : fetchWhere({ [relation.field]: value }, cap))));
 
         const groups = new Map<unknown, Record<string, unknown>[]>();
 
-        for (const child of masked(relation.table, page)) {
-            const key = child[relation.field];
-            const group = groups.get(key);
+        for (const page of pages) {
+            for (const child of masked(relation.table, page)) {
+                const key = child[relation.field];
+                const group = groups.get(key);
 
-            if (group) {
-                group.push(child);
-            } else {
-                groups.set(key, [child]);
+                if (group) {
+                    group.push(child);
+                } else {
+                    groups.set(key, [child]);
+                }
             }
         }
-
-        const cap = typeof nested.limit === "number" ? Math.max(0, Math.floor(nested.limit)) : undefined;
 
         for (const parent of parents) {
             const group = groups.get(parent[relation.references]) ?? [];
 
+            // Still sliced: a fan-out read is already bounded, but the batched
+            // branch is not, and a cross-shard fetcher concatenates per-shard
+            // pages (see this module's ordering caveat) so its `limit` is a
+            // per-shard bound rather than a global one.
             parent[name] = projectChildren(cap === undefined ? group : group.slice(0, cap), nested);
         }
     };

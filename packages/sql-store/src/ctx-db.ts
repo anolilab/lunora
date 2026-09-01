@@ -90,6 +90,7 @@ import {
     rankTableName,
     readAggregateValue,
     relationHooks,
+    renderSql,
     resolveRankPartition,
     resolveRankSeekTuple,
     resolveRelationPredicates,
@@ -177,10 +178,11 @@ const nullsPlacement = (dialect: SqlDialect, key: { direction?: string; nullable
  * unless an id field is already ordered (keeps paging deterministic).
  *
  * The tiebreak follows the last key's direction, via the shared
- * `tiebreakDirectionFor`. This backend does not append sort keys to its declared
- * indexes the way the DO does, so it gains nothing directly — but it shares
- * `buildSeekWhere`, and a cursor seek that disagrees with its own ORDER BY about
- * tie direction skips or repeats rows at a page boundary where the keys tie.
+ * `tiebreakDirectionFor`. Declared indexes here now carry the same
+ * `(<fields>, _creationTime, id)` sort keys the DO builds (see
+ * `indexSortKeys` below), and `normalizeOrderKeys` splices `_creationTime` in
+ * ahead of the tiebreak, so an ordered read is an index walk on this backend
+ * too — a single direction throughout is what keeps it one.
  *
  * NULL placement is the other half of that agreement — see {@link nullsPlacement}.
  */
@@ -739,6 +741,91 @@ const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables
     return sql.join([...frameworkColumns, ...fieldColumns], sql`, `);
 };
 
+/**
+ * The default total order every read here ends with, appended to a declared
+ * index so the index can answer the sort instead of the engine sorting every
+ * match into a temp B-tree.
+ *
+ * Same defect, same fix, as `INDEX_SORT_KEYS` in `@lunora/shard-engine`'s
+ * `ctx-db-migrations.ts` — this backend simply never got it. `compileOrderBySql`
+ * below used to say so in its own doc. Measured on `node:sqlite`, 50k rows,
+ * `WHERE status = ? ORDER BY _creationTime, id LIMIT 21`: 134.0us against a
+ * fields-only index, 11.3us with the sort keys on it, and the `USE TEMP B-TREE
+ * FOR ORDER BY` step disappears from the plan.
+ *
+ * NOT appended to a UNIQUE index: `(email, _creationTime, id)` is unique for
+ * every row, so the constraint would silently stop rejecting duplicates — data
+ * corruption rather than a slow query. Same split as the DO twin.
+ */
+const indexSortKeys = (dialect: SqlDialect): SQL | undefined => {
+    // Not on an engine that needs a key prefix to index text. MySQL declares
+    // `id VARCHAR(768)` — 768 utf8mb4 characters is 3072 bytes, which is exactly
+    // InnoDB's whole-index key limit on its own — so appending it to ANY other
+    // column raises ER_TOO_LONG_KEY and the migration fails outright. Prefixing
+    // it (`id(191)`) would create, but MySQL cannot satisfy an ORDER BY from a
+    // prefixed column, so the index would cost writes and buy nothing. The
+    // engine that actually backs `.global()` is D1 (SQLite); Postgres indexes
+    // text directly and gets the fix too.
+    if (dialect.indexKeyPrefix?.("string") !== undefined) {
+        return undefined;
+    }
+
+    return sql`${columnRefSql("_creationTime")}, ${columnRefSql("id")}`;
+};
+
+/**
+ * Drop `name` when the engine already holds an index by that name built from a
+ * DIFFERENT column list.
+ *
+ * `CREATE INDEX IF NOT EXISTS` does not replace a differing definition and does
+ * not complain, so a database provisioned before {@link indexSortKeys} existed
+ * would keep its filter-only index forever and never see the improvement. The
+ * DO twin (`dropIndexIfShapeChanged`) exists for exactly this.
+ *
+ * SQLite only — that is the engine `.global()` tables run on (D1), and it is the
+ * one whose catalog echoes the CREATE statement back verbatim, so the comparison
+ * is a string compare rather than a per-engine column-list reconstruction. On
+ * Postgres/MySQL a pre-existing index of the old shape is left alone: the new
+ * shape reaches fresh databases, and an existing one keeps working, slower.
+ */
+const dropIndexIfShapeChanged = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    spec: { columns: SQL; name: string; table: string; unique: boolean },
+): Promise<void> => {
+    if (dialect.name !== "sqlite") {
+        return;
+    }
+
+    const held = await queryAll(exec, dialect, sql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${spec.name} AND tbl_name = ${spec.table}`);
+    const current = held[0]?.["sql"];
+
+    // No row, or an implicit index the engine created for a constraint (`sql` is
+    // NULL there) — nothing of ours to replace.
+    if (typeof current !== "string") {
+        return;
+    }
+
+    // Compare the parenthesised column list rather than the whole statement, so
+    // this stays insensitive to how the surrounding DDL is spelled.
+    const columnsOf = (statement: string): string | undefined => {
+        const open = statement.indexOf("(");
+
+        return open === -1 ? undefined : statement.slice(open, statement.lastIndexOf(")") + 1);
+    };
+
+    const unique = spec.unique ? sql`UNIQUE ` : sql``;
+    const wanted = columnsOf(
+        renderSql(dialect.name, sql`CREATE ${unique}INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`).sql,
+    );
+
+    if (wanted === undefined || wanted === columnsOf(current)) {
+        return;
+    }
+
+    await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(spec.name)}`);
+};
+
 /** Create a global table's declared secondary indexes and its synthesized `.unique()` column indexes. */
 const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
     // Index column reference as drizzle SQL, with a key prefix where the engine
@@ -753,19 +840,34 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
         return prefix === undefined ? reference : sql`${reference}(${sql.raw(String(prefix))})`;
     };
 
+    const sortKeys = indexSortKeys(dialect);
+
     for (const index of definition.indexes) {
-        const expressions = sql.join(
+        const fields = sql.join(
             index.fields.map((field) => indexRef(field)),
             sql`, `,
         );
-
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await createIndexIfNotExists(exec, dialect, {
-            columns: expressions,
+        const unique = index.unique ?? false;
+        const spec = {
+            columns: unique || sortKeys === undefined ? fields : sql`${fields}, ${sortKeys}`,
             name: `${tableName}_${index.name}`,
             table: tableName,
-            unique: index.unique ?? false,
-        });
+            unique,
+        };
+
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+        await dropIndexIfShapeChanged(exec, dialect, spec);
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+        await createIndexIfNotExists(exec, dialect, spec);
+    }
+
+    // The DEFAULT total order, for the reads that name no index at all — a bare
+    // `findMany({ limit })` or `paginate()`. The table above declares only `id`
+    // as its primary key, so nothing indexed `ORDER BY _creationTime, id` and the
+    // engine read the whole table into a temp B-tree to return the first page.
+    // The DO twin creates the same index on every row table.
+    if (sortKeys !== undefined) {
+        await createIndexIfNotExists(exec, dialect, { columns: sortKeys, name: `${tableName}__by_creation`, table: tableName, unique: false });
     }
 
     // `.unique()` columns synthesize a UNIQUE index so the engine enforces the

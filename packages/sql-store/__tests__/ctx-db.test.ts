@@ -1069,3 +1069,138 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
         expect(plain).not.toMatch(/\(191\)/u);
     });
 });
+
+/**
+ * Declared indexes on a global table now carry the default sort keys, the way
+ * `@lunora/shard-engine`'s `INDEX_SORT_KEYS` has on the DO side — this backend
+ * simply never got the fix, and the ORDER BY builder's own doc used to say so.
+ *
+ * An index on the filter columns ALONE cannot satisfy `ORDER BY _creationTime,
+ * id`, so the engine reads every matching row into a temp B-tree to return a
+ * page. Measured on `node:sqlite`, 50k rows, 1k per key:
+ *
+ * ```
+ * WHERE status = ? ORDER BY _creationTime, id LIMIT 21
+ *   fields-only index   140.9us  SEARCH (status=?) | USE TEMP B-TREE FOR ORDER BY
+ *   + sort keys          19.6us  SEARCH (status=?)
+ * unfiltered, same page
+ *   no default index   1649.9us  SCAN notes | USE TEMP B-TREE FOR ORDER BY
+ *   + __by_creation      21.2us  SCAN notes USING INDEX notes__by_creation
+ * ```
+ *
+ * Skipped on an engine that needs a key prefix to index text (MySQL): `id` is
+ * `VARCHAR(768)` there, which is InnoDB's whole-index key limit on its own, so
+ * appending it to another column fails `CREATE INDEX` with ER_TOO_LONG_KEY.
+ */
+describe("global table index sort keys", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const indexedSchema: SchemaLike = {
+        tables: {
+            posts: {
+                indexes: [
+                    { fields: ["status"], name: "by_status" },
+                    { fields: ["slug"], name: "by_slug", unique: true },
+                ],
+                shape: { slug: col("string"), status: col("string"), title: col("string") },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
+
+    /** Provision the schema (migrations run lazily on the first read) and return the DDL SQLite kept for `name`. */
+    const provisionedIndex = async (name: string): Promise<string> => {
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: indexedSchema });
+
+        await writer.findMany("posts", { limit: 1 });
+
+        const rows = await harness.exec.all(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, [name]);
+        const ddl = rows[0]?.["sql"];
+
+        return typeof ddl === "string" ? ddl : "";
+    };
+
+    it("appends the sort keys to a declared index, and the default sort gets an index of its own", async () => {
+        expect.assertions(3);
+
+        await expect(provisionedIndex("posts_by_status")).resolves.toMatch(/"status".*"_creationTime".*"id"/su);
+        await expect(provisionedIndex("posts__by_creation")).resolves.toMatch(/"_creationTime".*"id"/su);
+
+        const plan = await harness.exec.all(`EXPLAIN QUERY PLAN SELECT * FROM "posts" WHERE "status" = ? ORDER BY "_creationTime" ASC, "id" ASC LIMIT 21`, [
+            "published",
+        ]);
+
+        expect(plan.map((step) => String(step["detail"])).join(" | ")).not.toContain("TEMP B-TREE");
+    });
+
+    it("skips the sort keys on an engine that must prefix its text index keys", async () => {
+        expect.assertions(2);
+
+        // MySQL declares `id VARCHAR(768)`: 768 utf8mb4 characters is 3072 bytes,
+        // exactly InnoDB's whole-index key limit, so `(status(191), _creationTime,
+        // id)` fails CREATE INDEX with ER_TOO_LONG_KEY and the migration takes the
+        // whole table with it. Prefixing `id` would create but buy nothing —
+        // MySQL cannot satisfy an ORDER BY from a prefixed column.
+        const statements: string[] = [];
+        const exec: SqlCtxExec = {
+            all: () => Promise.resolve([]),
+            run: (query) => {
+                statements.push(query);
+
+                return Promise.resolve();
+            },
+        };
+        const dialect: SqlDialect = { ...makeSqliteDialect("mysql"), indexKeyPrefix: (kind) => (kind === "string" ? 191 : undefined) };
+        const writer = createSqlCtxDb({ clock: () => 1, dialect, exec, schema: indexedSchema });
+
+        await writer.findMany("posts", { limit: 1 });
+
+        // `.every` over an empty list is vacuously true, so assert the statement
+        // was actually issued before asserting anything about its shape.
+        const declared = statements.filter((query) => query.includes("posts_by_status"));
+
+        expect(declared).toHaveLength(1);
+        expect(`${String(declared[0])} ${statements.filter((query) => query.includes("__by_creation")).join(" ")}`).not.toContain("_creationTime");
+    });
+
+    it("leaves a UNIQUE index alone, so the constraint keeps rejecting duplicates", async () => {
+        expect.assertions(2);
+
+        // `(slug, _creationTime, id)` is unique for every row, so appending the
+        // sort keys here would silently stop the constraint working — data
+        // corruption rather than a slow query.
+        await expect(provisionedIndex("posts_by_slug")).resolves.not.toMatch(/_creationTime/u);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: indexedSchema });
+
+        await writer.insert("posts", { slug: "a", status: "draft", title: "t" });
+
+        // The store maps the engine's breach to its own ConflictError, which is
+        // the observable proof the UNIQUE index is still enforcing.
+        await expect(writer.insert("posts", { slug: "a", status: "draft", title: "u" })).rejects.toThrow(/unique constraint violation/iu);
+    });
+
+    it("replaces an index a previous version provisioned without the sort keys", async () => {
+        expect.assertions(2);
+
+        // `CREATE INDEX IF NOT EXISTS` is a no-op against an index that exists
+        // with a DIFFERENT definition, so without an explicit drop an already
+        // provisioned database would keep the old shape forever and silently
+        // miss the improvement. Simulate that database.
+        await harness.exec.run(`CREATE TABLE "posts" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "slug" TEXT, "status" TEXT, "title" TEXT)`, []);
+        await harness.exec.run(`CREATE INDEX "posts_by_status" ON "posts" ("status")`, []);
+
+        const before = await harness.exec.all(`SELECT sql FROM sqlite_master WHERE name = 'posts_by_status'`, []);
+
+        expect(String(before[0]?.["sql"])).not.toMatch(/_creationTime/u);
+        await expect(provisionedIndex("posts_by_status")).resolves.toMatch(/_creationTime/u);
+    });
+});

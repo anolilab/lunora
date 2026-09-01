@@ -1218,6 +1218,42 @@ const compileOrderBySql = (keys: OrderKey[]): SQL => {
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
 
 /**
+ * The index fields a staged read still has to ORDER BY: `indexFields` minus the
+ * LEADING run the range builder pins with `.eq()`.
+ *
+ * A pinned column holds one value across every row the read can return, so
+ * ordering by it is semantically a no-op — but SQLite does not treat it as one.
+ * It will not drop an equality-pinned term from an ORDER BY over an EXPRESSION
+ * index, so `WHERE json_extract(...) = ? ORDER BY json_extract(...), _creationTime, id`
+ * still sorts every match into a temp B-tree even though the index is built in
+ * exactly that order. Measured on `node:sqlite`, 50k rows, 1k per key:
+ *
+ * ```
+ * ORDER BY <expr> ASC, _creationTime ASC, id ASC   63.4us  SEARCH (<expr>=?) | USE TEMP B-TREE FOR ORDER BY
+ * ORDER BY _creationTime ASC, id ASC               11.2us  SEARCH (<expr>=?)
+ * ORDER BY <expr> DESC, _creationTime DESC, id DESC 266.0us SEARCH (<expr>=?) | USE TEMP B-TREE FOR ORDER BY
+ * ORDER BY _creationTime DESC, id DESC              16.1us SEARCH (<expr>=?)
+ * ```
+ *
+ * Only a LEADING run is dropped: `.withIndex("by_channel_author", q => q.eq("channelId", c))`
+ * over a two-field index leaves `authorId` unpinned, and the order across
+ * distinct authors is the caller's, so it has to stay in the clause.
+ *
+ * A range (`.gt()`/`.lte()`) pins nothing — its column takes many values within
+ * the read — so it does not qualify.
+ */
+const unpinnedIndexFields = (stage: QueryStage): ReadonlyArray<string> => {
+    const pinned = new Set(stage.sqlConditions.filter((condition) => condition.comparator === "=").map((condition) => condition.field));
+    let start = 0;
+
+    while (start < stage.indexFields.length && pinned.has(stage.indexFields[start] ?? "")) {
+        start += 1;
+    }
+
+    return stage.indexFields.slice(start);
+};
+
+/**
  * Order keys for a paginated stage: the staged index, else creation order, in the
  * staged direction.
  *
@@ -1228,10 +1264,11 @@ const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte",
  */
 const paginateOrderKeys = (stage: QueryStage, shape: Record<string, ValidatorLike>): OrderKey[] => {
     const direction = stage.order;
+    const orderFields = unpinnedIndexFields(stage);
 
-    if (stage.indexFields.length > 0) {
+    if (orderFields.length > 0) {
         return normalizeOrderKeys(
-            stage.indexFields.map((field) => {
+            orderFields.map((field) => {
                 return { [field]: direction };
             }),
             shape,
@@ -1477,7 +1514,9 @@ const buildReader = (
         // `.filter()` runs on top, which narrows *within* that window rather than
         // widening the read.
         const engineLimit = resolveSearchScan(filtered ? undefined : limit);
-        const scored = isFtsAvailable(sql)
+        const viaFts = isFtsAvailable(sql);
+
+        const scored = viaFts
             ? searchViaFts(sql, tableName, search, engineLimit, scopeCondition)
             : searchViaScan(sql, tableName, search, engineLimit, scopeCondition);
 
@@ -1511,7 +1550,11 @@ const buildReader = (
     };
 
     const buildOrderClause = (): SQL => {
-        const orderFields = stage.indexFields.length > 0 ? stage.indexFields : ["_creationTime"];
+        // The same key list `paginateOrderKeys` builds, so `.collect()` and
+        // `.paginate()` return tied rows in the same order — see
+        // `unpinnedIndexFields` for why an `.eq()`-pinned field is dropped.
+        const unpinned = unpinnedIndexFields(stage);
+        const orderFields = unpinned.length > 0 ? unpinned : ["_creationTime"];
         const orderDirection = stage.order === "desc" ? "DESC" : "ASC";
         const parts = orderFields.map((field) => dsql`${jsonPathSql(field)} ${dsql.raw(orderDirection)}`);
 

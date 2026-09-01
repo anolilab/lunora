@@ -338,6 +338,33 @@ export const runShardMigrations = (
             )`,
         );
 
+        // The DEFAULT total order, `_creationTime ASC, id ASC`, which every read
+        // that names no `.withIndex()` and no `orderBy` sorts by — `paginate()`,
+        // `findMany({ limit })`, `.first()`, and every generated REST list
+        // endpoint whose caller sends no filter. The row table above declares
+        // only `id TEXT PRIMARY KEY`, so nothing indexed that order and SQLite
+        // read the WHOLE table into a temp B-tree to return the first page:
+        // `SCAN messages | USE TEMP B-TREE FOR ORDER BY`, 1317.9us over 50k rows
+        // against 7.3us on an index walk, and O(table) on every page after the
+        // first rather than O(page).
+        //
+        // Both columns are stored (not `json_extract`) so this is an ordinary
+        // btree; it is also what makes the descending read an index walk
+        // backwards. See `INDEX_SORT_KEYS` for the DECLARED-index twin of the
+        // same problem — this covers the reads that declare no index at all.
+        //
+        // Cold-start cost: an existing shard builds it once, on the first wake
+        // after deploy, inside this migration. Measured on `node:sqlite` over a
+        // 1,000,000-row table: 369ms, one sort of 1M `(_creationTime, id)` pairs
+        // — both stored columns, so no JSON is decoded. Every request that wakes
+        // the shard thereafter pays nothing.
+        //
+        // Left non-incremental deliberately. A resumable build would need a
+        // partial index plus a persisted cursor, and would leave the reads this
+        // exists for on the O(table) plan for as long as it ran — which on a
+        // table big enough to care is the expensive state, not the build.
+        runDrizzle(sql, createIndexSql(`${tableName}__by_creation`, tableName, INDEX_SORT_KEYS, false));
+
         migrateSecondaryIndexes(sql, tableName, definition);
         migrateSearchIndexes(sql, tableName, definition);
         migrateGeoIndexes(sql, tableName, definition);
