@@ -225,7 +225,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `LunoraErrorCode` (type)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `LunoraProvider` (const)
 
@@ -1068,6 +1068,12 @@ interface CustomerPortalButtonProps extends RedirectButtonOwnProps {
 }
 ```
 
+### `ProviderId` (type)
+
+```ts
+type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
+```
+
 ### `RedirectTarget` (interface)
 
 ```ts
@@ -1089,9 +1095,10 @@ interface Subscription {
     readonly cancelAtPeriodEnd: boolean;
     readonly createdAt: number;
     readonly currentPeriodEnd?: number;
+    readonly currentPeriodStart?: number;
     readonly id: string;
     readonly priceId: string;
-    readonly provider: "polar" | "stripe";
+    readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
     readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";

@@ -984,7 +984,7 @@ interface ShardInputProps {
 
 ```ts
 interface ShardMetrics {
-    cache: CacheStats | null;
+    cache?: CacheStats | null;
     databaseSize: null | number;
     errors: number;
     requests: number;
@@ -1025,7 +1025,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `Studio` (const)
 
 ```ts
-const Studio: ({ basePath, chrome, dataEditable, functions, i18n, initialShardKey, locale, openApiSpec, openRpcSpec, runAsIdentity, schemaEditable, scheduledCancel, scheduledCron, scheduledLoad }: StudioProps) => ReactElement;
+const Studio: ({ i18n, locale, ...shellProps }: StudioProps) => ReactElement;
 ```
 
 ### `StudioApp` (const)
@@ -1075,6 +1075,7 @@ interface StudioI18nProviderProps {
 
 ```ts
 interface StudioProps {
+    readonly analyticsQuery?: AnalyticsPanelProps["runQuery"];
     readonly basePath?: string;
     readonly chrome?: StudioChrome;
     readonly dataEditable?: boolean;

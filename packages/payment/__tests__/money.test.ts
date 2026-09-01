@@ -96,6 +96,34 @@ describe("money", () => {
         expect(thirds.reduce((total, part) => total + part.minorUnits, 0n)).toBe(1000n);
     });
 
+    it("distributes the remainder to the earliest parts, not the last", () => {
+        expect.assertions(3);
+
+        // WHICH part absorbs the extra minor unit is the property, not just the sum: seat/proration
+        // math bills a specific member for it. Floor-division with the remainder dumped on the last
+        // part sums identically while charging the wrong member.
+        expect(allocateMoney(money(1000, "USD"), [1n, 1n, 1n]).map((part) => part.minorUnits)).toStrictEqual([334n, 333n, 333n]);
+        // Two spare units go to the first two parts, in order.
+        expect(allocateMoney(money(1000, "USD"), [1n, 1n, 1n, 1n, 1n, 1n]).map((part) => part.minorUnits)).toStrictEqual([167n, 167n, 167n, 167n, 166n, 166n]);
+        // Uneven ratios: the remainder still lands on the earliest part.
+        expect(allocateMoney(money(1000, "USD"), [3n, 2n, 1n]).map((part) => part.minorUnits)).toStrictEqual([501n, 333n, 166n]);
+    });
+
+    it("honors three-decimal currencies (KWD/BHD/…), which default to two", () => {
+        expect.assertions(4);
+
+        // Intl separates the code from the amount with U+00A0; normalise so the assertion pins the digits.
+        const formatted = (minorUnits: number, currency: string): string => formatMoney(money(minorUnits, currency)).replaceAll("\u00A0", " ");
+
+        // 1000 minor units of KWD is 1.000 dinar, not 10.00 — treating it as two-decimal makes every
+        // Gulf-currency amount wrong by a factor of ten.
+        expect(formatted(1000, "KWD")).toBe("KWD 1.000");
+        expect(formatted(1000, "BHD")).toBe("BHD 1.000");
+        expect(formatted(1234, "JOD")).toBe("JOD 1.234");
+        // Still not zero-decimal.
+        expect(isZeroDecimalCurrency("KWD")).toBe(false);
+    });
+
     it("round-trips the JSON wire form without precision loss", () => {
         expect.assertions(2);
 

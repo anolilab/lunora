@@ -2320,10 +2320,12 @@ interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+    functionPath?: string;
     id: string;
+    pool?: string;
     scheduledFor: number;
     shardKey?: string;
+    workflow?: string;
 }
 ```
 
@@ -4272,7 +4274,7 @@ const readExternalSourceBaseline: (sql: SqlExec, table: string, columns?: Readon
 ### `readGlobalShapeSnapshot` (const)
 
 ```ts
-const readGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: string) => Map<string, string>;
+const readGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: string) => Map<string, string> | undefined;
 ```
 
 ### `readIdempotent` (const)

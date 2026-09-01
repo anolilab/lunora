@@ -125,7 +125,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `LunoraErrorCode` (type)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `LunoraProvider` (const)
 

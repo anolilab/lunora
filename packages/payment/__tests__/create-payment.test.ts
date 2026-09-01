@@ -129,6 +129,49 @@ describe("createPayment", () => {
         await expect(keyFor("https://a/x:y", "z")).resolves.toBe(collideA);
     });
 
+    it("varies the checkout idempotency key with every request-shaping field", async () => {
+        expect.assertions(8);
+
+        const base = {
+            cancelUrl: "https://x/cancel",
+            mode: "subscription" as const,
+            priceId: "price_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        };
+        const keyFor = async (overrides: Partial<Parameters<ReturnType<typeof createPayment>["createCheckout"]>[0]> = {}): Promise<string> => {
+            let forwarded = "";
+            const adapter = fakeAdapter({
+                createCheckout: async (input) => {
+                    forwarded = input.idempotencyKey ?? "";
+
+                    return { id: "cs_1", provider: "stripe", url: "https://pay.test/ok" };
+                },
+            });
+            const payment = createPayment({ adapter, store: new MemoryPaymentStore() });
+
+            await payment.createCheckout({ ...base, ...overrides });
+
+            return forwarded;
+        };
+
+        const baseline = await keyFor();
+
+        // referenceId is the tenant discriminator: two users buying the SAME single-plan checkout
+        // (identical price, mode, URLs) must not share a key, or the provider's idempotency window
+        // replays user A's session URL to user B.
+        await expect(keyFor({ referenceId: "user_2" })).resolves.not.toBe(baseline);
+        await expect(keyFor({ priceId: "price_2" })).resolves.not.toBe(baseline);
+        await expect(keyFor({ mode: "payment" })).resolves.not.toBe(baseline);
+        await expect(keyFor({ quantity: 2 })).resolves.not.toBe(baseline);
+        await expect(keyFor({ successUrl: "https://x/ok2" })).resolves.not.toBe(baseline);
+        await expect(keyFor({ cancelUrl: "https://x/cancel2" })).resolves.not.toBe(baseline);
+        await expect(keyFor({ metadata: { plan: "pro" } })).resolves.not.toBe(baseline);
+
+        // An identical repeat still dedupes onto the same key.
+        await expect(keyFor()).resolves.toBe(baseline);
+    });
+
     it("enforces authorization on the referenceId", async () => {
         expect.assertions(1);
 
@@ -418,6 +461,37 @@ describe("createPayment", () => {
         const stored = await store.getPaymentSession("stripe", "pi_1");
 
         expect(stored?.capturedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("derives a distinct capture idempotency key per amount so partial captures don't collide", async () => {
+        expect.assertions(4);
+
+        const keys: string[] = [];
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession({ ...paymentSession("user_1"), capturedAmount: money(0, "USD"), state: "authorized" });
+
+        const adapter = fakeAdapter({
+            capturePayment: async (input) => {
+                keys.push(input.idempotencyKey ?? "");
+
+                return { ...paymentSession("user_1"), capturedAmount: input.amount ?? money(1000, "USD"), referenceId: "" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.capturePayment({ amount: money(300, "USD"), sessionId: "pi_1" });
+        await payment.capturePayment({ amount: money(700, "USD"), sessionId: "pi_1" });
+        await payment.capturePayment({ amount: money(300, "USD"), sessionId: "pi_1" });
+        // No amount at all ("full") is a fourth, distinct request shape.
+        await payment.capturePayment({ sessionId: "pi_1" });
+
+        // Two partial captures on one authorization ($300 then $700) sharing a key makes the provider
+        // replay the first and silently never collect the second.
+        expect(keys[0]).not.toBe(keys[1]);
+        expect(keys[0]).toBe(keys[2]);
+        expect(keys[3]).not.toBe(keys[0]);
+        expect(keys[0]).toMatch(/^capture_payment:stripe:[0-9a-f]{64}$/);
     });
 
     it("cancels an owned payment through the facade and syncs the store", async () => {

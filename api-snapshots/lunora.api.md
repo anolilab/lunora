@@ -685,6 +685,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RetryPolicy` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RlsOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1497,7 +1501,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `LunoraErrorCode` (type)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `MutationCallOptions` (interface)
 
@@ -1628,6 +1632,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `ScheduleRecord` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ScheduleRetryPolicy` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -5371,6 +5379,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RetryPolicy` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RlsOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7174,6 +7186,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RestCacheConfig` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RetryPolicy` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
