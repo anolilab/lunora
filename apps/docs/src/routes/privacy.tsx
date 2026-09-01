@@ -283,7 +283,44 @@ const RouteComponent = () => (
             have processed your request). Mandatory statutory retention periods remain unaffected.
         </p>
 
-        <h2>5. Newsletter</h2>
+        <h2>5. Analysis tools</h2>
+
+        <h3>PostHog</h3>
+        <p>
+            This website uses PostHog, a web analysis service. The provider is PostHog, Inc., 965 Mission Street, Suite 425, San Francisco, CA 94103, USA
+            (hereinafter &ldquo;PostHog&rdquo;).
+        </p>
+        <p>
+            PostHog enables us to analyze the use of our website. It records, among other things, the pages you visit, the interactions you perform on them
+            (e.g., clicks on links and buttons), the referring page, your approximate location derived from your IP address (country and region level), and
+            technical information about your browser, operating system and device. If an error occurs while you are using the website, PostHog also records a
+            report about that error so that we can fix it. We use this information to understand which content is useful and to improve this website.
+        </p>
+        <p>
+            The use of PostHog is based exclusively on your consent (Art. 6(1)(a) GDPR and &sect; 25 (1) TDDDG). You give this consent via the consent banner
+            displayed on this website and can revoke it at any time with effect for the future by changing your selection via the consent settings link in the
+            footer of this website. Until you consent, and if you decline or later revoke your consent, PostHog neither stores information on your device nor
+            reads information from it; in that case no analysis data is transmitted at all.
+        </p>
+        <p>
+            The data is collected via our own domain (a so-called reverse proxy) and processed in PostHog&rsquo;s European infrastructure. PostHog acts as a
+            processor for us on the basis of a data processing agreement (Art. 28 GDPR). Insofar as data is nevertheless accessed from the USA, the transfer is
+            safeguarded by the EU Standard Contractual Clauses.
+        </p>
+        <p>
+            The data collected is deleted once it is no longer required for our analysis purposes, at the latest in accordance with the retention periods
+            configured with the provider. For more information about how PostHog handles data, please see the provider&rsquo;s privacy policy at:{" "}
+            <a href="https://posthog.com/privacy" rel="noopener noreferrer" target="_blank">
+                https://posthog.com/privacy
+            </a>{" "}
+            and the data processing agreement at:{" "}
+            <a href="https://posthog.com/dpa" rel="noopener noreferrer" target="_blank">
+                https://posthog.com/dpa
+            </a>
+            .
+        </p>
+
+        <h2>6. Newsletter</h2>
 
         <h3>Newsletter data</h3>
         <p>
@@ -313,7 +350,7 @@ const RouteComponent = () => (
             <strong>You may object to the storage if your interests outweigh our legitimate interest.</strong>
         </p>
 
-        <h2>6. Plug-ins and Tools</h2>
+        <h2>7. Plug-ins and Tools</h2>
 
         <h3>Cloudflare Turnstile</h3>
         <p>
