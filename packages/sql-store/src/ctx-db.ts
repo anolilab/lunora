@@ -823,6 +823,32 @@ const dropIndexIfShapeChanged = async (
         return;
     }
 
+    // A UNIQUE index is dropped only once we know the new shape can actually be
+    // created. Dropping first and letting the follow-up `CREATE UNIQUE INDEX`
+    // fail on rows that are duplicates under the NEW column set leaves the table
+    // with no constraint at all — and the failed migration re-runs and re-fails
+    // on every wake, so the gap does not close on its own. Refusing here keeps
+    // the old constraint in force and names what has to be de-duplicated.
+    //
+    // There is a TOCTOU window between this probe and the create, which is
+    // acceptable: this runs at provisioning time, only when an index's declared
+    // fields actually changed, and losing the race costs a failed migration
+    // rather than a silently unprotected table.
+    if (spec.unique) {
+        const duplicates = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT ${spec.columns} FROM ${sql.identifier(spec.table)} GROUP BY ${spec.columns} HAVING COUNT(*) > 1 LIMIT 1`,
+        );
+
+        if (duplicates.length > 0) {
+            throw new LunoraError(
+                "INTERNAL",
+                `unique index "${spec.name}" on "${spec.table}" cannot be re-created with its new column list: existing rows are duplicates under it. De-duplicate the table with a data migration first; the previous index is left in place.`,
+            );
+        }
+    }
+
     await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(spec.name)}`);
 };
 

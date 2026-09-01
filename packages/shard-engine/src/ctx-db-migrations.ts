@@ -16,6 +16,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-migrations" mirrors its parent "ctx-db.ts" (the established public module name). */
 
+import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
@@ -119,6 +120,28 @@ const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: str
 
     if (wanted === undefined || held === undefined || wanted === held) {
         return;
+    }
+
+    // A UNIQUE index is dropped only once the new shape is known to be
+    // creatable. Dropping first and letting the follow-up `CREATE UNIQUE INDEX`
+    // fail on rows that are duplicates under the NEW column list leaves the
+    // table with no constraint at all — and the failed migration re-runs and
+    // re-fails on every wake, so the gap never closes on its own. Refusing keeps
+    // the old constraint in force and names what has to be de-duplicated.
+    //
+    // Kept identical to the sql-store twin (`packages/sql-store/src/ctx-db.ts`)
+    // deliberately: the two already carry the same catalog-parsing logic, and a
+    // guard on one destructive DDL path but not the other is worse than the
+    // duplication.
+    if (unique) {
+        const duplicates = runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(tableName)} GROUP BY ${expressions} HAVING COUNT(*) > 1 LIMIT 1`);
+
+        if (duplicates.toArray().length > 0) {
+            throw new LunoraError(
+                "INTERNAL",
+                `unique index "${indexName}" on "${tableName}" cannot be re-created with its new column list: existing rows are duplicates under it. De-duplicate the table with a data migration first; the previous index is left in place.`,
+            );
+        }
     }
 
     runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(indexName)}`);

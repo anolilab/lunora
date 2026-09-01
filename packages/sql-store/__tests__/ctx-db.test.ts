@@ -1128,6 +1128,47 @@ describe("global table index sort keys", () => {
         return typeof ddl === "string" ? ddl : "";
     };
 
+    it("refuses to drop a UNIQUE index it cannot re-create, rather than leaving the table unprotected", async () => {
+        expect.assertions(2);
+
+        // Provision once so `posts_by_slug` exists as a UNIQUE index on `slug`.
+        await provisionedIndex("posts_by_slug");
+
+        // Two rows that are distinct under `slug` but DUPLICATES under the new
+        // column list. Written straight through the harness so the existing
+        // constraint does not reject them.
+        await harness.exec.run(`INSERT INTO "posts" ("id", "_creationTime", "slug", "status", "title") VALUES (?, ?, ?, ?, ?)`, ["p1", 1, "a", "draft", "t"]);
+        await harness.exec.run(`INSERT INTO "posts" ("id", "_creationTime", "slug", "status", "title") VALUES (?, ?, ?, ?, ?)`, ["p2", 2, "b", "draft", "t"]);
+
+        // Re-declare the same unique index over a DIFFERENT column, which the
+        // two rows above violate. Dropping first would remove the old constraint
+        // and then fail to create the new one, leaving no constraint at all —
+        // and the failed migration re-runs and re-fails on every wake.
+        const changed: SchemaLike = {
+            tables: {
+                posts: {
+                    indexes: [
+                        { fields: ["status"], name: "by_status" },
+                        { fields: ["status"], name: "by_slug", unique: true },
+                    ],
+                    shape: { slug: col("string"), status: col("string"), title: col("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: changed });
+
+        await expect(writer.findMany("posts", { limit: 1 })).rejects.toThrow(/cannot be re-created/u);
+
+        // The original constraint is still in force.
+        const rows = await harness.exec.all(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, ["posts_by_slug"]);
+
+        const held = rows[0]?.["sql"];
+
+        expect(typeof held === "string" ? held : "").toContain("slug");
+    });
+
     it("appends the sort keys to a declared index, and the default sort gets an index of its own", async () => {
         expect.assertions(3);
 

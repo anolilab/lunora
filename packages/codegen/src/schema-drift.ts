@@ -83,26 +83,6 @@ const byCanonicalForm = (a: FieldSnapshot, b: FieldSnapshot): number => {
  * `v.optional(v.string().unique())` records them on the inner validator,
  * `v.optional(v.string()).unique()` on the wrapper — so both nodes are read.
  */
-
-/**
- * Capture one column's full structural shape: its kind and optionality, plus
- * whatever the validator carries INSIDE — the `v.id` target, the array element,
- * the object properties, the record key/value, the literal, the union members —
- * and its column-level constraints.
- *
- * Recursive on purpose. A snapshot of only `{ kind, optional }` is byte-identical
- * across `v.id("users")` → `v.id("orgs")` and `v.array(v.string())` →
- * `v.array(v.bigint())`, so the gate saw no drift, the baseline saw no diff, and
- * the content hash did not move.
- *
- * Determinism: object properties are `sortKeys`-ordered and union members are
- * ordered canonically, so nothing here depends on the order the user happened to
- * declare things in.
- *
- * `.unique()` / `.nullable()` attach to whichever node the chain was applied to —
- * `v.optional(v.string().unique())` records them on the inner validator,
- * `v.optional(v.string()).unique()` on the wrapper — so both nodes are read.
- */
 const fieldSnapshotOf = (validator: ValidatorIR): FieldSnapshot => {
     const optional = validator.kind === "optional";
     const inner = optional ? validator.inner : undefined;
