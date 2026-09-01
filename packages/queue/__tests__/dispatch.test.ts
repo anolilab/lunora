@@ -561,6 +561,37 @@ describe("dispatchQueueBatch — poison message isolation (deterministic dispatc
         });
     });
 
+    it("logs the drop even with NO capture sink configured — the production shape", async () => {
+        expect.assertions(4);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+            const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+            // No `capture`: `shouldCaptureQueue(env)` needs an explicit
+            // `LUNORA_QUEUE_CAPTURE=1` or a dev-shaped `WORKER_ENV`, so a
+            // production deployment passes `undefined` and the capture record
+            // that describes the drop is never built. The ack is terminal — no
+            // retry, no DLQ — so without a log the message vanishes with no
+            // signal anywhere.
+            await expect(
+                dispatchQueueBatch(
+                    batch("q", [m1, m2]),
+                    { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                    { env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 404, "NOT_FOUND") },
+                ),
+            ).resolves.toBeUndefined();
+
+            expect(m2.acked).toBe(true);
+            expect(error).toHaveBeenCalledTimes(1);
+            expect(error.mock.calls[0]?.[0]).toContain("dropped message m2");
+        } finally {
+            error.mockRestore();
+        }
+    });
+
     it("keeps an explicit ack the handler already made and only retries the genuinely undecided message", async () => {
         expect.assertions(5);
 

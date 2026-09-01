@@ -54,9 +54,24 @@ class LogBuffer {
 
     private readonly capacity: number;
 
+    /** How many entries the ring has evicted since it was last cleared. */
+    private droppedCount = 0;
+
     public constructor(capacity: number = DEFAULT_CAPACITY) {
         // Guard against a zero/negative capacity silently disabling capture.
         this.capacity = capacity > 0 ? Math.trunc(capacity) : DEFAULT_CAPACITY;
+    }
+
+    /**
+     * Entries evicted for capacity since the last {@link LogBuffer.clear}.
+     *
+     * Without it a full ring is indistinguishable from a quiet instance that
+     * happened to log exactly `capacity` lines: the reader sees 500 entries
+     * either way and cannot tell whether 500 lines happened or 50,000 did. The
+     * count is what turns "the newest 500" into an honest statement.
+     */
+    public get dropped(): number {
+        return this.droppedCount;
     }
 
     /** Number of entries currently buffered. */
@@ -64,9 +79,10 @@ class LogBuffer {
         return this.buffer.length;
     }
 
-    /** Drop every buffered entry. */
+    /** Drop every buffered entry, including the eviction count. */
     public clear(): void {
         this.buffer.length = 0;
+        this.droppedCount = 0;
     }
 
     /**
@@ -87,6 +103,7 @@ class LogBuffer {
 
         if (this.buffer.length > this.capacity) {
             this.buffer.shift();
+            this.droppedCount += 1;
         }
     }
 }

@@ -459,6 +459,19 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
 
     if (attributed !== undefined) {
         resolveAttributedBatch(harness, attributed);
+
+        // Always log the drop. The ack above is terminal — no retry, no DLQ, no
+        // redelivery — and the capture record that describes it is only built
+        // when `options.capture` is wired, which needs an explicit
+        // `LUNORA_QUEUE_CAPTURE=1` or a dev-shaped `WORKER_ENV`. Without this
+        // line a production deployment discards the message with no signal
+        // anywhere: a rotated admin token silently stops the receipts and
+        // nothing says so.
+        // eslint-disable-next-line no-console -- last-resort operator signal for a dropped message; there is no injected logger on the dispatch path
+        console.error(
+            `@lunora/queue: dropped message ${attributed.id} on queue "${batch.queue}" (${entry.exportName}) — the handler failed it with a deterministic 4xx, so it was acked, not retried:`,
+            handlerError,
+        );
     }
 
     // `threw` stays truthful (the handler DID fail, and the records say so);

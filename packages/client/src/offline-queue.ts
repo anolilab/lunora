@@ -305,8 +305,8 @@ class OfflineQueue {
      *
      * The durable rewrite is remove-then-append because `PersistenceAdapter.append`
      * is an insert (the IndexedDB adapter's store has a unique index on `id`), not
-     * an upsert. Best-effort, like every other persistence call here: a failure
-     * leaves the record under its old stamp, which is exactly today's behaviour.
+     * an upsert — see {@link OfflineQueue.rewriteStamp}, which owns the failure
+     * handling that ordering forces.
      */
     public restampIdentity(from: string | null, to: string | null): void {
         for (const item of this.items) {
@@ -332,12 +332,13 @@ class OfflineQueue {
                 ...(this.version === undefined ? {} : { version: this.version }),
             };
 
-            this.persistence
-                .remove(id)
-                .then(async () => this.persistence?.append(record))
-                .catch((error: unknown) => {
-                    reportPersistenceError(this.onPersistenceError, "append", error, id);
-                });
+            this.rewriteStamp(id, record, from).catch((error: unknown) => {
+                // `rewriteStamp` reports and contains every failure it can see;
+                // this is the backstop for anything it cannot (an adapter that
+                // throws outside its own promise), and keeps the fire-and-forget
+                // call from floating.
+                reportPersistenceError(this.onPersistenceError, "append", error, id);
+            });
         }
     }
 
@@ -435,6 +436,52 @@ class OfflineQueue {
 
         this.items.length = 0;
         this.notifySize();
+    }
+
+    /**
+     * The durable half of {@link OfflineQueue.restampIdentity}: remove the record
+     * and re-append it under the new stamp, because `PersistenceAdapter.append`
+     * is an insert, not an upsert.
+     *
+     * That ordering has a window the naive version lost writes in. A failed
+     * `remove` is harmless — the record stands under its old stamp. A `remove`
+     * that SUCCEEDS followed by an `append` that fails leaves nothing durable at
+     * all, while the in-memory entry has already advanced: a reload before the
+     * next flush loses the write permanently. So the append failure is
+     * compensated by re-appending under the ORIGINAL stamp, which restores the
+     * documented "leaves the record under its old stamp" outcome (a replay under
+     * a stale stamp is rejected with `OFFLINE_IDENTITY_CHANGED` — recoverable
+     * and visible, unlike a silent loss).
+     *
+     * Each failure is reported under the operation that actually failed, not a
+     * hardcoded `"append"`.
+     */
+    private async rewriteStamp(id: string, record: PersistedMutation, from: string | null): Promise<void> {
+        const store = this.persistence;
+
+        if (!store) {
+            return;
+        }
+
+        try {
+            await store.remove(id);
+        } catch (error: unknown) {
+            reportPersistenceError(this.onPersistenceError, "remove", error, id);
+
+            return;
+        }
+
+        try {
+            await store.append(record);
+        } catch (error: unknown) {
+            reportPersistenceError(this.onPersistenceError, "append", error, id);
+
+            try {
+                await store.append({ ...record, identity: from });
+            } catch (rollbackError: unknown) {
+                reportPersistenceError(this.onPersistenceError, "append", rollbackError, id);
+            }
+        }
     }
 
     /**

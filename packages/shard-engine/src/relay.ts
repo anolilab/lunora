@@ -169,6 +169,31 @@ interface RelayShapeSubscribe {
 }
 
 /**
+ * A relay tells the owner that one of its sockets no longer holds a relayed
+ * shape — an explicit `shape_unsubscribe`, or the socket closing. The owner
+ * drops the matching per-socket proxy registrations, in memory and from
+ * `__lunora_relay_shapes`.
+ *
+ * Without it, the only reclamation those rows ever got was the relay detaching
+ * (its LAST socket closing). A busy relay never detaches, `connectionId` is
+ * freshly minted per upgrade, and every registration pins the op-log retention
+ * floor (`OwnerRelay.minShapeCursor` is a min over the registry) — so one
+ * orphan on a quiet table holds `__cdc_log` retention at its cursor forever
+ * while the operator's retention setting appears to do nothing.
+ *
+ * `subId` scopes it to one subscription; absent means every shape held by that
+ * connection (the socket-close case). Cohort registrations are untouched: they
+ * belong to the relay set, not to any one socket, and are reclaimed on detach /
+ * full drain.
+ */
+interface RelayShapeUnsubscribe {
+    connectionId: string;
+    relayIndex: number;
+    subId?: string;
+    type: "relay_shape_unsubscribe";
+}
+
+/**
  * The owner's response to a {@link RelayShapeSubscribe}: the serialized poke
  * frames (pokeStart/pokePart…/pokeEnd) to send to the subscribing socket, plus
  * the **cohort frontier** the relay must stamp the socket's memo at. `cursor` is
@@ -217,10 +242,21 @@ interface RelayShapePoke {
 }
 
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe;
+type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
 
 export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, shapeRoutingKey };
-export type { OwnerRelayFrame, PromotionState, PromotionThresholds, RelayAttach, RelayDetach, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe };
+export type {
+    OwnerRelayFrame,
+    PromotionState,
+    PromotionThresholds,
+    RelayAttach,
+    RelayDetach,
+    RelayFrame,
+    RelayShapePoke,
+    RelayShapeSeed,
+    RelayShapeSubscribe,
+    RelayShapeUnsubscribe,
+};
 // The DO-name contract lives in `shared/` so `@lunora/runtime` (which mints relay
 // names) and this package (which parses them) can't drift; re-exported so `./relay`
 // stays the single import surface for the relay tier inside `@lunora/do`.

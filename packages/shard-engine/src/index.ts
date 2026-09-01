@@ -303,6 +303,7 @@ export type {
     RelayShapePoke,
     RelayShapeSeed,
     RelayShapeSubscribe,
+    RelayShapeUnsubscribe,
 } from "./relay";
 export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, shapeRoutingKey } from "./relay";
 export type { RelayHost } from "./relay-hub";

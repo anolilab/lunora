@@ -27,6 +27,7 @@ import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { SqlExec } from "./ctx-db";
 import {
     deleteAllRelayShapes,
+    deleteRelayShapesForConnection,
     deleteRelayShapesForRelay,
     migrateRelayShapes,
     readRelayShapes,
@@ -36,7 +37,7 @@ import {
 import { envPositiveInt } from "./env-int";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
 import { stableWireKey } from "./reactive-cache";
-import type { OwnerRelayFrame, PromotionState, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
+import type { OwnerRelayFrame, PromotionState, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe, RelayShapeUnsubscribe } from "./relay";
 import { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, relayName, shapeRoutingKey } from "./relay";
 import type { ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, encodeRowsPatch } from "./shape-global-diff";
@@ -257,6 +258,11 @@ abstract class RelayLink {
                 // mirroring the shard's own `shape_subscribe` decode-at-entry.
                 return jsonRelayResponse(this.onShapeSubscribe({ ...message, args: decodeWire(message.args) as Record<string, unknown> }));
             }
+            case "relay_shape_unsubscribe": {
+                this.onShapeUnsubscribe(message);
+
+                return noContent();
+            }
             default: {
                 return assertNeverFrame(message);
             }
@@ -354,6 +360,17 @@ abstract class RelayLink {
     /** A relay detaches from its owner once its last socket closes; a no-op on an owner. */
     public abstract announceDrain(closing: ShardSocketLike): Promise<void>;
 
+    /**
+     * A relay tells its owner that `ws` has given up a relayed shape — one
+     * subscription (`subId`) or, on close, all of them — so the owner can drop
+     * the per-socket proxy registrations it would otherwise hold for the life of
+     * the relay. A no-op on an owner (its own sockets register nothing relayed)
+     * and on a socket that carries no connection id (nothing was ever
+     * registered for it — {@link OwnerRelay.buildShapeSeedFrames} refuses that
+     * seed outright).
+     */
+    public abstract releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void>;
+
     /** How many relays the runtime should spread new connections across for this shard (owner decides; a relay returns 0). */
     public abstract relayCount(): number;
 
@@ -391,6 +408,9 @@ abstract class RelayLink {
 
     /** Control-channel hook: an owner builds the seed frames for a relay subscriber; a relay errors (it can't seed). */
     protected abstract onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
+
+    /** Control-channel hook: an owner drops a relay socket's proxy registrations; a relay no-ops. */
+    protected abstract onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
 
     /** Control-channel hook: a relay delivers an owner-multicast poke to its cohort sockets and returns the delivered count; an owner returns 0. */
     protected abstract onShapePoke(poke: RelayShapePoke): number;
@@ -472,6 +492,11 @@ class OwnerRelay extends RelayLink {
         return Promise.resolve();
     }
 
+    // eslint-disable-next-line class-methods-use-this -- role hook: an owner's own sockets register no relayed shapes, so there is nothing to release
+    public override releaseRelayShapes(): Promise<void> {
+        return Promise.resolve();
+    }
+
     /**
      * How many relays the runtime should spread new connections across for this shard
      * (plan 075 Phase 2, hysteresis added in Phase 4). `0` keeps every connection on
@@ -538,6 +563,29 @@ class OwnerRelay extends RelayLink {
         this.shapeUniformCache.set(cacheKey, uniform);
 
         return uniform;
+    }
+
+    /**
+     * Drop the proxy registrations a relay socket held, in memory and durably.
+     * `subId` scopes it to one subscription; absent covers the whole connection
+     * (its socket closed). Cohort entries are untouched — one serves the entire
+     * relay set, so no single socket may retire it.
+     */
+    protected override onShapeUnsubscribe(message: RelayShapeUnsubscribe): void {
+        const { proxies } = this.relayShapes();
+        const scoped = message.subId === undefined ? undefined : `${String(message.relayIndex)}:${message.connectionId}:${message.subId}`;
+
+        for (const [key, entry] of proxies) {
+            if (entry.relayIndex !== message.relayIndex || entry.connectionId !== message.connectionId) {
+                continue;
+            }
+
+            if (scoped === undefined || key === scoped) {
+                proxies.delete(key);
+            }
+        }
+
+        deleteRelayShapesForConnection(this.host.sql(), message.relayIndex, message.connectionId, message.subId);
     }
 
     protected override onAttach(index: number): void {
@@ -1315,6 +1363,33 @@ class RelayMember extends RelayLink {
         await this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" });
     }
 
+    /**
+     * Tell the owner this socket has given up a relayed shape, so it drops the
+     * per-socket proxy registration rather than holding it until this relay
+     * detaches. Sent on an explicit `shape_unsubscribe` (`subId` set) and on
+     * socket close (`subId` omitted — every shape the connection held).
+     *
+     * Fire-and-forget like every other control frame: a dropped one leaves the
+     * registration to the coarser detach/full-drain reclamation, which is where
+     * it lived before.
+     */
+    public override async releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void> {
+        const { connectionId } = this.host.readAttachment(ws);
+
+        // No connection id means nothing was ever registered: the owner refuses
+        // to seed a per-socket shape without one (`RELAY_SHAPE_UNROUTABLE`).
+        if (connectionId === undefined || !this.canAddressSiblings()) {
+            return;
+        }
+
+        await this.postRelayMessage(this.roleId.ownerKey, {
+            connectionId,
+            relayIndex: this.roleId.relayIndex as number,
+            ...(subId === undefined ? {} : { subId }),
+            type: "relay_shape_unsubscribe",
+        });
+    }
+
     // eslint-disable-next-line class-methods-use-this -- role hook: a relay never spreads connections (flat single tier)
     public override relayCount(): number {
         return 0;
@@ -1348,6 +1423,11 @@ class RelayMember extends RelayLink {
     // eslint-disable-next-line class-methods-use-this -- role hook: a relay can't seed (no op-log) — the owner does
     protected override onShapeSubscribe(): RelayShapeSeed {
         return { error: { code: "RELAY_CANNOT_SEED", message: "a relay has no op-log to seed from" } };
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- role hook: only an owner holds the shape registry
+    protected override onShapeUnsubscribe(): void {
+        /* a relay registers nothing to release */
     }
 
     protected override onShapePoke(poke: RelayShapePoke): number {

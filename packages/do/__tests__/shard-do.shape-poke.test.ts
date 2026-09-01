@@ -643,6 +643,43 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         expect(readShapePokeCursor(harness.sql, "conn-7", "s1")).toBeDefined();
     });
 
+    it("removes every durable cursor for a socket on webSocketError, which workerd dispatches INSTEAD of webSocketClose", async () => {
+        expect.assertions(3);
+
+        // workerd's hibernation manager dispatches exactly one termination event
+        // per socket (`legacy-hibernation-manager.c++`,
+        // `handleSocketTermination`): a premature `DISCONNECTED` becomes a
+        // synthetic 1006 close, and every OTHER exception — a protocol error, an
+        // event timeout, a `webSocketMessage` handler that threw — becomes an
+        // error event with no close to follow. An empty `webSocketError` stub
+        // therefore orphans this socket's `__shape_poke_cursor` rows under a
+        // `connectionId` that can never reconnect, and `minShapePokeCursor` is a
+        // `SELECT MIN(cursor)` over the whole table, so ONE orphan pins CDC
+        // retention permanently.
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const wsA = createFakeWebSocket();
+        const wsB = createFakeWebSocket();
+
+        wsA.attachment = { connectionId: "conn-err-1", subs: {} };
+        wsB.attachment = { connectionId: "conn-err-2", subs: {} };
+        sockets.push(wsA, wsB);
+
+        await subscribeShape(shard, wsA, "c1");
+        await shard.webSocketMessage(
+            wsA as unknown as WebSocket,
+            JSON.stringify({ id: "s2", shape: { args: { channelId: "c2" }, name: "messagesByChannel" }, type: "shape_subscribe" }),
+        );
+        await subscribeShape(shard, wsB, "c1");
+
+        await shard.webSocketError(wsA as unknown as WebSocket, new Error("connection reset"));
+
+        expect(readShapePokeCursor(harness.sql, "conn-err-1", "s1")).toBeUndefined();
+        expect(readShapePokeCursor(harness.sql, "conn-err-1", "s2")).toBeUndefined();
+        // Untouched: a different socket's connection.
+        expect(readShapePokeCursor(harness.sql, "conn-err-2", "s1")).toBeDefined();
+    });
+
     it("still purges durable cursors and clears the attachment when lifecycle dispatch throws", async () => {
         expect.assertions(3);
 
@@ -698,8 +735,12 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         // Install a relay whose drain rejects. The unit harness has no relay
         // (`announceDrain` is skipped), and close touches no other relay method
         // — but a subscribe does, so this lands after the subscribe above.
-        (shard as unknown as { relay: { announceDrain: () => Promise<void> } }).relay = {
+        (shard as unknown as { relay: { announceDrain: () => Promise<void>; releaseRelayShapes: () => Promise<void> } }).relay = {
             announceDrain: () => Promise.reject(new Error("relay detach failed")),
+            // The close path also releases this socket's relayed shape
+            // registrations; a relay double that omits it fails on the wrong
+            // call and hides the drain failure this test is about.
+            releaseRelayShapes: () => Promise.resolve(),
         };
 
         await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).rejects.toThrow("dispatch machinery failed");
@@ -723,8 +764,12 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         // Install a relay whose drain rejects. The unit harness has no relay
         // (`announceDrain` is skipped), and close touches no other relay method
         // — but a subscribe does, so this lands after the subscribe above.
-        (shard as unknown as { relay: { announceDrain: () => Promise<void> } }).relay = {
+        (shard as unknown as { relay: { announceDrain: () => Promise<void>; releaseRelayShapes: () => Promise<void> } }).relay = {
             announceDrain: () => Promise.reject(new Error("relay detach failed")),
+            // The close path also releases this socket's relayed shape
+            // registrations; a relay double that omits it fails on the wrong
+            // call and hides the drain failure this test is about.
+            releaseRelayShapes: () => Promise.resolve(),
         };
 
         // Nothing else in flight → the relay error is the one the runtime sees…

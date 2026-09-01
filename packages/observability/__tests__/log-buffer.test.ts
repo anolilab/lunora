@@ -61,6 +61,32 @@ describe("logBuffer", () => {
         expect(buffer.size).toBe(1);
     });
 
+    it("counts evicted entries so a full ring is distinguishable from a quiet one", () => {
+        expect.assertions(4);
+
+        const buffer = new LogBuffer(3);
+
+        for (let index = 0; index < 3; index += 1) {
+            buffer.push(entry(`m${String(index)}`, index));
+        }
+
+        // Exactly at capacity: nothing dropped yet, so "3 lines" is the truth.
+        expect(buffer.dropped).toBe(0);
+
+        for (let index = 3; index < 50; index += 1) {
+            buffer.push(entry(`m${String(index)}`, index));
+        }
+
+        // Without this count the reader sees 3 entries either way and cannot
+        // tell whether 3 lines happened or 50 did.
+        expect(buffer.size).toBe(3);
+        expect(buffer.dropped).toBe(47);
+
+        buffer.clear();
+
+        expect(buffer.dropped).toBe(0);
+    });
+
     it("falls back to the default capacity for a non-positive bound", () => {
         expect.assertions(1);
 

@@ -96,8 +96,21 @@ export class SpanBuffer {
 
     private readonly capacity: number;
 
+    /** How many spans the ring has evicted since it was last cleared. */
+    private droppedCount = 0;
+
     public constructor(capacity: number = DEFAULT_CAPACITY) {
         this.capacity = capacity > 0 ? Math.trunc(capacity) : DEFAULT_CAPACITY;
+    }
+
+    /**
+     * Spans evicted for capacity since the last {@link SpanBuffer.clear}. The
+     * ring silently drops its oldest span once full, which makes a busy instance
+     * look identical to one that recorded exactly `capacity` spans; this count
+     * is the difference between the two.
+     */
+    public get dropped(): number {
+        return this.droppedCount;
     }
 
     /** Number of spans currently buffered. */
@@ -105,9 +118,10 @@ export class SpanBuffer {
         return this.buffer.length;
     }
 
-    /** Drop every buffered span. */
+    /** Drop every buffered span, including the eviction count. */
     public clear(): void {
         this.buffer.length = 0;
+        this.droppedCount = 0;
     }
 
     /** Snapshot of the buffered spans in insertion order. Fresh array per call. */
@@ -130,6 +144,7 @@ export class SpanBuffer {
 
         if (this.buffer.length > this.capacity) {
             this.buffer.shift();
+            this.droppedCount += 1;
         }
     }
 }
