@@ -395,6 +395,10 @@ export type { SqlConsoleResult } from "./sql-console";
 export type { SqlLintResult } from "./sql-console";
 export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
 export { lintReadonlySql } from "./sql-console";
+// The canonical order-preserving bigint key. `@lunora/sql-store` builds the
+// same key for the `.global()` plane and the two are compared by a parity
+// test, so there must be exactly one encoder.
+export { BIGINT_KEY_DIGITS, BIGINT_KEY_NEGATIVE, BIGINT_KEY_NON_NEGATIVE, bigintSqlKey } from "./sql-projection";
 export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ChangedKeys, SubscriptionReadFootprint } from "./subscription-range-gate";
 export { mergeChangedKeys, recordChangedKeys, writeTouchesMemo } from "./subscription-range-gate";

@@ -191,11 +191,34 @@ const normalizeUnsetOptionals = (definition: SchemaLike["tables"][string], docum
     return unset.size === 0 ? document : Object.fromEntries(Object.entries(document).filter(([field]) => !unset.has(field)));
 };
 
+/** Framework-managed keys a snapshot line legitimately carries alongside the declared fields; re-applied verbatim on insert. */
+const FRAMEWORK_FIELDS = new Set(["_creationTime", "_id"]);
+
+/**
+ * The first key in `document` the table does not declare, or `undefined`.
+ *
+ * Reject rather than ignore, exactly as the shard twin does
+ * (`@lunora/shard-engine`'s `validateImportRow`). Validation below iterates only
+ * `definition.shape` and never looks at an undeclared key, and a `.global()`
+ * table stores real columns — so the writer dropped it on the floor and the
+ * import still answered 200 with `errors: []`. A snapshot taken before a
+ * `title → heading` rename restored as `{"heading": null}` and reported success:
+ * the column was gone and nothing said so.
+ */
+const undeclaredField = (definition: SchemaLike["tables"][string], document: Record<string, unknown>): string | undefined =>
+    Object.keys(document).find((key) => !FRAMEWORK_FIELDS.has(key) && !(key in definition.shape));
+
 const validateRow = (schema: SchemaLike, table: string, document: Record<string, unknown>): string | undefined => {
     const definition = schema.tables[table];
 
     if (!definition) {
         return `unknown table: ${table}`;
+    }
+
+    const undeclared = undeclaredField(definition, document);
+
+    if (undeclared !== undefined) {
+        return `unexpected field "${undeclared}": not declared in table "${table}"`;
     }
 
     // Only declared schema fields are validated; `definition.shape` never

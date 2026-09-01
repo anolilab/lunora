@@ -379,8 +379,8 @@ describe("app-declarable signals with no capability row", () => {
         expect(result.diagnostics[0]?.name).toBe("platform_undeclared_feature");
     });
 
-    it("reports a feature reachable both ways exactly once", async () => {
-        expect.assertions(2);
+    it("reports a feature reachable both ways exactly once, and still rejects it", async () => {
+        expect.assertions(4);
 
         // `vectorStore` is a capability (`ctx.vectors`) AND a schema signal
         // (`.vectorize()`), and an app that does both has one problem, not two.
@@ -391,6 +391,13 @@ describe("app-declarable signals with no capability row", () => {
 
         expect(result.diagnostics).toHaveLength(1);
         expect(result.diagnostics[0]?.feature).toBe("vectors");
+
+        // Deduping the DIAGNOSTIC must not dedupe the REJECTION. Leaving the
+        // signal `true` here let `hasVectors` read it as accepted and emit
+        // `ctx.vectors` anyway — in the most common shape, since an app that
+        // declares a vector index almost always queries it too.
+        expect(result.usage.vectors).toBe(false);
+        expect(result.signals.vectorStore).toBe(false);
     });
 
     it("says nothing about a feature the app does not declare", async () => {

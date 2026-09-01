@@ -279,6 +279,24 @@ interface AuditLogResult {
 }
 ```
 
+### `BIGINT_KEY_DIGITS` (const)
+
+```ts
+const BIGINT_KEY_DIGITS = 39;
+```
+
+### `BIGINT_KEY_NEGATIVE` (const)
+
+```ts
+const NEGATIVE = "0";
+```
+
+### `BIGINT_KEY_NON_NEGATIVE` (const)
+
+```ts
+const NON_NEGATIVE = "1";
+```
+
 ### `BroadcastDelta` (type)
 
 ```ts
@@ -3361,6 +3379,12 @@ const backfillSearchIndexes: (sql: SqlExec, schema: SchemaLike, options?: {
 const backfillSearchIndexesForTable: (sql: SqlExec, tableName: string, definition: {
     searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
 }) => void;
+```
+
+### `bigintSqlKey` (const)
+
+```ts
+const bigintSqlKey: (value: bigint) => string;
 ```
 
 ### `boundingBoxCenter` (const)

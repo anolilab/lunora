@@ -73,6 +73,15 @@ const emittedD1Resolver = async (session: SessionDouble | null): Promise<Emitted
         throw new Error("could not locate the emitted D1 `resolveIdentity` in app.ts");
     }
 
+    // The "improperly sanitized value" CodeQL flags here is this repo's own
+    // codegen output: `emitApp` is called two lines up with a frozen literal
+    // options object, so nothing outside this file reaches the string. Compiling
+    // and CALLING that output is the whole point of the suite — the assertions
+    // have to be over a real return value rather than a substring of emitted
+    // text, which is how the resolver shipped without a credential expiry — so
+    // there is no restructuring that removes the sink and keeps the test. The
+    // suppression is scoped to this one query on this one line.
+    // codeql[js/unsafe-code-construction]
     const compiled = transformSync(`export const build = (getAuth) => (${match[1]});`, { loader: "ts" }).code;
 
     const file = join(scratch, `resolver-${randomUUID()}.mjs`);

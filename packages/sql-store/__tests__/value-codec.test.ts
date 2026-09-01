@@ -77,10 +77,38 @@ describe("sqliteEncode", () => {
         expect(sqliteEncode(null)).toBeNull();
     });
 
-    it("stringifies bigints as decimal", () => {
+    it("encodes bigints as a fixed-width, order-preserving text key", () => {
+        expect.assertions(3);
+
+        // Sign character + 39 digits of magnitude. Exact past 2^53, where
+        // `Number()` would collapse neighbouring values onto one double.
+        expect(sqliteEncode(9_007_199_254_740_993n)).toBe(`1${"9007199254740993".padStart(39, "0")}`);
+        expect(sqliteEncode(0n)).toBe(`1${"0".repeat(39)}`);
+        // Negatives: nines' complement under the lower sign character.
+        expect(sqliteEncode(-5n)).toBe(`0${"9".repeat(38)}4`);
+    });
+
+    /**
+     * The defect this encoding exists for. Plain decimal text is exact for `=`
+     * but sorts `"9"` after `"10"`, so a range filter, an `ORDER BY`, a page
+     * cursor and `MIN`/`MAX` over a `v.bigint()` column all returned the wrong
+     * rows — `where: { n: { gt: 9n } }` matched nothing while `10n` and `100n`
+     * sat in the table. Byte order over the encoded keys has to BE numeric order.
+     */
+    it("sorts lexicographically in numeric order, across zero", () => {
         expect.assertions(1);
 
-        expect(sqliteEncode(9_007_199_254_740_993n)).toBe("9007199254740993");
+        const values = [2n, 9n, 10n, 100n, -5n, -200n, 0n, 9_007_199_254_740_993n, -9_007_199_254_740_993n];
+        const byKey = values.toSorted((a, b) => String(sqliteEncode(a)).localeCompare(String(sqliteEncode(b))));
+        const numerically = values.toSorted((a, b) => Number(a - b));
+
+        expect(byKey).toStrictEqual(numerically);
+    });
+
+    it("refuses a magnitude past the fixed key width rather than mis-sorting it", () => {
+        expect.assertions(1);
+
+        expect(() => sqliteEncode(10n ** 39n)).toThrow(/over the 39-digit limit/u);
     });
 
     it("jSON-encodes objects and arrays", () => {
@@ -233,6 +261,20 @@ describe("sqliteDecode — round-trips with sqliteEncode by kind", () => {
 });
 
 describe("decodeBigint / tryJsonParse edge cases", () => {
+    /**
+     * A column written before the key encoding holds plain decimal text. It is
+     * never 40 characters with a `"0"`/`"1"` sign character (`toString()` emits
+     * no leading zero), so the key test cannot claim it and it decodes through
+     * the `BigInt(raw)` fallback — reads keep working on an unconverted row.
+     */
+    it("decodeBigint still reads a decimal string written before the key encoding", () => {
+        expect.assertions(3);
+
+        expect(decodeBigint("10")).toBe(10n);
+        expect(decodeBigint("-5")).toBe(-5n);
+        expect(decodeBigint("9007199254740993")).toBe(9_007_199_254_740_993n);
+    });
+
     it("decodeBigint leaves non-numeric strings and non-strings alone", () => {
         expect.assertions(2);
 

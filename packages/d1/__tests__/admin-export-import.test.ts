@@ -262,6 +262,33 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", table: "settings" });
         });
 
+        /**
+         * A `.global()` table stores real columns, so a key it does not declare
+         * has nowhere to go — the writer dropped it and the import still answered
+         * `{"conflicts":0,"errors":[],"inserted":{"settings":1}}`. A snapshot
+         * taken before a `title → heading` rename therefore restored as
+         * `{"heading": null}` and reported success. The shard twin errors with
+         * `unexpected field "…"` on the identical input; this half now does too.
+         */
+        it("rejects a field the table does not declare rather than dropping it and reporting success", async () => {
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: "s1", name: "ok", title: "renamed away", value: "x" }, table: "settings" },
+                    { doc: { _id: "s2", name: "ok2", value: "y" }, table: "settings" },
+                ],
+            });
+
+            expect(result.inserted).toEqual({ settings: 1 });
+            expect(result.errors).toHaveLength(1);
+            expect(result.errors[0]).toMatchObject({
+                code: "VALIDATION_ERROR",
+                message: 'unexpected field "title": not declared in table "settings"',
+                table: "settings",
+            });
+        });
+
         it("attributes errors to each row's own `line` when non-contiguous (interspersed shard-local rows filtered out upstream)", async () => {
             expect.assertions(1);
 

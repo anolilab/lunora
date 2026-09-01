@@ -66,6 +66,18 @@ describe("discoverPlatformSignals", () => {
         expect(signals().durableStreams).toBe(false);
     });
 
+    it("does not treat a parenthesized `durable: (false)` as a declaration", () => {
+        expect.assertions(1);
+
+        // The opt-out is read off the initializer's TEXT, so any wrapping the
+        // user's formatter leaves behind — `(false)`, `((false))` — used to read
+        // as a declaration and hard-fail the build on a host that rates
+        // durableStreams unsupported.
+        write("feed.ts", `import { procedure } from "@lunora/server";\n\nexport const feed = procedure.stream(async function* () {}, { durable: (false) });\n`);
+
+        expect(signals().durableStreams).toBe(false);
+    });
+
     it("detects a destructured ctx.secrets read", () => {
         expect.assertions(1);
 

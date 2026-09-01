@@ -266,8 +266,9 @@ describe("search layouts", () => {
 
     /**
      * The profile recorded with a companion's backfill progress. It has to change
-     * whenever the *meaning* of a stored row changes — analysis or layout — because
-     * that mismatch is the only signal that triggers the rebuild.
+     * whenever the *meaning* of a stored row changes — analysis, the indexed
+     * field, or the layout — because that mismatch is the only signal that
+     * triggers the rebuild.
      */
     describe("companionProfile", () => {
         it("separates two indexes that differ only in layout", () => {
@@ -282,7 +283,27 @@ describe("search layouts", () => {
             // Spelled out rather than derived: the profile is a stored format,
             // so a change here should be a visible edit that says "every index
             // built under the old rules now rebuilds", not a silent pass.
-            expect([fts5, inverted]).toStrictEqual(["none-v2/fts5", "none-v2/inverted"]);
+            expect([fts5, inverted]).toStrictEqual(["none-v2:body/fts5", "none-v2:body/inverted"]);
+        });
+
+        it("separates two indexes that differ only in the field they index", () => {
+            expect.assertions(1);
+
+            // Re-pointing an index at another column leaves every stored row
+            // holding the text of the column that was abandoned. Recorded as
+            // analysis-and-layout only, that went undetected: searching the
+            // column you just declared returned nothing while the old one kept
+            // matching, under an index reporting itself complete.
+            expect(companionProfile({ ...byBody, field: "title" }, sqliteDialect())).not.toBe(companionProfile(byBody, sqliteDialect()));
+        });
+
+        it("ignores filterFields, which no companion stores", () => {
+            expect.assertions(1);
+
+            // `filterFields` is read only when a staged query validates which
+            // columns `.eq()` may narrow by — it never reaches a companion row.
+            // Rebuilding every index on the table for it would be pure cost.
+            expect(companionProfile({ ...byBody, filterFields: ["channel"] }, sqliteDialect())).toBe(companionProfile(byBody, sqliteDialect()));
         });
 
         it("separates two indexes that differ only in analysis", () => {

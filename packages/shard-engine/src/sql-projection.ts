@@ -146,4 +146,18 @@ const mayHoldProjectedValue = (validator: KindedValidator): boolean => {
     return isProjectedKind(validator) || kind === "any" || kind === "union" || kind === "from";
 };
 
-export { BIGINT_KEY_DIGITS, isProjectedKind, mayHoldProjectedValue, sqlComparableProjection };
+// `bigintSqlKey` and the two sign characters are exported for `@lunora/sql-store`,
+// which must produce a BYTE-IDENTICAL key on the `.global()` plane — the two
+// planes are compared directly by a parity test, and a second copy of an
+// order-preserving encoding is precisely the thing that drifts. Its decoder
+// stays there: a shard never reverses the key, because it keeps the value in the
+// document alongside it.
+export {
+    BIGINT_KEY_DIGITS,
+    NEGATIVE as BIGINT_KEY_NEGATIVE,
+    NON_NEGATIVE as BIGINT_KEY_NON_NEGATIVE,
+    bigintSqlKey,
+    isProjectedKind,
+    mayHoldProjectedValue,
+    sqlComparableProjection,
+};
