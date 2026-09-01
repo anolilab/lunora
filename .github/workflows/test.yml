@@ -25,7 +25,6 @@
         "outputs":
             "packages": "${{ steps.changes.outputs.packages }}"
             "e2e": "${{ steps.changes.outputs.e2e }}"
-            "codecov": "${{ steps.changes.outputs.codecov }}"
             "templates": "${{ steps.changes.outputs.templates }}"
             "worker_size": "${{ steps.changes.outputs.worker_size }}"
             "sdks": "${{ steps.changes.outputs.sdks }}"
@@ -211,6 +210,29 @@
                   "enable-nx-cache": "false"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
+
+            # The matrix is a hand-typed list of 11 packages, duplicated verbatim in
+            # test.yml and nightly.yml, with nothing tying either copy to the packages
+            # that actually declare a `workerd` vitest project. Drop a package from one
+            # and its workerd suites stop running with every check green. Each leg
+            # asserts its own package still declares the project, and that the leg count
+            # equals the number of packages that do — together that makes the matrix and
+            # the filesystem the same set, not merely the same size.
+            - "name": "Assert the matrix matches the packages declaring a workerd project"
+              "run": |
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+                  count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
+                  if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
+                    echo "packages/${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    exit 1
+                  fi
+                  if [ "$count" != "${{ strategy.job-total }}" ]; then
+                    echo "$count packages declare a workerd project but the matrix has ${{ strategy.job-total }} legs." >&2
+                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
+                    exit 1
+                  fi
 
             # `vis run build` walks upstream deps via dependsOn, so the package's dist
             # and everything it imports exists. `pnpm --filter "pkg..."` does not build
@@ -438,6 +460,23 @@
 
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            # A third hardcoded copy of the language list — `sdks/lint-all.sh` and
+            # `sdks/generated-check.sh` hold the other two — and the only one no
+            # script can see. A ninth SDK missed here is never conformance-tested at
+            # all, with every leg green. `strategy.job-total` is this matrix's size,
+            # so compare it against what is on disk; the two scripts reconcile
+            # themselves against the same directories.
+            - "name": "Assert the matrix covers every SDK on disk"
+              "run": |
+                  on_disk="$(find sdks -mindepth 1 -maxdepth 1 -type d ! -name smoke | wc -l | tr -d ' ')"
+                  if [ "$on_disk" != "${{ strategy.job-total }}" ]; then
+                    echo "sdks/ holds $on_disk ports but the sdk-conformance matrix has ${{ strategy.job-total }} legs." >&2
+                    echo "Add the missing language to the matrix in .github/workflows/test.yml, and to ALL in" >&2
+                    echo "sdks/lint-all.sh and sdks/generated-check.sh." >&2
+                    exit 1
+                  fi
+                  echo "matrix covers all $on_disk SDKs"
 
             - "name": "Setup python"
               "if": "matrix.sdk.language == 'python'"

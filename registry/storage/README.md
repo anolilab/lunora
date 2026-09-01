@@ -49,7 +49,7 @@ The R2 binding `lunora registry add` writes:
 - **generateUploadUrl** (action) mints a short-lived signed `PUT` URL (`@lunora/storage`'s `generateUploadUrl`, built on `buildSignedUrl` with `method: "PUT"`). The browser `PUT`s the file straight to R2 — the bytes never touch your Worker. `contentType` is **required** and checked against an allowlist (`ALLOWED_UPLOAD_CONTENT_TYPES` in the copied file): because the browser pins that `Content-Type` into the signed PUT, R2 never sees the server-side `upload()` allowlist, so this is the only place to reject renderable types (`text/html`, `image/svg+xml`) that would otherwise become stored XSS if served same-origin. Widen the set as needed, and when you serve objects set `X-Content-Type-Options: nosniff` + `Content-Disposition: attachment` (or use a cookieless object host).
 - **getDownloadUrl** (action) mints a short-lived signed `GET` URL (`getSignedUrl` with `method: "GET"`). Your Worker's `GET /storage/:key` route must verify it before streaming (see below).
 - **deleteObject** (mutation) deletes an object by key.
-- **listObjects** (query) lists the caller's objects under an optional prefix, returning the R2 page `cursor` + `truncated` flag for pagination.
+- **listObjects** (action) lists the caller's objects under an optional prefix, returning the R2 page `cursor` + `truncated` flag for pagination. An action rather than a query because R2 is not a reactive source: a query would never re-run when a file is uploaded, yet Lunora would re-evaluate it on every unrelated mutation to the shard — a billable R2 LIST each time. Refetch after an upload or delete instead of subscribing.
 
 All four scope the key with `scopeKey(requireOwner(ctx.auth.userId), key)`, namespacing every object under the caller. They **require an authenticated identity** and fail closed otherwise (`requireOwner` throws) — these are public-by-default RPC, so a shared anonymous `public/` namespace would let any anonymous caller read, overwrite, or delete every other anonymous caller's objects. Wire `resolveIdentity` into `createWorker` (see the `auth` registry item) so `ctx.auth.userId` is populated. If you genuinely want a public namespace, add a separate **read-only** public path — never point `deleteObject` / `generateUploadUrl` at a shared anonymous prefix.
 
@@ -80,7 +80,19 @@ export default {
             }
 
             return new Response(object.body, {
-                headers: { "content-type": object.httpMetadata?.contentType ?? "application/octet-stream" },
+                headers: {
+                    "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
+                    // The stored `content-type` was chosen by the uploader, so
+                    // reflecting it same-origin without these two is a stored-XSS
+                    // path: `nosniff` stops the browser upgrading a mislabelled
+                    // body to HTML, and `attachment` stops it rendering one that
+                    // is honestly labelled. `lunora/storage/index.ts`'s
+                    // ALLOWED_UPLOAD_CONTENT_TYPES is the other half of this —
+                    // keep both. Serving from a separate cookieless object host
+                    // is the stronger answer if you need inline rendering.
+                    "content-disposition": "attachment",
+                    "x-content-type-options": "nosniff",
+                },
             });
         }
 

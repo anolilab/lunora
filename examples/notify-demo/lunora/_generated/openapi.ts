@@ -266,7 +266,35 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
-                                            "subscription": {}
+                                            "subscription": {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                    "endpoint": {
+                                                        "type": "string"
+                                                    },
+                                                    "keys": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                            "auth": {
+                                                                "type": "string"
+                                                            },
+                                                            "p256dh": {
+                                                                "type": "string"
+                                                            }
+                                                        },
+                                                        "required": [
+                                                            "auth",
+                                                            "p256dh"
+                                                        ],
+                                                        "type": "object"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "endpoint",
+                                                    "keys"
+                                                ],
+                                                "type": "object"
+                                            }
                                         },
                                         "required": [
                                             "subscription"

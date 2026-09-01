@@ -34,8 +34,11 @@
             "index_name": "posts_search",
         },
     ],
+    // Kept in sync with `LUNORA_CRON_TRIGGERS` in `lunora/_generated/crons.ts`,
+    // which codegen derives from `lunora/crons.ts`. Declare schedules there, not
+    // here — the vite plugin reconciles this list on the next `lunora codegen`.
     "triggers": {
-        "crons": [],
+        "crons": ["0 3 * * *"],
     },
     "vars": {
         "PUBLIC_STORAGE_BASE_URL": "https://files.example.com",

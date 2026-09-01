@@ -416,9 +416,9 @@
                   "file_or_dir": "."
                   "strict": true
 
-    # Two manifest guards nothing else covers. Their own job rather than a ninth
-    # postinstall gate: a failing postinstall turns every CI job red in its setup step,
-    # with the cause invisible in the job that reports it.
+    # Cheap repo-consistency guards nothing else covers, sharing one install. Their
+    # own job rather than more postinstall gates: a failing postinstall turns every
+    # CI job red in its setup step, with the cause invisible in the job that reports it.
     "dependency-manifests":
         "name": "Lint (dependency manifests)"
         "if": "needs.files-changed.outputs.dependency_manifests == 'true'"
@@ -454,6 +454,14 @@
             # invisible in this repo and lands on npm users as an ERESOLVE failure.
             - "name": "Check peerDependencies for catalog: refs"
               "run": "pnpm run lint:peer-catalog-refs"
+
+            # The PR-title gate is a REQUIRED check and a squash merge turns the title
+            # into the commit message, with no `commit-msg` hook server-side — so its
+            # hand-kept type list is the real type gate, and it had drifted from
+            # commitlint's in both directions. It cannot be derived in that workflow:
+            # `pull_request_target` with no checkout, deliberately.
+            - "name": "Check the PR-title gate matches commitlint's types"
+              "run": "node scripts/check-pr-title-types.js"
 
     # Regenerate every committed generator output and fail if the tree moved —
     # `apps/docs/src/data/packages.ts` went stale exactly this way, rewritten on every

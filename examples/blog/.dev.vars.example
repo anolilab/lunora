@@ -11,3 +11,8 @@ AUTH_SECRET="replace-with-openssl-rand-hex-32"
 
 # Base URL better-auth resolves callback URLs against — the Vite dev origin.
 AUTH_URL="http://localhost:5173"
+
+# Required as soon as you use the featured-image upload: `@lunora/storage` signs
+# the direct-to-R2 PUT URL with it, and `getSignedUrl`/`generateUploadUrl` throw
+# without it. Any long random string — generate one the same way as AUTH_SECRET.
+STORAGE_SECRET="replace-with-openssl-rand-hex-32"

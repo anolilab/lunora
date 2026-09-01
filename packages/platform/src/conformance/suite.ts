@@ -313,7 +313,8 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
             // `SocketHost.idFor` is documented to answer the SAME string for
             // the SAME socket, not a fresh value per call — the property every
-            // caller (fan-out dedup, subscription reassociation) relies on.
+            // comparison through it (this suite's own identity assertions, a
+            // host's recycle addressing) relies on.
             it("keeps idFor stable across repeated calls within a wake", async () => {
                 expect.assertions(1);
 
@@ -328,10 +329,12 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
             });
 
             // Same leg as "round-trips attachments across a recycle" above, for
-            // identity rather than payload: the engine reassociates a rehydrated
-            // socket with the subscription state it owned before the wake BY id,
-            // so a host whose id drifts across a recycle breaks that lookup even
-            // though the attachment round-trips fine.
+            // identity rather than payload. Not because the engine keys on it —
+            // it keys on its own `connectionId` (see `SocketHost.idFor`) — but
+            // because `idFor` is this suite's identity oracle and a host's own
+            // recycle plumbing addresses sockets by the id it hands out here. An
+            // id that drifts across a recycle makes both meaningless, even though
+            // the attachment round-trips fine.
             it("keeps idFor stable across a recycle", async (context) => {
                 await withHost(async (host) => {
                     if (host.simulateRecycle === undefined || host.restoreSocket === undefined) {

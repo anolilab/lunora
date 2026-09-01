@@ -4,10 +4,32 @@ import { describe, expect, it } from "vitest";
 import { dispatchAgentEmail } from "../src/inbound";
 import type { AgentEmailMapper } from "../src/types";
 
-/** A minimal RFC 822 message `parseInboundEmail` (postal-mime) can parse. */
-const RAW_EMAIL = ["From: Alice <alice@example.com>", "To: support@myapp.com", "Subject: Need help", "Message-ID: <abc@example.com>", "", "Please help."].join(
-    "\r\n",
-);
+/**
+ * A minimal RFC 822 message `parseInboundEmail` (postal-mime) can parse.
+ *
+ * Carries a passing `Authentication-Results` header because the handler gates on
+ * the DKIM/SPF/DMARC verdicts before any mapper runs. A message WITHOUT one is
+ * the spoofed case, covered by its own test below.
+ */
+const RAW_EMAIL = [
+    "From: Alice <alice@example.com>",
+    "To: support@myapp.com",
+    "Subject: Need help",
+    "Message-ID: <abc@example.com>",
+    "Authentication-Results: mx.cloudflare.net; dkim=pass; spf=pass; dmarc=pass",
+    "",
+    "Please help.",
+].join("\r\n");
+
+/** The same message with no `Authentication-Results` header — verdicts read `null`. */
+const UNAUTHENTICATED_EMAIL = [
+    "From: Alice <alice@example.com>",
+    "To: support@myapp.com",
+    "Subject: Need help",
+    "Message-ID: <abc@example.com>",
+    "",
+    "Please help.",
+].join("\r\n");
 
 /** A fake `AGENT_*` Workflow binding recording every `create(...)`. */
 const fakeBinding = (): {
@@ -59,6 +81,31 @@ describe(dispatchAgentEmail, () => {
         // The mapper's run is passed straight through as the workflow params.
         expect(support.calls[0]?.params).toStrictEqual({ input: "Need help", owner: "acct-1", threadKey: "thread-1", title: "Support" });
         expect(rejects).toHaveLength(0);
+    });
+
+    it("refuses an unauthenticated message before any mapper sees it", async () => {
+        expect.assertions(3);
+
+        const support = fakeBinding();
+        let mapperRan = false;
+        const onEmail: AgentEmailMapper = (email: InboundEmail) => {
+            mapperRan = true;
+
+            return { input: email.subject ?? "", owner: "acct-1", threadKey: "thread-1", title: "Support" };
+        };
+
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "AGENT_SUPPORT" }]);
+        const { message, rejects } = fakeMessage(UNAUTHENTICATED_EMAIL);
+
+        await handler(message, { AGENT_SUPPORT: support.binding }, {});
+
+        // A run dispatches privileged (its tools bypass RLS), so a message the
+        // receiving MX never authenticated must not reach a mapper that could
+        // claim it — the mapper is app code and gating there is advice, not a
+        // guarantee.
+        expect(mapperRan).toBe(false);
+        expect(support.calls).toHaveLength(0);
+        expect(rejects).toHaveLength(1);
     });
 
     it("drops the message (no run, no bounce) when the mapper declines with null", async () => {

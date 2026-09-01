@@ -18,7 +18,19 @@ from typing import ClassVar
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lunora.client import LunoraClient, LunoraError, parse_rpc_response
-from lunora.wire import MAX_BIGINT_DIGITS, MAX_DEPTH, TAG, UNDEFINED, decode_wire, encode_wire, stable_stringify
+from lunora.wire import (
+    MAX_BIGINT_DIGITS,
+    MAX_DEPTH,
+    MAX_EXACT_INTEGER,
+    TAG,
+    UNDEFINED,
+    WireBigInt,
+    WireFormatError,
+    decode_wire,
+    encode_wire,
+    stable_stringify,
+)
+from tests._fixtures import load
 from tests._manifest import covers
 
 
@@ -35,16 +47,46 @@ class TestDecodeBounds(unittest.TestCase):
 
         self.assertEqual(decode_wire([TAG, "bigint", "-42"]).value, -42)
 
-    def test_malformed_bytes_rejected(self):
-        covers("malformed_bytes_rejected")
+    def test_malformed_values_rejected(self):
+        covers("malformed_values_rejected")
 
-        # Lenient base64 discards characters outside the alphabet instead of
-        # raising — a corrupted bytes payload silently became different, wrong
-        # data instead of a loud failure.
-        with self.assertRaises(ValueError):
-            decode_wire([TAG, "bytes", "not@@base64!!"])
+        # The list is data (protocol/fixtures/wire-codec.json), not a per-suite
+        # invention: a rejection each port hard-codes for itself is a rejection
+        # only some ports have, which is how one of them ended up accepting a
+        # truncated base64 payload as valid short bytes.
+        for case in load("wire-codec.json")["rejected"]:
+            # WireFormatError, not a bare ValueError/IndexError: a caller
+            # catching the codec's own type has to catch all of them.
+            with self.subTest(case=case["name"]), self.assertRaises(WireFormatError):
+                decode_wire(case["encoded"])
 
         self.assertEqual(decode_wire([TAG, "bytes", "AQID"]), b"\x01\x02\x03")
+
+        # A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
+        # reference hands it back as an ordinary array rather than indexing past
+        # the end of it.
+        self.assertEqual(decode_wire([TAG]), [TAG])
+
+    def test_exact_integer_range_enforced(self):
+        covers("exact_integer_range_enforced")
+
+        # Python's int is arbitrary-precision and a JSON number is not, so an
+        # integer past 2**53-1 passed through here was rounded by the server's
+        # own JSON.parse — a different integer arrived and neither end could
+        # tell. WireBigInt is the way across.
+        self.assertEqual(encode_wire(MAX_EXACT_INTEGER), MAX_EXACT_INTEGER)
+        self.assertEqual(encode_wire(-MAX_EXACT_INTEGER), -MAX_EXACT_INTEGER)
+
+        with self.assertRaises(WireFormatError):
+            encode_wire(MAX_EXACT_INTEGER + 1)
+
+        with self.assertRaises(WireFormatError):
+            encode_wire(-MAX_EXACT_INTEGER - 1)
+
+        self.assertEqual(
+            encode_wire(WireBigInt(MAX_EXACT_INTEGER + 1)),
+            [TAG, "bigint", str(MAX_EXACT_INTEGER + 1)],
+        )
 
     def test_depth_cap_enforced(self):
         covers("depth_cap_enforced")

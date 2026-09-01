@@ -12,12 +12,13 @@ import { isWorkflowReference } from "./types";
 const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
     assertSchedulerOptions(options);
 
-    const runAt = async <T extends CronTarget>(
-        date: Date | number,
-        target: T,
-        args: ScheduleTargetArgs<T>,
-        options_: RunOptions = {},
-    ): Promise<{ id: string; scheduledFor: number }> => {
+    // Resolves the job id, not the `{ id, scheduledFor }` record the DO answers
+    // with: this object is installed as `ctx.scheduler`, whose contract
+    // (`SchedulerLike` in @lunora/shard-engine, `Scheduler` in @lunora/server,
+    // `ctx.scheduler` in @lunora/runtime, and the docs) is `Promise<string>`.
+    // The DO's `scheduledFor` echoes what the caller passed, so nothing is lost;
+    // `get(id)` returns the full record for a caller that wants it back.
+    const runAt = async <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options_: RunOptions = {}): Promise<string> => {
         const scheduledFor = date instanceof Date ? date.getTime() : date;
 
         // Shared envelope; the target-specific field (`functionPath` xor
@@ -50,7 +51,9 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
                 );
             }
 
-            return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", { ...base, workflow: target.binding });
+            const scheduled = await callDO<{ id: string }>(options, "/schedule", { ...base, workflow: target.binding });
+
+            return scheduled.id;
         }
 
         // A bare string reaches here via the public string-typed `ctx.scheduler`
@@ -58,15 +61,12 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         // carries the path under `__lunoraRef`.
         const functionPath = typeof (target as unknown) === "string" ? (target as unknown as string) : target.__lunoraRef;
 
-        return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", { ...base, functionPath });
+        const scheduled = await callDO<{ id: string }>(options, "/schedule", { ...base, functionPath });
+
+        return scheduled.id;
     };
 
-    const runAfter = async <T extends CronTarget>(
-        delayMs: number,
-        target: T,
-        args: ScheduleTargetArgs<T>,
-        options_: RunOptions = {},
-    ): Promise<{ id: string; scheduledFor: number }> => {
+    const runAfter = async <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options_: RunOptions = {}): Promise<string> => {
         if (!Number.isFinite(delayMs) || delayMs < 0) {
             throw new LunoraError("INTERNAL", "@lunora/scheduler: `delayMs` must be a non-negative finite number");
         }

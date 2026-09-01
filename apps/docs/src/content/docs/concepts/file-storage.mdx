@@ -33,12 +33,15 @@ mint signed URLs, since signing is an HMAC computation with no R2 round-trip.
 | ----------------------------------- | :---: | :------: | :----: |
 | `download` / `getMetadata` / `head` |   ✓   |    ✓     |   ✓    |
 | `getUrl` / `getSignedUrl`           |   ✓   |    ✓     |   ✓    |
+| `deleteAfterCommit`                 |   —   |    ✓     |   —    |
 | `generateUploadUrl`                 |   —   |    —     |   ✓    |
 | `store`                             |   —   |    —     |   ✓    |
 | `delete`                            |   —   |    —     |   ✓    |
 
 In short: serve and inspect files from anywhere; mint an **upload** URL or
-write and delete bytes only from an action.
+write and delete bytes only from an action. A mutation cannot delete bytes, but
+it can **queue** a delete that runs once its transaction commits — see
+[Deleting](#deleting).
 
 ## Uploading
 
@@ -100,8 +103,10 @@ export const avatarUrl = query.input({ key: v.string() }).query(async ({ ctx, ar
 });
 ```
 
-To stream the body through your Worker instead, `download(key)` returns the
-`ReadableStream` (or `null` when the object is absent), and `getMetadata(key)`
+To stream the body through your Worker instead, `download(key)` returns the R2
+object — its metadata plus a `body` stream — or `null` when the object is
+absent. It is not a bare `ReadableStream`: read it with `arrayBuffer()` /
+`text()`, or pass `object.body` straight into a `Response`. `getMetadata(key)`
 returns the size, content-type, sha256, and any custom metadata without fetching
 the body. `head(key)` is the same body-free read one level down — the raw R2
 object shape, with the `etag` and base64 digest an HTTP response needs. Reach for
@@ -121,7 +126,7 @@ them in your schema, so a typo is a compile error.
 
 ```ts
 await ctx.storage.bucket("exports").store(key, csv, { contentType: "text/csv" }); // action
-const stream = await ctx.storage.bucket("exports").download(key); // any context
+const object = await ctx.storage.bucket("exports").download(key); // any context
 ```
 
 ## Deleting
@@ -137,9 +142,34 @@ export const removeAttachment = action.input({ key: v.string() }).action(async (
 });
 ```
 
-A common shape is a mutation that deletes the database row and schedules an
-action to delete the underlying object, keeping the byte-level side-effect out
-of the transaction (see [scheduling](/docs/concepts/scheduling)).
+A mutation that removes the row pointing at an object does not need to schedule
+anything: `ctx.storage.deleteAfterCommit(key)` **queues** the delete, and the
+queue is flushed once the transaction commits — and never if it rolled back, so
+the row and the bytes cannot disagree.
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+export const remove = mutation.input({ id: v.id("attachments") }).mutation(async ({ ctx, args }) => {
+    const attachment = await ctx.db.attachments.get(args.id);
+
+    if (!attachment) {
+        return;
+    }
+
+    await ctx.db.attachments.delete(args.id);
+    ctx.storage.deleteAfterCommit(attachment.key);
+});
+```
+
+It returns `void`, not a promise: nothing has been attempted when it returns,
+and the object is still there on the next line. The flush runs after the
+response wherever the host can defer it, so the caller never waits on R2; the
+trade is that an object can briefly outlive its row, and a failed delete leaks
+the object (logged with its key) rather than failing a mutation that already
+committed. `ctx.storage.bucket("avatars").deleteAfterCommit(key)` queues against
+that bucket. See [@lunora/storage](/docs/packages/storage) for the full
+treatment.
 
 ## See also
 

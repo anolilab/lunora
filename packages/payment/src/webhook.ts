@@ -4,6 +4,7 @@
  * Verification runs over the **raw, unparsed request body** — never re-serialize JSON before
  * checking the signature. Uses WebCrypto (`crypto.subtle`), available in both workerd and Node.
  */
+import { fromBase64, toBase64 } from "../../../shared/base64";
 import { constantTimeEqual as sharedConstantTimeEqual } from "../../../shared/constant-time-equal";
 import { LunoraPaymentError } from "./errors";
 
@@ -13,15 +14,11 @@ const toHex = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((
 
 const SYMMETRIC_PREFIX = "whsec_";
 
-const base64ToBytes = (value: string): Uint8Array<ArrayBuffer> => new Uint8Array(Array.from(atob(value), (character) => character.codePointAt(0) ?? 0));
-
-const bytesToBase64 = (buffer: ArrayBuffer): string => btoa(String.fromCodePoint(...new Uint8Array(buffer)));
-
 const hmacSha256Base64 = async (keyBytes: BufferSource, payload: string): Promise<string> => {
     const key = await crypto.subtle.importKey("raw", keyBytes, { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
     const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
 
-    return bytesToBase64(signature);
+    return toBase64(new Uint8Array(signature));
 };
 
 /**
@@ -94,7 +91,7 @@ export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): 
         throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
     }
 
-    const keyBytes = base64ToBytes(rawSecret);
+    const keyBytes = fromBase64(rawSecret);
 
     if (keyBytes.length === 0) {
         throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");

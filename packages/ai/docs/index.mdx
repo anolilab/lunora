@@ -93,6 +93,12 @@ export const docs = defineRag({
 });
 ```
 
+`embeddingModel` is optional only if a default is configured: the later examples
+on this page omit it, and they resolve through `ctx.ai.embeddingModel()`, which
+reads `LUNORA_AI_DEFAULT_EMBEDDING_MODEL` from the Worker env (wrangler `vars`
+or `.dev.vars`). With neither, the first `index`/`retrieve` throws. The same
+holds for `ctx.ai.model()` with no argument and `LUNORA_AI_DEFAULT_MODEL`.
+
 ```ts
 // inside an action:
 import { docs } from "@/lunora/rag";

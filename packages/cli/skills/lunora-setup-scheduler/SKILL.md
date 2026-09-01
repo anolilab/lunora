@@ -41,16 +41,16 @@ import { internal } from "./_generated/api";
 
 export const startTrial = mutation.input({ userId: v.string() }).mutation(async ({ ctx, args: { userId } }) => {
     // run an internal action 14 days from now
-    const { id } = await ctx.scheduler.runAfter(14 * 24 * 60 * 60 * 1000, internal.billing.endTrial, { userId });
+    const jobId = await ctx.scheduler.runAfter(14 * 24 * 60 * 60 * 1000, internal.billing.endTrial, { userId });
 
-    return { jobId: id };
+    return { jobId };
 });
 ```
 
 - `runAfter(delayMs, fnRef, args, options?)` — run after a delay (`delayMs` must
   be a non-negative finite number). `runAt(date, fnRef, args, options?)` — run at
   a `Date` or epoch-ms timestamp.
-- Both return `{ id, scheduledFor }`. Cancel with `ctx.scheduler.cancel(id)`;
+- Both resolve the job id. Cancel with `ctx.scheduler.cancel(id)`;
   inspect with `ctx.scheduler.get(id)` / `ctx.scheduler.list()`.
 - `options` accepts a `retry` policy (`{ maxAttempts, backoff, baseMs, maxMs }`;
   DO defaults: `maxAttempts: 5`, `backoff: "exponential"`, `baseMs: 30_000`) and

@@ -134,7 +134,9 @@ Re-exported from `@visulima/notification` — signature tracked at its source.
 ```ts
 interface NotifyConfig {
     allowedPushOrigins?: string[];
+    broadcastPageSize?: number;
     chat?: (env: NotifyEnv) => unknown;
+    concurrency?: number;
     fcm?: FcmConfig | FcmConfigFactory;
     inApp?: (env: NotifyEnv) => unknown;
     store?: (env: NotifyEnv) => SubscriptionStore;

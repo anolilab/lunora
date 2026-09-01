@@ -38,7 +38,7 @@ export type { ProvideLunoraOptions } from "./client";
 export { injectLunoraClient, LUNORA_CLIENT, provideLunora } from "./client";
 export type { ConnectionStatusOptions } from "./connection-status";
 export { connectionStatus } from "./connection-status";
-export type { FlagContext, FlagOptions, FlagsOptions, FlagValue } from "./flag";
+export type { FlagOptions, FlagsOptions, FlagValue } from "./flag";
 export { flag, flags } from "./flag";
 export type { HydratePreloadedOptions, HydratePreloadedResult } from "./hydrate-preloaded";
 export { hydratePreloaded } from "./hydrate-preloaded";

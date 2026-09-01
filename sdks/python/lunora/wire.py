@@ -29,6 +29,24 @@ TAG = "$lunora.wire$"
 MAX_DEPTH = 64
 MAX_BIGINT_DIGITS = 1024
 
+#: Largest integer a float64 holds exactly (2**53 - 1). JSON numbers are
+#: float64, so an integer past this cannot cross the wire as a number without
+#: changing value — ``WireBigInt`` and its tag exist for that case.
+MAX_EXACT_INTEGER = 2**53 - 1
+
+
+class WireFormatError(ValueError):
+    """A wire value this codec refuses: malformed, over-long, or out of range.
+
+    Subclasses :class:`ValueError` because that is what every bound in this
+    module used to raise bare, and a caller catching the old type keeps working.
+    The named type is what makes ``except WireFormatError`` around a decode
+    complete: the codec previously let a raw ``IndexError`` out of a short
+    tagged array and a raw ``ValueError`` out of a truncated map entry, so a
+    caller catching the codec's own errors caught neither, and in the socket
+    read loop one such frame ended every subscription on the client.
+    """
+
 
 class _Undefined:
     """Singleton sentinel for JS ``undefined`` (distinct from ``None``/``null``)."""
@@ -122,14 +140,14 @@ def _b64decode(text: str) -> bytes:
     try:
         return base64.b64decode(text, validate=True)
     except binascii.Error as error:
-        raise ValueError(f"wire-codec: invalid base64 in bytes tag: {error}") from error
+        raise WireFormatError(f"wire-codec: invalid base64 in bytes tag: {error}") from error
 
 
 def encode_wire(value: Any, depth: int = 0) -> Any:
     """Encode ``value`` into a JSON-safe tree, tagging JSON-hostile leaves."""
 
     if depth > MAX_DEPTH:
-        raise ValueError(f"wire-codec: value nesting exceeds the {MAX_DEPTH}-level limit")
+        raise WireFormatError(f"wire-codec: value nesting exceeds the {MAX_DEPTH}-level limit")
 
     if value is UNDEFINED:
         return [TAG, "undefined"]
@@ -145,6 +163,12 @@ def encode_wire(value: Any, depth: int = 0) -> Any:
         return [TAG, "bigint", str(value.value)]
 
     if isinstance(value, int):
+        # Python's int is arbitrary-precision; a JSON number is not. Passing a
+        # larger one straight through meant the server's own JSON.parse rounded
+        # it, so the value that arrived was quietly a different integer. Refuse,
+        # as the Go port does, and name the way across.
+        if value > MAX_EXACT_INTEGER or value < -MAX_EXACT_INTEGER:
+            raise WireFormatError(f"wire-codec: integer {value} exceeds the exact float64 range — wrap it in WireBigInt so it crosses the wire as a bigint tag")
         return value
 
     if isinstance(value, float):
@@ -207,14 +231,17 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
     """Inverse of :func:`encode_wire`: revive tagged leaves to Wire* wrappers."""
 
     if depth > MAX_DEPTH:
-        raise ValueError(f"wire-codec: value nesting exceeds the {MAX_DEPTH}-level limit")
+        raise WireFormatError(f"wire-codec: value nesting exceeds the {MAX_DEPTH}-level limit")
 
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
 
     if isinstance(value, list):
         if len(value) > 0 and value[0] == TAG:
-            tag = value[1]
+            # Not `value[1]`: a bare `[TAG]` is a legitimate forward-compat
+            # shape every other port hands back as an ordinary array, and
+            # indexing it raised a bare IndexError out of the codec instead.
+            tag = value[1] if len(value) > 1 else None
             if tag == "undefined":
                 return UNDEFINED
             if tag == "nan":
@@ -226,14 +253,14 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
             if tag == "bigint":
                 raw = value[2]
                 if not isinstance(raw, str) or len(raw) > MAX_BIGINT_DIGITS or not _is_bigint_literal(raw):
-                    raise ValueError(f"wire-codec: invalid or over-long bigint (max {MAX_BIGINT_DIGITS} digits)")
+                    raise WireFormatError(f"wire-codec: invalid or over-long bigint (max {MAX_BIGINT_DIGITS} digits)")
                 return WireBigInt(int(raw))
             if tag == "date":
                 return WireDate(decode_wire(value[2], depth + 1))
             if tag == "url":
                 return WireUrl(value[2])
             if tag == "map":
-                return WireMap([(decode_wire(k, depth + 1), decode_wire(v, depth + 1)) for k, v in value[2]])
+                return _decode_map(value, depth)
             if tag == "set":
                 return WireSet([decode_wire(item, depth + 1) for item in value[2]])
             if tag == "error":
@@ -255,7 +282,31 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
     if isinstance(value, dict):
         return {key: decode_wire(item, depth + 1) for key, item in value.items()}
 
-    raise TypeError(f"wire-codec: cannot decode a {type(value).__name__}")
+    raise WireFormatError(f"wire-codec: cannot decode a {type(value).__name__}")
+
+
+def _decode_map(value: list, depth: int) -> WireMap:
+    """Decode a ``map`` tag, refusing an entry that is not a real pair.
+
+    Destructuring ``for k, v in value[2]`` raised a bare ``ValueError`` on a
+    truncated entry — the right outcome reported as the wrong kind of error, so
+    a caller catching the codec's own type saw an unhandled exception instead.
+    """
+
+    entries = value[2] if len(value) > 2 else None
+
+    if not isinstance(entries, list):
+        raise WireFormatError("wire-codec: malformed map tag")
+
+    pairs = []
+
+    for entry in entries:
+        if not isinstance(entry, list) or len(entry) < 2:
+            raise WireFormatError("wire-codec: malformed map entry")
+
+        pairs.append((decode_wire(entry[0], depth + 1), decode_wire(entry[1], depth + 1)))
+
+    return WireMap(pairs)
 
 
 def _is_bigint_literal(raw: str) -> bool:
@@ -357,7 +408,9 @@ def stable_stringify(value: Any) -> str:
 
     Operates on the output of :func:`encode_wire`, so it only ever sees
     ``None``/``bool``/``int``/``float``/``str``/``list``/``dict``. Object keys are
-    sorted at every depth (code-point order); arrays keep order; ``None`` fields
+    sorted at every depth in UTF-16 code-unit order (see :func:`_utf16_sort_key`;
+    Python's own ``sorted`` is by code point, which disagrees for any key starting
+    with a surrogate); arrays keep order; ``None`` fields
     are kept; :data:`UNDEFINED` (or an array-position ``UNDEFINED``) encodes as
     ``null``.
     """

@@ -1,7 +1,10 @@
 /**
- * Canonical FNV-1a (32-bit) digest shared by the server's mask middleware
- * (`@lunora/server`'s `"hash"` strategy) and the studio's data-browser mask
- * preview (`@lunora/studio`).
+ * Canonical FNV-1a digests — 32-bit ({@link fnv1aHex}) and 64-bit
+ * ({@link fnv1a64Hex}) — shared by the server's mask middleware
+ * (`@lunora/server`'s `"hash"` strategy), the studio's data-browser mask
+ * preview (`@lunora/studio`), and the three 64-bit callers
+ * (`@lunora/replica`'s deterministic insert ids, `@lunora/notify`'s persisted
+ * subscription primary keys, `@lunora/agent`'s workflow dedup instance ids).
  *
  * It is deliberately **not** a package. The studio must not depend on the server
  * runtime, and the server's digest is an implementation detail of one middleware
@@ -54,4 +57,67 @@ const fnv1aHex = (input: string, offset: number = FNV1A_OFFSET_BASIS): string =>
     return (hash >>> 0).toString(16).padStart(8, "0");
 };
 
-export { FNV1A_OFFSET_BASIS, FNV1A_PRIME, fnv1aHex };
+/** One 16-bit limb of the 64-bit state, as 4 lowercase hex digits. */
+const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
+
+/**
+ * FNV-1a (64-bit) digest of `input`, as 16 lowercase hex digits.
+ *
+ * The hash state is held as four 16-bit limbs in plain `number`s rather than a
+ * `BigInt`. BigInt allocates a heap object per operation, and this runs once per
+ * character of the hash input — the limb form measures ~5x faster in isolation
+ * (`packages/replica/__bench__/apply-diff-hotpath.bench.ts` benches THIS
+ * function, imported, against the BigInt form over a fixed string) and produces
+ * bit-identical digests (`packages/replica/__tests__/apply-diff.test.ts` pins the
+ * two together over random and boundary inputs, including astral code points and
+ * lone surrogates).
+ *
+ * The FNV-1a prime `0x0000_0100_0000_01b3` has only two non-zero 16-bit limbs
+ * (`0x01b3` at limb 0 and `0x0100` at limb 2), so the full 4x4 limb product
+ * collapses to the two multiplications per limb below. Every intermediate stays
+ * well under 2^32, so `>>> 16` is a valid carry extraction.
+ *
+ * The three consumers MUST agree byte-for-byte, which is why this lives here and
+ * is not copy-pasted per package: `@lunora/notify` derives a *persisted*
+ * subscription primary key from it, so a digest that drifts in one copy silently
+ * re-keys every existing subscription (the old row goes dark, the new row is a
+ * duplicate).
+ *
+ * A checksum, NOT a cryptographic hash — unkeyed, unsalted, and trivially
+ * invertible for a low-entropy input. Never use it to hide a value.
+ */
+const fnv1a64Hex = (input: string): string => {
+    /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and multiplication; the bit ops ARE the algorithm */
+    // Offset basis 0xcbf29ce484222325, low limb first.
+    let h0 = 0x23_25;
+    let h1 = 0x84_22;
+    let h2 = 0x9c_e4;
+    let h3 = 0xcb_f2;
+
+    for (let index = 0; index < input.length; index += 1) {
+        const point = input.codePointAt(index) ?? 0;
+
+        // A code point above the BMP occupies limbs 0 and 1.
+        h0 ^= point & 0xff_ff;
+        h1 ^= (point >>> 16) & 0xff_ff;
+
+        const p0 = h0 * 0x01_b3;
+        const p1 = h1 * 0x01_b3;
+        const p2 = h2 * 0x01_b3 + h0 * 0x01_00;
+        const p3 = h3 * 0x01_b3 + h1 * 0x01_00;
+
+        const c1 = p1 + (p0 >>> 16);
+        const c2 = p2 + (c1 >>> 16);
+        const c3 = p3 + (c2 >>> 16);
+
+        h0 = p0 & 0xff_ff;
+        h1 = c1 & 0xff_ff;
+        h2 = c2 & 0xff_ff;
+        h3 = c3 & 0xff_ff;
+    }
+
+    return hex4(h3) + hex4(h2) + hex4(h1) + hex4(h0);
+    /* eslint-enable no-bitwise */
+};
+
+export { FNV1A_OFFSET_BASIS, FNV1A_PRIME, fnv1a64Hex, fnv1aHex };

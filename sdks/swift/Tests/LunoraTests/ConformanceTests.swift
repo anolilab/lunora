@@ -56,12 +56,14 @@ final class ConformanceTests: XCTestCase {
             case "wire_codec_round_trip": try caseWireCodecRoundTrip()
             case "undefined_is_distinct_from_null": try caseUndefinedIsDistinctFromNull()
             case "over_long_bigint_rejected": caseOverLongBigIntRejected()
-            case "malformed_bytes_rejected": try caseMalformedBytesRejected()
+            case "malformed_values_rejected": try caseMalformedValuesRejected()
             case "depth_cap_enforced": caseDepthCapEnforced()
+            case "exact_integer_range_enforced": caseExactIntegerRangeEnforced()
             case "stable_wire_key_fixtures": try caseStableWireKeyFixtures()
             case "format_number_matches_ecmascript": caseFormatDoubleMatchesEcmaScript()
             case "key_order_matches_utf16": caseKeyOrderMatchesUTF16()
             case "string_escaping_matches_json_stringify": caseStringEscapingMatchesJSONStringify()
+            case "empty_shard_key_is_omitted": try caseEmptyShardKeyIsOmitted()
             case "rpc_request_bodies": try caseRPCRequestBodies()
             case "rpc_responses": try caseRPCResponses()
             case "non_2xx_without_error_envelope_fails": caseNon2xxWithoutErrorEnvelopeThrows()
@@ -104,7 +106,11 @@ final class ConformanceTests: XCTestCase {
             let name = testCase["name"] as? String ?? "?"
             let encoded = testCase["encoded"]
             let roundTripped = try Wire.encode(Wire.decode(encoded))
-            XCTAssertEqual(canonical(roundTripped), canonical(encoded), "round-trip mismatch for \(name)")
+            // A handful of shapes are legitimately not fixed points — a bare
+            // [tag] array is escaped on the way out, an `undefined` object field
+            // is dropped — and carry the expected re-encoding.
+            let expected = testCase["reencoded"] ?? encoded
+            XCTAssertEqual(canonical(roundTripped), canonical(expected), "round-trip mismatch for \(name)")
         }
     }
 
@@ -128,11 +134,74 @@ final class ConformanceTests: XCTestCase {
         XCTAssertNoThrow(try Wire.decode([Wire.tag, "bigint", "-42"]))
     }
 
-    func caseMalformedBytesRejected() throws {
-        XCTAssertThrowsError(try Wire.decode([Wire.tag, "bytes", "not@@base64!!"]))
+    /// Walks the shared rejection list.
+    ///
+    /// The list is data (`protocol/fixtures/wire-codec.json`), not a per-suite
+    /// invention: a rejection each port hard-codes for itself is a rejection
+    /// only some ports have, which is how one of them ended up accepting a
+    /// truncated base64 payload as valid short bytes.
+    func caseMalformedValuesRejected() throws {
+        let rejected = try XCTUnwrap(fixture("wire-codec.json")["rejected"] as? [[String: Any]])
+        XCTAssertFalse(rejected.isEmpty, "the fixture must carry a rejection list")
+
+        for testCase in rejected {
+            let name = testCase["name"] as? String ?? "?"
+            XCTAssertThrowsError(try Wire.decode(testCase["encoded"]), name)
+        }
 
         let decoded = try Wire.decode([Wire.tag, "bytes", "AQID"])
         XCTAssertEqual(try XCTUnwrap(decoded as? Data), Data([1, 2, 3]))
+
+        // A bare [tag] is NOT malformed: it is the forward-compat shape, and the
+        // reference hands it back as an ordinary array.
+        XCTAssertEqual(try XCTUnwrap(Wire.decode([Wire.tag]) as? [Any]).count, 1)
+    }
+
+    /// An integer a `Double` cannot hold exactly must not silently become a
+    /// different integer on the wire. Swift's `Int` is 64-bit, so passing one
+    /// through left the SERVER's own `JSON.parse` to round it.
+    func caseExactIntegerRangeEnforced() {
+        let maximum = 9_007_199_254_740_991
+
+        XCTAssertNoThrow(try Wire.encode(maximum))
+        XCTAssertNoThrow(try Wire.encode(-maximum))
+        XCTAssertThrowsError(try Wire.encode(maximum + 1))
+        XCTAssertThrowsError(try Wire.encode(-maximum - 1))
+
+        // WireBigInt is the way across, and it keeps every digit.
+        XCTAssertEqual(
+            canonical(try? Wire.encode(WireBigInt("9007199254740992"))),
+            canonical([Wire.tag, "bigint", "9007199254740992"])
+        )
+    }
+
+    /// An EMPTY shard key is absent, not the shard named `""`.
+    ///
+    /// The runtime takes any string as a named shard and gives `""` its own
+    /// Durable Object, while this client treats `""` and nil as one shard
+    /// wherever it matches a subscription or drains the queue. Sending it split
+    /// those two views: a single-call replay of a queued write landed on one
+    /// Durable Object and a BATCHED replay of that same write on another, with
+    /// the optimistic overlay tracking neither. Both builders that carry a shard
+    /// key are asserted, because normalising one and not the other is the same
+    /// split.
+    func caseEmptyShardKeyIsOmitted() throws {
+        for absent in [nil, ""] as [String?] {
+            let body = try LunoraClient.buildRPCBody(functionPath: "messages:send", args: [String: Any](), shardKey: absent)
+            XCTAssertNil(body["shardKey"], "shard key \(String(describing: absent))")
+        }
+
+        let named = try LunoraClient.buildRPCBody(functionPath: "messages:send", args: [String: Any](), shardKey: "room-1")
+        XCTAssertEqual(named["shardKey"] as? String, "room-1")
+
+        let client = LunoraClient(url: "https://app.example")
+
+        for absent in [nil, ""] as [String?] {
+            XCTAssertFalse(client.wsURL(shardKey: absent).contains("shard="), "ws shard key \(String(describing: absent))")
+        }
+
+        XCTAssertEqual(client.wsURL(shardKey: ""), client.wsURL(shardKey: nil))
+        XCTAssertTrue(client.wsURL(shardKey: "room-1").contains("shard="))
     }
 
     func caseDepthCapEnforced() {

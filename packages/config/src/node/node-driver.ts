@@ -29,6 +29,14 @@
  * remote log stream to tail, and no remote secret store to write. The interface
  * already models this ("or `undefined` for a host that has none"), and claiming
  * a toolchain here would mean inventing commands that cannot run.
+ *
+ * **What that costs the target, stated plainly.** `lunora deploy` and `lunora
+ * dev` both refuse this target at selection (`resolveRunnableTargetOrError` in
+ * `@lunora/cli`) rather than after codegen has already rewritten `_generated/*`
+ * for it. What this target IS good for is everything before that line:
+ * `lunora codegen --target node` gates the emitted `ctx.*` surface against
+ * `NODE_CAPABILITIES`, and `infer`/`provision` here report what the app needs.
+ * Running the result is the operator's own `@lunora/platform-node` process.
  */
 
 import type { DeployDriver, DriverContext, ProvisionResult, ResourceGraph } from "../deploy-driver";
@@ -73,12 +81,16 @@ const NODE_DRIVER: DeployDriver = {
         const warnings = UNSUPPORTED.filter((entry) => entry.detect(graph)).map((entry) => entry.warning);
 
         if (graph.crons.length > 0) {
-            // Not a gap — a difference worth stating, because it is the one
-            // place Node does *more*: Cloudflare reconciles `triggers.crons`
-            // into `wrangler.jsonc` at build time, while this target registers
-            // them at runtime through `SchedulerHost.cron`.
+            // A gap, not a difference. This warning used to promise the crons
+            // "will be registered at runtime via SchedulerHost.cron" — nothing
+            // does that. `@lunora/platform-node` implements `SchedulerHost.cron`
+            // and the conformance suite is its only caller; no runtime walks the
+            // generated `LUNORA_CRONS` map into it (the only cron dispatch is
+            // `@lunora/runtime`'s, reached from Cloudflare's `scheduled()`
+            // handler). Saying so is the whole value of this line: an operator
+            // reading "will be registered" ships an app whose crons never fire.
             warnings.push(
-                `${String(graph.crons.length)} cron expression(s) will be registered at runtime via SchedulerHost.cron rather than written to a config file`,
+                `${String(graph.crons.length)} cron expression(s) declared, and NOTHING dispatches them on this target: no runtime walks the generated LUNORA_CRONS map into SchedulerHost.cron. Schedule the work explicitly (ctx.scheduler.runAfter/runAt) or deploy to a target with cron dispatch`,
             );
         }
 

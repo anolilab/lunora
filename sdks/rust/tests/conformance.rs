@@ -12,7 +12,7 @@ use lunora::client::{
     StreamEvent, MAX_PENDING_POKES,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
-use lunora::wire::{decode_wire, encode_wire, from_model_json, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
+use lunora::wire::{decode_wire, encode_wire, from_json, from_model_json, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, MAX_EXACT_INTEGER, TAG};
 use serde_json::{json, Value};
 
 // The optimistic-layer and offline-queue cases live in their own file, dispatched
@@ -87,12 +87,14 @@ fn conformance_manifest_is_covered() {
             "wire_codec_round_trip" => wire_codec_round_trip(),
             "undefined_is_distinct_from_null" => undefined_is_distinct_from_null(),
             "over_long_bigint_rejected" => over_long_bigint_rejected(),
-            "malformed_bytes_rejected" => malformed_bytes_rejected(),
+            "malformed_values_rejected" => malformed_values_rejected(),
             "depth_cap_enforced" => depth_cap_enforced(),
+            "exact_integer_range_enforced" => exact_integer_range_enforced(),
             "stable_wire_key_fixtures" => stable_wire_key_fixtures(),
             "format_number_matches_ecmascript" => format_number_matches_ecmascript(),
             "key_order_matches_utf16" => key_order_matches_utf16(),
             "string_escaping_matches_json_stringify" => string_escaping_matches_json_stringify(),
+            "empty_shard_key_is_omitted" => empty_shard_key_is_omitted(),
             "rpc_request_bodies" => rpc_request_bodies(),
             "rpc_responses" => rpc_responses(),
             "non_2xx_without_error_envelope_fails" => non_2xx_without_error_envelope_fails(),
@@ -134,8 +136,12 @@ fn wire_codec_round_trip() {
         let name = case["name"].as_str().unwrap_or("?");
         let encoded = &case["encoded"];
         let round_tripped = encode_wire(&decode_wire(encoded).expect("decode")).expect("encode");
+        // A handful of shapes are legitimately not fixed points — a bare [TAG]
+        // array is escaped on the way out, an `undefined` object field is
+        // dropped — and carry the expected re-encoding.
+        let expected = case.get("reencoded").unwrap_or(encoded);
 
-        assert_eq!(canonical(&round_tripped), canonical(encoded), "round-trip mismatch for {name}");
+        assert_eq!(canonical(&round_tripped), canonical(expected), "round-trip mismatch for {name}");
     }
 }
 
@@ -166,12 +172,64 @@ fn over_long_bigint_rejected() {
     assert_eq!(decode_wire(&json!([TAG, "bigint", "-42"])).expect("decode"), WireValue::BigInt("-42".into()));
 }
 
-fn malformed_bytes_rejected() {
-    assert!(
-        decode_wire(&json!([TAG, "bytes", "not@@base64!!"])).is_err(),
-        "malformed base64 in a bytes tag must be rejected"
-    );
+/// Walks the shared rejection list.
+///
+/// The list is data (`protocol/fixtures/wire-codec.json`), not a per-suite
+/// invention: a rejection each port hard-codes for itself is a rejection only
+/// some ports have, which is exactly how THIS port's hand-rolled base64 decoder
+/// went on accepting `"AQIDA"` and `"AQ=ID"` — handing short, valid-looking
+/// bytes to application code — while seven ports rejected both.
+fn malformed_values_rejected() {
+    let document = fixture("wire-codec.json");
+    let rejected = document["rejected"].as_array().expect("rejected");
+
+    assert!(!rejected.is_empty(), "the fixture must carry a rejection list");
+
+    for case in rejected {
+        let name = case["name"].as_str().unwrap_or("?");
+
+        assert!(decode_wire(&case["encoded"]).is_err(), "{name} must be rejected");
+    }
+
     assert_eq!(decode_wire(&json!([TAG, "bytes", "AQID"])).expect("decode"), WireValue::Bytes(vec![1, 2, 3]));
+
+    // Whitespace INSIDE a payload is not a rejection: the reference decodes via
+    // `atob`, which strips ASCII whitespace before doing anything else.
+    assert_eq!(decode_wire(&json!([TAG, "bytes", "AQ\nID"])).expect("decode"), WireValue::Bytes(vec![1, 2, 3]));
+
+    // A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
+    // reference hands it back as an ordinary array.
+    assert_eq!(
+        decode_wire(&json!([TAG])).expect("decode"),
+        WireValue::Array(vec![WireValue::String(TAG.into())])
+    );
+}
+
+/// An integer a float64 cannot hold exactly must not silently become a
+/// different integer on the wire.
+///
+/// `WireValue::Number` IS an `f64`, so this port cannot carry such an integer
+/// through the codec at all — the exposure is `from_json`, where a generated
+/// model's `i64` field arrives as a `serde_json` integer with every digit still
+/// intact. Narrowing it there rounded it silently; it now keeps its digits as a
+/// bigint, which a `v.number()` field rejects loudly at the server instead.
+fn exact_integer_range_enforced() {
+    // An integral number is written as a JSON integer, not `1.0` — that is what
+    // `JSON.stringify` writes, and the conformance comparison normalises both
+    // sides through `stable_stringify`, so it could not see the difference.
+    assert_eq!(encode_wire(&WireValue::Number(1.0)).expect("encode"), json!(1));
+    assert_eq!(
+        encode_wire(&WireValue::Number(MAX_EXACT_INTEGER)).expect("encode"),
+        json!(9_007_199_254_740_991_i64)
+    );
+    assert_eq!(encode_wire(&WireValue::Number(3.5)).expect("encode"), json!(3.5));
+
+    assert_eq!(from_json(&json!(9_007_199_254_740_993_u64)), WireValue::BigInt("9007199254740993".into()));
+    assert_eq!(from_json(&json!(-9_007_199_254_740_993_i64)), WireValue::BigInt("-9007199254740993".into()));
+
+    // In range, and a float of any magnitude, stay plain numbers.
+    assert_eq!(from_json(&json!(9_007_199_254_740_991_i64)), WireValue::Number(MAX_EXACT_INTEGER));
+    assert_eq!(from_json(&json!(1e300)), WireValue::Number(1e300));
 }
 
 fn depth_cap_enforced() {
@@ -262,15 +320,16 @@ fn rpc_request_bodies() {
 
 /// An EMPTY shard key is absent, not the shard named `""`.
 ///
-/// Not a shared fixture case — only some ports ever sent it — but the one place
+/// A manifest case now, so every port is held to it — it used to be this suite's
+/// own test on the grounds that only some ports ever sent it, which is precisely
+/// the reason to make it required rather than local. It is the one place
 /// where getting it wrong is worse than the bug it replaced: this client treats
 /// `""` and `None` as one shard wherever it matches a subscription or drains the
 /// queue, so a `""` that reached the wire would route the write to a DIFFERENT
 /// Durable Object than the subscription it updated. Both builders that carry a
 /// shard key are asserted, because normalising one and not the other is the same
 /// split.
-#[test]
-fn empty_shard_key_is_the_default_shard() {
+fn empty_shard_key_is_omitted() {
     let body = build_rpc_body("messages:send", &WireValue::Object(Vec::new()), Some("")).expect("build");
 
     assert!(body.get("shardKey").is_none(), "an empty shard key is omitted from the body");

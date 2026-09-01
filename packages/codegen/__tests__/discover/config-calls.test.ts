@@ -1,7 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
+import { mailInboundDispatchWithoutVerify } from "@lunora/advisor";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -13,6 +14,16 @@ let project: Project;
 const write = (name: string, source: string): string => {
     const path = join(workdir, "lunora", name);
 
+    writeFileSync(path, source, "utf8");
+
+    return path;
+};
+
+/** Write a project-relative source file outside `lunora/` — e.g. the worker entry. */
+const writeAt = (relative: string, source: string): string => {
+    const path = join(workdir, relative);
+
+    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, source, "utf8");
 
     return path;
@@ -143,5 +154,51 @@ describe("discoverConfigCalls", () => {
         const found = discoverConfigCalls(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ analyzable: false, callee: "extend", presentKeys: [] });
+    });
+
+    // Regression: every one of these factories is built in the worker entry, never
+    // under `lunora/`. A `lunora/`-only walk found zero call sites repo-wide, so
+    // five ERROR-level security lints could not fire at all.
+    it("discovers a config call in the worker entry, not just under lunora/", () => {
+        expect.assertions(2);
+
+        writeAt(
+            "src/server/index.ts",
+            `import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
+
+            export const handler = createInboundEmailHandler({
+                dispatch: dispatchToLunoraFunction({ functionPath: "inbound:onEmail" }),
+                parse: parseInboundEmail,
+            });`,
+        );
+
+        const found = discoverConfigCalls(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ analyzable: true, callee: "createInboundEmailHandler", file: "src/server/index", presentKeys: ["dispatch", "parse"] });
+    });
+
+    // eslint-disable-next-line no-secrets/no-secrets -- an advisor rule id in a test title, not a credential
+    it("feeds mail_inbound_dispatch_without_verify from a worker-entry handler", () => {
+        expect.assertions(2);
+
+        writeAt(
+            "src/server/index.ts",
+            `export const handler = createInboundEmailHandler({ dispatch: dispatchToLunoraFunction({}), parse: parseInboundEmail });`,
+        );
+
+        const findings = mailInboundDispatchWithoutVerify.run({ configCalls: discoverConfigCalls(project, join(workdir, "lunora")), schema: { tables: [] } });
+
+        expect(findings).toHaveLength(1);
+        // eslint-disable-next-line no-secrets/no-secrets -- an advisor rule id, not a secret
+        expect(findings[0]).toMatchObject({ level: "ERROR", name: "mail_inbound_dispatch_without_verify" });
+    });
+
+    it("does not scan client-side src/ trees outside the worker entry", () => {
+        expect.assertions(1);
+
+        writeAt("src/components/Billing.ts", `export const pay = createPayment({ provider: stripe });`);
+
+        expect(discoverConfigCalls(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 });

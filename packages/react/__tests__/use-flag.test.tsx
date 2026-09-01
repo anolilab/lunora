@@ -104,7 +104,7 @@ describe("useFlag", () => {
         const [reference, args] = mock.subscribe.mock.calls[0] as [{ __lunoraRef: string }, Record<string, unknown>];
 
         expect(reference.__lunoraRef).toBe(FLAGS_REF);
-        expect(args).toStrictEqual({ context: undefined, default: "control", key: "hero", type: "string" });
+        expect(args).toStrictEqual({ default: "control", key: "hero", type: "string" });
 
         await act(async () => {
             mock.emit(FLAGS_REF, "variant-b");

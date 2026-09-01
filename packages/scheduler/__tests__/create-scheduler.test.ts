@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import createScheduler from "../src/create-scheduler";
 import { createCronTrigger } from "../src/cron";
@@ -76,7 +76,7 @@ describe("createScheduler", () => {
 
         const result = await scheduler.runAt(at, fnRef, { userId: "u-1" });
 
-        expect(result).toEqual({ id: "id-1", scheduledFor: 12_345 });
+        expect(result).toBe("id-1");
         expect(calls).toHaveLength(1);
         expect(calls[0]?.body).toEqual({
             args: { userId: "u-1" },
@@ -86,6 +86,28 @@ describe("createScheduler", () => {
             scheduledFor: at.getTime(),
             shardKey: undefined,
         });
+    });
+
+    // Regression (contract drift): `runAfter`/`runAt` used to resolve the DO's
+    // `{ id, scheduledFor }` record, while every gate that describes this object
+    // — `SchedulerLike` (@lunora/shard-engine), `Scheduler` (@lunora/server),
+    // `ctx.scheduler` (@lunora/runtime) and the docs — says `Promise<string>`.
+    // The generated shard installs it with a bare cast, so only an assertion here
+    // catches the drift: in a mutation you got an object, wrote it into a string
+    // column, and `cancel(id)` answered `{ cancelled: false }` with no error.
+    it("resolves the bare job id, not the DO's record", async () => {
+        expect.assertions(2);
+
+        const { namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        const id = await scheduler.runAfter(0, fnRef, { userId: "u-1" });
+
+        expect(id).toBe("id-1");
+        expect(typeof id).toBe("string");
+
+        expectTypeOf<Awaited<ReturnType<typeof scheduler.runAfter>>>().toEqualTypeOf<string>();
+        expectTypeOf<Awaited<ReturnType<typeof scheduler.runAt>>>().toEqualTypeOf<string>();
     });
 
     it("runAt() carries the scheduler's instanceName so a pooled slot is released on the right DO", async () => {
@@ -125,7 +147,7 @@ describe("createScheduler", () => {
 
         const result = await scheduler.runAt(at, agentRef, { prompt: "summarize" });
 
-        expect(result).toEqual({ id: "id-1", scheduledFor: 12_345 });
+        expect(result).toBe("id-1");
         // The wire payload carries the binding under `workflow` and omits `functionPath`.
         expect(calls[0]?.body).toEqual({
             args: { prompt: "summarize" },

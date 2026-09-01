@@ -178,7 +178,7 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
-        options.listSchemaTables = () => ["customers", "events", "paymentSessions", "subscriptions", "usageEvents"];
+        options.listSchemaTables = () => ["customers", "events", "paymentSessions", "subscriptions", "usageEvents", "ratelimit_buckets"];
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 

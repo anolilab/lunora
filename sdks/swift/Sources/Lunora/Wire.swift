@@ -30,6 +30,11 @@ public enum Wire {
     /// unbounded digit string from an untrusted peer is a denial of service.
     /// Applied only on decode — the untrusted direction.
     public static let maxBigIntDigits = 1024
+
+    /// Largest integer a `Double` holds exactly (2^53 - 1). JSON numbers are
+    /// doubles, so an integer past this cannot cross the wire as a number
+    /// without changing value — ``WireBigInt`` and its tag exist for that case.
+    public static let maxExactInteger = 9_007_199_254_740_991.0
 }
 
 /// JavaScript's `undefined`, distinct from JSON null.
@@ -106,6 +111,7 @@ public enum WireFormatError: Error, CustomStringConvertible {
     case invalidBigInt
     case unsupported(String)
     case malformed(String)
+    case outOfExactRange(String)
 
     public var description: String {
         switch self {
@@ -117,6 +123,8 @@ public enum WireFormatError: Error, CustomStringConvertible {
             return "wire-codec: cannot encode a \(type) over the Lunora wire — only plain values, arrays, dictionaries, Data, and the Wire* wrappers round-trip"
         case .malformed(let tag):
             return "wire-codec: malformed \(tag) tag"
+        case .outOfExactRange(let value):
+            return "wire-codec: integer \(value) exceeds the exact Double range — wrap it in WireBigInt so it crosses the wire as a bigint tag"
         }
     }
 }
@@ -149,7 +157,16 @@ extension Wire {
         // plain `as? Bool` would turn 0 and 1 into false and true.
         if let number = value as? NSNumber {
             if CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue }
-            if isIntegral(number) { return number }
+            if isIntegral(number) {
+                // `Int64` holds integers a `Double` cannot, so letting one
+                // through meant the SERVER's own JSON.parse rounded it and the
+                // value that arrived was quietly a different integer. Refuse, as
+                // the Go port does, and name the way across.
+                guard abs(number.doubleValue) <= maxExactInteger else {
+                    throw WireFormatError.outOfExactRange(number.stringValue)
+                }
+                return number
+            }
             return encodeDouble(number.doubleValue)
         }
 

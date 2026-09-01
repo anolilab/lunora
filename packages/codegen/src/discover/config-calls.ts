@@ -2,7 +2,7 @@ import type { ArrowFunction, Block, FunctionExpression, Node as TsNode, ObjectLi
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { ConfigCallIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { listSecurityScanFiles } from "./ast";
 import { calleeName } from "./callee";
 
 /**
@@ -164,11 +164,13 @@ const configCallsInSourceFile = (sourceFile: SourceFile, relativePath: string): 
 };
 
 /**
- * Discover factory/constructor/callback-builder calls in `lunora/` whose config
+ * Discover factory/constructor/callback-builder calls whose config
  * object literal a security lint inspects for a present-or-absent key — the
  * shared input for the config-call security lints (payment authorize,
  * inbound-mail verify, rate-limit store, browser private-targets, unauthenticated
- * shard access). Records the callee name and, when the config was a statically
+ * shard access). Scans the worker entry as well as `lunora/` (see
+ * {@link listSecurityScanFiles}) — every one of these factories is constructed in
+ * the entry by convention, so a `lunora/`-only walk found nothing to lint. Records the callee name and, when the config was a statically
  * readable object literal (a bare argument, or a callback's returned object
  * literal), the keys present and the subset assigned the literal `true`; the
  * lints decide what an absent (or present-and-true) key means.
@@ -176,10 +178,10 @@ const configCallsInSourceFile = (sourceFile: SourceFile, relativePath: string): 
 const discoverConfigCalls = (project: Project, lunoraDirectory: string): ConfigCallIR[] => {
     const calls: ConfigCallIR[] = [];
 
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
+    for (const { displayPath, filePath } of listSecurityScanFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        calls.push(...configCallsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
+        calls.push(...configCallsInSourceFile(sourceFile, displayPath));
     }
 
     return calls;

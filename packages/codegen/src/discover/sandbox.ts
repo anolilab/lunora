@@ -13,30 +13,40 @@ import { listLunoraSourceFiles } from "./ast";
  */
 const SANDBOX_MODULE_SPECIFIERS = new Set(["@lunora/agent", "@lunora/agent/sandbox"]);
 
+/** Sandbox tool name → the {@link SandboxUsage} flag its value import sets. */
+const TOOL_FLAGS: Record<string, keyof SandboxUsage> = {
+    browserTool: "usesSandboxBrowser",
+    containerTool: "usesSandboxContainer",
+    fsTool: "usesSandboxFs",
+};
+
 /**
  * Which sandbox tools a project imports from `@lunora/agent` (main entry or the
  * `/sandbox` subpath), detected by NAMED value import. Drives two things:
- * registering the `sandbox:invoke` dispatcher (either tool) and provisioning the
- * `BROWSER` wrangler binding (`browserTool` — the browser op runs on
- * `ctx.browser` inside the dispatcher).
+ * registering the `sandbox:invoke` dispatcher (ANY of the three tools — an agent
+ * whose only sandbox tool was `fsTool` used to be missed here, so every
+ * `ls`/`read`/`write`/`rm`/`stat` died on FUNCTION_NOT_FOUND) and provisioning
+ * the `BROWSER` wrangler binding (`browserTool` only — the browser op runs on
+ * `ctx.browser` inside the dispatcher, while `fsTool` reads a hand-declared R2
+ * bucket).
  */
 interface SandboxUsage {
     /** `import { browserTool } from "@lunora/agent"` (or `/sandbox`) appears in `lunora/`. */
     usesSandboxBrowser: boolean;
     /** `import { containerTool } from "@lunora/agent"` (or `/sandbox`) appears in `lunora/`. */
     usesSandboxContainer: boolean;
+    /** `import { fsTool } from "@lunora/agent"` (or `/sandbox`) appears in `lunora/`. */
+    usesSandboxFs: boolean;
 }
 
-/**
- * Scan the `lunora/` source set for named imports of `browserTool`/`containerTool`
- * from `@lunora/agent` (main entry or the `/sandbox` subpath). Type-only imports
- * (the input/option types) do not count — only a value import wires a tool into an
- * agent. This is additive and back-compat: a project that imports neither yields
- * all-`false` and codegen emits byte-identical output.
- */
+/** All-`false` usage — the starting point of every scan, and the answer for a project importing no sandbox tool. */
+const noSandboxUsage = (): SandboxUsage => {
+    return { usesSandboxBrowser: false, usesSandboxContainer: false, usesSandboxFs: false };
+};
+
 /** Which sandbox tools a single import declaration pulls in (all-`false` if not the sandbox module). */
 const scanImportDeclaration = (declaration: ImportDeclaration): SandboxUsage => {
-    const found: SandboxUsage = { usesSandboxBrowser: false, usesSandboxContainer: false };
+    const found = noSandboxUsage();
 
     if (!SANDBOX_MODULE_SPECIFIERS.has(declaration.getModuleSpecifierValue()) || declaration.isTypeOnly()) {
         return found;
@@ -47,20 +57,25 @@ const scanImportDeclaration = (declaration: ImportDeclaration): SandboxUsage => 
             continue;
         }
 
-        const name = named.getNameNode().getText();
+        const flag = TOOL_FLAGS[named.getNameNode().getText()];
 
-        if (name === "browserTool") {
-            found.usesSandboxBrowser = true;
-        } else if (name === "containerTool") {
-            found.usesSandboxContainer = true;
+        if (flag !== undefined) {
+            found[flag] = true;
         }
     }
 
     return found;
 };
 
+/**
+ * Scan the `lunora/` source set for named imports of the sandbox tools
+ * ({@link TOOL_FLAGS}) from `@lunora/agent` (main entry or the `/sandbox`
+ * subpath). Type-only imports (the input/option types) do not count — only a
+ * value import wires a tool into an agent. A project that imports none yields
+ * all-`false` and codegen emits byte-identical output.
+ */
 const discoverSandboxUsage = (project: Project, lunoraDirectory: string): SandboxUsage => {
-    const usage: SandboxUsage = { usesSandboxBrowser: false, usesSandboxContainer: false };
+    const usage = noSandboxUsage();
 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
@@ -68,11 +83,12 @@ const discoverSandboxUsage = (project: Project, lunoraDirectory: string): Sandbo
         for (const declaration of sourceFile.getImportDeclarations()) {
             const found = scanImportDeclaration(declaration);
 
-            usage.usesSandboxBrowser ||= found.usesSandboxBrowser;
-            usage.usesSandboxContainer ||= found.usesSandboxContainer;
+            for (const flag of Object.values(TOOL_FLAGS)) {
+                usage[flag] ||= found[flag];
+            }
         }
 
-        if (usage.usesSandboxBrowser && usage.usesSandboxContainer) {
+        if (Object.values(TOOL_FLAGS).every((flag) => usage[flag])) {
             break;
         }
     }

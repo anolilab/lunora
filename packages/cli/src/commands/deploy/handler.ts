@@ -36,7 +36,7 @@ import { autoLinkFromDeployOutput, parseDeployedUrl } from "../../util/auto-link
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
-import { resolveTargetOrError } from "../../util/deploy-target";
+import { resolveRunnableTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
@@ -1294,8 +1294,10 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: 
         temporary: options.temporary,
     };
 
-    // Every registered driver ships a toolchain; the optionality on the contract
-    // is for a hypothetical API-only host, which cannot be selected today.
+    // Not every registered driver ships a toolchain — the Node driver has none,
+    // because there is no control plane to deploy to. `runDeployCommand` rejects
+    // such a target at selection (`resolveRunnableTargetOrError`), so this is the
+    // backstop for a direct caller that skipped that path, not the primary guard.
     if (driver.toolchain === undefined) {
         throw new Error(`deploy target "${driver.id}" has no command-line toolchain`);
     }
@@ -1474,7 +1476,13 @@ const runPreDeployPipeline = async (
     // validating at the point of driver use would leave those side effects behind
     // on an unknown target. Resolving here also means `lunora.json`'s `target`
     // reaches the driver, not just the `--target` flag.
-    const resolvedTarget = resolveTargetOrError(cwd, options.target);
+    //
+    // The `Runnable` form additionally rejects a registered-but-undeployable
+    // target (a driver with no toolchain). That has to happen here rather than at
+    // the wrangler step: codegen below tailors the whole `ctx.*` surface to the
+    // target's capability matrix, and failing after that leaves the app rewritten
+    // for a target it then refuses to ship.
+    const resolvedTarget = resolveRunnableTargetOrError(cwd, options.target);
 
     if (resolvedTarget.target === undefined) {
         const message = resolvedTarget.error ?? "unknown deploy target";

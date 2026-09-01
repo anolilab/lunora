@@ -45,6 +45,37 @@ if [ ! -f "$CLI" ]; then
 fi
 
 ALL=(python go ruby rust swift java kotlin dart)
+
+# ALL is hardcoded here, again in `lint-all.sh`, and a third time as the CI matrix
+# in `.github/workflows/test.yml` — so a ninth SDK missed in any one of them is
+# silently never checked by that gate. Reconcile against what is actually on disk,
+# which is the only copy that cannot be forgotten. Same block as lint-all.sh, on
+# purpose: three copies of one list need one reconciliation idiom, not three.
+# Everything under sdks/ is a port unless it is listed here. An explicit ignore
+# list rather than a marker-file heuristic: a marker SKIPS what it does not
+# match, so a new port that forgot the marker is absent from both this list and
+# ALL — no drift, silently never checked. This way a directory that is not a port
+# costs one deliberate line, and anything else fails loudly.
+IGNORED=(smoke)
+
+DISCOVERED=()
+for sdk_dir in "$ROOT"/sdks/*/; do
+    sdk_name="$(basename "$sdk_dir")"
+    skip=""
+    for ignored in "${IGNORED[@]}"; do
+        [ "$sdk_name" = "$ignored" ] && skip=1 && break
+    done
+    [ -n "$skip" ] && continue
+    DISCOVERED+=("$sdk_name")
+done
+
+sdk_drift="$(comm -3 <(printf '%s\n' "${ALL[@]}" | sort) <(printf '%s\n' "${DISCOVERED[@]}" | sort))"
+if [ -n "$sdk_drift" ]; then
+    printf 'sdks/generated-check.sh ALL and sdks/ disagree (left column: listed but absent; right: present but unlisted):\n%s\n' "$sdk_drift" >&2
+    printf 'Update ALL here, ALL in sdks/lint-all.sh, and the sdk-conformance matrix in .github/workflows/test.yml.\n' >&2
+    exit 2
+fi
+
 LANGS=("$@")
 if [ ${#LANGS[@]} -eq 0 ]; then
     LANGS=("${ALL[@]}")

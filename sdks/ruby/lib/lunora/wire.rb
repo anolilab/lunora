@@ -31,6 +31,11 @@ module Lunora
   # Applied only on decode — the untrusted direction.
   MAX_BIGINT_DIGITS = 1024
 
+  # Largest integer a float64 holds exactly (2**53 - 1). JSON numbers are
+  # float64, so an integer past this cannot cross the wire as a number without
+  # changing value — WireBigInt and its tag exist for that case.
+  MAX_EXACT_INTEGER = (2**53) - 1
+
   # JavaScript's +undefined+, distinct from JSON null.
   #
   # As an object field it is dropped on encode (matching JSON.stringify); in an
@@ -66,7 +71,15 @@ module Lunora
 
   # An Error: name, message, own enumerable props, optional cause. +stack+ is
   # deliberately absent — the peer is untrusted.
-  WireError = Struct.new(:name, :message, :props, :cause)
+  WireError = Struct.new(:name, :message, :props, :cause) do
+    # +cause+ defaults to UNDEFINED rather than nil, because the wire tells the
+    # two apart: no cause is the 5-element form, a cause that IS null is the
+    # 6-element one. A Struct's nil default would have every hand-built error
+    # claim the second.
+    def initialize(name = nil, message = nil, props = {}, cause = UNDEFINED)
+      super
+    end
+  end
 
   class WireFormatError < StandardError; end
 
@@ -87,7 +100,7 @@ module Lunora
       [TAG, "map", value.pairs.map { |k, v| [encode_wire(k, depth + 1), encode_wire(v, depth + 1)] }]
     when WireSet then [TAG, "set", value.items.map { |item| encode_wire(item, depth + 1) }]
     when WireBytes then [TAG, "bytes", Base64.strict_encode64(value.data), value.ctor]
-    when ::Integer then value
+    when ::Integer then encode_integer(value)
     when ::Float then encode_float(value)
     when ::Array then encode_array(value, depth)
     when ::Hash then encode_hash(value, depth)
@@ -105,6 +118,19 @@ module Lunora
     return value unless value.is_a?(::String) && value.encoding == ::Encoding::BINARY
 
     [TAG, "bytes", Base64.strict_encode64(value)]
+  end
+
+  # Ruby's Integer is arbitrary-precision; a JSON number is not. Passing a
+  # larger one straight through meant the SERVER's JSON.parse rounded it, so the
+  # value that arrived was quietly a different integer. Refuse, as the Go port
+  # does, and name the way across.
+  def encode_integer(value)
+    if value > MAX_EXACT_INTEGER || value < -MAX_EXACT_INTEGER
+      raise WireFormatError,
+            "wire-codec: integer #{value} exceeds the exact float64 range — wrap it in WireBigInt so it crosses the wire as a bigint tag"
+    end
+
+    value
   end
 
   def encode_float(value)
@@ -144,7 +170,11 @@ module Lunora
 
     encoded = [TAG, "error", value.name, value.message, props]
     # +cause+ rides a positional slot; absent when unset, keeping the 5-element form.
-    encoded << encode_wire(value.cause, depth + 1) unless value.cause.nil? || value.cause.equal?(UNDEFINED)
+    # UNDEFINED alone means absent. Gating on nil as well conflated it with an
+    # explicitly-null cause, which the reference encodes (it tests
+    # `cause !== undefined`), so `new Error(m, { cause: null })` lost its 6th
+    # slot and came back as an error that never had a cause.
+    encoded << encode_wire(value.cause, depth + 1) unless value.cause.equal?(UNDEFINED)
     encoded
   end
 
@@ -168,7 +198,7 @@ module Lunora
     when "bigint" then decode_bigint(value)
     when "date" then WireDate.new(decode_wire(value[2], depth + 1))
     when "url" then WireUrl.new(value[2])
-    when "map" then WireMap.new(value[2].map { |k, v| [decode_wire(k, depth + 1), decode_wire(v, depth + 1)] })
+    when "map" then decode_map(value, depth)
     when "set" then WireSet.new(value[2].map { |item| decode_wire(item, depth + 1) })
     when "error" then decode_error(value, depth)
     when "bytes" then decode_bytes(value)
@@ -186,6 +216,23 @@ module Lunora
     end
 
     WireBigInt.new(Integer(raw, 10))
+  end
+
+  # Decode a +map+ tag, refusing an entry that is not a real pair.
+  #
+  # +map { |k, v| ... }+ destructures a 1-element entry into k="a", v=nil, so a
+  # truncated entry became a real entry holding null — a wrong answer where four
+  # ports raise. Nothing here can tell that null from one the peer meant.
+  def decode_map(value, depth)
+    raise WireFormatError, "wire-codec: malformed map tag" unless value[2].is_a?(::Array)
+
+    pairs = value[2].map do |entry|
+      raise WireFormatError, "wire-codec: malformed map entry" unless entry.is_a?(::Array) && entry.length >= 2
+
+      [decode_wire(entry[0], depth + 1), decode_wire(entry[1], depth + 1)]
+    end
+
+    WireMap.new(pairs)
   end
 
   def decode_error(value, depth)

@@ -83,4 +83,19 @@ describe("discoverExportSinks", () => {
 
         expect(spread).toBeDefined();
     });
+
+    // Regression: sinks are declared in the worker entry (`createWorker({ cdc: { sinks } })`),
+    // never under `lunora/`, so the `lunora/`-only walk never saw one to lint.
+    it("discovers a sink declared in the worker entry", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(workdir, "src", "server"), { recursive: true });
+        writeFileSync(join(workdir, "src", "server", "index.ts"), `export const archive = r2Sink({ name: "archive", prefix: "cdc" });`, "utf8");
+
+        const sinks = discoverExportSinks(project, join(workdir, "lunora"));
+        const entrySink = sinks.find((sink) => sink.file === "src/server/index");
+
+        expect(entrySink).toBeDefined();
+        expect(entrySink).toMatchObject({ analyzable: true, factory: "r2Sink", presentKeys: ["name", "prefix"] });
+    });
 });

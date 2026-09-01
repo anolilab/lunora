@@ -35,7 +35,7 @@ export { connectionStatus } from "./connection-status";
  * `+page.ts` / `+layout.ts` load.
  */
 export { getLunoraClient, setLunoraClient } from "./context";
-export type { FlagContext, FlagValue } from "./flag";
+export type { FlagValue } from "./flag";
 export { flag, flags } from "./flag";
 export { hydratePreloaded } from "./hydrate-preloaded";
 export type { MutationHandle } from "./mutation";

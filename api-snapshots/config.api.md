@@ -1306,6 +1306,12 @@ const isProcessAlive: (pid: number) => boolean;
 const isRecordedProcessCurrent: (state: DevServerState) => boolean;
 ```
 
+### `isRunnableTarget` (const)
+
+```ts
+const isRunnableTarget: (target: string) => boolean;
+```
+
 ### `packageNamesFromBindings` (const)
 
 ```ts
@@ -1496,6 +1502,12 @@ const runScriptArgsFor: (manager: PackageManager, script: string) => {
 
 ```ts
 const runScriptCommand: (manager: PackageManager, script: string) => string;
+```
+
+### `runnableTargetIds` (const)
+
+```ts
+const runnableTargetIds: () => ReadonlyArray<string>;
 ```
 
 ### `scaffoldPolicyFile` (const)

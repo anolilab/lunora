@@ -193,7 +193,7 @@ class Client(
          * with body `{"message":"…"}` returns null and throws nothing — the
          * caller believes its mutation committed.
          */
-        fun parseRpcResponse(body: Map<*, *>, status: Int = 200): WireValue {
+        fun parseRpcResponse(body: Map<*, *>, status: Int): WireValue {
             val envelope = body["error"]
 
             if (envelope is Map<*, *>) {

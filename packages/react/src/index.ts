@@ -104,7 +104,7 @@ export { useAgentToolEvents } from "./use-agent-tool-events";
 export { default as useAuth } from "./use-auth";
 export { default as useClientQuery } from "./use-client-query";
 export { default as useConnectionStatus } from "./use-connection-status";
-export type { FlagContext, FlagValue } from "./use-flag";
+export type { FlagValue } from "./use-flag";
 export { useFlag, useFlags } from "./use-flag";
 export type { UseHttpStreamOptions, UseHttpStreamResult } from "./use-http-stream";
 export { useHttpStream } from "./use-http-stream";

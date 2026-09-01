@@ -109,7 +109,7 @@ class LunoraTransport {
   /// INTERNAL transport error. Without it a 502 with body `{"message":"…"}`
   /// returns null and throws nothing — the caller believes its mutation
   /// committed.
-  static Object? parseRpcResponse(Map<String, Object?> body, {int status = 200}) {
+  static Object? parseRpcResponse(Map<String, Object?> body, {required int status}) {
     final envelope = body['error'];
 
     if (envelope is Map<String, Object?>) {

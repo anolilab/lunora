@@ -73,7 +73,16 @@ return { "body": source["body"], "title": source["title"] };
 installCompiledValidatorMap(lunora_push_0.registerDevice.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-return { "subscription": source["subscription"] };
+if (typeof source["subscription"] !== "object" || source["subscription"] === null || Array.isArray(source["subscription"])) return DEFER;
+if (Object.getPrototypeOf(source["subscription"]) !== Object.prototype && Object.getPrototypeOf(source["subscription"]) !== null) return DEFER;
+if (typeof source["subscription"]["endpoint"] !== "string") return DEFER;
+if (typeof source["subscription"]["keys"] !== "object" || source["subscription"]["keys"] === null || Array.isArray(source["subscription"]["keys"])) return DEFER;
+if (Object.getPrototypeOf(source["subscription"]["keys"]) !== Object.prototype && Object.getPrototypeOf(source["subscription"]["keys"]) !== null) return DEFER;
+if (typeof source["subscription"]["keys"]["auth"] !== "string") return DEFER;
+if (typeof source["subscription"]["keys"]["p256dh"] !== "string") return DEFER;
+const __obj1 = { "auth": source["subscription"]["keys"]["auth"], "p256dh": source["subscription"]["keys"]["p256dh"] };
+const __obj2 = { "endpoint": source["subscription"]["endpoint"], "keys": __obj1 };
+return { "subscription": __obj2 };
 });
 
 /**
@@ -125,7 +134,7 @@ export interface Caller {
         announce: (args: { body: string; title: string }) => Promise<Id<"announcements">>;
         broadcast: (args: { body: string; title: string }) => Promise<{ failed: number; pruned: number; sent: number; total: number; }>;
         listAnnouncements: (args?: {}) => Promise<{ _id: Id<"announcements">; body: string; sentAt: number; title: string }[]>;
-        registerDevice: (args: { subscription: unknown }) => Promise<void>;
+        registerDevice: (args: { subscription: { endpoint: string; keys: { auth: string; p256dh: string } } }) => Promise<void>;
     };
 }
 

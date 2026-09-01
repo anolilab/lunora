@@ -129,19 +129,58 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+/// Decode base64 exactly as the reference does.
+///
+/// The reference decodes through `atob`, i.e. WHATWG "forgiving base64": ASCII
+/// whitespace is stripped, up to two `=` are removed from the end of a
+/// multiple-of-four input, and a remaining length of 1 mod 4 — or any other
+/// character outside the alphabet — is a hard error.
+///
+/// The first version of this function skipped `=`, `\n` and `\r` wherever they
+/// appeared and discarded the trailing bits, so `"AQIDA"` (a truncated payload)
+/// and `"AQ=ID"` (a corrupted one) both decoded to a perfectly ordinary
+/// `[1, 2, 3]`. Seven ports rejected both; this one handed short, valid-looking
+/// bytes to application code, which is the single outcome the `bytes` tag
+/// exists to prevent.
 fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    // `atob` removes ASCII whitespace before doing anything else, so a payload
+    // wrapped across lines decodes here too — that leniency IS the reference's.
+    let cleaned: Vec<u8> = text.bytes().filter(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\x0C' | b'\r')).collect();
+
+    let mut end = cleaned.len();
+
+    // Padding is only padding at the end of a whole quantum. An `=` anywhere
+    // else stays in `body` and is rejected by the alphabet match below.
+    if end.is_multiple_of(4) {
+        for _ in 0..2 {
+            if end > 0 && cleaned[end - 1] == b'=' {
+                end -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    let body = &cleaned[..end];
+
+    // A single leftover character carries 6 bits: not a byte, and not a
+    // legitimate encoding of anything. This is the check that makes a truncated
+    // payload an error instead of a shorter one.
+    if body.len() % 4 == 1 {
+        return None;
+    }
+
     let mut accumulator: u32 = 0;
     let mut bits = 0;
-    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let mut out = Vec::with_capacity(body.len() / 4 * 3);
 
-    for byte in text.bytes() {
+    for &byte in body {
         let value = match byte {
             b'A'..=b'Z' => byte - b'A',
             b'a'..=b'z' => byte - b'a' + 26,
             b'0'..=b'9' => byte - b'0' + 52,
             b'+' => 62,
             b'/' => 63,
-            b'=' | b'\n' | b'\r' => continue,
             _ => return None,
         } as u32;
 
@@ -155,6 +194,28 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
     }
 
     Some(out)
+}
+
+/// The largest integer an `f64` holds exactly (2^53 - 1). JSON numbers are
+/// `f64`, so an integer past this cannot cross the wire as a number without
+/// changing value — `v.bigint()` and its tag exist for that case.
+pub const MAX_EXACT_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// A finite `f64` onto the wire.
+///
+/// An integral value is written as a JSON integer, because that is what the
+/// reference writes: `JSON.stringify(1)` is `1`, while serialising through
+/// `f64` alone spelled it `1.0`. Nothing caught the difference, because the
+/// conformance comparison normalises both sides through `stable_stringify`,
+/// which formats numbers the ECMAScript way — so the two sides agreed on the
+/// comparison and disagreed on the bytes actually sent.
+fn encode_number(value: f64) -> Value {
+    if value.fract() == 0.0 && value.abs() <= MAX_EXACT_INTEGER {
+        // `-0.0` lands here as `0`, matching `JSON.stringify(-0) === "0"`.
+        return Value::Number(Number::from(value as i64));
+    }
+
+    Number::from_f64(value).map_or(Value::Null, Value::Number)
 }
 
 /// Encode a [`WireValue`] into a JSON tree, tagging the leaves JSON cannot carry.
@@ -174,7 +235,7 @@ fn encode_at(value: &WireValue, depth: usize) -> WireResult<Value> {
         WireValue::NaN => tagged(vec![tag_value(), Value::String("nan".into())]),
         WireValue::Infinity => tagged(vec![tag_value(), Value::String("inf".into())]),
         WireValue::NegInfinity => tagged(vec![tag_value(), Value::String("-inf".into())]),
-        WireValue::Number(inner) => Number::from_f64(*inner).map_or(Value::Null, Value::Number),
+        WireValue::Number(inner) => encode_number(*inner),
         WireValue::String(inner) => Value::String(inner.clone()),
         WireValue::BigInt(digits) => tagged(vec![tag_value(), Value::String("bigint".into()), Value::String(digits.clone())]),
         WireValue::Date(epoch) => tagged(vec![tag_value(), Value::String("date".into()), encode_at(epoch, depth + 1)?]),
@@ -368,6 +429,24 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
     })
 }
 
+/// Whether `number` is an integer an `f64` cannot hold exactly.
+///
+/// Only integers — a float like `1e300` is a perfectly good JSON number and is
+/// left alone; it is the integer that changes VALUE when narrowed.
+fn is_inexact_integer(number: &Number) -> bool {
+    const LIMIT: i64 = 9_007_199_254_740_991;
+
+    if let Some(value) = number.as_i64() {
+        return !(-LIMIT..=LIMIT).contains(&value);
+    }
+
+    if let Some(value) = number.as_u64() {
+        return value > LIMIT as u64;
+    }
+
+    false
+}
+
 /// Whether `raw` is an optionally-negative run of ASCII digits. Deliberately not
 /// a regex: this runs on untrusted input on every decode.
 fn is_bigint_literal(raw: &str) -> bool {
@@ -458,6 +537,12 @@ pub fn from_json(value: &Value) -> WireValue {
     match value {
         Value::Null => WireValue::Null,
         Value::Bool(inner) => WireValue::Bool(*inner),
+        // An i64/u64 past the exact-f64 range keeps its digits as a bigint
+        // rather than being narrowed. `as_f64` alone rounded it silently, so a
+        // generated model holding 9007199254740993 sent 9007199254740992 and
+        // nothing on either end could tell. A bigint tag against a `v.number()`
+        // field is a validation error the server reports; a wrong number is not.
+        Value::Number(inner) if is_inexact_integer(inner) => WireValue::BigInt(inner.to_string()),
         Value::Number(inner) => WireValue::Number(inner.as_f64().unwrap_or(f64::NAN)),
         Value::String(inner) => WireValue::String(inner.clone()),
         Value::Array(items) => WireValue::Array(items.iter().map(from_json).collect()),

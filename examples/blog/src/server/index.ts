@@ -7,6 +7,7 @@ import type { R2BucketLike } from "@lunora/storage";
 import { createStorage } from "@lunora/storage";
 import type { VectorizeIndexLike } from "@lunora/bindings/vectors";
 
+import { LUNORA_CRONS } from "../../lunora/_generated/crons.js";
 import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
 
@@ -93,6 +94,11 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // `openApiSpec` (regenerated on every `lunora/` change) backs the
         // studio's always-current API-reference tab.
         openApiSpec,
+        // The dispatcher map codegen emits from `lunora/crons.ts`. The worker's
+        // `scheduled()` entry (re-exported below) looks up the firing trigger
+        // here and dispatches each job's internal function into the shard —
+        // server-side, so a client can never reach it.
+        cronJobs: LUNORA_CRONS,
         resolveIdentity: async (request) => {
             if (!auth) {
                 return null;
@@ -129,5 +135,17 @@ export default {
         worker ??= buildWorker(env);
 
         return worker.fetch(request, env, ctx);
+    },
+
+    /**
+     * Cron entry. Cloudflare fires this for each expression in
+     * `wrangler.jsonc`'s `triggers.crons` (kept in sync with
+     * `LUNORA_CRON_TRIGGERS` by codegen); the worker dispatches the matching
+     * jobs. Without this export the triggers fire into nothing.
+     */
+    async scheduled(controller: Parameters<ReturnType<typeof createWorker>["scheduled"]>[0], env: Env, ctx: ExecutionContextLike): Promise<void> {
+        worker ??= buildWorker(env);
+
+        await worker.scheduled(controller, env, ctx);
     },
 };

@@ -15,9 +15,15 @@
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "observability": { "enabled": true, "head_sampling_rate": 1 },
     // `AUTH_SECRET` is a secret: `.dev.vars` locally (see `.dev.vars.example`),
-    // `wrangler secret put AUTH_SECRET` in production. `AUTH_URL` should be the
-    // deployed worker URL so better-auth resolves cookie origins correctly.
-    "vars": {
-        "AUTH_URL": "http://localhost:8787",
-    },
+    // `wrangler secret put AUTH_SECRET` in production.
+    //
+    // `AUTH_URL` is deliberately NOT declared here. `vars` ship with the deployed
+    // worker, and `@lunora/auth` reads the baseURL to decide its production
+    // posture: an explicit `http://…` origin turns OFF `useSecureCookies` and
+    // downgrades the weak-secret guard from a throw to a warning. Pinning the dev
+    // origin in `vars` would therefore deploy session cookies without `Secure`
+    // over HTTPS. Left unset, better-auth resolves the origin per request, which
+    // is correct both in `wrangler dev` and in production. Set `AUTH_URL` in
+    // `.dev.vars` (local only) if you need to pin one, or
+    // `wrangler secret put AUTH_URL` with the deployed HTTPS URL.
 }

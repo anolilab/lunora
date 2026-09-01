@@ -25,8 +25,15 @@ const toBase64 = (bytes: Uint8Array): string => {
     return btoa(binary);
 };
 
-/** Base64-decode a string to bytes. */
-const fromBase64 = (base64: string): Uint8Array => {
+/**
+ * Base64-decode a string to bytes.
+ *
+ * Returned as `Uint8Array<ArrayBuffer>`, not the wider `Uint8Array`
+ * (`<ArrayBufferLike>`): the buffer is freshly allocated here and is never
+ * shared, and the narrow type is what `BufferSource` parameters like
+ * `crypto.subtle.importKey`'s key material accept without a cast.
+ */
+const fromBase64 = (base64: string): Uint8Array<ArrayBuffer> => {
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
 

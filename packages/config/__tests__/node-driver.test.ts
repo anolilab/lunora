@@ -41,15 +41,22 @@ describe("node deploy driver", () => {
         expect(result.warnings).toStrictEqual([]);
     });
 
-    it("reports crons as runtime-registered rather than written to config", async () => {
-        expect.assertions(2);
+    it("reports declared crons as undispatched, not as runtime-registered", async () => {
+        expect.assertions(4);
 
         const result = await driver.provision({ crons: ["0 9 * * *", "*/5 * * * *"], projectRoot: "/nonexistent-lunora-project" });
 
-        // The one place this target does MORE than Cloudflare, which reconciles
-        // `triggers.crons` into wrangler.jsonc at build time and cannot register
-        // one at runtime at all.
+        // Regression: this warning used to read "will be registered at runtime
+        // via SchedulerHost.cron", which is a promise nothing keeps. Node's
+        // `SchedulerHost.cron` is implemented and the conformance suite is its
+        // only caller — no runtime walks the generated LUNORA_CRONS map into it,
+        // and the only cron dispatch that ships is @lunora/runtime's, reached
+        // from Cloudflare's `scheduled()` handler. An operator reading the old
+        // line shipped an app whose crons silently never fired.
         expect(result.warnings).toHaveLength(1);
-        expect(result.warnings[0]).toContain("SchedulerHost.cron");
+        expect(result.warnings[0]).toContain("NOTHING dispatches them");
+        expect(result.warnings[0]).not.toMatch(/will be registered/);
+        // Still says where the work can go instead of just refusing.
+        expect(result.warnings[0]).toContain("ctx.scheduler.runAfter");
     });
 });

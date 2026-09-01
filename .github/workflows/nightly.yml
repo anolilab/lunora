@@ -85,6 +85,29 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
+            # The matrix is a hand-typed list of 11 packages, duplicated verbatim in
+            # test.yml and nightly.yml, with nothing tying either copy to the packages
+            # that actually declare a `workerd` vitest project. Drop a package from one
+            # and its workerd suites stop running with every check green. Each leg
+            # asserts its own package still declares the project, and that the leg count
+            # equals the number of packages that do — together that makes the matrix and
+            # the filesystem the same set, not merely the same size.
+            - "name": "Assert the matrix matches the packages declaring a workerd project"
+              "run": |
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+                  count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
+                  if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
+                    echo "packages/${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    exit 1
+                  fi
+                  if [ "$count" != "${{ strategy.job-total }}" ]; then
+                    echo "$count packages declare a workerd project but the matrix has ${{ strategy.job-total }} legs." >&2
+                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
+                    exit 1
+                  fi
+
             - "name": "Build package and dependencies"
               "run": |
                   pnpm exec vis run build --query "project=${{ matrix.package }}"
@@ -135,12 +158,23 @@
                   "LUNORA_E2E": "true"
               "run": "pnpm e2e"
 
+            # This job is a hand-copy of test.yml's and had already diverged: the
+            # examples suite was missing here. That is the worst place to lose it —
+            # the point of the nightly is to run what the paths filters skip, so a
+            # suite absent here is a suite nothing unfiltered ever runs.
+            - "name": "Run examples E2E suite"
+              "env":
+                  "CI": "true"
+              "run": "pnpm run e2e:examples"
+
             - "name": "Upload Playwright report on failure"
               "if": "failure()"
               "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
               "with":
                   "name": "playwright-report"
-                  "path": "tests/e2e/playwright-report"
+                  "path": |
+                      tests/e2e/playwright-report
+                      tests/e2e/playwright-report-examples
                   "retention-days": 7
 
     # On PRs this matrix is path-gated and the filter excludes `packages/**`, since a

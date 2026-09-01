@@ -1,5 +1,33 @@
 {
-    "$comment": "Golden fixtures for the Lunora wire value codec (shared/wire-codec.ts). Each case's `encoded` is the canonical JSON wire form. A conforming codec MUST satisfy `encode(decode(encoded)) == encoded` for every case (round-trip stability), which exercises both the decode of tagged tokens and their re-encode. Language-native construction checks (e.g. bigint 7 -> the bigint tag) live in each SDK's own test suite since native values are not uniformly JSON-representable.",
+    "$comment": [
+        "Golden fixtures for the Lunora wire value codec (shared/wire-codec.ts).",
+        "",
+        "`cases[].encoded` is the canonical JSON wire form. A conforming codec MUST",
+        "satisfy `encode(decode(encoded)) == encoded`, which exercises both the decode",
+        "of tagged tokens and their re-encode.",
+        "",
+        "A few shapes are legitimately NOT fixed points of that identity — a bare",
+        "`[TAG]` array is escaped on the way back out, and an object field that",
+        "arrives as the `undefined` tag is dropped, matching JSON.stringify. Those",
+        "carry `reencoded`, and the assertion becomes `encode(decode(encoded)) ==",
+        "reencoded`. Without it those two shapes were untestable, so no port was held",
+        "to them and four decoded them differently.",
+        "",
+        "`rejected[]` is the other half: wire values every port MUST refuse to decode.",
+        "It is data for the same reason the case list is — a rejection each suite",
+        "hard-codes for itself is a rejection only some suites have. The base64 entries",
+        "are what a lenient hand-rolled decoder lets through: the reference decodes via",
+        "`atob`, which fails any input whose length is 1 mod 4 once ASCII whitespace is",
+        "removed, so a truncated or padding-corrupted payload is an error rather than",
+        "valid-looking short bytes. (Whitespace INSIDE the payload is not here: `atob`",
+        "strips it, so the reference accepts it and a fixture demanding rejection would",
+        "be asserting against the reference.)",
+        "",
+        "Language-native construction checks (e.g. bigint 7 -> the bigint tag, or an",
+        "integer past the exact-float64 range being refused) live in each SDK's own",
+        "suite, keyed by protocol/conformance-cases.json, since native values are not",
+        "uniformly JSON-representable."
+    ],
     "tag": "$lunora.wire$",
     "cases": [
         { "name": "null", "encoded": null },
@@ -40,6 +68,15 @@
         { "name": "error", "encoded": ["$lunora.wire$", "error", "Error", "boom", {}] },
         { "name": "error-with-props", "encoded": ["$lunora.wire$", "error", "TypeError", "bad", { "code": "E_BAD" }] },
         { "name": "array-sentinel-escape", "encoded": ["$lunora.wire$", "arr", ["$lunora.wire$", "x"]] },
+        { "name": "error-with-null-cause", "encoded": ["$lunora.wire$", "error", "Error", "boom", {}, null] },
+        {
+            "name": "error-with-cause",
+            "encoded": ["$lunora.wire$", "error", "Error", "outer", { "code": "E_OUTER" }, ["$lunora.wire$", "error", "TypeError", "inner", {}]]
+        },
+        { "name": "tag-only-array", "encoded": ["$lunora.wire$"], "reencoded": ["$lunora.wire$", "arr", ["$lunora.wire$"]] },
+        { "name": "undefined-object-field", "encoded": { "a": ["$lunora.wire$", "undefined"], "b": 1 }, "reencoded": { "b": 1 } },
+        { "name": "bytes-bigint64", "encoded": ["$lunora.wire$", "bytes", "AQAAAAAAAAA=", "BigInt64Array"] },
+        { "name": "proto-key", "encoded": { "__proto__": { "polluted": true } } },
         {
             "name": "nested-typed",
             "encoded": {
@@ -50,5 +87,11 @@
                 "flag": true
             }
         }
+    ],
+    "rejected": [
+        { "name": "bytes-outside-alphabet", "encoded": ["$lunora.wire$", "bytes", "not@@base64!!"] },
+        { "name": "bytes-truncated-quantum", "encoded": ["$lunora.wire$", "bytes", "AQIDA"] },
+        { "name": "bytes-padding-inside", "encoded": ["$lunora.wire$", "bytes", "AQ=ID"] },
+        { "name": "map-entry-too-short", "encoded": ["$lunora.wire$", "map", [["a"]]] }
     ]
 }

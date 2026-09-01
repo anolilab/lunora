@@ -7,16 +7,13 @@ import type { FunctionReference } from "lunorash/client";
 import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
-    cleanup: {
-        purgeStaleDrafts: FunctionReference<"mutation", {}, { deleted: number; }>;
-    };
     drafts: {
-        listMine: FunctionReference<"query", {}, { _id: Id<"drafts">; authorId: Id<"users">; body: string; title: string; updatedAt: number }[]>;
+        listMine: FunctionReference<"query", {}, { _id: Id<"drafts">; authorId: string; body: string; title: string; updatedAt: number }[]>;
         save: FunctionReference<"mutation", { id?: Id<"drafts">; title: string; body: string }, Id<"drafts">>;
     };
     posts: {
-        get: FunctionReference<"query", { id: Id<"posts"> }, null | { _id: Id<"posts">; authorId: Id<"users">; body: string; imageKey?: string; publishedAt: number; title: string }>;
-        list: FunctionReference<"query", {}, { _id: Id<"posts">; authorId: Id<"users">; body: string; imageKey?: string; publishedAt: number; title: string }[]>;
+        get: FunctionReference<"query", { id: Id<"posts"> }, null | { _id: Id<"posts">; authorId: string; body: string; imageKey?: string; publishedAt: number; title: string }>;
+        list: FunctionReference<"query", {}, { _id: Id<"posts">; authorId: string; body: string; imageKey?: string; publishedAt: number; title: string }[]>;
         publish: FunctionReference<"mutation", { title: string; body: string; imageKey?: string }, Id<"posts">>;
         requestImageUpload: FunctionReference<"action", { contentType: string }, { key: string; url: string; }>;
         search: FunctionReference<"query", { text: string; topK?: number }, { id: Id<"posts">; score: number; title: string; }[]>;
@@ -26,6 +23,10 @@ export interface ApiTypes {
 export const api = anyApi as unknown as ApiTypes;
 
 /** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
-export interface InternalApiTypes {}
+export interface InternalApiTypes {
+    cleanup: {
+        purgeStaleDrafts: FunctionReference<"mutation", {}, { deleted: number; }>;
+    };
+}
 
 export const internal = anyApi as unknown as InternalApiTypes;

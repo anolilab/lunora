@@ -45,11 +45,8 @@ await client.mutation("registerDevice", { subscription });
 
 ```ts
 // lunora/registerDevice.ts (a mutation — storage write is fine here)
-export const registerDevice = mutation({
-    args: { subscription: v.any() },
-    handler: async (ctx, { subscription }) => {
-        await ctx.push.register({ subscription, userId: ctx.auth?.userId });
-    },
+export const registerDevice = mutation.input({ subscription: v.any() }).mutation(async ({ ctx, args: { subscription } }) => {
+    await ctx.push.register({ subscription, userId: ctx.auth?.userId });
 });
 ```
 
@@ -58,12 +55,9 @@ export const registerDevice = mutation({
 Notification sends are external I/O, so they belong in **actions** (the `notify_send_outside_action` advisor lint enforces this):
 
 ```ts
-export const announce = action({
-    args: { title: v.string(), body: v.string() },
-    handler: async (ctx, { title, body }) => {
-        const result = await ctx.push.broadcast({ title, body });
-        // result: { total, sent, pruned, failed, outcomes }
-    },
+export const announce = action.input({ title: v.string(), body: v.string() }).action(async ({ ctx, args: { title, body } }) => {
+    const result = await ctx.push.broadcast({ title, body });
+    // result: { total, sent, pruned, failed, outcomes }
 });
 ```
 
@@ -90,27 +84,35 @@ Move a large broadcast off the request path with `@lunora/queue`:
 // producer (mutation/action)
 await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body: "…" } });
 
-// consumer (lunora/queues.ts)
-for (const message of batch.messages) {
-    const { failedIds, nextCursor } = await runPushBroadcastPage(ctx.push, message.body);
+// lunora/notify-fanout.ts — an INTERNAL ACTION, because that is where
+// `ctx.push` and `ctx.queues` exist.
+export const deliverPage = internalAction.input({ job: v.any() }).action(async ({ args: { job }, ctx }) => {
+    const { failedIds, nextCursor } = await runPushBroadcastPage(ctx.push, job);
 
     // One message = ONE bounded page. Discarding `nextCursor` delivers only the
     // first page (default 250 devices) and reports success for the whole audience.
     if (nextCursor !== undefined) {
-        await enqueuePushBroadcast(ctx.queues.push, {
-            payload: message.body.payload,
-            filter: { ...message.body.filter, after: nextCursor },
-        });
+        await enqueuePushBroadcast(ctx.queues.push, { payload: job.payload, filter: { ...job.filter, after: nextCursor } });
     }
 
     // Redeliver ONLY the recipients that failed — a retry of the whole page would
     // re-POST everyone it already reached.
     if (failedIds.length > 0) {
-        await enqueuePushBroadcast(ctx.queues.push, { payload: message.body.payload, retryIds: failedIds });
+        await enqueuePushBroadcast(ctx.queues.push, { payload: job.payload, retryIds: failedIds });
     }
+});
 
-    message.ack();
-}
+// lunora/queues.ts — a `QueueRunContext` is exactly `{ env, log, run }`: no
+// `ctx.push`, no `ctx.queues`. The consumer hands each message to the action above.
+// (Note the handler signature: `(context, batch)`, in that order.)
+export const push = defineQueue<PushBroadcastJob>({
+    handler: async (context, batch) => {
+        for (const message of batch.messages) {
+            await message.run(internal.notifyFanout.deliverPage, { job: message.body });
+            message.ack();
+        }
+    },
+});
 ```
 
 ## Subscription storage

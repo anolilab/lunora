@@ -1,18 +1,27 @@
-import { RateLimiter, rateLimit, createDbStore } from "lunorash/ratelimit";
+import { rateLimit } from "lunorash/ratelimit";
 
+import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { MutationCtx } from "#lunora/_generated/server.js";
 import { mutation, query, v } from "#lunora/_generated/server.js";
 
-// Typed against the generated MutationCtx so `rateLimit(limiter, ...)` infers
-// the full procedure context — `ctx.auth` in the key callback and a typed
-// `ctx.db` in the downstream handler both depend on it.
-const limiter = (ctx: MutationCtx) =>
-    new RateLimiter({
-        config: {
-            send: { kind: "token bucket", period: 60_000, rate: 30 },
-        },
-        store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
-    });
+/**
+ * The limiter comes from `lunora/ratelimit/schema.ts` — that file owns the named
+ * limits and the durable store, so tuning `send` there is what changes this
+ * procedure's budget. Build it from the generated `MutationCtx` so
+ * `rateLimit(limiter, …)` infers the full procedure context: `ctx.auth`/`ctx.ip`
+ * in the key callback and a typed `ctx.db` in the handler both depend on it.
+ */
+const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+
+/**
+ * One bucket per caller, not one bucket for the whole app.
+ *
+ * `ctx.auth.userId` is `null` until you wire auth (`lunora registry add auth`),
+ * so the `ctx.ip` fallback is what actually keys the limit in a fresh project —
+ * Cloudflare's server-side `CF-Connecting-IP`, never a client header. Keying on
+ * `"anon"` alone would let one script exhaust the budget for every user.
+ */
+const byCaller = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
 export const list = query.input({ channelId: v.string().meta({ schema: { maxLength: 256 } }), limit: v.optional(v.number()) }).query(async ({ args, ctx }) => {
     const messages = await ctx.db
@@ -25,7 +34,7 @@ export const list = query.input({ channelId: v.string().meta({ schema: { maxLeng
 
 export const send = mutation
     .input({ channelId: v.string().meta({ schema: { maxLength: 256 } }), text: v.string().meta({ schema: { maxLength: 4096 } }) })
-    .use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId ?? "anon" }))
+    .use(rateLimit(limiter, "send", byCaller))
     .mutation(async ({ args, ctx }) => {
         const id = await ctx.db.insert("messages", { channelId: args.channelId, text: args.text });
 

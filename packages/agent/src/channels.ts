@@ -21,6 +21,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { fnv1a64Hex } from "../../../shared/fnv1a";
 import type { AgentChannelRun, AgentDefinition, AgentInboundChannelKind, AgentWorkflowBindingLike, InboundChannelEvent } from "./types";
 
 /** Max age (seconds) of a signed request before it is rejected as a replay. */
@@ -218,53 +219,6 @@ const discordPongResponse = (channel: AgentInboundChannelKind, body: string): Re
 
 /** The eligible targets for a channel, paired with their resolved `onInbound` config. */
 type EligibleTarget = { config: NonNullable<AgentDefinition["onInbound"]>; target: AgentChannelTarget };
-
-/** One 16-bit limb of the FNV-1a state as four lowercase hex chars. */
-const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
-
-/**
- * 64-bit FNV-1a over a string, as 16 lowercase hex chars. Used to build the
- * workflow dedup instance id from the provider's raw delivery id: hashing keeps
- * the whole id significant in a fixed-length, always-instance-id-safe key,
- * where sanitize-then-truncate collapsed distinct ids differing only in
- * stripped punctuation or past the cutoff — silently swallowing the second
- * event. A checksum, NOT a cryptographic hash: it is applied to an id whose
- * authenticity the caller has already verified by signature.
- * Algorithm lifted from `@lunora/replica`'s bit-verified `fnv1a64Hex`.
- */
-const fnv1a64Hex = (input: string): string => {
-    /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and multiplication; the bit ops ARE the algorithm */
-    // Offset basis 0xcbf29ce484222325, low limb first.
-    let h0 = 0x23_25;
-    let h1 = 0x84_22;
-    let h2 = 0x9c_e4;
-    let h3 = 0xcb_f2;
-
-    for (let index = 0; index < input.length; index += 1) {
-        const point = input.codePointAt(index) ?? 0;
-
-        // A code point above the BMP occupies limbs 0 and 1.
-        h0 ^= point & 0xff_ff;
-        h1 ^= (point >>> 16) & 0xff_ff;
-
-        const p0 = h0 * 0x01_b3;
-        const p1 = h1 * 0x01_b3;
-        const p2 = h2 * 0x01_b3 + h0 * 0x01_00;
-        const p3 = h3 * 0x01_b3 + h1 * 0x01_00;
-
-        const c1 = p1 + (p0 >>> 16);
-        const c2 = p2 + (c1 >>> 16);
-        const c3 = p3 + (c2 >>> 16);
-
-        h0 = p0 & 0xff_ff;
-        h1 = c1 & 0xff_ff;
-        h2 = c2 & 0xff_ff;
-        h3 = c3 & 0xff_ff;
-    }
-
-    return hex4(h3) + hex4(h2) + hex4(h1) + hex4(h0);
-    /* eslint-enable no-bitwise */
-};
 
 /** Matches Cloudflare Workflows' "instance already exists" rejection (hoisted). */
 const DUPLICATE_INSTANCE = /already[\s-]?exists/iu;

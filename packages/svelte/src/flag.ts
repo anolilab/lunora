@@ -2,7 +2,7 @@ import type { LunoraClient, Unsubscribe } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
-import type { FlagContext, FlagValue } from "../../../shared/flag-subscription";
+import type { FlagValue } from "../../../shared/flag-subscription";
 import { subscribeFlag } from "../../../shared/flag-subscription";
 import { isBrowser } from "../../../shared/is-browser";
 import { isClient } from "./agent";
@@ -22,13 +22,8 @@ import { getLunoraClient } from "./context";
  * primitive in this package already guards — `presence.ts`, `agent.ts`,
  * `agent-chat.ts`, `rate-limit.ts`. The store holds its default until hydration.
  */
-const openFlag = <T extends FlagValue>(
-    client: LunoraClient,
-    key: string,
-    defaultValue: T,
-    context: FlagContext | undefined,
-    set: (value: T) => void,
-): Unsubscribe => (isBrowser() ? subscribeFlag<T>(client, { context, default: defaultValue, key }, set) : () => {});
+const openFlag = <T extends FlagValue>(client: LunoraClient, key: string, defaultValue: T, set: (value: T) => void): Unsubscribe =>
+    isBrowser() ? subscribeFlag<T>(client, { default: defaultValue, key }, set) : () => {};
 
 /**
  * Open a single feature flag as a Svelte readable store, live over Lunora's
@@ -38,29 +33,28 @@ const openFlag = <T extends FlagValue>(
  * server's resolved value — re-emitted whenever the provider re-evaluates (e.g. a
  * flag is toggled in Cloudflare Flagship). The flag's kind is inferred from
  * `defaultValue`'s runtime type, so `flag("dark", false)` reads a boolean and
- * `flag("hero", "control")` a string. `context` supplies a per-call targeting
- * context merged on top of the app's default `identify` targeting key.
+ * `flag("hero", "control")` a string.
+ *
+ * The reactive channel is public, so the server evaluates every flag under the
+ * socket's own verified identity — the targeting key your `defineFlags({
+ * identify })` derives — and accepts no client-supplied targeting context. For
+ * evaluation under a context you compute, call `ctx.flags.*` inside a query,
+ * mutation, or action and return the resolved value.
  *
  * The subscription opens lazily on the first `$`-read and tears down when the
  * last subscriber detaches. Pass `client` explicitly, or omit it to resolve the
  * ambient client published by `setLunoraClient`. Evaluation never throws — a
  * provider error resolves the default (the same fail-open contract as `ctx.flags`).
  */
-export function flag<T extends FlagValue>(key: string, defaultValue: T, context?: FlagContext): Readable<T>;
-export function flag<T extends FlagValue>(client: LunoraClient, key: string, defaultValue: T, context?: FlagContext): Readable<T>;
-export function flag<T extends FlagValue>(
-    clientOrKey: LunoraClient | string,
-    keyOrDefault: T | string,
-    defaultOrContext?: FlagContext | T,
-    maybeContext?: FlagContext,
-): Readable<T> {
+export function flag<T extends FlagValue>(key: string, defaultValue: T): Readable<T>;
+export function flag<T extends FlagValue>(client: LunoraClient, key: string, defaultValue: T): Readable<T>;
+export function flag<T extends FlagValue>(clientOrKey: LunoraClient | string, keyOrDefault: T | string, maybeDefault?: T): Readable<T> {
     const hasExplicitClient = isClient(clientOrKey);
     const client = hasExplicitClient ? clientOrKey : getLunoraClient();
     const key = (hasExplicitClient ? keyOrDefault : clientOrKey) as string;
-    const defaultValue = (hasExplicitClient ? defaultOrContext : keyOrDefault) as T;
-    const context = (hasExplicitClient ? maybeContext : (defaultOrContext as FlagContext | undefined)) ?? undefined;
+    const defaultValue = (hasExplicitClient ? maybeDefault : keyOrDefault) as T;
 
-    return readable<T>(defaultValue, (set) => openFlag(client, key, defaultValue, context, set));
+    return readable<T>(defaultValue, (set) => openFlag(client, key, defaultValue, set));
 }
 
 /**
@@ -69,24 +63,20 @@ export function flag<T extends FlagValue>(
  *
  * Pass a record of `key → defaultValue`; each flag's kind is inferred from its
  * default, and the store holds the same-shaped record with resolved values (the
- * defaults until each evaluation lands). A single `context` applies to every
- * flag. This is the batched form of {@link flag} — one store, one subscription
- * per key, torn down together when the last subscriber detaches.
+ * defaults until each evaluation lands). This is the batched form of {@link flag}
+ * — one store, one subscription per key, torn down together when the last
+ * subscriber detaches. Like {@link flag} it evaluates under the socket's
+ * server-verified identity only.
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client published
  * by `setLunoraClient`.
  */
-export function flags<T extends Record<string, FlagValue>>(flagDefaults: T, context?: FlagContext): Readable<T>;
-export function flags<T extends Record<string, FlagValue>>(client: LunoraClient, flagDefaults: T, context?: FlagContext): Readable<T>;
-export function flags<T extends Record<string, FlagValue>>(
-    clientOrFlags: LunoraClient | T,
-    flagsOrContext?: FlagContext | T,
-    maybeContext?: FlagContext,
-): Readable<T> {
+export function flags<T extends Record<string, FlagValue>>(flagDefaults: T): Readable<T>;
+export function flags<T extends Record<string, FlagValue>>(client: LunoraClient, flagDefaults: T): Readable<T>;
+export function flags<T extends Record<string, FlagValue>>(clientOrFlags: LunoraClient | T, maybeFlags?: T): Readable<T> {
     const hasExplicitClient = isClient(clientOrFlags);
     const client = hasExplicitClient ? clientOrFlags : getLunoraClient();
-    const flagDefaults = (hasExplicitClient ? flagsOrContext : clientOrFlags) as T;
-    const context = (hasExplicitClient ? maybeContext : flagsOrContext) ?? undefined;
+    const flagDefaults = (hasExplicitClient ? maybeFlags : clientOrFlags) as T;
 
     return readable<T>(flagDefaults, (set) => {
         let current = { ...flagDefaults };
@@ -94,7 +84,7 @@ export function flags<T extends Record<string, FlagValue>>(
 
         for (const [key, defaultValue] of Object.entries(flagDefaults)) {
             unsubscribes.push(
-                openFlag(client, key, defaultValue, context, (next) => {
+                openFlag(client, key, defaultValue, (next) => {
                     current = { ...current, [key]: next };
                     set(current);
                 }),
@@ -109,4 +99,4 @@ export function flags<T extends Record<string, FlagValue>>(
     });
 }
 
-export type { FlagContext, FlagValue } from "../../../shared/flag-subscription";
+export type { FlagValue } from "../../../shared/flag-subscription";

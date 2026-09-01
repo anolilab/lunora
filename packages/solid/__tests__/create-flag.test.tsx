@@ -44,7 +44,7 @@ describe(createFlag, () => {
             { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
         );
 
-        expect(fake.subscriptions[0]?.args).toStrictEqual({ context: undefined, default: "control", key: "hero", type: "string" });
+        expect(fake.subscriptions[0]?.args).toStrictEqual({ default: "control", key: "hero", type: "string" });
     });
 
     it("re-subscribes and resets to the default when a reactive key changes", () => {

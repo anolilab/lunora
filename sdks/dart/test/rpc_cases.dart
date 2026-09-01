@@ -9,6 +9,38 @@ import 'harness.dart';
 
 // ─── RPC ─────────────────────────────────────────────────────────────────────
 
+/// An EMPTY shard key is absent, not the shard named `''`.
+///
+/// The runtime takes any string as a named shard and gives `''` its own Durable
+/// Object, while this client treats `''` and null as one shard wherever it
+/// matches a subscription or drains the queue. Sending it split those two views:
+/// a single-call replay of a queued write landed on one Durable Object and a
+/// BATCHED replay of that same write on another, with the optimistic overlay
+/// tracking neither. Both builders that carry a shard key are asserted, because
+/// normalising one and not the other is the same split.
+void caseEmptyShardKeyIsOmitted() {
+  covers('empty_shard_key_is_omitted');
+
+  for (final absent in <String?>[null, '']) {
+    final body = LunoraClient.buildRpcBody('messages:send', const <String, Object?>{}, shardKey: absent);
+
+    check(!body.containsKey('shardKey'), 'shard key ${absent.toString()} must not reach the RPC body');
+  }
+
+  final named = LunoraClient.buildRpcBody('messages:send', const <String, Object?>{}, shardKey: 'room-1');
+
+  equals(named['shardKey'], 'room-1', 'a real shard key still rides the body');
+
+  final client = LunoraClient(url: 'https://app.example');
+
+  for (final absent in <String?>[null, '']) {
+    check(!client.wsUrl(shardKey: absent).contains('shard='), 'shard key ${absent.toString()} must not name a shard on the socket');
+  }
+
+  equals(client.wsUrl(shardKey: ''), client.wsUrl(), 'an empty shard key is byte-identical to sending none');
+  check(client.wsUrl(shardKey: 'room-1').contains('shard='), 'a real shard key still rides the socket URL');
+}
+
 void caseRpcRequestBodies() {
   covers('rpc_request_bodies');
 
@@ -29,7 +61,7 @@ void caseRpcResponses() {
 
   for (final testCase in objectList(document['responseOk'])) {
     final response = testCase['response'] as Map<String, Object?>;
-    final value = LunoraClient.parseRpcResponse(response);
+    final value = LunoraClient.parseRpcResponse(response, status: 200);
 
     equals(canonical(encodeWire(value)), canonical(response['result']), 'rpc result for ${testCase['name']}');
   }

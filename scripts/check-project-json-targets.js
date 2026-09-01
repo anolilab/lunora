@@ -36,6 +36,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { workspaceGroups } from "./workspace-config.js";
+
 /**
  * Projects still carrying a silently-skipped target, each with the change that
  * removes it. An entry here is a debt marker, not an exemption: the check also
@@ -68,8 +70,12 @@ const KNOWN_SCRIPT_EXCEPTIONS = new Map([
     ],
 ]);
 
-/** The pnpm workspace globs, minus the trailing `/*` — every project.json lives under one. */
-const WORKSPACE_DIRECTORIES = ["apps", "examples", "packages", "tests"];
+/**
+ * The pnpm workspace globs, minus the trailing `/*` — every project.json lives
+ * under one. Read from `pnpm-workspace.yaml` rather than hardcoded, so a new
+ * glob cannot be added without this guard following it.
+ */
+const WORKSPACE_DIRECTORIES = workspaceGroups();
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -85,8 +91,20 @@ for (const workspace of WORKSPACE_DIRECTORIES) {
 
     try {
         entries = readdirSync(join(rootDir, workspace), { withFileTypes: true });
-    } catch {
-        continue;
+    } catch (error) {
+        // Not `continue`. This guard reports success by finding no offenders, so a
+        // directory it could not read is indistinguishable from a clean one.
+        console.error(`❌ pnpm-workspace.yaml declares "${workspace}/*" but ${workspace}/ could not be read: ${error.message}`);
+        process.exit(1);
+    }
+
+    // A declared group that resolves to no member at all is the same vacuous pass
+    // as an unreadable one: the loop below finds no offenders and the total floor
+    // still clears on the OTHER groups' files. Floored on member directories, not
+    // on `project.json` files — not every member has one, by design.
+    if (entries.filter((entry) => entry.isDirectory()).length === 0) {
+        console.error(`❌ pnpm-workspace.yaml declares "${workspace}/*" but ${workspace}/ holds no member directories — this check examined nothing there.`);
+        process.exit(1);
     }
 
     for (const entry of entries) {
@@ -141,8 +159,10 @@ let packageEntries;
 
 try {
     packageEntries = readdirSync(join(rootDir, "packages"), { withFileTypes: true });
-} catch {
-    packageEntries = [];
+} catch (error) {
+    // Same reasoning: an empty list would satisfy every assertion below.
+    console.error(`❌ packages/ could not be read: ${error.message}`);
+    process.exit(1);
 }
 
 for (const entry of packageEntries) {
@@ -300,6 +320,19 @@ if (offenders.size > 0) {
     for (const [path, targets] of offenders) {
         console.log(`   ${path} (${targets.join(", ")}) — ${KNOWN_UNMIGRATED.get(path)}`);
     }
+}
+
+// The two counts above were computed and printed and never compared against
+// anything, so `✅ 0 of 0 project.json files` was a passing run. A repo with no
+// project.json and no package manifests is a broken checkout, not a clean one.
+if (projectFiles.length === 0) {
+    console.error(`❌ No project.json found under ${WORKSPACE_DIRECTORIES.map((workspace) => `${workspace}/*`).join(", ")} — this check examined nothing.`);
+    process.exit(1);
+}
+
+if (packageManifests.length === 0) {
+    console.error("❌ No packages/*/package.json found — the required-script check examined nothing.");
+    process.exit(1);
 }
 
 console.log(`✅ ${projectFiles.length - offenders.size} of ${projectFiles.length} project.json files declare no silently-skipped target.`);

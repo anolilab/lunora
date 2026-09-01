@@ -152,6 +152,34 @@ describe("ctx.push.broadcast pagination (plan 222 / NOTIFY-01)", () => {
         return { ...facade, engine, sends: push.sends, store };
     };
 
+    // Regression: `broadcastPageSize` lived ONLY on `createNotify`'s third
+    // argument, and the sole production call is codegen's fixed `{ log, metrics }`
+    // — so `ctx.push.broadcast` was pinned at 250 per round trip forever, while
+    // `SubscriptionFilter.limit`'s own docs pointed at this knob as the way to
+    // size pages. It is settable on `defineNotify` now, which apps can reach.
+    it("takes broadcastPageSize from the defineNotify definition", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const provider = mockPushProvider();
+        const { push } = createNotify(
+            { ...baseDefinition(store), broadcastPageSize: 2 },
+            {},
+            { engine: mockEngine({ push: provider.provider }), silent: true },
+        );
+
+        for (let index = 0; index < 5; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await push.register({ subscription: { endpoint: `https://push.example/def/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } });
+        }
+
+        const page = await push.broadcastPage({ body: "bulk", title: "t" });
+
+        // One page is the definition's 2, not the 250 default.
+        expect(page.result.total).toBe(2);
+        expect(page.nextCursor).toBeDefined();
+    });
+
     it("a broadcast over pageSize + 10 fakes visits every one across >= 2 pages", async () => {
         expect.hasAssertions();
 

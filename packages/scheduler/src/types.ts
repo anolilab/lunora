@@ -188,20 +188,24 @@ export interface Scheduler {
      * `agents.<name>` ref — which starts a fresh instance on fire (args become
      * its `params`). {@link ScheduleTargetArgs} infers the accepted args from
      * whichever target was passed.
+     *
+     * **Resolves the job id, a bare string** — the same value `cancel`/`get`
+     * take, and the same value the `ctx.scheduler` surface promises. This object
+     * IS `ctx.scheduler` on the shard side (codegen installs it behind
+     * `SchedulerLike`, whose `runAfter`/`runAt` are declared `Promise<string>`),
+     * so resolving a `{ id, scheduledFor }` record here handed mutations an
+     * object where every other gate — `@lunora/server`'s `Scheduler`,
+     * `@lunora/shard-engine`'s `SchedulerLike`, `@lunora/runtime`'s httpAction
+     * ctx, and the docs — said string. Nothing caught it, because the install is
+     * a cast: apps wrote the object into a string column and `cancel(id)`
+     * answered `{ cancelled: false }` with no error anywhere.
+     *
+     * The fire instant is not lost: `runAt` was handed it, and a caller that
+     * needs it back reads `scheduledFor` off {@link Scheduler.get}.
      */
-    runAfter: <T extends CronTarget>(
-        delayMs: number,
-        target: T,
-        args: ScheduleTargetArgs<T>,
-        options?: RunOptions,
-    ) => Promise<{ id: string; scheduledFor: number }>;
-    /** Like {@link Scheduler.runAfter} but fires at an absolute `date`/timestamp. */
-    runAt: <T extends CronTarget>(
-        date: Date | number,
-        target: T,
-        args: ScheduleTargetArgs<T>,
-        options?: RunOptions,
-    ) => Promise<{ id: string; scheduledFor: number }>;
+    runAfter: <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<string>;
+    /** Like {@link Scheduler.runAfter} but fires at an absolute `date`/timestamp. Resolves the job id. */
+    runAt: <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<string>;
 }
 
 /**

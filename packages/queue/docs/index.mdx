@@ -78,13 +78,10 @@ Because an isolated message is acked, it never reaches the dead-letter queue. It
 import { mutation } from "./_generated/server";
 import { v } from "@lunora/values";
 
-export const invite = mutation({
-    args: { email: v.string() },
-    handler: async (ctx, { email }) => {
-        await ctx.queues.emailQueue.send({ to: email });
-        // or in one call:
-        // await ctx.queues.emailQueue.sendBatch([{ body: { to: a } }, { body: { to: b } }]);
-    },
+export const invite = mutation.input({ email: v.string() }).mutation(async ({ ctx, args: { email } }) => {
+    await ctx.queues.emailQueue.send({ to: email });
+    // or in one call:
+    // await ctx.queues.emailQueue.sendBatch([{ body: { to: a } }, { body: { to: b } }]);
 });
 ```
 

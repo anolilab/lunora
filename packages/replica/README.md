@@ -112,9 +112,11 @@ const SQL = await initSqlJs();
 const adapter = createSqlJsAdapter(new SQL.Database());
 const mirror = new LocalMirror({ db: adapter });
 
+// A diff is `{ table, timestamp, changes }` (plus an optional stable `id`).
+// `createTableDiff("todos", changes)` fills the timestamp and id for you.
 mirror.applyDiff({
     table: "todos",
-    schema: "1.0",
+    timestamp: Date.now(),
     changes: [{ type: "insert", data: { id: "1", title: "hello", done: false } }],
 });
 

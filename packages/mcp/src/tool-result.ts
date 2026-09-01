@@ -6,24 +6,8 @@
  * observability tools (`./observability-tools`). Keeping it here also keeps
  * `./observability-tools` off `./tools`, which would be an import cycle.
  */
+import { toBase64 } from "../../../shared/base64";
 import type { ToolResult } from "./tool-types";
-
-/**
- * Base64-encode bytes for the model-visible JSON, chunking to stay under
- * `String.fromCharCode`'s argument-count ceiling on large buffers (mirrors the
- * wire codec's own encoder).
- */
-const bytesToBase64 = (bytes: Uint8Array): string => {
-    let binary = "";
-    const chunk = 0x80_00;
-
-    for (let index = 0; index < bytes.length; index += chunk) {
-        // eslint-disable-next-line unicorn/prefer-code-point -- byte values 0-255 -> latin1; fromCharCode is correct and faster here
-        binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
-    }
-
-    return btoa(binary);
-};
 
 /**
  * `JSON.stringify` replacer for a decoded RPC result. `LunoraClient` decodes
@@ -42,13 +26,13 @@ const jsonResultReplacer = (_key: string, value: unknown): unknown => {
     }
 
     if (value instanceof ArrayBuffer) {
-        return bytesToBase64(new Uint8Array(value));
+        return toBase64(new Uint8Array(value));
     }
 
     if (ArrayBuffer.isView(value)) {
         const view = value;
 
-        return bytesToBase64(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+        return toBase64(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
     }
 
     return value;
@@ -95,4 +79,4 @@ const errorResult = (message: string): ToolResult => {
     return { content: [{ text: message, type: "text" }], isError: true };
 };
 
-export { bytesToBase64, errorResult, jsonResultReplacer, ok, okStructured, toJsonSafe };
+export { errorResult, jsonResultReplacer, ok, okStructured, toJsonSafe };

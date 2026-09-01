@@ -34,7 +34,15 @@ const APP_NAME = "Lunora Auth Playground";
  */
 const options = (env: { AUTH_SECRET: string }): LunoraAuthOptions => ({
     appName: APP_NAME,
-    baseURL: "http://localhost:5173",
+    // `baseURL` is deliberately absent.
+    //
+    // `@lunora/auth` derives its production posture from it: an explicit
+    // `http://…` origin marks the deployment as local, which turns OFF
+    // `useSecureCookies` and downgrades the weak-secret guard from a throw to a
+    // warning. Hard-coding the Vite dev origin here would therefore ship session
+    // cookies without `Secure` over HTTPS and let a sample secret through. Left
+    // unset, better-auth resolves the origin from each request, which is correct
+    // in dev and in production. Pin one via an `AUTH_URL` secret if you must.
     emailAndPassword: {
         enabled: true,
         // Revoke other sessions when a user resets their password so a leaked

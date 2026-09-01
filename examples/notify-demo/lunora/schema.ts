@@ -1,3 +1,4 @@
+import { ratelimit } from "./ratelimit/schema.js";
 import { defineSchema, defineTable, v } from "lunorash/server";
 
 /**
@@ -14,4 +15,4 @@ export default defineSchema({
         sentAt: v.number(),
         title: v.string(),
     }).index("by_sent", ["sentAt"]),
-});
+}).extend(ratelimit.extension);

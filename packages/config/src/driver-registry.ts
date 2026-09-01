@@ -48,4 +48,27 @@ const resolveDeployDriver = (target: string = DEFAULT_DEPLOY_TARGET): DeployDriv
     return driver;
 };
 
-export { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver };
+/**
+ * Whether `target`'s driver ships a `toolchain` — i.e. whether any tool can
+ * actually build, serve or deploy it, as opposed to merely generate for it.
+ *
+ * One predicate rather than one per caller: the CLI (`deploy`, `dev`) and the
+ * Vite plugin (`build`, `dev`) must refuse the same set, and a second copy
+ * fails silently — the tool that forgot runs the WRONG pipeline for the target
+ * instead of rejecting it.
+ * @param target A target id already resolved by `resolveTargetOrThrow`. Unknown
+ * ids answer `false` rather than throwing, so this is safe to ask about
+ * arbitrary input.
+ * @returns `true` when the target can be run.
+ */
+const isRunnableTarget = (target: string): boolean => Object.hasOwn(DEPLOY_DRIVERS, target) && resolveDeployDriver(target).toolchain !== undefined;
+
+/**
+ * The subset of {@link deployTargetIds} that {@link isRunnableTarget} accepts,
+ * in the same (alphabetical) order.
+ * @returns every target id a tool can build, serve or deploy — used to name the
+ * alternatives when one is refused.
+ */
+const runnableTargetIds = (): ReadonlyArray<string> => deployTargetIds().filter((id) => isRunnableTarget(id));
+
+export { DEFAULT_DEPLOY_TARGET, deployTargetIds, isRunnableTarget, resolveDeployDriver, runnableTargetIds };

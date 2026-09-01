@@ -105,10 +105,59 @@ func TestWireCodecRoundTrip(t *testing.T) {
 				t.Fatalf("encode: %v", err)
 			}
 
-			if got, want := canonical(t, reEncoded), canonical(t, encoded); got != want {
+			// A handful of shapes are legitimately not fixed points — a bare
+			// [Tag] array is escaped on the way out, an `undefined` object
+			// field is dropped — and carry the expected re-encoding.
+			expected, ok := testCase["reencoded"]
+			if !ok {
+				expected = encoded
+			}
+
+			if got, want := canonical(t, reEncoded), canonical(t, expected); got != want {
 				t.Errorf("round-trip mismatch\n got: %s\nwant: %s", got, want)
 			}
 		})
+	}
+}
+
+// TestEmptyShardKeyIsOmitted pins the one normalisation both the RPC body and
+// the socket URL depend on.
+//
+// `""` is ABSENT on the wire, not "the shard named empty string". The runtime
+// takes any string as a named shard and gives `""` its own Durable Object, while
+// this client treats `""` and absent as one shard everywhere it matches a
+// subscription or drains the queue. A port that sent it replayed a single queued
+// write to one Durable Object and a BATCHED replay of the same write to another,
+// with the optimistic overlay tracking neither.
+func TestEmptyShardKeyIsOmitted(t *testing.T) {
+	covers("empty_shard_key_is_omitted")
+
+	body, err := BuildRPCBody("messages:list", map[string]any{}, "")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	if _, present := body["shardKey"]; present {
+		t.Error("an empty shard key must not reach the RPC body")
+	}
+
+	named, err := BuildRPCBody("messages:list", map[string]any{}, "tenant_a")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	if named["shardKey"] != "tenant_a" {
+		t.Errorf("shardKey = %v, want tenant_a", named["shardKey"])
+	}
+
+	client := NewClient("https://app.example", nil)
+
+	if url := client.WSURL("", ""); strings.Contains(url, "shard=") {
+		t.Errorf("WSURL(%q) = %s, want no shard parameter", "", url)
+	}
+
+	if url := client.WSURL("tenant_a", ""); !strings.Contains(url, "shard=tenant_a") {
+		t.Errorf("WSURL(tenant_a) = %s, want a shard parameter", url)
 	}
 }
 

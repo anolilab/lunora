@@ -51,10 +51,68 @@ for gem_bin in /opt/homebrew/lib/ruby/gems/*/bin; do
 done
 
 ALL=(python go ruby rust swift java kotlin dart)
+
+# ALL is hardcoded here, again in `generated-check.sh`, and a third time as the
+# CI matrix in `.github/workflows/test.yml` — so a ninth SDK missed in any one of
+# them is silently never checked by that gate. Reconcile against what is actually
+# on disk, which is the only copy that cannot be forgotten.
+# Everything under sdks/ is a port unless it is listed here. An explicit ignore
+# list rather than a marker-file heuristic: a marker SKIPS what it does not
+# match, so a new port that forgot the marker is absent from both this list and
+# ALL — no drift, silently never checked. This way a directory that is not a port
+# costs one deliberate line, and anything else fails loudly.
+IGNORED=(smoke)
+
+DISCOVERED=()
+for sdk_dir in "$ROOT"/sdks/*/; do
+    sdk_name="$(basename "$sdk_dir")"
+    skip=""
+    for ignored in "${IGNORED[@]}"; do
+        [ "$sdk_name" = "$ignored" ] && skip=1 && break
+    done
+    [ -n "$skip" ] && continue
+    DISCOVERED+=("$sdk_name")
+done
+
+sdk_drift="$(comm -3 <(printf '%s\n' "${ALL[@]}" | sort) <(printf '%s\n' "${DISCOVERED[@]}" | sort))"
+if [ -n "$sdk_drift" ]; then
+    printf 'sdks/lint-all.sh ALL and sdks/ disagree (left column: listed but absent; right: present but unlisted):\n%s\n' "$sdk_drift" >&2
+    printf 'Update ALL here, ALL in sdks/generated-check.sh, and the sdk-conformance matrix in .github/workflows/test.yml.\n' >&2
+    exit 2
+fi
+
 LANGS=("$@")
 if [ ${#LANGS[@]} -eq 0 ]; then
     LANGS=("${ALL[@]}")
 fi
+
+# A linter pointed at a tree with no matching sources exits 0 having linted
+# nothing — `ruff check .`, `rubocop`, `dart analyze` and `swift format lint
+# --recursive` all do. Empty the tree, move the sources, or rename the directory
+# and the leg reports PASS. Only the kotlin leg guarded against this; this is the
+# same guard, shared.
+#
+# Every input is held to at least one file individually: a total count would
+# still pass while one of two or three inputs contributed nothing.
+require_files() {
+    local extension="$1"
+    shift
+
+    local input
+    local found
+
+    for input in "$@"; do
+        found="$(find "$input" -name "*.$extension" 2>/dev/null | head -1)"
+
+        if [ -z "$found" ]; then
+            printf 'no *.%s files at %s — the linter would have reported PASS without reading it\n' "$extension" "$input"
+
+            return 1
+        fi
+    done
+
+    return 0
+}
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -77,6 +135,7 @@ lint_suite() {
                 return 3
             }
             cd "$ROOT/sdks/python" || return 1
+            require_files py . "$ROOT/sdks/smoke/python" || return 1
             # --config, because ruff resolves settings by walking up from each
             # FILE: the smoke lives outside this directory and would otherwise be
             # linted against defaults rather than the transport's own rules.
@@ -109,6 +168,7 @@ lint_suite() {
                 return 3
             }
             cd "$ROOT/sdks/ruby" || return 1
+            require_files rb . "$ROOT/sdks/smoke/ruby" || return 1
             rubocop && rubocop --config .rubocop.yml "$ROOT/sdks/smoke/ruby"
             ;;
         rust)
@@ -183,6 +243,7 @@ lint_suite() {
             fi
 
             cd "$ROOT/sdks/swift" || return 1
+            require_files swift Sources/Lunora Tests "$ROOT/sdks/smoke/swift" || return 1
             # --configuration for the same reason rustfmt needs --config-path: the
             # smoke sits outside this directory, and swift-format finds
             # `.swift-format` by walking up from the file.
@@ -238,6 +299,7 @@ lint_suite() {
                 return 3
             }
             cd "$ROOT/sdks/dart" || return 1
+            require_files dart lib test "$ROOT/sdks/smoke/dart" || return 1
             # `pub get` first: `dart analyze` resolves `package:lunora/…` through
             # .dart_tool/package_config.json, which is gitignored. --offline
             # because this package declares no dependencies, so a lint run must

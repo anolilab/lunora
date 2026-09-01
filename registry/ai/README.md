@@ -12,8 +12,8 @@ lunora registry add ai
 
 This:
 
-1. Adds `@lunora/ai` and `@lunora/server` to your `package.json` (run `pnpm install` afterwards).
-2. Copies `lunora/ai/index.ts` (the `summarize` and `analyzeSentiment` actions) into your project — this is **yours** to edit.
+1. Adds `@lunora/ai`, `@lunora/server`, and `@lunora/ratelimit` to your `package.json` (run `pnpm install` afterwards).
+2. Copies `lunora/ai/index.ts` (the `summarize` and `analyzeSentiment` actions, with their auth guard and rate limit) into your project — this is **yours** to edit.
 3. Adds an `ai` binding entry to `wrangler.jsonc` for the **`AI`** binding (the Workers AI binding).
 
 Then regenerate types:
@@ -22,7 +22,7 @@ Then regenerate types:
 lunora codegen
 ```
 
-The functions surface in the generated `api` (client-reachable) as `ai/summarize` and `ai/analyzeSentiment` — i.e. `api.ai.summarize` and `api.ai.analyzeSentiment`.
+The functions surface in the generated `api` (client-reachable) as `ai/summarize` and `ai/analyzeSentiment` — i.e. `api.ai.summarize` and `api.ai.analyzeSentiment`. See [Metered, so guarded](#metered-so-guarded) for what stands between them and your neuron bill.
 
 ## How it works
 
@@ -81,6 +81,16 @@ for await (const chunk of result.textStream) {
     // send chunk to client
 }
 ```
+
+## Metered, so guarded
+
+Workers AI is billed per neuron and Lunora `action`s are public RPC, so an unguarded model call is an anonymous, unbounded way for anyone who can reach your API to spend your budget — and a free LLM proxy on your account. Both scaffolded actions fail closed:
+
+- **Auth** — `requireUser` rejects unauthenticated callers.
+- **Rate** — a per-caller token bucket keyed `ctx.auth.userId ?? ctx.ip ?? "anon"`, so one account (or one anonymous IP) can't drain the quota. The default store is in-memory; run `lunora add ratelimit` for the durable, `ctx.db`-backed store in production.
+- **Size** — the prompt input is length-bounded. A neuron bill scales with tokens, so the input cap is a cost control, not just validation.
+
+Widen those bounds deliberately. Removing them is what turns the item into a bill.
 
 ## What you own
 

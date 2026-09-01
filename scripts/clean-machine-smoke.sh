@@ -39,35 +39,57 @@ PROJECT_DIR="$SCRATCH/scaffold"
 
 mkdir -p "$PACK_DIR" "$INSTALL_DIR"
 
-echo "==> Packing all @lunora/* workspace packages into $PACK_DIR"
-# Pack every package so we can map any @lunora/* dep a template (or the CLI
+echo "==> Packing all @lunora/* + lunorash workspace packages into $PACK_DIR"
+# Pack every package so we can map any base-package dep a template (or the CLI
 # itself) might pull to a local file: tarball instead of the npm registry.
+#
+# Record each real package name -> its tarball in a manifest, and key the
+# overrides off THAT rather than off a filename regex. The regex here only
+# matched a plain X.Y.Z, so every `1.0.0-alpha.N` tarball — which is all of them —
+# produced a key like `@lunora/cli-1.0.0-alpha.208.tgz`: a package name that does
+# not exist, an override that matches nothing, and every transitive base package
+# quietly resolved from npm. The script then "passed" while testing the PUBLISHED
+# packages instead of this checkout. `scripts/template-build-smoke.sh` hit the
+# same trap and this is its fix.
+PACK_MANIFEST="$SCRATCH/pack-manifest.tsv"
+: > "$PACK_MANIFEST"
+
 for pkg_dir in "$REPO_ROOT"/packages/*/; do
     pkg_name="$(node -e "try{process.stdout.write(require('$pkg_dir/package.json').name||'')}catch{}" 2>/dev/null)"
-    if [[ "$pkg_name" == @lunora/* ]]; then
+    if [[ "$pkg_name" == @lunora/* || "$pkg_name" == "lunorash" ]]; then
         pushd "$pkg_dir" >/dev/null
-        pnpm pack --pack-destination "$PACK_DIR" >/dev/null
+        # `pnpm pack --pack-destination` prints the created tarball path on its
+        # last output line; normalize to an absolute path under PACK_DIR.
+        tarball_out="$(pnpm pack --pack-destination "$PACK_DIR" | tail -1)"
         popd >/dev/null
+        printf '%s\t%s\n' "$pkg_name" "$PACK_DIR/$(basename "$tarball_out")" >> "$PACK_MANIFEST"
     fi
 done
 
-cli_tgz="$(ls "$PACK_DIR"/lunora-cli-*.tgz | head -n1)"
+cli_tgz="$(awk -F'\t' '$1 == "@lunora/cli" { print $2 }' "$PACK_MANIFEST")"
+
+if [[ -z "$cli_tgz" || ! -f "$cli_tgz" ]]; then
+    echo "ERROR: no @lunora/cli tarball was packed — nothing to smoke-test" >&2
+    exit 1
+fi
 
 # Build the pnpm-workspace.yaml overrides block (pnpm 11: overrides live in
-# pnpm-workspace.yaml, not in the "pnpm" field of package.json).
+# pnpm-workspace.yaml, not in the "pnpm" field of package.json) from the
+# name -> tarball manifest, so every base package resolves locally at any version.
 OVERRIDES_YAML="$(node -e "
 const fs = require('fs');
-const path = require('path');
-const dir = '$PACK_DIR';
-const lines = fs.readdirSync(dir)
-  .filter(f => f.endsWith('.tgz'))
-  .map(f => {
-    const base = f.replace(/-[0-9]+\.[0-9]+\.[0-9]+\.tgz\$/, '');
-    const scope = base.replace(/^lunora-/, '@lunora/');
-    return '  \"' + scope + '\": \"file:' + path.join(dir, f) + '\"';
-  });
+const rows = fs.readFileSync('$PACK_MANIFEST', 'utf8').trim().split('\n').filter(Boolean);
+const lines = rows.map((row) => {
+    const [name, file] = row.split('\t');
+    return '  \"' + name + '\": \"file:' + file + '\"';
+});
 process.stdout.write(lines.join('\n'));
 ")"
+
+if [[ -z "$OVERRIDES_YAML" ]]; then
+    echo "ERROR: the overrides block is empty — every @lunora/* dep would come from npm" >&2
+    exit 1
+fi
 
 echo "==> Installing @lunora/cli into a standalone tmpdir"
 cd "$INSTALL_DIR"
@@ -90,6 +112,26 @@ $OVERRIDES_YAML
 EOF
 
 pnpm install --no-frozen-lockfile >/dev/null
+
+# The overrides are only worth anything if they were actually applied. A base
+# package resolved from the npm registry means this run tested the PUBLISHED
+# package, not this checkout — the exact failure the bogus override keys caused,
+# and one that looks identical to success from the outside.
+echo "==> Sanity: no base package resolved from the npm registry"
+if [[ -f pnpm-lock.yaml ]]; then
+    # `tr -d` rather than a `?` quantifier: BSD's basic regex has none. The `(...)`
+    # peer-resolved suffix is excluded so one package is reported once.
+    leaked="$(grep -oE "^  '?(@lunora/[a-z0-9-]+|lunorash)@[0-9][^'(:]*" pnpm-lock.yaml | tr -d " '" | sort -u || true)"
+
+    if [[ -n "$leaked" ]]; then
+        echo "ERROR: these base packages came from the registry instead of the packed tarballs:" >&2
+        echo "$leaked" | sed 's/^/    /' >&2
+        exit 1
+    fi
+else
+    echo "ERROR: no pnpm-lock.yaml after install — cannot prove the overrides applied" >&2
+    exit 1
+fi
 
 echo "==> Sanity: the cli binary is on the path"
 test -x node_modules/.bin/lunora || {

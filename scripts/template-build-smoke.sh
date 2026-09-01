@@ -579,6 +579,10 @@ FAIL=()
 XFAIL=()
 XPASS=()
 SKIP_BUILD=()
+# Templates whose auth-ui view the detector actually resolved. Everything the
+# matrix is really for hangs off a non-empty `authui_view`, so if that comes back
+# empty for every template the run proves nothing and has to say so.
+AUTHUI_RESOLVED=()
 
 # ---------------------------------------------------------------------------
 # Per-template loop.
@@ -662,13 +666,17 @@ for tname in "${TEMPLATES[@]}"; do
     #
     # The expected view file mirrors `detectAuthUiItem` in
     # packages/cli/src/commands/add/features.ts — keep the two in step.
+    authui_detect_status=0
     authui_view="$(node -e "
         const p = require('$scaffold_dir/package.json');
         const d = { ...p.dependencies, ...p.devDependencies };
         const has = (n) => Object.hasOwn(d, n);
         // Mirrors \`minimumMajor\`: the lowest major the range admits, not its
         // first digit — \`>1\` floors at 2 and \`2 || 1\` floors at 1.
-        const { minVersion, validRange } = require('$REPO_ROOT/packages/cli/node_modules/semver');
+        // Resolved, not path-joined: \`packages/cli/node_modules/semver\` is a pnpm
+        // layout artifact, and a hoist change moves it without warning. The
+        // repo root is the fallback for a hoisted install.
+        const { minVersion, validRange } = require(require.resolve('semver', { paths: ['$REPO_ROOT/packages/cli', '$REPO_ROOT'] }));
         const major = (r) => (r && validRange(r) !== null ? (minVersion(r)?.major ?? 0) : 0);
         // React Native is not a DOM target: the react payload would not work there.
         if (has('react-native') || has('@lunora/react-native')) process.stdout.write('');
@@ -687,9 +695,24 @@ for tname in "${TEMPLATES[@]}"; do
         else if (has('solid-js')) process.stdout.write('solid/auth-cards.tsx');
         else if (has('@angular/core')) process.stdout.write('angular/auth-cards.ts');
         else process.stdout.write('');
-    " 2>/dev/null || true)"
+    ")" || authui_detect_status=$?
+
+    # NOT `|| true`. This one substitution decides whether the strongest half of
+    # the matrix runs at all: an empty result leaves AUTHUI_ADDED="no", which skips
+    # `lunora add auth-ui`, every file-landed assertion, the dep-injection check,
+    # the per-template typechecker, the typecheck:never-ran guard, the FILE_RE
+    # vacuity guard and the planted-error canary — and the template still records
+    # PASS on `pnpm run build` alone. Swallowing the exit status made a resolution
+    # failure indistinguishable from "this template has no framework".
+    if [[ ${authui_detect_status:-0} -ne 0 ]]; then
+        echo "  FAIL: could not resolve the expected auth-ui view for $tname (node exited ${authui_detect_status})"
+        echo "        Everything from \`lunora add auth-ui\` onwards would have been skipped, and $tname would have recorded PASS on its build alone."
+        FAIL+=("$tname(auth-ui:detect)")
+        continue
+    fi
 
     if [[ -n "$authui_view" ]]; then
+        AUTHUI_RESOLVED+=("$tname")
         echo "  ==> lunora add auth-ui (expecting lunora/auth-ui/$authui_view)"
         authui_log="$RESULTS_DIR/${tname}-auth-ui.log"
         # `dist/bin.mjs`, not `dist/index.mjs` — the package's `bin` field. Running
@@ -1052,6 +1075,22 @@ echo "  XPASS    : ${#XPASS[@]}  (${XPASS[*]+${XPASS[*]}})"
 # ---------------------------------------------------------------------------
 # Exit code.
 # ---------------------------------------------------------------------------
+# The whole auth-ui half of the matrix is conditional on a non-empty detector
+# result. If not one template produced one, every scaffold was graded on
+# `pnpm run build` alone and the run is worthless — which is exactly how it would
+# read if the detector broke for a reason that is the same for all of them (a
+# moved `semver`, a renamed dependency, a typo in the mirror of
+# `detectAuthUiItem`). A green summary must not be able to mean that.
+if [[ ${#AUTHUI_RESOLVED[@]} -eq 0 ]]; then
+    echo ""
+    echo "FAILED — no template resolved an auth-ui view, so 'lunora add auth-ui', the payload"
+    echo "         assertions, the per-template typecheck and its canary ran for none of them."
+    echo "         Check the detector against detectAuthUiItem in packages/cli/src/commands/add/features.ts."
+    exit 1
+fi
+
+echo "  auth-ui view resolved for ${#AUTHUI_RESOLVED[@]} of ${#TEMPLATES[@]} templates: ${AUTHUI_RESOLVED[*]}"
+
 if [[ ${#FAIL[@]} -gt 0 ]]; then
     echo ""
     echo "FAILED — unexpected build/install failures: ${FAIL[*]+${FAIL[*]}}"
