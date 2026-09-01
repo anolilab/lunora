@@ -30,6 +30,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactElement, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import communityCard from "@/assets/images/community-card.webp";
 import lunoraLogoRaw from "@/assets/lunora_logo.svg?raw";
 import LunoraLogo from "@/assets/lunora_logo.svg?react";
 import dashboardsImg from "@/assets/studio/dark/dashboards.png";
@@ -46,8 +47,6 @@ import { cn } from "@/lib/utils";
  * menus. Each dropdown pairs a vertical icon list with one or two tall feature
  * cards (Lunora Studio screenshots).
  */
-
-const card = (id: string): string => `https://images.unsplash.com/${id}?q=80&w=900&auto=format&fit=crop`;
 
 const TRAILING_ZERO_DECIMAL = /\.0$/;
 
@@ -117,7 +116,7 @@ const menu: NavColumn[] = [
             { href: "/studio", image: dashboardsImg, subtitle: "A local studio for your backend", title: "Lunora Studio" },
             {
                 href: "https://discord.gg/eajEZvk2PG",
-                image: card("photo-1614852206732-6728910dc175"),
+                image: communityCard,
                 subtitle: "Join us on Discord",
                 title: "Community",
             },
