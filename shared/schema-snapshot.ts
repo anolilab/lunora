@@ -25,12 +25,50 @@ import { contentDigest } from "./content-digest";
 /** Current snapshot format version. Bumped if the structural shape below changes. */
 const SCHEMA_SNAPSHOT_VERSION = 1 as const;
 
-/** A single field's structural shape: its value kind and whether it is optional. */
+/**
+ * A single field's structural shape.
+ *
+ * `kind` + `optional` were once the whole record, which made every change INSIDE
+ * a validator invisible to the diff, to the serialized baseline, and to the
+ * content hash — `v.id("users")` → `v.id("orgs")`, `v.array(v.string())` →
+ * `v.array(v.bigint())` (which changes the storage projection), a swapped union
+ * member, an added `.unique()`. Zero drift, byte-identical snapshot, same hash,
+ * so `recordSchemaVersion` did not even append a ledger row.
+ *
+ * Everything past `optional` is therefore recorded too. All of it is declared
+ * OPTIONAL so a baseline written before the deepening still parses (no
+ * {@link SCHEMA_SNAPSHOT_VERSION} bump, which `parseSnapshotJson` would turn into
+ * a hard reject with no upgrade path) — see {@link recordsFieldDetail} for how the
+ * differ tells "this baseline predates the detail" from "this field has none".
+ */
 interface FieldSnapshot {
+    /** `v.object({…})` member shapes, key-sorted. */
+    fields?: Record<string, FieldSnapshot>;
+    /** `v.record(key, …)` key shape. */
+    key?: FieldSnapshot;
     /** The validator kind (`string`, `number`, `id`, `object`, …) after unwrapping `v.optional`. */
     kind: string;
+    /** `v.literal(value)` — the literal as source text. */
+    literal?: string;
+    /** `v.union(…)` members, in canonical (not declaration) order — a union is a set. */
+    members?: ReadonlyArray<FieldSnapshot>;
+    /** `.nullable()` — the column accepts SQL NULL. Always written by a current snapshot. */
+    nullable?: boolean;
+    /** `v.array(inner)` element / `v.record(…, value)` value shape. */
+    of?: FieldSnapshot;
     /** True when declared `v.optional(...)` — accepts `undefined` / absent on insert. */
     optional: boolean;
+    /** `v.id("table")` — the referenced table. */
+    ref?: string;
+    /**
+     * A `.check()`/`.max()`/`.email()`/… predicate is declared on the column. Only
+     * its PRESENCE is knowable — the IR cannot represent the closure — so
+     * `.max(200)` → `.max(500)` stays invisible; adding the first refinement to a
+     * populated column does not.
+     */
+    refined?: boolean;
+    /** `.unique()`. Always written by a current snapshot — see {@link recordsFieldDetail}. */
+    unique?: boolean;
 }
 
 /** A single secondary index's structural shape. */
@@ -139,21 +177,25 @@ interface DriftChange {
     table?: string;
     /** A machine-readable change discriminator. */
     type:
+        | "addedFieldConstraint"
         | "addedIndex"
         | "addedOptionalField"
         | "addedRelation"
         | "addedRequiredField"
         | "addedTable"
         | "changedFieldKind"
+        | "changedFieldShape"
         | "changedIndex"
         | "changedJurisdiction"
         | "changedShardMode"
         | "fieldOptionalToRequired"
         | "fieldRequiredToOptional"
+        | "relaxedFieldConstraint"
         | "removedField"
         | "removedIndex"
         | "removedRelation"
-        | "removedTable";
+        | "removedTable"
+        | "widenedFieldShape";
 }
 
 /** The result of diffing two snapshots: every classified change. */
@@ -291,19 +333,210 @@ const parseSnapshotJson = (content: string | undefined): SnapshotParseOutcome =>
 const indexesEqual = (a: IndexSnapshot, b: IndexSnapshot): boolean =>
     a.unique === b.unique && a.fields.length === b.fields.length && a.fields.every((field, index) => field === b.fields[index]);
 
-/** Classify the change to a single field that exists in BOTH snapshots (kind change + optionality flip). */
-const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot): DriftChange[] => {
-    const changes: DriftChange[] = [];
+/**
+ * Does this field snapshot come from a format that records constraints and
+ * nested shape?
+ *
+ * `unique` is written unconditionally by the snapshot builder, so its ABSENCE
+ * means the baseline was written before {@link FieldSnapshot} was deepened — not
+ * that the column has no `.unique()`. A dimension the baseline never recorded
+ * must not be diffed: every existing app would otherwise see one spurious
+ * breaking change per constrained/structured field on its first run after the
+ * upgrade, and a gate that blocks a deploy nothing actually changed is a gate
+ * whose override gets typed reflexively. One re-blessed baseline later the
+ * detail is present and every dimension below is live.
+ */
+const recordsFieldDetail = (field: FieldSnapshot): boolean => field.unique !== undefined;
+
+/**
+ * The VALUE-SHAPE half of a field snapshot, as a canonical string.
+ *
+ * Excludes the column-level flags (`optional`/`unique`/`nullable`/`refined`),
+ * which are diffed on their own — folding them in here would report one edit as
+ * two changes. Property order is fixed by this literal, and every nested record
+ * is already key-sorted by the builder, so two structurally-identical shapes
+ * always produce identical bytes.
+ */
+const shapeForm = (field: FieldSnapshot): string =>
+    JSON.stringify({
+        fields: field.fields,
+        key: field.key,
+        kind: field.kind,
+        literal: field.literal,
+        members: field.members,
+        of: field.of,
+        ref: field.ref,
+    });
+
+/** A field's accepted shapes as a set of canonical forms: a union contributes its members, anything else itself. */
+const memberForms = (field: FieldSnapshot): string[] =>
+    field.kind === "union" && field.members ? field.members.map((member) => shapeForm(member)) : [shapeForm(field)];
+
+/**
+ * Is `field` a widening of `old` — does it still accept everything `old` did?
+ *
+ * `v.string()` → `v.union(v.string(), v.number())` invalidates no stored row, so
+ * it is safe; the reverse narrowing, and a union that SWAPS a member, are not.
+ * Judged by union membership alone, which is the only widening the schema
+ * surface can express — anything subtler falls through to `breaking`, which is
+ * the safe direction to be wrong in.
+ */
+const isWidening = (old: FieldSnapshot, field: FieldSnapshot): boolean => {
+    if (field.kind !== "union") {
+        return false;
+    }
+
+    const accepted = new Set(memberForms(field));
+
+    return memberForms(old).every((form) => accepted.has(form));
+};
+
+/**
+ * Short rendering of a field's value shape (`id(users)`, `array(bigint)`, `a | b`).
+ *
+ * Shared with the studio's schema-diff view, not just the drift summaries: a
+ * column cell rendered from `kind` alone shows `id` on both sides of a repointed
+ * foreign key, so the row reads "changed" while the two cells it is contrasting
+ * look identical. Same text on both surfaces, from one function.
+ */
+const describeShape = (field: FieldSnapshot): string => {
+    switch (field.kind) {
+        case "array": {
+            return `array(${field.of ? describeShape(field.of) : "?"})`;
+        }
+        case "id": {
+            return `id(${field.ref ?? "?"})`;
+        }
+        case "literal": {
+            return `literal(${field.literal ?? "?"})`;
+        }
+        case "object": {
+            return `object({ ${Object.keys(field.fields ?? {}).join(", ")} })`;
+        }
+        case "record": {
+            return `record(${field.key ? describeShape(field.key) : "?"}, ${field.of ? describeShape(field.of) : "?"})`;
+        }
+        case "union": {
+            return (field.members ?? []).map((member) => describeShape(member)).join(" | ");
+        }
+        default: {
+            return field.kind;
+        }
+    }
+};
+
+/** A breaking change to one field that a `defineMigration` transform can repair. */
+const breakingFieldChange = (tableName: string, type: DriftChange["type"], summary: string): DriftChange => {
+    return { remediation: "backfill", scope: "table", severity: "breaking", summary, table: tableName, type };
+};
+
+/** An additive/relaxing change to one field — nothing stored becomes invalid. */
+const safeFieldChange = (tableName: string, type: DriftChange["type"], summary: string): DriftChange => {
+    return { remediation: "none", scope: "table", severity: "safe", summary, table: tableName, type };
+};
+
+/**
+ * Classify a change to the field's value SHAPE: its kind, its `v.id` target, its
+ * element/member/property shapes, its literal value.
+ *
+ * A widening is safe; a kind change keeps its own (long-standing) discriminator;
+ * everything else is a same-kind structural change — a repointed foreign key, a
+ * changed array element type (which moves the storage projection), a swapped
+ * union member, a different literal.
+ */
+const diffFieldShape = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot, deep: boolean): DriftChange | undefined => {
+    if (old.kind === field.kind && (!deep || shapeForm(old) === shapeForm(field))) {
+        return undefined;
+    }
+
+    if (deep && isWidening(old, field)) {
+        return safeFieldChange(
+            tableName,
+            "widenedFieldShape",
+            `field ${tableName}.${name} widened: ${describeShape(old)} → ${describeShape(field)} — every stored value stays valid`,
+        );
+    }
 
     if (old.kind !== field.kind) {
-        changes.push({
-            remediation: "backfill",
-            severity: "breaking",
-            summary: `field ${tableName}.${name} changed type: ${old.kind} → ${field.kind} — add a data migration to convert existing values`,
-            table: tableName,
-            scope: "table",
-            type: "changedFieldKind",
-        });
+        return breakingFieldChange(
+            tableName,
+            "changedFieldKind",
+            `field ${tableName}.${name} changed type: ${old.kind} → ${field.kind} — add a data migration to convert existing values`,
+        );
+    }
+
+    return breakingFieldChange(
+        tableName,
+        "changedFieldShape",
+        `field ${tableName}.${name} changed shape: ${describeShape(old)} → ${describeShape(field)} — stored values were written against the old shape; add a data migration to convert them`,
+    );
+};
+
+/**
+ * Classify the column-level constraints: `.unique()`, `.nullable()`, and whether
+ * a `.check()`-family refinement is declared.
+ *
+ * Tightening any of the three can invalidate rows already on disk (duplicates,
+ * NULLs, values the new predicate rejects) and none of them is verifiable from
+ * the schema, so each is breaking with a backfill as the fix. Relaxing one
+ * cannot invalidate anything, so it is safe.
+ */
+const diffFieldConstraints = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot): DriftChange[] => {
+    const changes: DriftChange[] = [];
+
+    if (old.unique !== field.unique) {
+        changes.push(
+            field.unique === true
+                ? breakingFieldChange(
+                      tableName,
+                      "addedFieldConstraint",
+                      `field ${tableName}.${name} became unique — existing duplicates would violate it; add a data migration to de-duplicate first`,
+                  )
+                : safeFieldChange(tableName, "relaxedFieldConstraint", `field ${tableName}.${name} is no longer unique`),
+        );
+    }
+
+    if (old.nullable !== field.nullable) {
+        changes.push(
+            field.nullable === true
+                ? safeFieldChange(tableName, "relaxedFieldConstraint", `field ${tableName}.${name} became nullable`)
+                : breakingFieldChange(
+                      tableName,
+                      "addedFieldConstraint",
+                      `field ${tableName}.${name} is no longer nullable — rows holding NULL would be invalid; add a data migration to backfill them`,
+                  ),
+        );
+    }
+
+    if (old.refined !== field.refined) {
+        changes.push(
+            field.refined === true
+                ? breakingFieldChange(
+                      tableName,
+                      "addedFieldConstraint",
+                      `field ${tableName}.${name} gained a validation refinement — stored values were never checked against it; add a data migration if any could fail`,
+                  )
+                : safeFieldChange(tableName, "relaxedFieldConstraint", `field ${tableName}.${name} dropped its validation refinement`),
+        );
+    }
+
+    return changes;
+};
+
+/** Classify the change to a single field that exists in BOTH snapshots (shape, constraints, optionality flip). */
+const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot): DriftChange[] => {
+    const changes: DriftChange[] = [];
+    // Both sides must record the detail for a comparison over it to mean
+    // anything — see `recordsFieldDetail`.
+    const deep = recordsFieldDetail(old) && recordsFieldDetail(field);
+    const shapeChange = diffFieldShape(tableName, name, old, field, deep);
+
+    if (shapeChange) {
+        changes.push(shapeChange);
+    }
+
+    if (deep) {
+        changes.push(...diffFieldConstraints(tableName, name, old, field));
     }
 
     if (old.optional && !field.optional) {
@@ -540,7 +773,16 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
     return { changes };
 };
 
-export { diffSchemaSnapshots, hashSchemaSnapshot, isValidTableSnapshot, parseSnapshotJson, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot, sortKeys };
+export {
+    describeShape,
+    diffSchemaSnapshots,
+    hashSchemaSnapshot,
+    isValidTableSnapshot,
+    parseSnapshotJson,
+    SCHEMA_SNAPSHOT_VERSION,
+    serializeSchemaSnapshot,
+    sortKeys,
+};
 export type {
     DriftChange,
     DriftRemediation,

@@ -7,8 +7,8 @@
  * on. That is the whole point of the extraction: this view cannot tell the
  * operator a change is safe while the gate refuses to ship it.
  */
-import type { DriftChange, SchemaSnapshot, TableSnapshot } from "../../../../../shared/schema-snapshot";
-import { diffSchemaSnapshots, parseSnapshotJson } from "../../../../../shared/schema-snapshot";
+import type { DriftChange, FieldSnapshot, SchemaSnapshot, TableSnapshot } from "../../../../../shared/schema-snapshot";
+import { describeShape, diffSchemaSnapshots, parseSnapshotJson, SCHEMA_SNAPSHOT_VERSION } from "../../../../../shared/schema-snapshot";
 import type { ColumnMeta } from "../../lib/admin";
 
 /** How a table fared between two versions. */
@@ -48,14 +48,45 @@ const columnsOf = (table: TableSnapshot): ColumnMeta[] =>
             // field it reads, so match on `field` — keying on the accessor would
             // silently drop every FK arrow whose accessor differs from its column.
             ref: Object.values(table.relations).find((relation) => relation.field === name && relation.kind === "one")?.table,
-            type: field.kind,
+            // `describeShape`, not `field.kind`: a repointed `v.id()` or a changed
+            // array element is `id`/`array` under both, so the cell would look
+            // identical on both sides of a change the row is flagging.
+            type: describeShape(field),
         };
     });
 
 /**
- * Per-field status for one table, derived by comparing the two field maps
- * directly rather than parsing `DriftChange.summary` — the summaries are
- * operator prose and must stay free to change wording.
+ * A snapshot carrying exactly one field, so the shared differ can classify that
+ * field in isolation.
+ *
+ * The field maps cannot be compared by hand here. `kind` + `optional` was once
+ * the whole of a `FieldSnapshot`, but it now also records `ref`, `literal`,
+ * `of`, `key`, `fields`, `members`, `unique`, `nullable` and `refined` — so a
+ * repointed `v.id()`, an added `.unique()`, a swapped union member or a changed
+ * array element type all leave `kind` and `optional` untouched while the deploy
+ * gate blocks them. Re-deriving the comparison over here would be a second,
+ * subtly different opinion; feeding the SAME `diffSchemaSnapshots` a one-field
+ * pair cannot drift from the gate, and inherits its baseline-compatibility rule
+ * (a snapshot written before the deepening is not diffed on dimensions it never
+ * recorded) for free. Ordering is inherited too: the snapshot builder key-sorts
+ * nested records and canonically orders union members, so a pure reordering
+ * still produces no change.
+ */
+const oneFieldSnapshot = (field: FieldSnapshot): SchemaSnapshot => {
+    return {
+        migrationIds: [],
+        tables: { t: { fields: { f: field }, indexes: {}, relations: {}, shardMode: "root" } },
+        version: SCHEMA_SNAPSHOT_VERSION,
+    };
+};
+
+/**
+ * Per-field status for one table, derived from the shared diff engine rather
+ * than by parsing `DriftChange.summary` — the summaries are operator prose and
+ * must stay free to change wording, and `DriftChange` carries no field name.
+ *
+ * See {@link oneFieldSnapshot} for why each field is routed back through
+ * `diffSchemaSnapshots` instead of compared here.
  */
 const fieldStatusOf = (before: TableSnapshot | undefined, after: TableSnapshot | undefined): Record<string, FieldStatus> => {
     const status: Record<string, FieldStatus> = {};
@@ -68,7 +99,7 @@ const fieldStatusOf = (before: TableSnapshot | undefined, after: TableSnapshot |
         if (old === undefined) {
             status[name] = before === undefined ? "unchanged" : "added";
         } else {
-            status[name] = old.kind === field.kind && old.optional === field.optional ? "unchanged" : "changed";
+            status[name] = diffSchemaSnapshots(oneFieldSnapshot(old), oneFieldSnapshot(field)).changes.length === 0 ? "unchanged" : "changed";
         }
     }
 

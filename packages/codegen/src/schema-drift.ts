@@ -6,9 +6,11 @@
  * migrations — there is no schema→migration-file mapping to diff the way a
  * Drizzle/Prisma stack would. So instead of regenerating migration DDL, this
  * module captures a deterministic STRUCTURAL snapshot of the schema (per table:
- * field kinds + optionality, indexes, relations, shard mode) plus the set of
- * declared migration ids, and diffs the current schema against a COMMITTED
- * baseline (`lunora/.lunora-schema.json`).
+ * each field's full validator shape — kind, optionality, `v.id` target, element /
+ * property / member shapes, literal value, `.unique()` / `.nullable()` /
+ * refinement — plus indexes, relations, shard mode) and the set of declared
+ * migration ids, and diffs the current schema against a COMMITTED baseline
+ * (`lunora/.lunora-schema.json`).
  *
  * Each change is classified `safe` (additive — new table, new optional field,
  * added index/relation, a required field made optional) or `breaking` (needs a
@@ -44,16 +46,128 @@ const encodeShardMode = (mode: TableIR["shardMode"]): string => {
     return `shardBy:${mode.field}`;
 };
 
-/** Unwrap `v.optional(inner)` to `{ kind, optional }`. */
-const fieldSnapshotOf = (validator: ValidatorIR): FieldSnapshot => {
-    if (validator.kind === "optional") {
-        return { kind: validator.inner?.kind ?? "unknown", optional: true };
+/**
+ * Canonical order for `v.union(...)` members. A union is a SET, so
+ * `v.union(a, b)` and `v.union(b, a)` describe the same column and must produce
+ * the same bytes — otherwise reordering the arguments reports drift, changes the
+ * content hash, and burns a `SCHEMA_HISTORY_MAX_VERSIONS` slot for an edit that
+ * changed nothing. Compared by code unit for the same reason `sortKeys` is.
+ */
+const byCanonicalForm = (a: FieldSnapshot, b: FieldSnapshot): number => {
+    const left = JSON.stringify(a);
+    const right = JSON.stringify(b);
+
+    if (left === right) {
+        return 0;
     }
 
-    return { kind: validator.kind, optional: false };
+    return left < right ? -1 : 1;
 };
 
-/** Build a deterministic structural snapshot of one table. */
+/**
+ * Capture one column's full structural shape: its kind and optionality, plus
+ * whatever the validator carries INSIDE — the `v.id` target, the array element,
+ * the object properties, the record key/value, the literal, the union members —
+ * and its column-level constraints.
+ *
+ * Recursive on purpose. A snapshot of only `{ kind, optional }` is byte-identical
+ * across `v.id("users")` → `v.id("orgs")` and `v.array(v.string())` →
+ * `v.array(v.bigint())`, so the gate saw no drift, the baseline saw no diff, and
+ * the content hash did not move.
+ *
+ * Determinism: object properties are `sortKeys`-ordered and union members are
+ * ordered canonically, so nothing here depends on the order the user happened to
+ * declare things in.
+ *
+ * `.unique()` / `.nullable()` attach to whichever node the chain was applied to —
+ * `v.optional(v.string().unique())` records them on the inner validator,
+ * `v.optional(v.string()).unique()` on the wrapper — so both nodes are read.
+ */
+
+/**
+ * Capture one column's full structural shape: its kind and optionality, plus
+ * whatever the validator carries INSIDE — the `v.id` target, the array element,
+ * the object properties, the record key/value, the literal, the union members —
+ * and its column-level constraints.
+ *
+ * Recursive on purpose. A snapshot of only `{ kind, optional }` is byte-identical
+ * across `v.id("users")` → `v.id("orgs")` and `v.array(v.string())` →
+ * `v.array(v.bigint())`, so the gate saw no drift, the baseline saw no diff, and
+ * the content hash did not move.
+ *
+ * Determinism: object properties are `sortKeys`-ordered and union members are
+ * ordered canonically, so nothing here depends on the order the user happened to
+ * declare things in.
+ *
+ * `.unique()` / `.nullable()` attach to whichever node the chain was applied to —
+ * `v.optional(v.string().unique())` records them on the inner validator,
+ * `v.optional(v.string()).unique()` on the wrapper — so both nodes are read.
+ */
+const fieldSnapshotOf = (validator: ValidatorIR): FieldSnapshot => {
+    const optional = validator.kind === "optional";
+    const inner = optional ? validator.inner : undefined;
+    const target = inner ?? validator;
+
+    const snapshot: FieldSnapshot = {
+        kind: optional ? (inner?.kind ?? "unknown") : validator.kind,
+        nullable: target.column?.notNull === false || validator.column?.notNull === false,
+        optional,
+        unique: target.column?.unique === true || validator.column?.unique === true,
+        // Spread LAST so the key order — which the serialization and therefore the
+        // content hash depend on — is fixed by these two literals rather than by
+        // the order the validator happened to be built in.
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- STRUCTURAL_DETAIL's readers recurse back into this function, so one of the two references has to precede its definition
+        ...STRUCTURAL_DETAIL[target.kind]?.(target),
+    };
+
+    if (target.hasRefinement === true || validator.hasRefinement === true) {
+        snapshot.refined = true;
+    }
+
+    return snapshot;
+};
+
+/** Snapshot every property of a `v.object({...})` shape, key-sorted so declaration order cannot move the hash. */
+const objectFieldsOf = (shape: Record<string, ValidatorIR>): Record<string, FieldSnapshot> => {
+    const fields: Record<string, FieldSnapshot> = {};
+
+    for (const [key, member] of Object.entries(shape)) {
+        fields[key] = fieldSnapshotOf(member);
+    }
+
+    return sortKeys(fields);
+};
+
+/**
+ * How to read the interior of each validator kind that has one. A kind with no
+ * entry contributes nothing beyond its name — which is exactly what the whole
+ * snapshot used to be.
+ */
+const STRUCTURAL_DETAIL: Record<string, (validator: ValidatorIR) => Partial<FieldSnapshot>> = {
+    array: (validator) => (validator.inner ? { of: fieldSnapshotOf(validator.inner) } : {}),
+    id: (validator) => (validator.tableName === undefined ? {} : { ref: validator.tableName }),
+    literal: (validator) => (validator.literalValue === undefined ? {} : { literal: validator.literalValue }),
+    object: (validator) => (validator.shape ? { fields: objectFieldsOf(validator.shape) } : {}),
+    record: (validator) => {
+        return {
+            ...(validator.keyType ? { key: fieldSnapshotOf(validator.keyType) } : {}),
+            ...(validator.valueType ? { of: fieldSnapshotOf(validator.valueType) } : {}),
+        };
+    },
+    union: (validator) => (validator.members ? { members: validator.members.map((member) => fieldSnapshotOf(member)).toSorted(byCanonicalForm) } : {}),
+};
+
+/**
+ * Build a deterministic structural snapshot of one table.
+ *
+ * Field / index / relation keys are `sortKeys`-ordered, like the table keys
+ * above them. They used to be emitted in declaration order "so the snapshot
+ * reads next to the schema it mirrors", but the snapshot is HASHED: declaration
+ * order made moving a field up a line report drift, mint a new content hash, and
+ * consume one of the ledger's `SCHEMA_HISTORY_MAX_VERSIONS` slots for an edit
+ * that changed nothing on disk. Readability was the only argument for it, and a
+ * sorted list is not less readable than an arbitrary one.
+ */
 const tableSnapshotOf = (table: TableIR): TableSnapshot => {
     const fields: Record<string, FieldSnapshot> = {};
 
@@ -73,7 +187,7 @@ const tableSnapshotOf = (table: TableIR): TableSnapshot => {
         relations[relation.name] = { field: relation.field, kind: relation.kind, table: relation.table };
     }
 
-    return { fields, indexes, relations, shardMode: encodeShardMode(table.shardMode) };
+    return { fields: sortKeys(fields), indexes: sortKeys(indexes), relations: sortKeys(relations), shardMode: encodeShardMode(table.shardMode) };
 };
 
 /**
@@ -83,9 +197,8 @@ const tableSnapshotOf = (table: TableIR): TableSnapshot => {
  * churn) — see `sortKeys` in `shared/schema-snapshot.ts` for why that ordering
  * must not be locale-aware.
  *
- * Field / index / relation keys are deliberately NOT sorted: they are emitted in
- * declaration order from the schema source, which is already deterministic for a
- * given source file and keeps the snapshot readable next to the schema it mirrors.
+ * Field / index / relation keys are sorted the same way, by `tableSnapshotOf` —
+ * see there for why declaration order was the wrong default for a hashed file.
  */
 const buildSchemaSnapshot = (schema: SchemaIR, migrationIds: ReadonlyArray<string>): SchemaSnapshot => {
     const tables: Record<string, TableSnapshot> = {};
