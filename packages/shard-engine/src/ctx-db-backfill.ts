@@ -26,7 +26,7 @@ import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "./ag
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
 import { insertRankRow, rankColumnsSql } from "./ctx-db-companions";
-import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
+import { migrateSearchState, readSearchBackfillState, readSearchIndexCoverage, writeSearchBackfillState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, tryRowToDocument } from "./do-sql";
 import { isLiveForCompanion } from "./query-args";
@@ -50,6 +50,13 @@ interface SearchBackfillProgress {
 /** True when `table` already carries rows — the backfills' idempotence check. */
 const hasRows = (sql: SqlExec, table: string): boolean =>
     runDrizzle<{ count: number }>(sql, dsql`SELECT COUNT(*) AS count FROM ${dsql.identifier(table)}`).one().count > 0;
+
+/**
+ * Does `tableName` hold anything at all? `LIMIT 1`, not the `COUNT(*)` above:
+ * this one runs on the search read path, where counting a large table per read
+ * is the cost `staged` exists to avoid in the first place.
+ */
+const tableHasRows = (sql: SqlExec, table: string): boolean => runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(table)} LIMIT 1`).toArray().length > 0;
 
 /** One full scan of `tableName`'s stored rows, decoded per row by the caller. */
 const scanRows = (sql: SqlExec, tableName: string): Record<string, unknown>[] =>
@@ -166,8 +173,8 @@ const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
  * inside a 128 MB isolate, so materialising a whole table there is how a large
  * table turns into an eviction loop. Instead each pass indexes a page and
  * records where it stopped; the next pass resumes. For a NEW index that means it
- * covers a growing prefix of the table — see {@link isSearchIndexComplete}, which
- * is how a reader tells that prefix from a finished index.
+ * covers a growing prefix of the table — see {@link searchIndexCoversTable},
+ * which is how a reader tells that prefix from an index holding every row.
  */
 const SEARCH_BACKFILL_BATCH_ROWS = 500;
 
@@ -255,27 +262,51 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
 };
 
 /**
- * Has this search companion finished its backfill — does it cover the WHOLE
- * table under the analyzer the query side will use?
+ * Does this search companion hold a row for every document in the table — is a
+ * result set read from it whole?
  *
- * `false` means the index is mid-walk and answers over a prefix of the table, so
- * a reader that queries it anyway returns silently incomplete results. Exposed
- * for the read path, which is the only place that distinction can be acted on
- * (by falling back to a scan, or by telling the caller the index is still
- * building) — the backfill itself cannot decide for it.
+ * Not the same question as "has the backfill finished", and the difference is
+ * the reason this is a separate helper rather than `plan(...).finished`. Two
+ * unfinished walks reach the read path:
+ *
+ * A NEW index over a table that already holds rows covers a growing PREFIX
+ * (`id ASC`). Every match past the cursor is simply absent, so a read served from
+ * it is silently partial. `false`, and the reader refuses.
+ *
+ * A REBUILDING index — the analyzer profile changed — holds every row already;
+ * the re-walk rewrites each one's analysis in place (see
+ * {@link backfillSearchIndexPage}, which deliberately does not empty the
+ * companion first). Nothing is missing, some rows are analyzed by the previous
+ * rules. `true`: refusing here would take search on the table offline for the
+ * whole re-walk — 500 rows a read, thousands of reads on a large table, a
+ * fleet-wide outage on an `ANALYZER_VERSION` bump — to protect against staleness
+ * the rows do not have, and it would make the preserved rows pointless.
+ *
+ * Recorded rather than inferred: from its second page a rebuild's progress row
+ * looks exactly like a new index's, so `covered` carries the distinction (see
+ * `ctx-db-search-state`).
  */
-const isSearchIndexComplete = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
+const searchIndexCoversTable = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
+    const companion = ftsTableName(tableName, index.name);
     const { profile } = createSearchAnalyzer(index.language);
 
-    return planSearchBackfillPass(readSearchBackfillState(sql, ftsTableName(tableName, index.name)), profile).finished;
+    // The finished case first, and on its own: it is every read of a healthy
+    // index, and it answers from the same single primary-key lookup the backfill
+    // page above already makes.
+    if (planSearchBackfillPass(readSearchBackfillState(sql, companion), profile).finished) {
+        return true;
+    }
+
+    return readSearchIndexCoverage(sql, companion);
 };
 
 /**
- * Index one page of every declared search index on `tableName`, unless the
- * index is `staged`. Called by `runShardMigrations` right after the shadow
- * tables exist, which is what makes `.searchIndex()` on a table that already
- * holds data searchable — and again on every search read, so a warm DO keeps
- * advancing a large table's backfill instead of stopping after one page.
+ * Index one page of every declared search index on `tableName`, unless the index
+ * is `staged` over a table that has rows to walk. Called by `runShardMigrations`
+ * right after the shadow tables exist, which is what makes `.searchIndex()` on a
+ * table that already holds data searchable — and again on every search read, so
+ * a warm DO keeps advancing a large table's backfill instead of stopping after
+ * one page.
  *
  * The FTS5 guard is load-bearing on that second call site. Migration only
  * creates the shadow tables where the engine has FTS5, so on an engine without
@@ -289,7 +320,13 @@ const backfillSearchIndexesForTable = (sql: SqlExec, tableName: string, definiti
     }
 
     for (const index of definition.searchIndexes ?? []) {
-        if (index.staged) {
+        // `staged` keeps the row walk out of the cold start, for tables too large
+        // to walk there. A table with no rows is not one of those, and skipping it
+        // records nothing — so the index would report no coverage and refuse every
+        // search until an operator ran the backfill by hand, on a table where the
+        // write path had it complete all along. The page below walks nothing and
+        // records that completion, which is the whole cost.
+        if (index.staged && tableHasRows(sql, tableName)) {
             continue;
         }
 
@@ -395,4 +432,4 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxP
 };
 
 export type { SearchBackfillProgress };
-export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, isSearchIndexComplete };
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, searchIndexCoversTable };

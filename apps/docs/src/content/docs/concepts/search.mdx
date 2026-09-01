@@ -169,13 +169,31 @@ for.
 ## Backfill and `staged`
 
 Declaring a search index on a table that already holds rows indexes those rows
-too. That work is paged: each deploy (and, on `.global()` tables, each request
-until it finishes) indexes a bounded batch and records where it stopped, so a
-large table becomes searchable progressively instead of blocking behind a
-full-table scan. Rows written while the backfill is in flight are indexed
-immediately by the write path, as usual.
+too. That work is paged: each deploy — and on a shard-local table each search
+read, on a `.global()` table each request — indexes a bounded batch and records
+where it stopped, so a large table is walked in bounded pieces instead of
+blocking a cold start behind a full-table scan. Rows written while the backfill
+is in flight are indexed immediately by the write path, as usual.
 
-To keep that work out of the request path entirely, declare the index `staged`
+Until that walk finishes, a search on a **shard-local** table is refused with
+`SEARCH_INDEX_BUILDING` (HTTP 503) rather than answered from the part of the
+table indexed so far. The index covers a growing prefix in `id` order, and a
+result set missing every match past that point is indistinguishable from one
+where those matches never existed. Each read advances the backfill, so a caller
+that retries makes progress; the admin op below finishes it in one go. On a
+`.global()` table the read is answered from whatever is indexed at the time.
+
+An index **rebuilding** under a changed analyzer — a different `language`, or a
+new analyzer version shipped with Lunora — is a different state, and a
+shard-local table keeps answering throughout it. Every row is already in the
+index and the re-walk rewrites each one's analysis in place, so nothing goes
+missing; a shrinking suffix is matched under the previous rules until the walk
+reaches it. (A `.global()` table discards the index and rebuilds it, and answers
+from the rebuilt part meanwhile.)
+
+### `staged`
+
+To keep the walk out of the request path entirely, declare the index `staged`
 and run the backfill yourself.
 
 ```ts
@@ -183,9 +201,13 @@ and run the backfill yourself.
 ```
 
 A staged index is maintained on every write from the moment it is declared, but
-starts out empty: until it is backfilled it only finds documents written after
-the deploy. **The backfill is not optional** — skip it and every row that
-predates the deploy stays unsearchable indefinitely.
+nothing walks the rows that predate it. On a shard-local table that means **every
+search on the table is refused with `SEARCH_INDEX_BUILDING` until you run the
+backfill** — the index is not partly useful in the meantime, and skipping the
+backfill leaves it that way indefinitely. (On a `.global()` table it answers from
+the documents written after the deploy only.) Declared together with the table
+there is nothing to walk, so the index is complete from the start and `staged`
+costs nothing.
 
 For sharded tables, drive it against a running deployment with the
 `backfillSearch` admin op:

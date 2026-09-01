@@ -3,19 +3,27 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { backfillSearchIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
-import { isSearchIndexComplete } from "../src/ctx-db-backfill";
+import { searchIndexCoversTable } from "../src/ctx-db-backfill";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * A search index that is still backfilling must not answer.
+ * A search index that is still backfilling must not answer — unless every row is
+ * already in it.
  *
- * A `.searchIndex()` declared over a table that already holds rows is filled a
- * page at a time, in `id` order — so until it finishes it covers a PREFIX of the
+ * Two states look alike from the backfill's cursor and deserve opposite answers.
+ *
+ * A NEW `.searchIndex()` declared over a table that already holds rows is filled
+ * a page at a time, in `id` order, so until it finishes it covers a PREFIX of the
  * table. A read served from that prefix is the worst possible answer: correctly
  * shaped, confidently returned, and missing every matching document past the
- * cursor, with nothing to tell the caller the index was not ready.
+ * cursor, with nothing to tell the caller the index was not ready. It refuses.
  *
- * These cases pin the refusal, that it lifts the moment the backfill completes,
+ * A REBUILDING index — one whose analyzer profile changed — has every row in the
+ * companion already; the re-walk overwrites each row's analysis in place. It
+ * serves: stale analysis on the shrinking suffix beats refusing every search for
+ * as long as the walk takes, which on a large table is thousands of reads.
+ *
+ * These cases pin both, that the refusal lifts the moment the backfill completes,
  * and — the reason the reader refuses rather than falling back to the scan — that
  * the scan is NOT an equivalent answer at this scale.
  */
@@ -69,6 +77,22 @@ const indexedSchema: SchemaLike = {
     },
 };
 
+/**
+ * The same index re-declared under a different analysis language. Nothing about
+ * the table or the companion changes — only the analyzer profile recorded with
+ * the backfill's progress, which is what marks every stored row's analysis stale
+ * and starts a re-walk from the top.
+ */
+const reanalyzedSchema: SchemaLike = {
+    tables: {
+        docs: {
+            indexes: [],
+            searchIndexes: [{ field: "body", language: "de", name: "by_body" }],
+            shape: { body: { kind: "string" }, title: { kind: "string" } },
+        },
+    },
+};
+
 let harness: ReturnType<typeof createSqliteExec>;
 
 /** A writer over `schema`, with a deterministic clock/ids so ordering is stable across runs. */
@@ -97,9 +121,9 @@ const writerFor = (schema: SchemaLike): DatabaseWriterLike => {
 /** How many rows the companion currently holds — the index's coverage, independent of any analyzer. */
 const indexedRows = (): number => Number(harness.raw(`SELECT COUNT(*) AS count FROM "${ftsTableName("docs", "by_body")}"`)[0]?.["count"]);
 
-/** Titles matching `term`, read the way an app would. */
-const searchTitles = async (term: string): Promise<unknown[]> => {
-    const results = await writerFor(indexedSchema)
+/** Titles matching `term`, read the way an app would, under `schema`'s analysis. */
+const searchTitles = async (term: string, schema: SchemaLike = indexedSchema): Promise<unknown[]> => {
+    const results = await writerFor(schema)
         .query("docs")
         .withSearchIndex("by_body", (q) => q.search("body", term))
         .collect();
@@ -151,7 +175,7 @@ describe("search over a still-backfilling index", () => {
             // the refused read still advanced a page (501-1000) before checking, so
             // 200 rows — `t1100` among them — remain uncovered.
             expect(indexedRows()).toBe(1000);
-            expect(isSearchIndexComplete(harness.sql, "docs", indexedSchema.tables["docs"]!.searchIndexes![0]!)).toBe(false);
+            expect(searchIndexCoversTable(harness.sql, "docs", indexedSchema.tables["docs"]!.searchIndexes![0]!)).toBe(false);
         });
 
         it("answers with every match once the backfill completes", async () => {
@@ -162,10 +186,53 @@ describe("search over a still-backfilling index", () => {
             backfillSearchIndexes(harness.sql, indexedSchema);
 
             expect(indexedRows()).toBe(ROW_COUNT);
-            expect(isSearchIndexComplete(harness.sql, "docs", indexedSchema.tables["docs"]!.searchIndexes![0]!)).toBe(true);
+            expect(searchIndexCoversTable(harness.sql, "docs", indexedSchema.tables["docs"]!.searchIndexes![0]!)).toBe(true);
             // Newest first on equal score — and crucially `t100`, which the scan
             // fallback below cannot reach, is here.
             await expect(searchTitles("needle")).resolves.toStrictEqual([`t${String(NEW_NEEDLE)}`, `t${String(OLD_NEEDLE)}`]);
+        });
+
+        it("keeps answering while a changed analyzer profile rebuilds a complete index", async () => {
+            expect.assertions(4);
+
+            await seedThenDeployIndex();
+            backfillSearchIndexes(harness.sql, indexedSchema);
+
+            // The deploy that changes `language`: the recorded profile no longer
+            // matches, so the next pass re-walks the table from the top. The
+            // companion is NOT emptied — each row is rewritten in place as the
+            // walk reaches it — so every row is still in the index throughout.
+            runShardMigrations(harness.sql, reanalyzedSchema);
+
+            expect(indexedRows()).toBe(ROW_COUNT);
+
+            // Mid-rebuild, and every row is present: the walked prefix carries the
+            // new analysis, the rest still carries the old one. Refusing here would
+            // take the whole table's search offline for the length of the re-walk —
+            // 500 rows per read, thousands of reads on a large table — to protect
+            // against staleness the rows do not have.
+            await expect(searchTitles("needle", reanalyzedSchema)).resolves.toStrictEqual([`t${String(NEW_NEEDLE)}`, `t${String(OLD_NEEDLE)}`]);
+            expect(searchIndexCoversTable(harness.sql, "docs", reanalyzedSchema.tables["docs"]!.searchIndexes![0]!)).toBe(true);
+
+            backfillSearchIndexes(harness.sql, reanalyzedSchema);
+
+            await expect(searchTitles("needle", reanalyzedSchema)).resolves.toStrictEqual([`t${String(NEW_NEEDLE)}`, `t${String(OLD_NEEDLE)}`]);
+        });
+
+        it("still refuses when the profile changes before the FIRST walk ever finished", async () => {
+            expect.assertions(2);
+
+            // The prefix case and the rebuild case at once: a NEW index 500 rows
+            // into its first walk, and then the analyzer profile changes. There is
+            // prior progress recorded — so "has this companion been walked before?"
+            // is the wrong question to ask — but no walk has ever reached the end
+            // of the table, so rows past the cursor were never in the companion and
+            // the re-walk does not put them there any sooner. Refuse.
+            await seedThenDeployIndex();
+            runShardMigrations(harness.sql, reanalyzedSchema);
+
+            expect(searchIndexCoversTable(harness.sql, "docs", reanalyzedSchema.tables["docs"]!.searchIndexes![0]!)).toBe(false);
+            await expect(searchTitles("needle", reanalyzedSchema)).rejects.toThrow(/still backfilling/u);
         });
     });
 
@@ -189,6 +256,19 @@ describe("search over a still-backfilling index", () => {
             // for the backfill to page, the scan trades the prefix's silent partial
             // answer for a suffix's silent partial answer.
             await expect(searchTitles("needle")).resolves.toStrictEqual([`t${String(NEW_NEEDLE)}`]);
+        });
+
+        it("is unaffected by an analyzer profile change, having no companion to rebuild", async () => {
+            expect.assertions(1);
+
+            await seedThenDeployIndex();
+            runShardMigrations(harness.sql, reanalyzedSchema);
+
+            // The coverage check is FTS5-only — there is no companion here, so the
+            // rebuild the branch above serves through does not exist and the scan
+            // answers exactly as it did before. Pinned so the two engines' answers
+            // to a profile change are both under test on any Node build.
+            await expect(searchTitles("needle", reanalyzedSchema)).resolves.toStrictEqual([`t${String(NEW_NEEDLE)}`]);
         });
     });
 });

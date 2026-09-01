@@ -96,6 +96,10 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
             // scans the source table — the canned rows stand in for a table that
             // already held data when the search index was declared.
             { pattern: /^SELECT COUNT\(\*\) AS count FROM /u, rows: () => [{ count: 0 }] as unknown as Row[] },
+            // "Does the source table hold anything?" — what decides whether a
+            // `staged` index has a walk to skip. The canned rows ARE that table,
+            // so an empty `matchRows` answers "empty" and a seeded one "not".
+            { pattern: /^SELECT 1 FROM "docs" LIMIT 1$/u, rows: () => matchRows as unknown as Row[] },
             { pattern: /^SELECT id, _creationTime, "__doc__" FROM "docs" ORDER BY id ASC/u, rows: () => matchRows as unknown as Row[] },
             { pattern: /__fts_by_body__vocab/u, rows: () => matchRows as unknown as Row[] },
             // `lookupById` folds every table into one UNION-ALL probe tagged
