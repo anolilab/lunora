@@ -30,6 +30,8 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import type { RelationOperator } from "../../../shared/relation-operators";
+import { isRelationPredicate as isSharedRelationPredicate, RELATION_OPERATOR_SET } from "../../../shared/relation-operators";
 import { distinctValues } from "./relations";
 import type { QueryArgs, QueryPage, RelationDefinitionLike, TableDefinitionLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
@@ -62,7 +64,12 @@ interface RelationOperatorMeta {
     nullDisjunct?: boolean;
 }
 
-const RELATION_OPERATOR_META: Record<string, RelationOperatorMeta> = {
+// `Record<RelationOperator, …>` deliberately, not `Record<string, …>`: the names
+// live in `shared/relation-operators.ts` because `@lunora/server` needs the same
+// set and cannot depend on this package. Keying the meta map off that union is
+// what makes them one fact — add a sixth name there without a row here and this
+// file stops compiling, rather than the server's guards silently walking past it.
+const RELATION_OPERATOR_META: Record<RelationOperator, RelationOperatorMeta> = {
     every: { kind: "many", negateChild: true, negated: true },
     is: { kind: "one", negated: false },
     isNot: { kind: "one", negated: true, nullDisjunct: true },
@@ -70,11 +77,14 @@ const RELATION_OPERATOR_META: Record<string, RelationOperatorMeta> = {
     some: { kind: "many", negated: false },
 };
 
-const RELATION_OPERATORS = new Set(Object.keys(RELATION_OPERATOR_META));
+/** Narrow an arbitrary key to a relation operator, so the union-keyed meta map can be indexed with it. */
+const asRelationOperator = (operator: string): RelationOperator | undefined =>
+    RELATION_OPERATOR_SET.has(operator) ? (operator as RelationOperator) : undefined;
 
 /** Look up an operator's meta row, throwing on an unknown operator. */
 const requireOperatorMeta = (operator: string): RelationOperatorMeta => {
-    const meta = RELATION_OPERATOR_META[operator];
+    const key = asRelationOperator(operator);
+    const meta = key === undefined ? undefined : RELATION_OPERATOR_META[key];
 
     if (!meta) {
         throw new LunoraError("INTERNAL", `unknown relation operator "${operator}"`);
@@ -202,15 +212,7 @@ const combineAnd = (clauses: WhereInput[]): WhereInput => {
  * `isOperatorObject` "all keys known" disambiguation so a relation-named key
  * holding an ordinary literal/filter is left untouched.
  */
-const isRelationPredicate = (value: unknown): value is Record<string, WhereInput> => {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) {
-        return false;
-    }
-
-    const keys = Object.keys(value);
-
-    return keys.length > 0 && keys.every((key) => RELATION_OPERATORS.has(key));
-};
+const isRelationPredicate = (value: unknown): value is Record<string, WhereInput> => isSharedRelationPredicate(value);
 
 /**
  * Cheap synchronous scan: does `where` contain any relation predicate for
@@ -364,7 +366,8 @@ const buildExistsMarker = async (
 
 /** Reject a relation operator applied to a relation of the wrong cardinality. */
 const assertCardinality = (operator: string, name: string, relation: RelationDefinitionLike): void => {
-    const meta = RELATION_OPERATOR_META[operator];
+    const key = asRelationOperator(operator);
+    const meta = key === undefined ? undefined : RELATION_OPERATOR_META[key];
 
     if (meta && meta.kind !== relation.kind) {
         throw new LunoraError("INTERNAL", `relation operator "${operator}" requires a to-${meta.kind} relation, but "${name}" is to-${relation.kind}`);

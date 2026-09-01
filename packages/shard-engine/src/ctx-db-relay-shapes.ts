@@ -60,6 +60,7 @@ import { sql as dsql } from "drizzle-orm";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
+import { relayProxyKey } from "./relay";
 import type { SubscriptionIdentity } from "./types";
 
 const RELAY_SHAPES_TABLE = "__lunora_relay_shapes";
@@ -208,7 +209,7 @@ const writeRelayShapeCursor = (sql: SqlExec, key: string, cursor: number): void 
  * row per connection, each one pinning the op-log retention floor.
  */
 const deleteRelayShapesForConnection = (sql: SqlExec, relayIndex: number, connectionId: string, subId?: string): void => {
-    const scope = subId === undefined ? dsql`` : dsql` AND key = ${`${String(relayIndex)}:${connectionId}:${subId}`}`;
+    const scope = subId === undefined ? dsql`` : dsql` AND key = ${relayProxyKey(relayIndex, connectionId, subId)}`;
 
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(RELAY_SHAPES_TABLE)} WHERE relay_idx = ${relayIndex} AND connection_id = ${connectionId}${scope}`);
 };

@@ -38,7 +38,7 @@ import { envPositiveInt } from "./env-int";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
 import { stableWireKey } from "./reactive-cache";
 import type { OwnerRelayFrame, PromotionState, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe, RelayShapeUnsubscribe } from "./relay";
-import { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, relayName, shapeRoutingKey } from "./relay";
+import { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, relayName, relayProxyKey, shapeRoutingKey } from "./relay";
 import type { ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, encodeRowsPatch } from "./shape-global-diff";
 import type { SiblingStub } from "./sibling-channel";
@@ -573,7 +573,7 @@ class OwnerRelay extends RelayLink {
      */
     protected override onShapeUnsubscribe(message: RelayShapeUnsubscribe): void {
         const { proxies } = this.relayShapes();
-        const scoped = message.subId === undefined ? undefined : `${String(message.relayIndex)}:${message.connectionId}:${message.subId}`;
+        const scoped = message.subId === undefined ? undefined : relayProxyKey(message.relayIndex, message.connectionId, message.subId);
 
         for (const [key, entry] of proxies) {
             if (entry.relayIndex !== message.relayIndex || entry.connectionId !== message.connectionId) {
@@ -876,7 +876,7 @@ class OwnerRelay extends RelayLink {
 
             cohortCursor = entry.cursor;
         } else if (request.relayIndex !== undefined && request.connectionId !== undefined) {
-            const key = `${String(request.relayIndex)}:${request.connectionId}:${request.subId}`;
+            const key = relayProxyKey(request.relayIndex, request.connectionId, request.subId);
             const proxy: ProxyShapeEntry = {
                 args: request.args,
                 connectionId: request.connectionId,

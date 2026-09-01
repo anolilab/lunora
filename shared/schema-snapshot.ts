@@ -357,16 +357,16 @@ const recordsFieldDetail = (field: FieldSnapshot): boolean => field.unique !== u
  * is already key-sorted by the builder, so two structurally-identical shapes
  * always produce identical bytes.
  */
-const shapeForm = (field: FieldSnapshot): string =>
-    JSON.stringify({
-        fields: field.fields,
-        key: field.key,
-        kind: field.kind,
-        literal: field.literal,
-        members: field.members,
-        of: field.of,
-        ref: field.ref,
-    });
+const shapeForm = ({ nullable, optional, refined, unique, ...shape }: FieldSnapshot): string => {
+    // Destructured, not enumerated. Listing the INTERIOR keys means a dimension
+    // added to `FieldSnapshot` and to the snapshot builder but forgotten here is
+    // recorded and never compared — a byte-identical diff over a changed shape,
+    // which is the exact bug this whole comparison exists to catch, reintroduced
+    // one key at a time and invisible to every test. Naming the FLAGS instead
+    // fails safe: a new interior key is compared automatically, and a new flag
+    // key over-reports until it is added above, which is the harmless direction.
+    return JSON.stringify(sortKeys(shape as Record<string, unknown>));
+};
 
 /** A field's accepted shapes as a set of canonical forms: a union contributes its members, anything else itself. */
 const memberForms = (field: FieldSnapshot): string[] =>
@@ -523,7 +523,16 @@ const diffFieldConstraints = (tableName: string, name: string, old: FieldSnapsho
     return changes;
 };
 
-/** Classify the change to a single field that exists in BOTH snapshots (shape, constraints, optionality flip). */
+/**
+ * Classify the change to a single field that exists in BOTH snapshots (shape,
+ * constraints, optionality flip).
+ *
+ * Exported for the studio's schema-diff view, which needs a per-field verdict
+ * and must reach it through THIS function rather than a comparison of its own —
+ * a second opinion is how the canvas comes to render as unchanged exactly what
+ * the deploy gate blocks. `tableName`/`name` only reach the operator-facing
+ * summary text, so a caller that wants the verdict alone can pass anything.
+ */
 const diffExistingField = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot): DriftChange[] => {
     const changes: DriftChange[] = [];
     // Both sides must record the detail for a comparison over it to mean
@@ -775,6 +784,7 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
 
 export {
     describeShape,
+    diffExistingField,
     diffSchemaSnapshots,
     hashSchemaSnapshot,
     isValidTableSnapshot,
