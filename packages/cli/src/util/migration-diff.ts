@@ -27,6 +27,7 @@
  * uses, so a generated migration is byte-identical to what the runtime would
  * auto-provision.
  */
+import type { FieldSnapshot } from "@lunora/codegen";
 import { columnRef, frameworkColumnDdl, MAX_D1_TABLE_COLUMNS, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "@lunora/d1/dialect";
 import { LunoraError } from "@lunora/errors";
 
@@ -39,6 +40,20 @@ interface TableSnapshot {
 }
 
 interface ColumnSnapshot {
+    /**
+     * The column's full validator shape — the SAME {@link FieldSnapshot} the
+     * deploy gate diffs (`shared/schema-snapshot.ts`), not a second parallel
+     * format.
+     *
+     * `sqlType` alone is lossy: `bigint`, `array`, `record`, `id`, `literal` and
+     * `string` all map to the TEXT affinity, so `v.string()` → `v.bigint()` was
+     * byte-identical here and `migrate generate` answered "no schema changes
+     * detected" for a change `lunora prepare` blocks as breaking.
+     *
+     * Optional so a `.snapshot.json` written before this existed still parses —
+     * it simply gets no deep check until the next generate rewrites it.
+     */
+    field?: FieldSnapshot;
     /** True when the column accepts NULL (validator wrapped in v.optional). */
     nullable: boolean;
     /** SQLite type affinity, derived from the validator. */
@@ -134,12 +149,39 @@ const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
 
 const renderDropIndex = (tableName: string, indexName: string): string => `DROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)};`;
 
+/**
+ * The column's shape with `optional` stripped — that flag is the same fact as
+ * {@link ColumnSnapshot.nullable}, which is reported on its own line, so leaving
+ * it in would make one nullability edit print twice. `undefined` for a snapshot
+ * written before the shape was recorded.
+ */
+const shapeForm = (column: ColumnSnapshot): string | undefined =>
+    // `optional: undefined` drops that key from the JSON without moving any
+    // other — `JSON.stringify` omits undefined values and a re-assignment keeps
+    // the original key position, so the form stays order-stable.
+    column.field === undefined ? undefined : JSON.stringify({ ...column.field, optional: undefined });
+
 /** Surface type/nullability changes on an existing column as unsupported deltas. */
 const diffExistingColumn = (tableName: string, columnName: string, old: ColumnSnapshot, column: ColumnSnapshot, unsupported: UnsupportedEntry[]): void => {
+    const previousShape = shapeForm(old);
+    const shape = shapeForm(column);
+
     if (old.sqlType !== column.sqlType) {
         unsupported.push({
             kind: "columnTypeChange",
             summary: `column type change on ${tableName}.${columnName}: ${old.sqlType} → ${column.sqlType} (write SQL manually)`,
+        });
+    } else if (previousShape !== undefined && shape !== undefined && previousShape !== shape) {
+        // Same affinity, different validator — the case a `{nullable, sqlType}`
+        // snapshot could not see at all.
+        const detail =
+            old.field?.kind === column.field?.kind
+                ? `${String(column.field?.kind)} shape/constraints changed`
+                : `${String(old.field?.kind)} → ${String(column.field?.kind)}`;
+
+        unsupported.push({
+            kind: "columnTypeChange",
+            summary: `column type change on ${tableName}.${columnName}: ${detail} (write SQL manually)`,
         });
     }
 

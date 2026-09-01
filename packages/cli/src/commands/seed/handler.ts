@@ -7,7 +7,7 @@ import { seedPlan } from "@lunora/seed";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
-import { isLoopbackTarget } from "../../util/admin-token";
+import { targetsRemoteWorker } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -43,9 +43,6 @@ interface SeedCommandOptions {
     /** Skip the production-insert confirmation prompt. Required when stdin is not a TTY. */
     yes?: boolean;
 }
-
-/** True when `url` targets the local dev worker (or is unset). `--reset` is local-state only. */
-const isLocalUrl = (url: string | undefined): boolean => (url === "" ? false : isLoopbackTarget(url));
 
 interface SeedCommandResult {
     code: number;
@@ -97,7 +94,7 @@ const guardSeedTargets = (options: SeedCommandOptions, schemaPath: string): Seed
 
     // `--reset` clears local `.wrangler/state` only; it cannot touch a remote
     // deployment, so refuse it the moment a remote target is in play.
-    if (options.reset === true && (options.prod === true || !isLocalUrl(options.url))) {
+    if (options.reset === true && targetsRemoteWorker({ prod: options.prod, url: options.url })) {
         options.logger.error("--reset only clears local .wrangler/state and cannot be combined with --prod or a remote --url");
 
         return seedFailure(1);
@@ -131,6 +128,10 @@ const insertSeedRows = async (ndjson: string, generated: number, cwd: string, op
             prod: options.prod,
             token: options.token,
             url: options.url,
+            // seed has already confirmed the target itself (`confirmRemoteSeedTarget`),
+            // so the import leg must not demand a second `--yes` the caller has no
+            // way to pass through.
+            yes: true,
         });
 
         const conflicts = result.body?.conflicts ?? 0;
@@ -165,13 +166,16 @@ const validateSeedTable = (options: SeedCommandOptions, ir: { tables: ReadonlyAr
 
 /**
  * Gate a non-local seed target behind explicit confirmation — seeding fake rows
- * into a deployment pollutes real data, so this applies the same guard the repo
- * uses for reset/migrate --prod (an explicit --yes, or an interactive TTY
- * confirmation). Returns a failure {@link SeedCommandResult} when the seed must
- * NOT proceed (refused / aborted), or `undefined` when it is safe to continue.
+ * into a deployment pollutes real data. "Remote" is decided by the resolved
+ * target, not by `--prod` — see {@link targetsRemoteWorker}. Confirmation is an
+ * explicit --yes or, on a TTY, an interactive prompt; the sibling admin
+ * commands (`migrate up/down`, `backup pitr --restore`, `import`) gate the same
+ * way but accept only --yes, so do not describe this as identical to them.
+ * Returns a failure {@link SeedCommandResult} when the seed must NOT proceed
+ * (refused / aborted), or `undefined` when it is safe to continue.
  */
 const confirmRemoteSeedTarget = async (options: SeedCommandOptions, generated: number): Promise<SeedCommandResult | undefined> => {
-    const targetsRemote = options.prod === true || !isLocalUrl(options.url);
+    const targetsRemote = targetsRemoteWorker({ prod: options.prod, url: options.url });
 
     if (!targetsRemote || options.yes === true) {
         return undefined;
@@ -254,18 +258,23 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
         return { code: 0, conflicts: 0, generated, inserted: 0, ndjson };
     }
 
-    if (options.reset === true) {
-        const reset = await runResetCommand({ cwd, logger: options.logger, yes: true });
-
-        if (reset.code !== 0) {
-            return { code: reset.code, conflicts: 0, generated, inserted: 0, ndjson };
-        }
-    }
-
+    // Checked BEFORE the wipe: `--reset --count 0` used to destroy the local dev
+    // database and only then warn there was nothing to insert — exiting 0.
     if (generated === 0) {
         options.logger.warn("no rows generated — nothing to insert");
 
         return { code: 0, conflicts: 0, generated: 0, inserted: 0, ndjson };
+    }
+
+    if (options.reset === true) {
+        // `yes` is forwarded, not hard-coded: `--reset` deletes `.wrangler/state`
+        // exactly as `lunora reset` does, and passing `true` unconditionally
+        // bypassed that command's own confirmation.
+        const reset = await runResetCommand({ confirm: options.confirm, cwd, logger: options.logger, yes: options.yes });
+
+        if (reset.code !== 0) {
+            return { code: reset.code, conflicts: 0, generated, inserted: 0, ndjson };
+        }
     }
 
     const aborted = await confirmRemoteSeedTarget(options, generated);

@@ -194,3 +194,35 @@ describe("lunora init --here", () => {
         expect(logger.lines.join("\n")).toContain("already present");
     });
 });
+
+describe("lunora init --add", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-init-add-"));
+    });
+
+    it("fails the command when an explicitly requested feature could not be added", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        // An empty registry root: the requested item cannot be resolved, so the
+        // add fails. `--add` exists for scripts, so that must not exit 0.
+        const registryRoot = mkdtempSync(join(tmpdir(), "lunora-empty-registry-"));
+        const logger = capturingLogger();
+        const result = await runInitCommand({ add: "auth", cwd: workdir, inPlace: true, logger, registryFrom: registryRoot });
+
+        expect(result.code).not.toBe(0);
+        expect(logger.lines.join("\n")).toMatch(/auth/);
+    });
+
+    it("still exits 0 when --add succeeds", async () => {
+        expect.assertions(1);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const logger = capturingLogger();
+        const result = await runInitCommand({ cwd: workdir, inPlace: true, logger });
+
+        expect(result.code).toBe(0);
+    });
+});

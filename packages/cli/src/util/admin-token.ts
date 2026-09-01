@@ -101,6 +101,16 @@ const resolveAdminBearer = ({ cwd, token, url }: ResolveAdminTokenInputs): Resol
     return fromFile === undefined ? {} : { source: "dev-vars", token: fromFile };
 };
 
+/**
+ * Whether a destructive command's effective target is a deployed worker.
+ *
+ * The `--prod` flag is a self-declaration, not a fact: `--url https://prod…`
+ * without it still rewrites production. Gate confirmations on this instead — it
+ * believes the URL over the flag, and treats an explicit-but-empty `--url` as
+ * remote so a mis-quoted shell variable fails closed.
+ */
+const targetsRemoteWorker = ({ prod, url }: { prod?: boolean; url?: string }): boolean => prod === true || url === "" || !isLoopbackTarget(url);
+
 /** Human-readable origin for a resolved token, for `info`-level output. */
 const describeAdminTokenSource = (source: AdminTokenSource | undefined): string => {
     if (source === "flag") {
@@ -111,4 +121,4 @@ const describeAdminTokenSource = (source: AdminTokenSource | undefined): string 
 };
 
 export type { AdminTokenSource, ResolveAdminTokenInputs, ResolvedAdminToken };
-export { describeAdminTokenSource, isLoopbackTarget, resolveAdminBearer };
+export { describeAdminTokenSource, isLoopbackTarget, resolveAdminBearer, targetsRemoteWorker };

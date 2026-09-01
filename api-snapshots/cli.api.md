@@ -86,6 +86,7 @@ const COMMANDS: readonly [
 
 ```ts
 interface ColumnSnapshot {
+    field?: FieldSnapshot;
     nullable: boolean;
     sqlType: "BLOB" | "INTEGER" | "REAL" | "TEXT";
 }

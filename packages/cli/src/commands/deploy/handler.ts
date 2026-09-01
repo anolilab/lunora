@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { discoverMigrations, runCodegen } from "@lunora/codegen";
@@ -393,6 +393,16 @@ const findD1PlaceholderBinding = (cwd: string): string | undefined =>
  * Returns an error message when a build is blocked or fails, else `undefined`.
  */
 const buildContainerImages = async (cwd: string, options: DeployCommandOptions): Promise<string | undefined> => {
+    // A dry run publishes nothing, and this pushes to the Cloudflare Registry —
+    // the same reason `offerMissingSecrets` skips. The comment at the call site
+    // called this "deploy-only" while nothing enforced it, so `lunora build` and
+    // `deploy --dry-run` both shipped an image. The read-only container checks
+    // (missing build dir / Dockerfile) still run in `runPreDeployChecks`, so a
+    // dry run keeps reporting what a real deploy would reject.
+    if (options.dryRun === true) {
+        return undefined;
+    }
+
     const targets = discoverContainerInfo(cwd, "lunora")
         .containers.filter((container) => container.image.kind === "build")
         .map((container) => {
@@ -1540,24 +1550,39 @@ const runPreDeployPipeline = async (
         reblessSchemaBaseline = gate.rebless;
     }
 
-    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env);
+    // A dry run publishes nothing, so it must not leave a diff in a committed,
+    // hand-maintained config — it used to reformat `wrangler.jsonc` and add
+    // whatever provisioning inferred. Provisioning still RUNS (the validation
+    // below has to see the config a real deploy would validate, or a dry run
+    // would report gaps the deploy itself fills); its writes are rolled back
+    // once validation has read them.
+    const wranglerPath = options.dryRun === true ? findWranglerFile(cwd) : undefined;
+    const wranglerBefore = wranglerPath === undefined ? undefined : readFileSync(wranglerPath, "utf8");
 
-    const checkError = runPreDeployChecks(cwd, options, command);
+    try {
+        await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env);
 
-    if (checkError !== undefined) {
-        return { error: checkError, target, validation: empty };
+        const checkError = runPreDeployChecks(cwd, options, command);
+
+        if (checkError !== undefined) {
+            return { error: checkError, target, validation: empty };
+        }
+
+        // `--env <name>` validates the env-scoped view — a binding present only at
+        // the top level is a real gap for that environment (non-inheritable; see
+        // wrangler-validator.ts's NON_INHERITABLE_KEYS).
+        const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
+
+        if (reportWranglerProblems(validation, options.logger)) {
+            return { error: "wrangler validation failed", target, validation };
+        }
+
+        return { codegen, reblessSchemaBaseline, target, validation };
+    } finally {
+        if (wranglerPath !== undefined && wranglerBefore !== undefined) {
+            writeFileSync(wranglerPath, wranglerBefore, "utf8");
+        }
     }
-
-    // `--env <name>` validates the env-scoped view — a binding present only at
-    // the top level is a real gap for that environment (non-inheritable; see
-    // wrangler-validator.ts's NON_INHERITABLE_KEYS).
-    const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
-
-    if (reportWranglerProblems(validation, options.logger)) {
-        return { error: "wrangler validation failed", target, validation };
-    }
-
-    return { codegen, reblessSchemaBaseline, target, validation };
 };
 
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
@@ -1588,7 +1613,8 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     }
 
     // The build half of the pre-deploy gates. The read-only checks already ran in
-    // the shared pipeline; this pushes container images, so it is deploy-only.
+    // the shared pipeline; this pushes container images, so it no-ops on a dry
+    // run (enforced inside `buildContainerImages`).
     const buildError = await buildContainerImages(cwd, options);
 
     if (buildError !== undefined) {
@@ -1669,7 +1695,6 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
             cwd: options.cwd ?? process.cwd(),
             env: options.env,
             logger: options.logger,
-            migrated: options.migrate === true,
             mintedSecretsFile: result.mintedSecretsFile,
             // From the deploy that just ran, not the link file — the link can be
             // stale (or absent on a first deploy), and this run knows the truth.

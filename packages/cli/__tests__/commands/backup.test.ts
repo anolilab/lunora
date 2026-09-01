@@ -937,6 +937,50 @@ describe("lunora backup", () => {
             expect(calls).toHaveLength(0);
         });
 
+        it("refuses a restore against a remote --url without --yes even when --prod is not passed", async () => {
+            expect.assertions(3);
+
+            const { logger, logs } = capturingLogger();
+            const calls: PitrCall[] = [];
+
+            const result = await runBackupCommand({
+                at: "2026-06-01T00:00:00.000Z",
+                cwd: workDir,
+                logger,
+                adminFetch: captureFetch(calls, {}),
+                restore: true,
+                subcommand: "pitr",
+                token: "admintok",
+                url: "https://app.example.com",
+            });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(logs.join("\n")).toContain("--yes");
+        });
+
+        it("restores against a remote --url once --yes confirms it", async () => {
+            expect.assertions(2);
+
+            const { logger } = capturingLogger();
+            const calls: PitrCall[] = [];
+
+            const result = await runBackupCommand({
+                at: "2026-06-01T00:00:00.000Z",
+                cwd: workDir,
+                logger,
+                adminFetch: captureFetch(calls, { restoredTo: "bm", undoBookmark: "bm-undo" }),
+                restore: true,
+                subcommand: "pitr",
+                token: "admintok",
+                url: "https://app.example.com",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(1);
+        });
+
         it("refuses a production restore without --yes", async () => {
             expect.assertions(2);
 

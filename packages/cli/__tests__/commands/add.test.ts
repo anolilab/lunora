@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { runAddFeature } from "../../src/commands/add/handler";
 import { applyDeps, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports } from "../../src/commands/registry/apply";
 import { parseManifest, runAddCommand } from "../../src/commands/registry/index";
 import type { Logger } from "../../src/util/logger";
@@ -376,6 +377,52 @@ describe("lunora add", () => {
             expect(result.code).toBe(0);
             expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
             expect(existsSync(join(workdir, "lunora", "needs-ratelimit", "index.ts"))).toBe(true);
+        });
+    });
+
+    describe("untrusted --source confirmation", () => {
+        it("`lunora add <item> --source …` refuses to write without confirmation", async () => {
+            expect.assertions(4);
+
+            const { lines, logger } = makeLogger();
+            const result = await runAddFeature({
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger,
+                source: "gh:attacker/evil",
+            });
+
+            expect(result.code).toBe(1);
+            expect(lines.join("\n")).toContain("non-default source");
+            // Nothing from the attacker-controlled origin reached the project.
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(false);
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).not.toContain("RATELIMIT_ENABLED");
+        });
+
+        it("`--yes` is the conscious confirmation that lets it through", async () => {
+            expect.assertions(2);
+
+            const result = await runAddFeature({
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger: makeLogger().logger,
+                source: "gh:attacker/evil",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
+        });
+
+        it("the default source still needs no confirmation", async () => {
+            expect.assertions(2);
+
+            const result = await runAddFeature({ cwd: workdir, feature: "ratelimit", from: registryRoot, logger: makeLogger().logger });
+
+            expect(result.code).toBe(0);
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
         });
     });
 

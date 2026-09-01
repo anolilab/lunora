@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -131,6 +131,36 @@ describe("lunora data-transfer", () => {
             expect(calls[0]!.body.tables).toEqual(["users", "messages"]);
         });
 
+        it("leaves an existing --out file intact when the export fails mid-stream", async () => {
+            expect.assertions(3);
+
+            const outPath = join(workDir, "yesterday.ndjson");
+            const yesterday = `${JSON.stringify({ doc: { _id: "old" }, table: "users" })}\n`;
+
+            writeFileSync(outPath, yesterday, "utf8");
+
+            // The body starts fine and then errors — the shape of a dropped
+            // connection part-way through a large dump.
+            const failingBody = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode('{"table":"users","doc":{"_id":"u1"}}\n'));
+                    controller.error(new Error("connection reset"));
+                },
+            });
+
+            const fetchImpl: StreamingFetchLike = async () => {
+                return { body: failingBody, json: async () => undefined, ok: true, status: 200, text: async () => "" };
+            };
+
+            await expect(runExportCommand({ fetchImpl, logger: silentLogger(), out: outPath, token: "t", url: "http://localhost:8787" })).rejects.toThrow(
+                "connection reset",
+            );
+
+            // Yesterday's dump is still there, byte for byte.
+            expect(existsSync(outPath)).toBe(true);
+            expect(readFileSync(outPath, "utf8")).toBe(yesterday);
+        });
+
         it("refuses to target localhost with --prod", async () => {
             expect.assertions(1);
 
@@ -155,6 +185,42 @@ describe("lunora data-transfer", () => {
             });
 
             expect(result.code).toBe(1);
+        });
+
+        it("refuses a remote --url without --yes even when --prod is not passed", async () => {
+            expect.assertions(3);
+
+            const file = join(workDir, "remote.ndjson");
+
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`, "utf8");
+
+            const errors: string[] = [];
+            const calls: string[] = [];
+            const fetchImpl: StreamingFetchLike = async (url) => {
+                calls.push(url);
+
+                return {
+                    body: null,
+                    json: async () => {
+                        return { conflicts: 0, errors: [], inserted: {} };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            };
+
+            const result = await runImportCommand({
+                fetchImpl,
+                file,
+                logger: { ...silentLogger(), error: (m) => errors.push(m) },
+                token: "t",
+                url: "https://prod.example.invalid",
+            });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.join("\n")).toContain("--yes");
         });
 
         it("pOSTs batches and aggregates the inserted counts", async () => {

@@ -24,6 +24,12 @@ const buildCommand: Command = {
         }),
     name: "build",
     options: [
+        {
+            description:
+                "Override the schema-drift gate for this run (build even with breaking schema drift and no migration; the committed baseline is not advanced)",
+            name: "allow-schema-drift",
+            type: Boolean,
+        },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         {
             description: "Write a JSON manifest of the bindings + crons the bundle needs to this path, for an IaC program to consume",
@@ -39,6 +45,7 @@ const buildCommand: Command = {
 export { buildCommand };
 
 export type BuildOptions = CreateOptions<{
+    "allow-schema-drift": boolean | undefined;
     "api-spec": string | undefined;
     "emit-bindings": string | undefined;
     format: string | undefined;

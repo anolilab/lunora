@@ -144,6 +144,25 @@ describe("lunora add — shadcn-parity features", () => {
         expect(existsSync(destination())).toBe(false);
     });
 
+    it("registry view strips terminal escapes from remote manifest text and file bodies", async () => {
+        expect.assertions(3);
+
+        // `view` is the inspect-before-you-install command, so its whole input is
+        // attacker-controlled when `--source` points at a hostile registry.
+        writeItem({ title: "Foo\u001B[2J\u001B]0;pwned\u0007" }, "export const marker = 42;\u001B[8m hidden\u001B[0m\n\texport const tabbed = 1;\n");
+
+        const { lines, logger } = capturingLogger();
+
+        await runRegistryViewCommand({ cwd: workdir, from: registryRoot, logger, names: ["foo"] });
+
+        const printed = lines.join("\n");
+
+        expect(printed).not.toContain("\u001B");
+        expect(printed).not.toContain("\u0007");
+        // Tabs are real indentation in a source listing, not an escape vector.
+        expect(printed).toContain("\texport const tabbed = 1;");
+    });
+
     it("registry build generates index.json and --check detects drift", async () => {
         expect.assertions(3);
 

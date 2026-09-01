@@ -19,6 +19,16 @@ import type { BuildOptions } from "./index";
 const DEFAULT_OUT_DIR = ".lunora/build";
 
 interface BuildCommandOptions {
+    /**
+     * Per-run override for the schema-drift gate. `build` runs the same gate
+     * `deploy` does (it IS `deploy --dry-run` underneath), so the blocked-drift
+     * message it prints tells the operator to pass this — and it used to be
+     * rejected as an unknown option by the command that had just printed it.
+     *
+     * Per-run only: a build publishes nothing, so it never advances the
+     * committed baseline (see `schema-drift-gate.ts`).
+     */
+    allowSchemaDrift?: boolean;
     /** Which API spec(s) codegen emits. */
     apiSpec?: ApiSpec;
     cwd?: string;
@@ -110,6 +120,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     }
 
     const result = await runDeployCommand({
+        allowSchemaDrift: options.allowSchemaDrift,
         apiSpec: options.apiSpec,
         cwd: options.cwd,
         dryRun: true,
@@ -156,6 +167,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async ({ cwd, logger, options }) => {
     const result = await runBuildCommand({
+        allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         emitBindings: options.emitBindings,

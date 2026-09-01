@@ -178,23 +178,47 @@ const runSchemaDriftGate = (options: {
         return corruptBaselineResult(context);
     }
 
-    const decision = evaluateSchemaDrift({
-        allowDrift,
-        baseline: baseline.status === "ok" ? baseline.snapshot : undefined,
-        command,
-        current: codegen.schemaSnapshot,
-        migrations: codegen.migrations,
-    });
+    const evaluate = (override: boolean): SchemaDriftDecision =>
+        evaluateSchemaDrift({
+            allowDrift: override,
+            baseline: baseline.status === "ok" ? baseline.snapshot : undefined,
+            command,
+            current: codegen.schemaSnapshot,
+            migrations: codegen.migrations,
+        });
+
+    const decision = evaluate(allowDrift);
 
     if (decision.blocked) {
         return blockedDecisionResult(decision, context);
     }
+
+    // `--allow-schema-drift` is a PER-RUN override, not an acceptance of the new
+    // shape: re-blessing on its say-so advances the committed baseline past the
+    // breaking change, so the very next run — with no flag at all — sees no drift
+    // and the gate is disarmed for good. `prepare` makes that starkest (it
+    // produces no bundle, so nothing shipped), but the same write from `deploy`
+    // means the flag and `--update-schema-baseline` do the same thing. Only the
+    // latter accepts the shape. Re-evaluating without the override is how we tell
+    // "waved through" from "no breaking drift to wave through"; the diff is pure
+    // and in-memory.
+    const overriddenOnly = allowDrift && decision.changes.length > 0 && evaluate(false).blocked;
 
     // Non-blocked drift (safe / migration-accompanied / overridden): surface it
     // and hand back a deferred re-bless so the baseline advances only on success.
     if (decision.changes.length > 0) {
         if (!readOnly) {
             logger.info(decision.reason);
+        }
+
+        if (overriddenOnly && !updateBaseline) {
+            if (!readOnly) {
+                logger.warn(
+                    `schema baseline left at its committed shape — --allow-schema-drift overrides this run only. Pass --update-schema-baseline to accept the new shape: ${snapshotPath}`,
+                );
+            }
+
+            return { blocked: false, changes: decision.changes, reason: decision.reason };
         }
 
         return { blocked: false, changes: decision.changes, reason: decision.reason, rebless: readOnly ? undefined : context.rebless };

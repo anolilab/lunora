@@ -18,7 +18,12 @@ const deployCommand: Command = {
         }),
     name: "deploy",
     options: [
-        { description: "Override the schema-drift gate (deploy even with breaking schema drift and no migration)", name: "allow-schema-drift", type: Boolean },
+        {
+            description:
+                "Override the schema-drift gate for this run (deploy even with breaking schema drift and no migration; the committed baseline is not advanced — use --update-schema-baseline to accept the new shape)",
+            name: "allow-schema-drift",
+            type: Boolean,
+        },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Validate, bundle, and run pre-deploy gates without publishing (wrangler deploy --dry-run)", name: "dry-run", type: Boolean },
         { description: "Cloudflare environment name", name: "env", type: String },
