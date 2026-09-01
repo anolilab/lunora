@@ -1,5 +1,5 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
-import { LunoraError, toErrorBody } from "@lunora/errors";
+import { isLunoraError, LunoraError, toErrorBody } from "@lunora/errors";
 import type {
     AppendRequestLogEntry,
     ContextFetch,
@@ -10100,12 +10100,12 @@ abstract class ShardDO {
      * cache then carries the baseline for the DO's lifetime, matching the
      * pre-durable behavior).
      *
-     * A failure is LOGGED rather than swallowed. It used to be neither reported
-     * nor observable: the in-memory cache had already advanced past it, so the
-     * shape kept diffing correctly for the life of the instance and only lost its
-     * deletes after a hibernation eviction, arbitrarily later and nowhere near the
-     * write that failed. The over-cap refusal from `writeGlobalShapeSnapshot`
-     * names the subscription to narrow.
+     * A failure is LOGGED rather than swallowed, and the in-memory cache has
+     * already advanced past it, so an unreported one would only surface as lost
+     * deletes after a hibernation eviction — arbitrarily later and nowhere near
+     * the write that failed. The over-cap refusal from `writeGlobalShapeSnapshot`
+     * names the subscription to narrow, and is reported unconditionally because
+     * it is raised before `sql` is touched at all.
      */
     private saveGlobalSnapshot(connectionId: string, subId: string, snapshot: Map<string, string>): void {
         if (connectionId === "") {
@@ -10116,9 +10116,18 @@ abstract class ShardDO {
             writeGlobalShapeSnapshot(this.sql as SqlExec, connectionId, subId, snapshot);
             this.durableSnapshotStoreAvailable = true;
         } catch (error: unknown) {
-            // A stub `sql` handle (unit harness) has no durable store at all —
-            // that is in-memory-only mode, not a failure worth logging.
-            if (this.durableSnapshotStoreAvailable) {
+            // The over-cap refusal is raised by `writeGlobalShapeSnapshot` BEFORE
+            // it touches `sql`, so it can never be a stub-handle artifact — it is
+            // always a real, actionable failure and is always reported. Gating it
+            // on the availability flag hid it on exactly the path it was written
+            // for: an over-wide shape throws on its very first write, so the flag
+            // had never been set true and the message naming the subscription was
+            // swallowed until some later hibernation eviction happened to flip it.
+            //
+            // An untyped throw is the other case: a stub `sql` handle (unit
+            // harness) has no durable store at all, which is in-memory-only mode
+            // rather than a failure worth logging.
+            if (isLunoraError(error) || this.durableSnapshotStoreAvailable) {
                 this.recordShapeError(`shape:snapshot:${subId}`, error);
             }
         }

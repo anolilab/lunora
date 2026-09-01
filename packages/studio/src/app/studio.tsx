@@ -160,6 +160,12 @@ interface StudioProps {
      * views source. Supply a runner that proxies the statement through your own
      * worker (which holds the token server-side). Without it the Analytics tab
      * renders an empty state and issues no request.
+     *
+     * Pass a STABLE reference — a module-level function, or one held in a
+     * `useCallback`/ref. It is read while building the tab router, so a fresh
+     * inline arrow on every render rebuilds the router and remounts the panel
+     * tree, losing in-progress query state. The same holds for `scheduledLoad`,
+     * `scheduledCancel` and `scheduledCron`.
      */
     readonly analyticsQuery?: AnalyticsPanelProps["runQuery"];
 

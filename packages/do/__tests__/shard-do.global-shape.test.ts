@@ -284,6 +284,44 @@ describe("shardDO global-shape poll tier", () => {
         expect(alarmBox.scheduled).toBeNull();
     });
 
+    it("reports an over-cap durable snapshot even though it is the first durable write", async () => {
+        expect.assertions(3);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+        sockets.push(ws);
+
+        // Under the ROW cap but past the CHARACTER cap: few rows, very wide ones.
+        // That is the shape whose report was swallowed — `writeGlobalShapeSnapshot`
+        // refuses it on its very FIRST durable write, so the availability flag the
+        // log used to be gated on had never been set true, and the message naming
+        // the subscription surfaced only if a later hibernation eviction happened
+        // to flip it.
+        shard.rows = Array.from({ length: 12 }, (_, index) => {
+            return { doc: { _id: `w${String(index)}`, blob: "x".repeat(100_000) }, id: `w${String(index)}` };
+        });
+
+        // A durable connection id is what makes the persist attempt happen at all
+        // — `saveGlobalSnapshot` no-ops without one, which is the in-memory-only
+        // harness mode.
+        ws.attachment = { connectionId: "conn-1", subs: {} };
+
+        await subscribeShape(shard, ws);
+
+        // The subscription itself still succeeds — the in-memory baseline carries
+        // it, which is exactly why the failed persist was invisible.
+        expect(frameTypes(ws)).toContain("pokeStart");
+
+        // `logs` is private and there is no public drain on this surface — the
+        // recorded diagnostic IS the observable behaviour being asserted.
+        const recorded = (shard as unknown as { logs: { entries: () => { functionPath?: string; message: string }[] } }).logs.entries();
+        const snapshotErrors = recorded.filter((entry) => (entry.functionPath ?? "").startsWith("shape:snapshot:"));
+
+        expect(snapshotErrors).toHaveLength(1);
+        expect(snapshotErrors[0]?.message).toContain("past the");
+    });
+
     it("pokes only the diff (insert / update / delete) on an alarm tick", async () => {
         expect.assertions(2);
 
