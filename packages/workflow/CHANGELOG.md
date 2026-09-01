@@ -1,3 +1,18 @@
+## @lunora/workflow [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.39...@lunora/workflow@1.0.0-alpha.40) (2026-09-01)
+
+### ⚠ BREAKING CHANGES
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests (#541)
+
+### Bug Fixes
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests ([#541](https://github.com/anolilab/lunora/issues/541)) ([dfc2d4d](https://github.com/anolilab/lunora/commit/dfc2d4d07bf8f67214122dc7f14d83a9b1533d07))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.97
+
 ## @lunora/workflow [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.38...@lunora/workflow@1.0.0-alpha.39) (2026-09-01)
 
 
