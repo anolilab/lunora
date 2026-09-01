@@ -232,6 +232,27 @@ private fun depthCapEnforced() {
     repeat(Wire.MAX_DEPTH + 2) { nested = listOf(nested) }
 
     check(rejects(nested), "decoding past the depth cap must be rejected")
+
+    // The PARSER's cap is counted from the document root, and every payload
+    // arrives inside an envelope — so charging the envelope against the wire
+    // value's own budget refused a frame whose payload the reference encodes
+    // happily. A value nested exactly MAX_DEPTH deep must still reach onData.
+    var deepest: Any? = "leaf"
+
+    repeat(Wire.MAX_DEPTH) { deepest = listOf(deepest) }
+
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+
+    val seen = mutableListOf<WireValue>()
+
+    client.subscribe("messages:list", null, seen::add)
+
+    val envelope = linkedMapOf<String, Any?>("type" to "data", "id" to "sub_1", "data" to deepest)
+
+    check(client.handleFrame(Json.write(envelope)) == "data", "a MAX_DEPTH value must survive its frame envelope")
+    check(seen.size == 1, "and reach onData")
 }
 
 private fun stableWireKeyFixtures() {

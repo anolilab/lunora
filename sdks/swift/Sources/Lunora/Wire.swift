@@ -35,6 +35,26 @@ public enum Wire {
     /// doubles, so an integer past this cannot cross the wire as a number
     /// without changing value — ``WireBigInt`` and its tag exist for that case.
     public static let maxExactInteger = 9_007_199_254_740_991.0
+
+    /// Bytes per element for the typed-array views the codec round-trips. A view
+    /// whose payload is not a whole number of elements is not a view the
+    /// reference can rebuild — `Float32Array(buffer)` raises a `RangeError`
+    /// there — so accepting it would hand the consumer bytes it cannot
+    /// reconstruct. `ArrayBuffer` is absent deliberately: it is untyped, so
+    /// there is nothing to align.
+    static let typedArrayElementSizes: [String: Int] = [
+        "BigInt64Array": 8,
+        "BigUint64Array": 8,
+        "Float32Array": 4,
+        "Float64Array": 8,
+        "Int16Array": 2,
+        "Int32Array": 4,
+        "Int8Array": 1,
+        "Uint16Array": 2,
+        "Uint32Array": 4,
+        "Uint8Array": 1,
+        "Uint8ClampedArray": 1,
+    ]
 }
 
 /// JavaScript's `undefined`, distinct from JSON null.
@@ -293,17 +313,79 @@ extension Wire {
         guard value.count >= 3, let raw = value[2] as? [Any] else { throw WireFormatError.malformed("map") }
 
         var entries: [(key: Any, value: Any)] = []
+        var seen: [String: Int] = [:]
+
         for item in raw {
-            guard let pair = item as? [Any], pair.count >= 2 else { throw WireFormatError.malformed("map entry") }
-            entries.append((key: try decode(pair[0], depth: depth + 1), value: try decode(pair[1], depth: depth + 1)))
+            guard let pair = item as? [Any], pair.count == 2 else { throw WireFormatError.malformed("map entry") }
+
+            let key = try decode(pair[0], depth: depth + 1)
+            let entry = (key: key, value: try decode(pair[1], depth: depth + 1))
+
+            // Last write wins, at the FIRST occurrence's position — the reference
+            // builds a real Map, and `Map.prototype.set` on a key already present
+            // overwrites the value in place rather than appending. Keeping both
+            // entries left two peers of one deployment reading a different value
+            // from identical bytes.
+            if let identity = mapKeyIdentity(key) {
+                if let index = seen[identity] {
+                    entries[index] = entry
+                    continue
+                }
+
+                seen[identity] = entries.count
+            }
+
+            entries.append(entry)
         }
         return WireMap(entries)
+    }
+
+    /// A map key's collapse identity, or `nil` when it never collapses.
+    ///
+    /// The reference's `Map` compares keys by SameValueZero: primitives by value
+    /// (`NaN` equal to itself), everything else by reference — so two
+    /// structurally identical `WireDate`/bytes keys stay two entries there and
+    /// must stay two here.
+    private static func mapKeyIdentity(_ key: Any) -> String? {
+        if key is NSNull { return "null" }
+        if key is WireUndefined { return "undefined" }
+        if let bigInt = key as? WireBigInt { return "big:\(normaliseBigInt(bigInt.digits))" }
+        if let text = key as? String { return "str:\(text)" }
+
+        // NSNumber bridges Bool, Int and Double indistinguishably under `as?`, so
+        // booleans are identified by their CoreFoundation type first — `as? Bool`
+        // would collapse 0 and 1 onto false and true.
+        if let number = key as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() { return "bool:\(number.boolValue)" }
+            return number.doubleValue.isNaN ? "num:nan" : "num:\(number.doubleValue)"
+        }
+
+        if let double = key as? Double { return double.isNaN ? "num:nan" : "num:\(double)" }
+
+        return nil
+    }
+
+    /// Strip a bigint literal's leading zeros and a sign that only reaches zero,
+    /// so `01` and `1` are one key here as they are to the reference.
+    private static func normaliseBigInt(_ digits: String) -> String {
+        let negative = digits.hasPrefix("-")
+        let body = negative ? String(digits.dropFirst()) : digits
+        let trimmed = String(body.drop(while: { $0 == "0" }))
+
+        if trimmed.isEmpty { return "0" }
+
+        return negative ? "-" + trimmed : trimmed
     }
 
     private static func decodeError(_ value: [Any], depth: Int) throws -> Any {
         guard value.count >= 4 else { throw WireFormatError.malformed("error") }
 
-        let props = value.count > 4 ? (try decode(value[4], depth: depth + 1) as? [String: Any] ?? [:]) : [:]
+        // The props slot is NOT optional and NOT nullable: the reference reads it
+        // with `Object.keys`, which throws on a null or missing slot, so quietly
+        // substituting an empty map accepted a frame the reference refuses.
+        guard value.count > 4, !(value[4] is NSNull) else { throw WireFormatError.malformed("error") }
+
+        let props = (try decode(value[4], depth: depth + 1)) as? [String: Any] ?? [:]
         let cause = value.count > 5 ? try decode(value[5], depth: depth + 1) : nil
         return WireError(
             name: value[2] as? String ?? "",
@@ -321,7 +403,20 @@ extension Wire {
         let ctor = value.count > 3 ? (value[3] as? String ?? "Uint8Array") : "Uint8Array"
         // A plain Uint8Array is `Data` and re-encodes to the 2-element form;
         // every other view keeps its constructor name.
-        return ctor == "Uint8Array" ? data : WireBytes(data: data, ctor: ctor)
+        if ctor == "Uint8Array" { return data }
+
+        if ctor != "ArrayBuffer" {
+            // An UNKNOWN ctor name decodes to raw bytes, dropping the name — the
+            // forward-compat rule in protocol/README.md §2.1. Keeping it
+            // re-encoded a 4-element form the reference emits as 3, so the same
+            // value relayed through JS and through here produced different bytes,
+            // and therefore different stable subscription keys.
+            guard let size = typedArrayElementSizes[ctor] else { return data }
+
+            guard data.count % size == 0 else { throw WireFormatError.malformed("typed-array bytes") }
+        }
+
+        return WireBytes(data: data, ctor: ctor)
     }
 
     /// Whether `raw` is an optionally-negative run of ASCII digits. Deliberately

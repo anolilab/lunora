@@ -251,30 +251,27 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
             if tag == "-inf":
                 return -math.inf
             if tag == "bigint":
-                raw = value[2]
+                raw = value[2] if len(value) > 2 else None
                 if not isinstance(raw, str) or len(raw) > MAX_BIGINT_DIGITS or not _is_bigint_literal(raw):
                     raise WireFormatError(f"wire-codec: invalid or over-long bigint (max {MAX_BIGINT_DIGITS} digits)")
                 return WireBigInt(int(raw))
             if tag == "date":
-                return WireDate(decode_wire(value[2], depth + 1))
+                return WireDate(decode_wire(_payload(value, "date"), depth + 1))
             if tag == "url":
-                return WireUrl(value[2])
+                href = _payload(value, "url")
+                if not isinstance(href, str):
+                    raise WireFormatError("wire-codec: malformed url tag")
+                return WireUrl(href)
             if tag == "map":
                 return _decode_map(value, depth)
             if tag == "set":
-                return WireSet([decode_wire(item, depth + 1) for item in value[2]])
+                return WireSet([decode_wire(item, depth + 1) for item in _payload_list(value, "set")])
             if tag == "error":
-                props = decode_wire(value[4], depth + 1) if len(value) > 4 else {}
-                cause = decode_wire(value[5], depth + 1) if len(value) > 5 else UNDEFINED
-                return WireError(value[2], value[3], dict(props), cause)
+                return _decode_error(value, depth)
             if tag == "bytes":
-                data = _b64decode(value[2])
-                ctor = value[3] if len(value) > 3 else "Uint8Array"
-                if ctor == "Uint8Array":
-                    return data
-                return WireBytes(data, ctor)
+                return _decode_bytes(value)
             if tag == "arr":
-                return [decode_wire(item, depth + 1) for item in value[2]]
+                return [decode_wire(item, depth + 1) for item in _payload_list(value, "arr")]
             # Unknown tag (forward-compat): treat as an ordinary array.
             return [decode_wire(item, depth + 1) for item in value]
         return [decode_wire(item, depth + 1) for item in value]
@@ -285,6 +282,54 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
     raise WireFormatError(f"wire-codec: cannot decode a {type(value).__name__}")
 
 
+def _payload(value: list, tag: str) -> Any:
+    """The tag's payload slot, or a typed rejection when the array is too short.
+
+    ``value[2]`` on a truncated tag raised a bare ``IndexError`` straight out of
+    :func:`decode_wire`, so ``except WireFormatError`` around a decode caught
+    nothing — and in the socket read loop one such frame ended every
+    subscription on the client rather than the one that carried it.
+    """
+
+    if len(value) < 3:
+        raise WireFormatError(f"wire-codec: malformed {tag} tag")
+
+    return value[2]
+
+
+def _payload_list(value: list, tag: str) -> list:
+    """The tag's payload slot as a list.
+
+    Iterating it unchecked let a ``str`` payload iterate PER CHARACTER, so
+    ``[TAG, "set", "xx"]`` decoded to a two-item set of ``"x"`` rather than
+    being refused. The reference throws; so does every other port.
+    """
+
+    items = _payload(value, tag)
+
+    if not isinstance(items, list):
+        raise WireFormatError(f"wire-codec: malformed {tag} tag")
+
+    return items
+
+
+def _decode_error(value: list, depth: int) -> WireError:
+    """Decode an ``error`` tag, refusing one with no props object.
+
+    The props slot is not optional: the reference reads it with ``Object.keys``,
+    which throws on ``null`` or a missing slot, so a port that quietly
+    substituted ``{}`` accepted a frame the reference refuses.
+    """
+
+    if len(value) < 5 or not isinstance(value[4], dict):
+        raise WireFormatError("wire-codec: malformed error tag")
+
+    props = decode_wire(value[4], depth + 1)
+    cause = decode_wire(value[5], depth + 1) if len(value) > 5 else UNDEFINED
+
+    return WireError(value[2], value[3], dict(props), cause)
+
+
 def _decode_map(value: list, depth: int) -> WireMap:
     """Decode a ``map`` tag, refusing an entry that is not a real pair.
 
@@ -293,25 +338,134 @@ def _decode_map(value: list, depth: int) -> WireMap:
     a caller catching the codec's own type saw an unhandled exception instead.
     """
 
-    entries = value[2] if len(value) > 2 else None
+    pairs: list[tuple[Any, Any]] = []
+    seen: dict[str, int] = {}
 
-    if not isinstance(entries, list):
-        raise WireFormatError("wire-codec: malformed map tag")
-
-    pairs = []
-
-    for entry in entries:
-        if not isinstance(entry, list) or len(entry) < 2:
+    for entry in _payload_list(value, "map"):
+        if not isinstance(entry, list) or len(entry) != 2:
             raise WireFormatError("wire-codec: malformed map entry")
 
-        pairs.append((decode_wire(entry[0], depth + 1), decode_wire(entry[1], depth + 1)))
+        key = decode_wire(entry[0], depth + 1)
+        item = decode_wire(entry[1], depth + 1)
+        identity = _map_key_identity(key)
+
+        # Last write wins, at the FIRST occurrence's position — the reference
+        # builds a real Map, and `Map.prototype.set` on a key already present
+        # overwrites the value in place rather than appending. Keeping both
+        # entries left two peers of one deployment reading a different value
+        # from identical bytes, and re-encoded as two entries a map the
+        # reference emits as one.
+        if identity is not None and identity in seen:
+            pairs[seen[identity]] = (key, item)
+            continue
+
+        if identity is not None:
+            seen[identity] = len(pairs)
+
+        pairs.append((key, item))
 
     return WireMap(pairs)
 
 
+#: Bytes per element for the typed-array views the codec round-trips. A view
+#: whose payload is not a whole number of elements is not a view the reference
+#: can rebuild — ``new Float32Array(buffer)`` raises a ``RangeError`` there —
+#: so accepting it would hand the consumer bytes it cannot reconstruct.
+#: ``ArrayBuffer`` is absent deliberately: it is untyped, so nothing to align.
+TYPED_ARRAY_ELEMENT_SIZES = {
+    "BigInt64Array": 8,
+    "BigUint64Array": 8,
+    "Float32Array": 4,
+    "Float64Array": 8,
+    "Int16Array": 2,
+    "Int32Array": 4,
+    "Int8Array": 1,
+    "Uint16Array": 2,
+    "Uint32Array": 4,
+    "Uint8Array": 1,
+    "Uint8ClampedArray": 1,
+}
+
+
+def _decode_bytes(value: list) -> Any:
+    encoded = _payload(value, "bytes")
+
+    if not isinstance(encoded, str):
+        raise WireFormatError("wire-codec: malformed bytes tag")
+
+    data = _b64decode(encoded)
+    ctor = value[3] if len(value) > 3 else "Uint8Array"
+
+    if ctor == "Uint8Array":
+        return data
+
+    if ctor != "ArrayBuffer":
+        size = TYPED_ARRAY_ELEMENT_SIZES.get(ctor)
+
+        # An UNKNOWN ctor name decodes to raw bytes, dropping the name — the
+        # forward-compat rule in protocol/README.md §2.1. Keeping it re-encoded
+        # a 4-element form the reference emits as 3, so the same value relayed
+        # through JS and through here produced different bytes, and therefore
+        # different stable subscription keys.
+        if size is None:
+            return data
+
+        if len(data) % size != 0:
+            raise WireFormatError(f"wire-codec: {ctor} payload of {len(data)} bytes is not a multiple of its {size}-byte element")
+
+    return WireBytes(data, ctor)
+
+
+def _map_key_identity(key: Any) -> str | None:
+    """A map key's collapse identity, or ``None`` when it never collapses.
+
+    The reference's ``Map`` compares keys by SameValueZero: primitives by value
+    (``NaN`` equal to itself), everything else by reference — so two
+    structurally identical ``Date``/bytes keys stay two entries there and must
+    stay two here. Only the scalar kinds get an identity.
+    """
+
+    if key is None:
+        return "null"
+
+    if key is UNDEFINED:
+        return "undefined"
+
+    # bool before int: Python's bool IS an int, but JS `true` and `1` are
+    # distinct keys.
+    if isinstance(key, bool):
+        return f"bool:{key}"
+
+    if isinstance(key, WireBigInt):
+        return f"big:{key.value}"
+
+    if isinstance(key, (int, float)):
+        if isinstance(key, float) and math.isnan(key):
+            return "num:nan"
+
+        try:
+            number = float(key)
+        except OverflowError:
+            # JSON.parse renders an over-large literal as +-Infinity; Python
+            # keeps it exact, so collapse it the way the reference would see it.
+            number = math.inf if key > 0 else -math.inf
+
+        return f"num:{number!r}"
+
+    if isinstance(key, str):
+        return f"str:{key}"
+
+    return None
+
+
 def _is_bigint_literal(raw: str) -> bool:
+    # NOT `body.isdigit()`: that is Unicode-aware and true for '\u0663'
+    # (Arabic-Indic three) and '\u00b2' (superscript two), which `int()` then
+    # accepts or refuses inconsistently — so '\u0663' decoded to 3 here while
+    # the reference, whose `\d` is ASCII-only, refused the same frame.
     body = raw.removeprefix("-")
-    return len(body) > 0 and body.isdigit()
+
+    return len(body) > 0 and all("0" <= char <= "9" for char in body)
 
 
 # --- Stable subscription / dedup key ---------------------------------------

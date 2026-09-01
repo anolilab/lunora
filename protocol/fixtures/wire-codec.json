@@ -7,11 +7,15 @@
         "of tagged tokens and their re-encode.",
         "",
         "A few shapes are legitimately NOT fixed points of that identity — a bare",
-        "`[TAG]` array is escaped on the way back out, and an object field that",
-        "arrives as the `undefined` tag is dropped, matching JSON.stringify. Those",
-        "carry `reencoded`, and the assertion becomes `encode(decode(encoded)) ==",
-        "reencoded`. Without it those two shapes were untestable, so no port was held",
-        "to them and four decoded them differently.",
+        "`[TAG]` array is escaped on the way back out; an object field that arrives",
+        "as the `undefined` tag is dropped, matching JSON.stringify; a `bytes` tag",
+        "naming an unknown typed-array ctor decodes to raw bytes and re-encodes",
+        "without the name; and a `map` carrying a duplicate key collapses last-wins,",
+        "because the reference decodes into a real Map. Those carry `reencoded`, and",
+        "the assertion becomes `encode(decode(encoded)) == reencoded`. Without it",
+        "those shapes were untestable, so no port was held to them — four decoded",
+        "the first two differently, and all eight kept the unknown ctor name and",
+        "both duplicate entries.",
         "",
         "`rejected[]` is the other half: wire values every port MUST refuse to decode.",
         "It is data for the same reason the case list is — a rejection each suite",
@@ -22,6 +26,16 @@
         "valid-looking short bytes. (Whitespace INSIDE the payload is not here: `atob`",
         "strips it, so the reference accepts it and a fixture demanding rejection would",
         "be asserting against the reference.)",
+        "",
+        "The rest of `rejected[]` is what a hand-rolled decoder waves through where",
+        "the reference throws: a map entry that is not EXACTLY a pair (reading slots",
+        "0 and 1 out of a longer one is the same invention as inventing a missing",
+        "half); a `set`/`arr` payload that is not an array (a string iterates per",
+        "CHARACTER); a typed-array payload that is not a whole number of elements",
+        "(`new Float32Array` on 3 bytes raises a RangeError); an `error` tag whose",
+        "props slot is missing or null (`Object.keys` throws on both); and a bigint",
+        "tag with a missing or non-ASCII digit string (`\\d` is ASCII-only, while a",
+        "Unicode-aware digit test accepts Arabic-Indic ٣).",
         "",
         "Language-native construction checks (e.g. bigint 7 -> the bigint tag, or an",
         "integer past the exact-float64 range being refused) live in each SDK's own",
@@ -64,6 +78,48 @@
                 ]
             ]
         },
+        {
+            "name": "map-duplicate-keys",
+            "encoded": [
+                "$lunora.wire$",
+                "map",
+                [
+                    ["a", 1],
+                    ["b", 2],
+                    ["a", 3]
+                ]
+            ],
+            "reencoded": [
+                "$lunora.wire$",
+                "map",
+                [
+                    ["a", 3],
+                    ["b", 2]
+                ]
+            ]
+        },
+        {
+            "name": "map-duplicate-nonstring-keys",
+            "encoded": [
+                "$lunora.wire$",
+                "map",
+                [
+                    [["$lunora.wire$", "bigint", "1"], "x"],
+                    [["$lunora.wire$", "date", 0], "y"],
+                    [["$lunora.wire$", "bigint", "1"], "z"],
+                    [["$lunora.wire$", "date", 0], "w"]
+                ]
+            ],
+            "reencoded": [
+                "$lunora.wire$",
+                "map",
+                [
+                    [["$lunora.wire$", "bigint", "1"], "z"],
+                    [["$lunora.wire$", "date", 0], "y"],
+                    [["$lunora.wire$", "date", 0], "w"]
+                ]
+            ]
+        },
         { "name": "set", "encoded": ["$lunora.wire$", "set", [1, 2, "three"]] },
         { "name": "error", "encoded": ["$lunora.wire$", "error", "Error", "boom", {}] },
         { "name": "error-with-props", "encoded": ["$lunora.wire$", "error", "TypeError", "bad", { "code": "E_BAD" }] },
@@ -76,6 +132,11 @@
         { "name": "tag-only-array", "encoded": ["$lunora.wire$"], "reencoded": ["$lunora.wire$", "arr", ["$lunora.wire$"]] },
         { "name": "undefined-object-field", "encoded": { "a": ["$lunora.wire$", "undefined"], "b": 1 }, "reencoded": { "b": 1 } },
         { "name": "bytes-bigint64", "encoded": ["$lunora.wire$", "bytes", "AQAAAAAAAAA=", "BigInt64Array"] },
+        {
+            "name": "bytes-unknown-ctor",
+            "encoded": ["$lunora.wire$", "bytes", "AQID", "Complex128Array"],
+            "reencoded": ["$lunora.wire$", "bytes", "AQID"]
+        },
         { "name": "proto-key", "encoded": { "__proto__": { "polluted": true } } },
         {
             "name": "nested-typed",
@@ -92,6 +153,14 @@
         { "name": "bytes-outside-alphabet", "encoded": ["$lunora.wire$", "bytes", "not@@base64!!"] },
         { "name": "bytes-truncated-quantum", "encoded": ["$lunora.wire$", "bytes", "AQIDA"] },
         { "name": "bytes-padding-inside", "encoded": ["$lunora.wire$", "bytes", "AQ=ID"] },
-        { "name": "map-entry-too-short", "encoded": ["$lunora.wire$", "map", [["a"]]] }
+        { "name": "map-entry-too-short", "encoded": ["$lunora.wire$", "map", [["a"]]] },
+        { "name": "map-entry-too-long", "encoded": ["$lunora.wire$", "map", [["k", "v", "EXTRA"]]] },
+        { "name": "bytes-element-misaligned", "encoded": ["$lunora.wire$", "bytes", "AQID", "Float32Array"] },
+        { "name": "set-payload-not-array", "encoded": ["$lunora.wire$", "set", "xx"] },
+        { "name": "arr-payload-not-array", "encoded": ["$lunora.wire$", "arr", "xx"] },
+        { "name": "bigint-missing-payload", "encoded": ["$lunora.wire$", "bigint"] },
+        { "name": "bigint-non-ascii-digits", "encoded": ["$lunora.wire$", "bigint", "\u0663"] },
+        { "name": "error-props-not-object", "encoded": ["$lunora.wire$", "error", "Error", "boom", null] },
+        { "name": "error-missing-props", "encoded": ["$lunora.wire$", "error", "Error", "boom"] }
     ]
 }

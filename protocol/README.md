@@ -89,8 +89,30 @@ Notes that a port MUST honour:
 - **Depth** is capped at 64 levels (throw beyond). On decode, a `bigint` digit
   string is rejected beyond 1024 digits, and `__proto__` keys are assigned as
   plain data properties (never via the prototype setter).
+- **Map entries** are exactly two elements. A shorter or LONGER entry is
+  refused — a decoder that reads slots 0 and 1 out of a 3-element entry accepts
+  a frame the reference throws on.
+- **Duplicate map keys collapse, last value wins, at the FIRST occurrence's
+  position** — the reference decodes into a real `Map`, and `Map.prototype.set`
+  on a key already present overwrites in place. So
+  `[TAG, "map", [["a",1],["b",2],["a",3]]]` decodes to two entries and
+  re-encodes as `[["a",3],["b",2]]`. Keys collapse under SameValueZero: the
+  scalar kinds (`null`, `undefined`, boolean, number — `NaN` equal to itself —
+  string, `bigint`) compare by VALUE, and everything else (`Date`, `URL`, bytes,
+  a nested `Map`/`Set`, an object or array) compares by REFERENCE, so two
+  structurally identical non-scalar keys stay two entries.
+- **Error** `ownProps` is neither optional nor nullable: the reference reads it
+  with `Object.keys`, which throws on a missing or `null` slot, so a 4-element
+  error tag and `[TAG, "error", n, m, null]` are both refused.
+- **Typed arrays** must carry a whole number of elements: a payload whose byte
+  length is not a multiple of the named view's element size is refused, because
+  the reference builds the view with its real constructor and
+  `new Float32Array(buffer)` raises a `RangeError` on 3 bytes.
 - **Forward-compat**: an unknown tag is decoded as an ordinary array; an unknown
-  typed-array ctor name decodes to raw bytes.
+  typed-array ctor name decodes to raw bytes, DROPPING the name — so it
+  re-encodes as the 3-element `Uint8Array` form, not as the 4-element form it
+  arrived in. (A name it does not recognise carries no element size, so the
+  alignment rule above does not apply to it.)
 
 ### 2.2 Native-type mapping for a non-TS SDK
 
@@ -113,12 +135,15 @@ authoritative description; this is the summary.
 
 - **`cases[].reencoded`** — the expected re-encoding, for the shapes that are
   legitimately NOT fixed points of `encode(decode(encoded)) == encoded`. There
-  are exactly two: a bare `[TAG]` array, which is escaped on the way back out as
-  `[TAG, "arr", [TAG]]`, and an object field holding the `undefined` tag, which
-  is dropped (matching `JSON.stringify`). When a case carries `reencoded` the
-  assertion becomes `encode(decode(encoded)) == reencoded`. Without it those two
-  shapes were untestable, so no port was held to them and four decoded them
-  differently.
+  are four: a bare `[TAG]` array, which is escaped on the way back out as
+  `[TAG, "arr", [TAG]]`; an object field holding the `undefined` tag, which is
+  dropped (matching `JSON.stringify`); a `bytes` tag naming an unknown
+  typed-array ctor, which decodes to raw bytes and re-encodes without the name;
+  and a `map` carrying a duplicate key, which collapses last-wins. When a case
+  carries `reencoded` the assertion becomes
+  `encode(decode(encoded)) == reencoded`. Without it those shapes were
+  untestable, so no port was held to them — and four ports decoded the first two
+  differently, while all eight kept the ctor name and both duplicate entries.
 - **`rejected[]`** — wire values every conforming codec MUST refuse to decode.
   These are data for the same reason the case list is: a rejection each suite
   hard-codes for itself is a rejection only some suites have. The base64 entries

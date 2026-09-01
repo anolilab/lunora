@@ -439,6 +439,17 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     return BigInt(raw);
                 }
                 case "date": {
+                    // A conforming encoder always emits the payload slot. Without
+                    // this guard `[TAG,"date"]` decoded `undefined` into an Invalid
+                    // Date and re-encoded as `[TAG,"date",[TAG,"nan"]]` — inventing
+                    // a NaN timestamp out of a truncated frame, which is the silent
+                    // corruption this codec exists to refuse. Every non-JS port
+                    // already rejects it; this makes the reference agree rather than
+                    // asking eight languages to reproduce `new Date(undefined)`.
+                    if (value.length < 3) {
+                        throw new TypeError("wire-codec: malformed date — missing payload");
+                    }
+
                     return new Date(decodeWire(value[2], depth + 1) as number);
                 }
                 case "map": {
@@ -488,6 +499,17 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     // prototype. Mirror the object branch's `UNSAFE_KEY` guard so the
                     // value lands as an own data property instead (Cap'n Web #190).
                     const props = decodeWire(value[4], depth + 1) as Record<string, unknown>;
+
+                    // The props slot must be a real object. `Object.keys` on a
+                    // primitive is not an error in JS — it enumerates a string's
+                    // indices — so `[TAG,"error","E","m","ab"]` used to decode as
+                    // `{ 0: "a", 1: "b" }` here while every port produced `{}`. That
+                    // divergence is a JS accident, not a contract, and the honest
+                    // fix is to refuse the frame rather than teach eight languages
+                    // to reproduce it.
+                    if (props === null || typeof props !== "object" || Array.isArray(props)) {
+                        throw new TypeError("wire-codec: malformed error — props must be an object");
+                    }
 
                     for (const key of Object.keys(props)) {
                         if (key === UNSAFE_KEY) {

@@ -31,6 +31,25 @@ module Lunora
   # Applied only on decode — the untrusted direction.
   MAX_BIGINT_DIGITS = 1024
 
+  # Bytes per element for the typed-array views the codec round-trips. A view
+  # whose payload is not a whole number of elements is not a view the reference
+  # can rebuild -- new Float32Array(buffer) raises a RangeError there -- so
+  # accepting it would hand the consumer bytes it cannot reconstruct.
+  # ArrayBuffer is absent deliberately: it is untyped, so nothing to align.
+  TYPED_ARRAY_ELEMENT_SIZES = {
+    "BigInt64Array" => 8,
+    "BigUint64Array" => 8,
+    "Float32Array" => 4,
+    "Float64Array" => 8,
+    "Int16Array" => 2,
+    "Int32Array" => 4,
+    "Int8Array" => 1,
+    "Uint16Array" => 2,
+    "Uint32Array" => 4,
+    "Uint8Array" => 1,
+    "Uint8ClampedArray" => 1
+  }.freeze
+
   # Largest integer a float64 holds exactly (2**53 - 1). JSON numbers are
   # float64, so an integer past this cannot cross the wire as a number without
   # changing value — WireBigInt and its tag exist for that case.
@@ -196,17 +215,36 @@ module Lunora
     when "inf" then ::Float::INFINITY
     when "-inf" then -::Float::INFINITY
     when "bigint" then decode_bigint(value)
-    when "date" then WireDate.new(decode_wire(value[2], depth + 1))
-    when "url" then WireUrl.new(value[2])
+    when "date" then WireDate.new(decode_wire(payload(value, "date"), depth + 1))
+    when "url" then WireUrl.new(payload_of(value, "url", ::String))
     when "map" then decode_map(value, depth)
-    when "set" then WireSet.new(value[2].map { |item| decode_wire(item, depth + 1) })
+    when "set" then WireSet.new(payload_of(value, "set", ::Array).map { |item| decode_wire(item, depth + 1) })
     when "error" then decode_error(value, depth)
     when "bytes" then decode_bytes(value)
-    when "arr" then value[2].map { |item| decode_wire(item, depth + 1) }
+    when "arr" then payload_of(value, "arr", ::Array).map { |item| decode_wire(item, depth + 1) }
     else
       # Unknown tag (forward compatibility): an ordinary array.
       value.map { |item| decode_wire(item, depth + 1) }
     end
+  end
+
+  # The tag's payload slot, or a typed rejection when the array is too short.
+  def payload(value, tag)
+    raise WireFormatError, "wire-codec: malformed #{tag} tag" if value.length < 3
+
+    value[2]
+  end
+
+  # The payload slot, required to be of +type+.
+  #
+  # +value[2].map+ on a String payload raised a NoMethodError straight out of
+  # the codec — a rejection, but of a class that bypasses every
+  # +rescue WireFormatError+ a caller wraps a decode in.
+  def payload_of(value, tag, type)
+    slot = payload(value, tag)
+    raise WireFormatError, "wire-codec: malformed #{tag} tag" unless slot.is_a?(type)
+
+    slot
   end
 
   def decode_bigint(value)
@@ -224,26 +262,65 @@ module Lunora
   # truncated entry became a real entry holding null — a wrong answer where four
   # ports raise. Nothing here can tell that null from one the peer meant.
   def decode_map(value, depth)
-    raise WireFormatError, "wire-codec: malformed map tag" unless value[2].is_a?(::Array)
+    pairs = []
+    seen = {}
 
-    pairs = value[2].map do |entry|
-      raise WireFormatError, "wire-codec: malformed map entry" unless entry.is_a?(::Array) && entry.length >= 2
+    payload_of(value, "map", ::Array).each do |entry|
+      raise WireFormatError, "wire-codec: malformed map entry" unless entry.is_a?(::Array) && entry.length == 2
 
-      [decode_wire(entry[0], depth + 1), decode_wire(entry[1], depth + 1)]
+      key = decode_wire(entry[0], depth + 1)
+      item = decode_wire(entry[1], depth + 1)
+      identity = map_key_identity(key)
+
+      # Last write wins, at the FIRST occurrence's position — the reference
+      # builds a real Map, and Map.prototype.set on a key already present
+      # overwrites the value in place rather than appending. Keeping both
+      # entries left two peers of one deployment reading a different value from
+      # identical bytes.
+      if !identity.nil? && seen.key?(identity)
+        pairs[seen[identity]] = [key, item]
+        next
+      end
+
+      seen[identity] = pairs.length unless identity.nil?
+      pairs << [key, item]
     end
 
     WireMap.new(pairs)
   end
 
+  # A map key's collapse identity, or nil when it never collapses.
+  #
+  # The reference's Map compares keys by SameValueZero: primitives by value (NaN
+  # equal to itself), everything else by reference — so two structurally
+  # identical WireDate/bytes keys stay two entries there and must stay two here.
+  def map_key_identity(key)
+    case key
+    when nil then "null"
+    when true, false then "bool:#{key}"
+    when WireBigInt then "big:#{key.value}"
+    when ::Numeric then key.is_a?(::Float) && key.nan? ? "num:nan" : "num:#{key.to_f}"
+    when ::String then "str:#{key}"
+    else key.equal?(UNDEFINED) ? "undefined" : nil
+    end
+  end
+
+  # Decode an +error+ tag, refusing one with no props object.
+  #
+  # The props slot is not optional: the reference reads it with +Object.keys+,
+  # which throws on null or a missing slot, so quietly substituting {} accepted
+  # a frame the reference refuses.
   def decode_error(value, depth)
-    props = value.length > 4 ? decode_wire(value[4], depth + 1) : {}
+    raise WireFormatError, "wire-codec: malformed error tag" unless value.length > 4 && value[4].is_a?(::Hash)
+
+    props = decode_wire(value[4], depth + 1)
     cause = value.length > 5 ? decode_wire(value[5], depth + 1) : UNDEFINED
     WireError.new(value[2], value[3], props, cause)
   end
 
   def decode_bytes(value)
     begin
-      data = Base64.strict_decode64(value[2])
+      data = Base64.strict_decode64(payload_of(value, "bytes", ::String))
     rescue ::ArgumentError => e
       raise WireFormatError, "wire-codec: invalid base64 in bytes tag: #{e.message}"
     end
@@ -251,6 +328,20 @@ module Lunora
     # A plain Uint8Array is a binary Ruby String and re-encodes to the
     # 2-element form; every other view keeps its constructor name.
     return data.dup.force_encoding(::Encoding::BINARY) if ctor == "Uint8Array"
+
+    unless ctor == "ArrayBuffer"
+      size = TYPED_ARRAY_ELEMENT_SIZES[ctor]
+
+      # An UNKNOWN ctor name decodes to raw bytes, dropping the name — the
+      # forward-compat rule in protocol/README.md 2.1. Keeping it re-encoded a
+      # 4-element form the reference emits as 3, so the same value relayed
+      # through JS and through here produced different bytes.
+      return data.dup.force_encoding(::Encoding::BINARY) if size.nil?
+
+      if (data.bytesize % size) != 0
+        raise WireFormatError, "wire-codec: #{ctor} payload of #{data.bytesize} bytes is not a multiple of its #{size}-byte element"
+      end
+    end
 
     WireBytes.new(data.dup.force_encoding(::Encoding::BINARY), ctor)
   end
