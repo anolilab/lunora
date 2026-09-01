@@ -2907,8 +2907,15 @@ class LunoraClient {
     /**
      * Read a page of rows from one `.global()` table. `filters` AND-narrows the
      * page to rows matching each `column = value` eq constraint — the drill-down a
-     * facet-value click applies; the array is JSON-encoded into the `filters`
-     * query param and the values are bound server-side.
+     * facet-value click applies; the array is wire-encoded, JSON-encoded into the
+     * `filters` query param, and the values are bound server-side.
+     *
+     * The response is `decodeWire`d. The worker encodes it (`readGlobalTablePage`
+     * in `@lunora/d1`) because JSON cannot carry a `v.bigint()` column at all and
+     * silently flattens a `v.bytes()` one to `{}` — so without the decode here the
+     * grid renders the raw 3-element tagged array instead of the value. The shard
+     * browser's twin already pairs the same way through `rpc`; this is the global
+     * half of that symmetry.
      */
     public async readGlobalTablePage(options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }): Promise<GlobalTablePage> {
         this.assertOpen();
@@ -2924,10 +2931,10 @@ class LunoraClient {
         }
 
         if (options.filters !== undefined && options.filters.length > 0) {
-            params.set("filters", JSON.stringify(options.filters));
+            params.set("filters", JSON.stringify(encodeWire(options.filters)));
         }
 
-        return (await this.adminFetch(`${GLOBAL_TABLE_PATH}?${params.toString()}`, "GET")) as GlobalTablePage;
+        return decodeWire(await this.adminFetch(`${GLOBAL_TABLE_PATH}?${params.toString()}`, "GET")) as GlobalTablePage;
     }
 
     /**
@@ -2936,6 +2943,12 @@ class LunoraClient {
      * twin of the shard browser's facet. Hits the admin-gated
      * `GET /_lunora/admin/global/facet` endpoint; `column` is validated + bound
      * server-side. Powers the global data browser's facet sidebar.
+     *
+     * Wire-encoded/decoded on both legs for the same reason
+     * {@link LunoraClient.readGlobalTablePage} is: a facet over a BLOB column
+     * returns bytes, which `Response.json` flattens to `{}` — and since a facet
+     * value is exactly what a click sends back as a `filters` clause, that is a
+     * broken drill-down rather than a display glitch.
      */
     public async facetGlobalColumn(options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }): Promise<GlobalFacetResult> {
         this.assertOpen();
@@ -2947,10 +2960,10 @@ class LunoraClient {
         }
 
         if (options.filters !== undefined && options.filters.length > 0) {
-            params.set("filters", JSON.stringify(options.filters));
+            params.set("filters", JSON.stringify(encodeWire(options.filters)));
         }
 
-        return (await this.adminFetch(`${GLOBAL_FACET_PATH}?${params.toString()}`, "GET")) as GlobalFacetResult;
+        return decodeWire(await this.adminFetch(`${GLOBAL_FACET_PATH}?${params.toString()}`, "GET")) as GlobalFacetResult;
     }
 
     // --- Vector indexes admin -----------------------------------------------

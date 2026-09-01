@@ -117,6 +117,15 @@ const compileContains = <T>(reference: T, value: unknown, strategy: WhereSqlStra
     return strategy.containsExpr ? strategy.containsExpr(reference, term) : fragments.contains(reference, term);
 };
 
+/**
+ * `null` and `undefined` are the same value to SQL: a column holding NULL and a
+ * column absent from a JSON-blob document both read back as NULL, and a missing
+ * key binds NULL. Both take the null path below rather than one being bound
+ * verbatim — `undefined` reaching a driver is not a NULL, it is an unbindable
+ * value the DO's `stmt.raw(...)` rejects (or, worse, binds as one).
+ */
+const isSqlNull = (value: unknown): boolean => value === null || value === undefined;
+
 const compileComparator = <T>(
     reference: T,
     operator: string,
@@ -125,9 +134,21 @@ const compileComparator = <T>(
     strategy: WhereSqlStrategy<T>,
     fragments: WhereFragments<T>,
 ): T => {
-    // `= NULL` / `<> NULL` never match; map null comparisons to IS [NOT] NULL.
-    if (value === null) {
-        return fragments.nullCheck(reference, operator === "ne");
+    if (isSqlNull(value)) {
+        // `= NULL` / `<> NULL` never match, so THOSE two map to IS [NOT] NULL.
+        if (operator === "eq" || operator === "ne") {
+            return fragments.nullCheck(reference, operator === "ne");
+        }
+
+        // Every other comparator is UNKNOWN against NULL — `x > NULL` matches
+        // nothing — and that is what this emits. It used to fold the range
+        // comparators into `IS NULL` too, which is not a weaker answer but the
+        // OPPOSITE one: `col > NULL` matched every null row instead of none. A
+        // keyset seek over a nullable ordered column (`buildSeekWhere` emits
+        // `{ gt: <cursor value> }`, and a nullable column puts `null` there) then
+        // produced a page-2 predicate subsumed by its own first disjunct, so page
+        // 2 repeated page 1 forever and every non-null row was unreachable.
+        return fragments.constant(false);
     }
 
     return fragments.binary(reference, comparator, strategy.serialize(value));
@@ -191,7 +212,7 @@ const compileField = <T>(field: string, value: unknown, strategy: WhereSqlStrate
         return compileFieldOperators(reference, value, strategy, fragments);
     }
 
-    if (value === null) {
+    if (isSqlNull(value)) {
         return [fragments.nullCheck(reference, false)];
     }
 

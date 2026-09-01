@@ -14,6 +14,15 @@
  * Everything here is I/O-free and dialect-agnostic: the seek predicate is
  * emitted as a {@link WhereInput} so the shared drizzle compiler
  * (`compileWhereSql`) renders it per dialect.
+ *
+ * One thing it is NOT free of is the dialect's NULL ordering. A keyset seek has
+ * to place NULLs exactly where the ORDER BY does or a nullable ordered column
+ * cannot be paged at all, and neither ORDER BY builder emits an explicit
+ * `NULLS FIRST`/`NULLS LAST`. {@link pivotCondition} therefore assumes the
+ * SQLite/MySQL default (NULLs first ascending, last descending), which covers
+ * both stores that page with these cursors. Postgres defaults the other way, so
+ * a nullable ordered column there needs its ORDER BY made explicit before the
+ * two agree.
  */
 import { LunoraError } from "@lunora/errors";
 
@@ -175,11 +184,77 @@ const decodeCursor = (cursor: string): unknown[] => {
 };
 
 /**
+ * Framework columns the store stamps on every row, so a seek over one never
+ * needs {@link pivotCondition}'s NULL arm.
+ *
+ * That arm is correct but not free: `OR col IS NULL` on the pivot is a second
+ * disjunct the planner cannot answer from the same index range, and the DEFAULT
+ * ordering (`_creationTime DESC` plus the `id` tiebreak) is the hot path every
+ * unordered `paginate` takes. Both of those columns are written by the store
+ * itself and can never be null, so the arm would only ever cost — a user-declared
+ * ordered column, which is the one that can actually hold NULL, still gets it.
+ */
+const NEVER_NULL_FIELDS = new Set(["_creationTime", "_id", "id"]);
+
+/**
+ * The pivot comparison for ONE column of the lexicographic seek: the rows on the
+ * wanted side of `value` under this column's direction.
+ *
+ * `wantLater` is which side is being sought — `true` for the strict "after"
+ * seek, `false` for the mirrored "at or before" bound. `inclusive` applies to the
+ * terminal column only, so a page's own end cursor stays inside the page it
+ * terminates.
+ *
+ * NULL is why this is not a comparator lookup. `col > NULL` and `col < NULL` are
+ * both UNKNOWN, so no comparator expresses either side of a NULL pivot, and none
+ * matches a NULL row sitting on the far side of a non-null pivot — a nullable
+ * ordered column cannot be paged without writing the ordering's NULL placement
+ * out. Neither ORDER BY builder emits `NULLS FIRST`/`NULLS LAST`, so the dialect
+ * default stands: SQLite and MySQL sort NULLs FIRST ascending, LAST descending.
+ * Hence a non-null row is on the wanted side of a NULL pivot exactly when
+ * `ascending === wantLater`, and NULL rows are on the wanted side of a non-null
+ * pivot exactly when it is not.
+ *
+ * `undefined` is the same pivot as `null`: a column absent from a document reads
+ * back as SQL NULL, and {@link encodeCursor} takes the ordered field verbatim, so
+ * an absent one arrives here as `undefined`.
+ */
+const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, inclusive: boolean): WhereInput => {
+    const { field } = column;
+    const nonNullWanted = (column.direction !== "desc") === wantLater;
+
+    if (value === null || value === undefined) {
+        if (nonNullWanted) {
+            // Inclusive at a NULL pivot is "the non-nulls, plus the NULL group itself" — every row.
+            return inclusive ? { OR: [{ [field]: { isNull: false } }, { [field]: { isNull: true } }] } : { [field]: { isNull: false } };
+        }
+
+        // Nothing sorts past NULL on this side; inclusive still keeps the NULL group.
+        return inclusive ? { [field]: { isNull: true } } : { OR: [] };
+    }
+
+    let operator = nonNullWanted ? "gt" : "lt";
+
+    if (inclusive) {
+        operator = nonNullWanted ? "gte" : "lte";
+    }
+
+    const comparison: WhereInput = { [field]: { [operator]: value } };
+
+    if (nonNullWanted || NEVER_NULL_FIELDS.has(field)) {
+        return comparison;
+    }
+
+    // The NULL rows sort on the wanted side of this pivot and no comparator can reach them.
+    return { OR: [comparison, { [field]: { isNull: true } }] };
+};
+
+/**
  * Shared lexicographic-seek builder behind {@link buildSeekWhere} /
  * {@link buildSeekBeforeWhere}: one disjunct per pivot column, each ANDing the
- * prefix equalities with the pivot comparison `operatorFor` chooses.
+ * prefix equalities with the pivot comparison for the side being sought.
  */
-const buildSeek = (keys: OrderKey[], cursorValues: unknown[], operatorFor: (direction: SortDirection, isFinal: boolean) => string): WhereInput => {
+const buildSeek = (keys: OrderKey[], cursorValues: unknown[], wantLater: boolean, inclusiveFinal: boolean): WhereInput => {
     const columns: OrderKey[] = keys.some((key) => ID_FIELDS.has(key.field))
         ? keys
         : [...keys, { direction: tiebreakDirectionFor(keys), field: TIEBREAK_FIELD }];
@@ -193,9 +268,7 @@ const buildSeek = (keys: OrderKey[], cursorValues: unknown[], operatorFor: (dire
             conditions.push({ [prefixColumn.field]: { eq: cursorValues[prefix] } });
         }
 
-        const operator = operatorFor(pivotColumn.direction, pivot === columns.length - 1);
-
-        conditions.push({ [pivotColumn.field]: { [operator]: cursorValues[pivot] } });
+        conditions.push(pivotCondition(pivotColumn, cursorValues[pivot], wantLater, inclusiveFinal && pivot === columns.length - 1));
 
         // Wrap multi-condition branches so each disjunct is explicitly grouped
         // rather than leaning on SQL's AND-over-OR precedence.
@@ -211,24 +284,10 @@ const buildSeek = (keys: OrderKey[], cursorValues: unknown[], operatorFor: (dire
  * Build the `where` tree that selects rows strictly after the cursor under the
  * given sort. For keys `[a ASC, b DESC]` (plus the id tiebreak) it expands to
  * the lexicographic seek `(a > ?) OR (a = ? AND b < ?) OR (a = ? AND b = ? AND id > ?)`,
- * letting the shared compiler render it per dialect.
+ * letting the shared compiler render it per dialect. A nullable ordered column
+ * swaps its comparator for the NULL-aware form — see {@link pivotCondition}.
  */
-const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput =>
-    buildSeek(keys, cursorValues, (direction) => (direction === "desc" ? "lt" : "gt"));
-
-/**
- * The per-column comparator {@link buildSeekBeforeWhere} emits: every column
- * runs in the mirror direction of the strict seek (asc → `lt`, desc → `gt`),
- * except the final id tiebreak which is inclusive (`lte`/`gte`) so the boundary
- * row stays inside the page.
- */
-const seekBeforeOperator = (direction: SortDirection, isFinal: boolean): string => {
-    if (direction === "desc") {
-        return isFinal ? "gte" : "gt";
-    }
-
-    return isFinal ? "lte" : "lt";
-};
+const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => buildSeek(keys, cursorValues, true, false);
 
 /**
  * Build the `where` tree that selects rows at-or-before the cursor under the
@@ -241,7 +300,7 @@ const seekBeforeOperator = (direction: SortDirection, isFinal: boolean): string 
  * the page it terminates. Reactive pagination uses this for a page's fixed end
  * cursor; the shared compiler renders it per dialect.
  */
-const buildSeekBeforeWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => buildSeek(keys, cursorValues, seekBeforeOperator);
+const buildSeekBeforeWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => buildSeek(keys, cursorValues, false, true);
 
 /** System fields a `select` projection always retains so cursors + by-id reuse keep working. */
 const SELECT_SYSTEM_FIELDS = ["_id", "_creationTime"] as const;

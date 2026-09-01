@@ -112,9 +112,16 @@ describe("buildSeekWhere", () => {
         // the seek has to select rows below the cursor on BOTH terms. A seek that
         // disagreed with its own ORDER BY here would skip or repeat rows at a page
         // boundary that lands inside a group of equal `createdAt`.
+        //
+        // `OR createdAt IS NULL` on the pivot, and NOT on the `id` tiebreak:
+        // SQLite sorts NULLs LAST descending, so a null-scored row sits AFTER
+        // every value the comparator can reach and no comparator will ever match
+        // it — the descending page would simply stop at the last non-null row. The
+        // tiebreak is the framework `id`, which is never null, so it is spared the
+        // arm (see `NEVER_NULL_FIELDS`).
         expect(compiled).toEqual({
             params: [1700, 1700, "row_42"],
-            sql: `(${json("createdAt")} < ?) OR ((${json("createdAt")} = ?) AND (id < ?))`,
+            sql: `((${json("createdAt")} < ?) OR (${json("createdAt")} IS NULL)) OR ((${json("createdAt")} = ?) AND (id < ?))`,
         });
     });
 
@@ -131,8 +138,11 @@ describe("buildSeekWhere", () => {
         const compiled = compile(where);
 
         // Balanced grouping (see `joinClauses`); same terms, same param order.
+        // `a` is ascending, so its NULLs sort BEFORE the cursor and the seek is
+        // already past them — no null arm. `b` is descending, so its NULLs sort
+        // after and it gets one.
         expect(compiled.sql).toBe(
-            `(${json("a")} > ?) OR (((${json("a")} = ?) AND (${json("b")} < ?)) OR ((${json("a")} = ?) AND ((${json("b")} = ?) AND (id < ?))))`,
+            `(${json("a")} > ?) OR (((${json("a")} = ?) AND ((${json("b")} < ?) OR (${json("b")} IS NULL))) OR ((${json("a")} = ?) AND ((${json("b")} = ?) AND (id < ?))))`,
         );
         expect(compiled.params).toEqual(["av", "av", "bv", "av", "bv", "row_1"]);
     });
@@ -144,5 +154,52 @@ describe("buildSeekWhere", () => {
         const compiled = compile(where);
 
         expect(compiled).toEqual({ params: ["row_1"], sql: "id > ?" });
+    });
+
+    it("a null pivot value seeks past the null group instead of selecting it", () => {
+        expect.assertions(1);
+
+        const where = buildSeekWhere([{ direction: "asc", field: "createdAt" }], [null, "row_42"]);
+        const compiled = compile(where);
+
+        // `IS NOT NULL`, not `IS NULL`. Every comparator used to fold a null
+        // operand into `IS [NOT] NULL`, which is right for `eq`/`ne` and the exact
+        // inverse for a range seek: `createdAt IS NULL` matched the whole null
+        // group, subsuming the tiebreak branch, so page 2 repeated page 1 forever
+        // and no non-null row was ever reachable.
+        expect(compiled).toEqual({
+            params: ["row_42"],
+
+            sql: `(${json("createdAt")} IS NOT NULL) OR ((${json("createdAt")} IS NULL) AND (id > ?))`,
+        });
+    });
+
+    it("an absent ordered field is the same pivot as null, and binds nothing", () => {
+        expect.assertions(2);
+
+        // `encodeCursor` reads the ordered field off the document verbatim, so a
+        // column the document omits arrives as `undefined` — which used to reach
+        // the driver as a bound parameter (`Provided value cannot be bound`).
+        const where = buildSeekWhere([{ direction: "asc", field: "createdAt" }], [undefined, "row_42"]);
+        const compiled = compile(where);
+
+        expect(compiled.params).toEqual(["row_42"]);
+        expect(compiled.params).not.toContain(undefined);
+    });
+
+    it("a descending null pivot has nothing after it but the tiebreak", () => {
+        expect.assertions(1);
+
+        // NULLs sort LAST descending, so nothing outside the null group follows
+        // this cursor — the pivot branch is unsatisfiable and only the tiebreak
+        // can advance.
+
+        const where = buildSeekWhere([{ direction: "desc", field: "createdAt" }], [null, "row_42"]);
+        const compiled = compile(where);
+
+        expect(compiled).toEqual({
+            params: ["row_42"],
+            sql: `(0 = 1) OR ((${json("createdAt")} IS NULL) AND (id < ?))`,
+        });
     });
 });

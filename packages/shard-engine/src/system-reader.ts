@@ -49,14 +49,28 @@ interface ScheduledFunctionDoc {
     attempts?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
-    /** Fully-qualified path of the function to invoke. */
-    functionPath: string;
+
+    /**
+     * Fully-qualified `ns:fn` path of the function to invoke. Absent when the job
+     * targets a durable workflow/agent instead — exactly one of `functionPath` /
+     * {@link ScheduledFunctionDoc.workflow} is set on any given row.
+     */
+    functionPath?: string;
     /** The job's id (the `_scheduled_functions` row id). */
     id: string;
+    /** Logical workpool the job is concurrency-gated by, when any. */
+    pool?: string;
     /** When the job is scheduled to fire (epoch ms). */
     scheduledFor: number;
     /** Routing hint forwarded so dispatch lands on the right shard. */
     shardKey?: string;
+
+    /**
+     * The `WORKFLOW_*`/`AGENT_*` binding a fresh durable instance is started from
+     * on fire (the {@link ScheduledFunctionDoc.args} become its `params`). Set
+     * instead of {@link ScheduledFunctionDoc.functionPath}.
+     */
+    workflow?: string;
 }
 
 /**
@@ -150,13 +164,14 @@ interface SystemReaderOptions {
 /**
  * Map a scheduler record (shape-compatible with `ScheduleRecord` / `ScheduledJob`)
  * onto the documented {@link ScheduledFunctionDoc}. Reads through `unknown` so a
- * structurally-typed source still maps cleanly.
+ * structurally-typed source still maps cleanly. Optional fields are copied only
+ * when the record actually carries them — an absent value stays absent rather
+ * than being coerced to a placeholder.
  */
 const toScheduledFunctionDoc = (record: Record<string, unknown>): ScheduledFunctionDoc => {
     const doc: ScheduledFunctionDoc = {
         args: (record["args"] as Record<string, unknown> | undefined) ?? {},
         enqueuedAt: typeof record["enqueuedAt"] === "number" ? record["enqueuedAt"] : 0,
-        functionPath: typeof record["functionPath"] === "string" ? record["functionPath"] : "",
         id: typeof record["id"] === "string" ? record["id"] : "",
         scheduledFor: typeof record["scheduledFor"] === "number" ? record["scheduledFor"] : 0,
     };
@@ -165,8 +180,24 @@ const toScheduledFunctionDoc = (record: Record<string, unknown>): ScheduledFunct
         doc.attempts = record["attempts"];
     }
 
+    // Copied only when present: a workflow-targeted job has no `functionPath`,
+    // and inventing `""` for it made every such row look like a function whose
+    // path happened to be empty — a caller matching on the path (a dedupe check
+    // before enqueueing) silently never matched and scheduled a duplicate.
+    if (typeof record["functionPath"] === "string") {
+        doc.functionPath = record["functionPath"];
+    }
+
+    if (typeof record["pool"] === "string") {
+        doc.pool = record["pool"];
+    }
+
     if (typeof record["shardKey"] === "string") {
         doc.shardKey = record["shardKey"];
+    }
+
+    if (typeof record["workflow"] === "string") {
+        doc.workflow = record["workflow"];
     }
 
     return doc;

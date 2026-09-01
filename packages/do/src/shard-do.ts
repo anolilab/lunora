@@ -1447,10 +1447,17 @@ abstract class ShardDO {
      * Set once a mutation's replay bookkeeping (idempotency row + watermark
      * advance) has committed INSIDE the handler transaction, so the post-dispatch
      * path skips the now-redundant best-effort writes. Cleared per request; stays
-     * `false` for actions/queries (no transaction wrapper) so their dispatch-level
-     * idempotency persist still runs.
+     * `undefined` for actions/queries (no transaction wrapper) so their
+     * dispatch-level idempotency persist still runs.
+     *
+     * It carries the committing dispatch's `x-lunora-mutation-id` rather than being
+     * a bare boolean, because this is a SHARED field on an instance that serves
+     * concurrent dispatches — see {@link ShardDO.recordPostDispatchBookkeeping} for
+     * what a bare boolean let a concurrent mutation do to an action's replay guard.
+     * A mutation carrying no id records `{ mutationId: undefined }`, which is still
+     * distinguishable from "nothing committed".
      */
-    private mutationBookkeepingCommitted = false;
+    private mutationBookkeeping: { mutationId: string | undefined } | undefined;
 
     /**
      * Wall-clock millis of the last `__idempotency` GC sweep on this warm
@@ -1577,6 +1584,20 @@ abstract class ShardDO {
      * never be poked as a `delete`, lingering on the client as a phantom row.
      */
     private readonly globalShapeSnapshots = new WeakMap<ShardSocketLike, Map<string, Map<string, string>>>();
+
+    /**
+     * Whether the `__global_shape_snapshot` table has actually answered a read on
+     * this instance.
+     *
+     * Separates "the durable row is missing" from "there is no durable store at
+     * all". A unit harness passes a stub `sql` handle, so every snapshot read and
+     * write throws and the baseline lives only in
+     * {@link ShardDO.globalShapeSnapshots} — the documented pre-durable behaviour,
+     * and not something to log or to treat as a lost baseline. On a real shard the
+     * table is created by migration, so the first read sets this and a missing row
+     * from then on means exactly what it says.
+     */
+    private durableSnapshotStoreAvailable = false;
 
     /**
      * Whether a global-shape poll alarm is currently armed. Guards
@@ -3705,8 +3726,8 @@ abstract class ShardDO {
      * but before the transaction commits, so the writes, the dedup row, and the
      * watermark land in one atomic commit: a crash can't leave the writes durable
      * without the replay guard (which a re-dispatch would otherwise re-run) nor
-     * without the watermark. Sets {@link ShardDO.mutationBookkeepingCommitted} so
-     * `fetch` skips the redundant post-dispatch persist.
+     * without the watermark. Records {@link ShardDO.mutationBookkeeping} under this
+     * dispatch's mutation id so `fetch` skips the redundant post-dispatch persist.
      */
     protected commitMutationBookkeeping(result: unknown): void {
         this.persistIdempotentResult(result);
@@ -3717,7 +3738,7 @@ abstract class ShardDO {
             this.advanceClientMutationWatermark({ strict: true });
         }
 
-        this.mutationBookkeepingCommitted = true;
+        this.mutationBookkeeping = { mutationId: this.currentRequestMutationId };
     }
 
     /**
@@ -3727,9 +3748,24 @@ abstract class ShardDO {
      * sets the flag), so this skips. Actions/queries aren't transaction-wrapped,
      * so they record their dedup row here (a no-op without an `x-lunora-mutation-id`),
      * and a `"next"` push advances its watermark (the gap self-heals on replay).
+     *
+     * The skip is matched on the MUTATION ID, not on a bare "someone committed"
+     * flag. A Durable Object serves concurrent `fetch`es over one instance, and
+     * only mutation FUNCTIONS take the `runSerialized` gate — an action carrying an
+     * `x-lunora-mutation-id` dispatches straight through. So a mutation could
+     * commit its bookkeeping while such an action sat on an await, and the action's
+     * tail then read the shared flag as its own, skipped its `__idempotency` write,
+     * and left a client retry free to re-run the handler (a second charge, a second
+     * outbound call). `currentRequestMutationId` is re-pinned from this dispatch's
+     * `RequestScope` immediately above the call, so comparing against it asks the
+     * question that actually matters: did MY dispatch already commit?
+     *
+     * The comparison can only ever be wrong in the safe direction. A sibling
+     * dispatch's prologue clearing the record makes this re-run a write that is
+     * idempotent by construction; nothing makes it skip a write it owes.
      */
     protected recordPostDispatchBookkeeping(result: unknown, mutatorClass: ClientMutationClass | undefined): void {
-        if (this.mutationBookkeepingCommitted) {
+        if (this.mutationBookkeeping !== undefined && this.mutationBookkeeping.mutationId === this.currentRequestMutationId) {
             return;
         }
 
@@ -5355,18 +5391,44 @@ abstract class ShardDO {
                 return;
             }
 
+            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
+            // before handing them to the stream handler — mirrors the `/rpc` path,
+            // and the `subscribe` / `shape_subscribe` branches above.
+            //
+            // Decoded into a local FIRST, not inline in the call below. `decodeWire`
+            // throws a `RangeError` on an over-long bigint or past its 64-level
+            // nesting cap, and inline it threw during ARGUMENT EVALUATION — before
+            // `handleStream` had returned a promise, so the trailing `.catch()`
+            // could not see it. Neither `handleWebSocketMessage` nor
+            // `webSocketMessage` wraps this, so under the hibernation API one
+            // malformed frame killed the whole socket instead of failing one stream.
+            let streamArgs: Record<string, unknown>;
+
+            try {
+                streamArgs = decodeWire(envelope.query.args ?? {}) as Record<string, unknown>;
+            } catch {
+                trySendFrame(
+                    ws,
+                    JSON.stringify({
+                        error: { code: "BAD_SUBSCRIPTION_ARGS", message: "stream args failed wire decoding" },
+                        id: envelope.id,
+                        type: "error",
+                    }),
+                );
+
+                return;
+            }
+
             // Fire-and-forget: handleStream owns its own error reporting (it
             // sends `type:"error"` frames to the socket). The trailing no-op
             // catch only guards the rare pre-try throw path (e.g. ws.send on a
             // socket the runtime already tore down) so a dead socket can't
             // surface as an unhandled rejection.
-            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
-            // before handing them to the stream handler — mirrors the `/rpc` path.
             this.handleStream(
                 ws,
                 envelope.id,
                 envelope.query.functionPath,
-                decodeWire(envelope.query.args ?? {}) as Record<string, unknown>,
+                streamArgs,
                 // Client input: a non-integer or negative watermark would seed
                 // `delivered` past real chunks and silently truncate the stream,
                 // so it is normalised here rather than trusted.
@@ -9919,8 +9981,29 @@ abstract class ShardDO {
             return;
         }
 
-        const previous = this.readGlobalSnapshot(ws, subId, connectionId);
+        const { lost, snapshot: previous } = this.readGlobalSnapshot(ws, subId, connectionId);
         const { next, rowsPatch } = diffGlobalMembership(rows, previous, { columns: resolved.columns, table: resolved.table });
+
+        // A lost baseline (see `readGlobalSnapshot`) makes the diff a fiction: it
+        // is computed against an empty map, so it can emit an `insert` for every
+        // surviving row and a `delete` for none — and a row that left the shape
+        // while this DO slept would stay on the client for the life of the tab.
+        // Send the membership as a full `reset` instead, which is the one frame
+        // that drops what the client still holds. Same shape the seed uses.
+        if (lost) {
+            await awaitWsDrain(ws);
+
+            if (this.sendPoke(ws, [{ reset: true, rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined)) {
+                this.recordGlobalSnapshot(ws, subId, next);
+                this.saveGlobalSnapshot(connectionId, subId, next);
+
+                return;
+            }
+
+            tick.requestResync();
+
+            return;
+        }
 
         if (rowsPatch.length === 0) {
             // Unchanged tick: membership equals `previous`, so refreshing the
@@ -9958,18 +10041,27 @@ abstract class ShardDO {
      * `connectionId` (a socket that never went through the lifecycle-aware upgrade,
      * e.g. a unit harness) skips the durable read and behaves as in-memory-only.
      */
-    private readGlobalSnapshot(ws: ShardSocketLike, subId: string, connectionId: string): Map<string, string> {
+    private readGlobalSnapshot(ws: ShardSocketLike, subId: string, connectionId: string): { lost: boolean; snapshot: Map<string, string> } {
         const cached = this.globalShapeSnapshots.get(ws)?.get(subId);
 
         if (cached) {
-            return cached;
+            return { lost: false, snapshot: cached };
         }
 
         const stored = this.loadGlobalSnapshot(connectionId, subId);
+        const snapshot = stored ?? new Map<string, string>();
 
-        this.recordGlobalSnapshot(ws, subId, stored);
+        this.recordGlobalSnapshot(ws, subId, snapshot);
 
-        return stored;
+        // `lost` = both copies of this subscription's baseline are gone: the
+        // in-memory one to a hibernation eviction, the durable one because the
+        // read found no row (a persist that failed, or a socket evicted before
+        // its first save). Only a poll tick that KNOWS its baseline is missing
+        // can avoid diffing against a fabricated empty one — see
+        // `refreshGlobalShape`. `undefined` from `loadGlobalSnapshot` means the
+        // durable path itself is unavailable (a stub `sql`, a connection-id-less
+        // harness socket), which is in-memory-only mode, not a lost baseline.
+        return { lost: stored === undefined && this.durableSnapshotStoreAvailable, snapshot };
     }
 
     /** Record a socket's latest global-shape membership snapshot in the in-memory cache (creating the per-socket map lazily). */
@@ -9978,28 +10070,42 @@ abstract class ShardDO {
     }
 
     /**
-     * Load a durable global-shape baseline from SQLite, or an empty map when none
+     * Load a durable global-shape baseline from SQLite, or `undefined` when no row
      * is stored / the durable path is unavailable. A stub `sql` handle (unit
      * harness) or a missing table degrades to in-memory-only behavior rather than
-     * failing the poll tick.
+     * failing the poll tick — and marks the durable store unavailable, so
+     * {@link ShardDO.readGlobalSnapshot} does not mistake it for a lost baseline.
      */
-    private loadGlobalSnapshot(connectionId: string, subId: string): Map<string, string> {
+    private loadGlobalSnapshot(connectionId: string, subId: string): Map<string, string> | undefined {
         if (connectionId === "") {
-            return new Map<string, string>();
+            return undefined;
         }
 
         try {
-            return readGlobalShapeSnapshot(this.sql as SqlExec, connectionId, subId);
+            const stored = readGlobalShapeSnapshot(this.sql as SqlExec, connectionId, subId);
+
+            this.durableSnapshotStoreAvailable = true;
+
+            return stored;
         } catch {
-            return new Map<string, string>();
+            this.durableSnapshotStoreAvailable = false;
+
+            return undefined;
         }
     }
 
     /**
      * Persist a socket's global-shape baseline to SQLite so the poll-loop diff
-     * survives hibernation. A no-op for a connection-id-less socket or a stub
-     * `sql` handle (the in-memory cache then carries the baseline for the DO's
-     * lifetime, matching the pre-durable behavior).
+     * survives hibernation. A no-op for a connection-id-less socket (the in-memory
+     * cache then carries the baseline for the DO's lifetime, matching the
+     * pre-durable behavior).
+     *
+     * A failure is LOGGED rather than swallowed. It used to be neither reported
+     * nor observable: the in-memory cache had already advanced past it, so the
+     * shape kept diffing correctly for the life of the instance and only lost its
+     * deletes after a hibernation eviction, arbitrarily later and nowhere near the
+     * write that failed. The over-cap refusal from `writeGlobalShapeSnapshot`
+     * names the subscription to narrow.
      */
     private saveGlobalSnapshot(connectionId: string, subId: string, snapshot: Map<string, string>): void {
         if (connectionId === "") {
@@ -10008,8 +10114,13 @@ abstract class ShardDO {
 
         try {
             writeGlobalShapeSnapshot(this.sql as SqlExec, connectionId, subId, snapshot);
-        } catch {
-            /* stub sql / missing table — degrade to in-memory cache only */
+            this.durableSnapshotStoreAvailable = true;
+        } catch (error: unknown) {
+            // A stub `sql` handle (unit harness) has no durable store at all —
+            // that is in-memory-only mode, not a failure worth logging.
+            if (this.durableSnapshotStoreAvailable) {
+                this.recordShapeError(`shape:snapshot:${subId}`, error);
+            }
         }
     }
 
@@ -10189,7 +10300,7 @@ abstract class ShardDO {
         // classification + flag for a mutation push so the writes, dedup row, and
         // watermark advance all commit atomically (see `commitMutationBookkeeping`).
         this.currentMutatorClass = undefined;
-        this.mutationBookkeepingCommitted = false;
+        this.mutationBookkeeping = undefined;
         this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
         // The caller's IP, forwarded server-side from Cloudflare's trusted
         // `CF-Connecting-IP` (never copied from a client header). Surfaced as
@@ -10275,7 +10386,7 @@ abstract class ShardDO {
         this.currentRequestClientId = undefined;
         this.currentRequestClientSeq = undefined;
         this.currentMutatorClass = undefined;
-        this.mutationBookkeepingCommitted = false;
+        this.mutationBookkeeping = undefined;
         this.currentRequestIdentity = undefined;
         this.currentRequestIp = undefined;
         this.currentRequestSystem = false;

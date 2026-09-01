@@ -390,6 +390,53 @@ describe("shardDO global-shape poll tier", () => {
         expect(pokeOps(ws)).toStrictEqual([{ key: "t2", op: "delete", table: "things" }]);
     });
 
+    it("a lost durable baseline re-seeds with `reset` instead of diffing against an empty one", async () => {
+        expect.assertions(3);
+
+        migrateGlobalShapeSnapshot(harness.sql);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-1", subs: {} };
+        sockets.push(ws);
+
+        shard.rows = [
+            { doc: { _id: "t1", label: "a" }, id: "t1" },
+            { doc: { _id: "t2", label: "b" }, id: "t2" },
+        ];
+        await subscribeShape(shard, ws);
+
+        // The baseline row is GONE while the subscription is still live — what a
+        // swallowed persist failure leaves behind (the snapshot write threw, the
+        // in-memory cache advanced past it anyway, and the eviction took that copy
+        // with it). Deleting the row reproduces that state exactly.
+        harness.sql.exec(`DELETE FROM "__global_shape_snapshot"`);
+
+        const woken = new GlobalShapeShard(makeState([ws]), {});
+
+        // t2 left the global backend while the DO slept.
+        woken.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        ws.sent.length = 0;
+
+        await woken.alarm();
+
+        // Diffing against a fabricated empty baseline can emit an `insert` for
+        // every surviving row and a `delete` for none, so t2 would have stayed on
+        // the client for the life of the tab. `reset` is the one frame that drops
+        // what the client still holds.
+        expect(partResets(ws)).toStrictEqual([true]);
+        expect(pokeOps(ws)).toStrictEqual([{ key: "t1", op: "insert", table: "things", value: expect.objectContaining({ _id: "t1", label: "a" }) }]);
+
+        // And the recovered baseline persists, so the next tick is an ordinary diff again.
+        ws.sent.length = 0;
+        woken.rows = [];
+        await woken.alarm();
+
+        expect(pokeOps(ws)).toStrictEqual([{ key: "t1", op: "delete", table: "things" }]);
+    });
+
     it("does not re-arm the alarm once the global shape is unsubscribed", async () => {
         expect.assertions(2);
 
