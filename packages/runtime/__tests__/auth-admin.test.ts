@@ -167,6 +167,28 @@ describe("createWorker — auth admin mutation endpoints", () => {
         expect(admin.banUser).toHaveBeenCalledWith(expect.objectContaining({ reason: "spam", userId: "u1" }));
     });
 
+    it("marks every auth admin reply no-store — they carry session tokens and PII", async () => {
+        expect.assertions(3);
+
+        const admin = authAdmin();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: admin, shardDO: noopNamespace });
+
+        // `impersonate` hands back a live session bearer token for an arbitrary user
+        // and `users` returns PII. Under `adminGate` (Cloudflare Access) the request
+        // carries a cookie/JWT and no `Authorization` header, so RFC 9111's
+        // shared-cache suppression does not apply and an intermediary is free to
+        // store the reply. The two inline admin routes in `create-worker.ts` already
+        // set `no-store`; this plane did not.
+        const impersonate = await worker.fetch(post("https://app.example/_lunora/admin/auth/users/impersonate", { userId: "u1" }), {}, fakeContext);
+
+        expect(impersonate.status).toBe(200);
+        expect(impersonate.headers.get("cache-control")).toBe("no-store");
+
+        const users = await worker.fetch(authed("https://app.example/_lunora/admin/auth/users"), {}, fakeContext);
+
+        expect(users.headers.get("cache-control")).toBe("no-store");
+    });
+
     it("revokes a single session by id", async () => {
         expect.assertions(2);
 

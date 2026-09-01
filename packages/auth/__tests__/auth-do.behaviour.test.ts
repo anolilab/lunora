@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthDoOptions } from "../src/auth-do";
 import { INTERNAL_SECRET_HEADER, LunoraAuthDO, READ_AUDIT_PATH, RESOLVE_SESSION_PATH } from "../src/auth-do";
 import type { LunoraAuthOptions } from "../src/create-auth";
+import { createDoAuthWiring } from "../src/do-wiring";
 import { admin } from "../src/plugins";
 import createDoStorage from "./helpers/do-storage";
 
@@ -161,6 +162,69 @@ describe("lunoraAuthDO", () => {
         });
 
         await expect(resolved.json()).resolves.toMatchObject({ userId: expect.any(String) });
+    });
+
+    it("answers with the session expiry and role, not just the user id", async () => {
+        expect.assertions(3);
+
+        const { authDo } = createDo({ emailAndPassword: { enabled: true }, plugins: [admin()] });
+
+        const signUp = await authDo.fetch(
+            new Request("https://example.test/api/auth/sign-up/email", {
+                body: JSON.stringify({ email: "grace@acme.test", name: "Grace", password: "correct-horse-battery" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+        const cookie = (signUp.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+        const resolved = await resolveSession(authDo, { cookie, [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET });
+        const body: { expiresAtMs?: number; role?: string; userId?: string } = await resolved.json();
+
+        expect(body.userId).toEqual(expect.any(String));
+
+        // `expiresAtMs` becomes the socket's credential expiry (`x-lunora-identity-exp`).
+        // Without it the DO's expiry check is permanently false, so a signed-out,
+        // banned or lapsed user keeps streaming their RLS-scoped rows over an already
+        // open WebSocket while every HTTP call is anonymous.
+        expect(body.expiresAtMs).toBeGreaterThan(Date.now());
+
+        // `role` is what `readIdentityRoles` reads for RLS role grants. The D1 wiring
+        // forwards it; dropping it here made `.auth({ d1 })` -> `.auth({ namespace })`
+        // silently turn every role-based grant off.
+        expect(body.role).toBe("user");
+    });
+
+    it("drives the real worker-side wiring end to end, expiry and role intact", async () => {
+        expect.assertions(2);
+
+        const { authDo } = createDo({ emailAndPassword: { enabled: true }, plugins: [admin()] });
+
+        const signUp = await authDo.fetch(
+            new Request("https://example.test/api/auth/sign-up/email", {
+                body: JSON.stringify({ email: "linus@acme.test", name: "Linus", password: "correct-horse-battery" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+        const cookie = (signUp.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+
+        // The real wiring, over the real object — no stubbed session payload. This is
+        // the identity `createWorker` turns into `x-lunora-userid` /
+        // `x-lunora-identity` / `x-lunora-identity-exp`.
+        const { resolveIdentity } = createDoAuthWiring({
+            internalSecret: INTERNAL_SECRET,
+            namespace: {
+                get: () => {
+                    return { fetch: (request: Request) => authDo.fetch(request) };
+                },
+                idFromName: (name: string) => name,
+            },
+        });
+
+        const identity = await resolveIdentity(new Request("https://example.test/_lunora/rpc", { headers: { cookie } }));
+
+        expect(identity?.expiresAtMs).toBeGreaterThan(Date.now());
+        expect(identity?.role).toBe("user");
     });
 
     it("serves the audit log to a trusted caller, creating its table on demand", async () => {

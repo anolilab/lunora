@@ -284,7 +284,20 @@ class AppBuilder<Env extends object> {
                 // `admin()` plugin owns that column (comma-joined for multiple roles)
                 // and only an administrator can write it; it is absent when the plugin
                 // is off, which reads as no roles.
-                return { role: (session.user as { role?: unknown }).role, userId: session.user.id };
+                //
+                // `expiresAtMs` is the socket credential expiry the runtime forwards
+                // as `x-lunora-identity-exp`. Without it the DO's expiry check never
+                // fires, so a signed-out, banned or lapsed user keeps streaming their
+                // RLS-scoped rows over an already-open WebSocket while every HTTP call
+                // is anonymous. better-auth hands back a `Date`; anything else means
+                // the adapter did not hydrate it, and omitting beats guessing.
+                const expiresAt = session.session.expiresAt;
+
+                return {
+                    ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
+                    role: (session.user as { role?: unknown }).role,
+                    userId: session.user.id,
+                };
             };
             const authInstance = getAuth();
 

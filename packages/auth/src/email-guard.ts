@@ -132,14 +132,35 @@ let listsPromise: Promise<void> | undefined;
  * the gating path is always edge-safe. Idempotent — repeat calls share one load.
  */
 const loadEmailDomainLists = async (): Promise<void> => {
-    listsPromise ??= (async (): Promise<void> => {
-        const [disposable, free] = await Promise.all([import("@visulima/disposable-email-domains/domains"), import("@visulima/free-email-domains/domains")]);
+    if (listsPromise) {
+        return listsPromise;
+    }
+
+    const run = (async (): Promise<void> => {
+        const [disposable, free] = await Promise.all([
+            import("@visulima/disposable-email-domains/domains"),
+            // `with { type: "json" }` is load-bearing: this specifier resolves to a raw
+            // `dist/domains.json`, and native ESM rejects a JSON module imported without
+            // the attribute (`ERR_IMPORT_ATTRIBUTE_MISSING`). Vite and wrangler's esbuild
+            // inline the JSON, so the bundled paths never notice — only the published
+            // `dist/email-guard.mjs` hits it, where it turns every signup into a 500.
+            import("@visulima/free-email-domains/domains", { with: { type: "json" } }),
+        ]);
 
         setDisposableDomains(listFromModule(disposable));
         setFreeDomains(listFromModule(free));
     })();
 
-    return listsPromise;
+    // Recorded synchronously so concurrent callers single-flight onto this run, and
+    // evicted on rejection so a transient failure doesn't brick the gate for the
+    // isolate's life — a memoised rejection would make `emailGateMiddleware` answer
+    // 500 forever. Mirrors `audit.ts`'s `ensured` and `migrate.ts`'s `migrating`.
+    listsPromise = run;
+    run.catch(() => {
+        listsPromise = undefined;
+    });
+
+    return run;
 };
 
 /**
