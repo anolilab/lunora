@@ -1,3 +1,21 @@
+## @lunora/studio [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.141...@lunora/studio@1.0.0-alpha.142) (2026-09-01)
+
+### Features
+
+* **studio:** set a column across matching rows ([#538](https://github.com/anolilab/lunora/issues/538)) ([2a2c9f2](https://github.com/anolilab/lunora/commit/2a2c9f229fe7affc314e9967f4c649b93c1b3559))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.102
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.44
+* **@lunora/client:** upgraded to 1.0.0-alpha.68
+* **@lunora/errors:** upgraded to 1.0.0-alpha.27
+* **@lunora/react:** upgraded to 1.0.0-alpha.73
+* **@lunora/mail:** upgraded to 1.0.0-alpha.57
+* **@lunora/notify:** upgraded to 1.0.0-alpha.31
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.85
+
 ## @lunora/studio [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.140...@lunora/studio@1.0.0-alpha.141) (2026-08-31)
 
 ### Bug Fixes
