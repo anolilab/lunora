@@ -1079,6 +1079,64 @@ describe("mask — relation-depth value oracle fails closed (regression)", () =>
         // filters — and the hydrated child is still masked on the way out.
         expect((result.page[0] as { author?: Record<string, unknown> }).author).toMatchObject({ name: "Ada", ssn: null });
     });
+
+    /**
+     * Glue a `posts` facade entry onto the fake writer, the way codegen's
+     * `bindTableFacade` does — so the read can use the IDIOMATIC
+     * `ctx.db.posts.findMany(...)` form instead of the flat method form every
+     * test above uses. `isFacadeEntry` recognises an entry structurally, by
+     * `findMany` + `withSearchIndex`, so those two are all the fixture needs.
+     */
+    const withPostsFacade = (database: FakeDatabase): void => {
+        const facade = database.writer as FakeDatabase["writer"] & Record<string, unknown>;
+
+        facade["posts"] = {
+            findMany: async (args?: unknown) => database.writer.findMany("posts", args),
+            withSearchIndex: () => {
+                throw new Error("withSearchIndex not used in these tests");
+            },
+        };
+    };
+
+    it("refuses the hop filter through the per-table FACADE of an UNMASKED root", async () => {
+        expect.assertions(1);
+
+        const database = oracleDatabase();
+
+        withPostsFacade(database);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(async ({ ctx }) => {
+            const { db } = ctx as unknown as { db: Record<string, { findMany: (args?: unknown) => Promise<unknown> }> };
+
+            return db["posts"]!.findMany({ with: { author: { where: { ssn: { eq: SSN } } } } });
+        });
+
+        await expect(handler.handler(makeContext(database, "u1") as unknown as Record<string, unknown>, {})).rejects.toMatchObject({
+            code: "MASK_UNSUPPORTED",
+            name: "LunoraError",
+        });
+    });
+
+    it("masks a hop-hydrated child read through the per-table FACADE of an UNMASKED root", async () => {
+        expect.assertions(1);
+
+        const database = oracleDatabase();
+
+        withPostsFacade(database);
+
+        const handler = lunora.query.use(maskForTest({ users: { ssn: "redact" } })).query(async ({ ctx }) => {
+            const { db } = ctx as unknown as { db: Record<string, { findMany: (args?: unknown) => Promise<Page> }> };
+
+            return db["posts"]!.findMany({ with: { author: true } });
+        });
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        // Without the facade rebind the read never reaches the wrapper, so no
+        // `relationMask` is threaded and the child's masked column comes back in
+        // the clear — a straight mask bypass, not merely an oracle.
+        expect((result.page[0] as { author?: Record<string, unknown> }).author).toMatchObject({ ssn: null });
+    });
 });
 
 describe("mask — stacked middlewares", () => {
@@ -2129,10 +2187,21 @@ describe("mask — per-table facade (no mask bypass)", () => {
         expect(result.page[0]?.["email"]).toBeNull();
     });
 
-    it("leaves a non-masked table's facade entry on its original binding", async () => {
-        expect.assertions(2);
+    /**
+     * This test used to pin the opposite — "leaves a non-masked table's facade
+     * entry on its original binding" — on the reasoning that an unmasked table
+     * needs no masking. That was wrong: a read of an UNMASKED table reaches a
+     * masked column through a relation (`events.findMany({ with: { user: … } })`
+     * hydrates a masked `users` row, and a per-hop `where` on it is the value
+     * oracle `assertWithAllowed` closes). Both the `relationMask` that redacts
+     * the child and the hop guard live on the wrapped writer, so an unmasked
+     * table left on its raw binding was a mask BYPASS via the idiomatic facade
+     * form — see the two facade tests in the relation-depth describe above.
+     */
+    it("re-binds EVERY facade entry through the mask, masked table or not", async () => {
+        expect.assertions(3);
 
-        const database = createFakeDatabase([]);
+        const database = createFakeDatabase([{ _id: "e1", table: "events", title: "Launch" }]);
 
         let usersEntry: unknown;
         let eventsEntry: unknown;
@@ -2143,18 +2212,20 @@ describe("mask — per-table facade (no mask bypass)", () => {
             usersEntry = db["users"];
             eventsEntry = db["events"];
 
-            return null;
+            return (db["events"] as { findMany: (args?: unknown) => Promise<Page> }).findMany();
         });
 
         const context = makeFacadeContext(database, "u1");
         const originalEvents = (context["db"] as Record<string, unknown>)["events"];
         const originalUsers = (context["db"] as Record<string, unknown>)["users"];
 
-        await handler.handler(context, {});
+        const result = await handler.handler(context, {});
 
-        // events: untouched reference; users: re-bound through the mask.
-        expect(eventsEntry).toBe(originalEvents);
+        expect(eventsEntry).not.toBe(originalEvents);
         expect(usersEntry).not.toBe(originalUsers);
+        // Re-bound, but nothing on `events` is masked — the policy still scopes
+        // which VALUES are rewritten; only the routing changed.
+        expect(result.page[0]).toEqual({ _id: "e1", table: "events", title: "Launch" });
     });
 });
 

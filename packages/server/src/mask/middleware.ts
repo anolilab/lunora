@@ -94,6 +94,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { fnv1aHex } from "../../../../shared/fnv1a";
+import { isRelationPredicate } from "../../../../shared/relation-operators";
 import type { Middleware } from "../builder/types";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
@@ -673,26 +674,6 @@ const wrapDatabase = <Context>(
         }
     }
 
-    /** Prisma-style relation operators — mirrors `@lunora/shard-engine`'s `relation-predicates.ts`. */
-    const RELATION_OPERATOR_KEYS: ReadonlySet<string> = new Set(["every", "is", "isNot", "none", "some"]);
-
-    /**
-     * A value is a relation predicate when it is a non-empty plain object whose
-     * every key is a known relation operator — the same "all keys known"
-     * disambiguation `@lunora/server`'s RLS side (`rls/middleware.ts`) and the
-     * engine's pre-resolver use. Relation operator names don't collide with the
-     * column-operator names (`eq`/`in`/`lt`/…), so shape alone identifies one.
-     */
-    const isRelationPredicate = (value: unknown): value is Record<string, unknown> => {
-        if (!value || typeof value !== "object" || Array.isArray(value)) {
-            return false;
-        }
-
-        const keys = Object.keys(value);
-
-        return keys.length > 0 && keys.every((key) => RELATION_OPERATOR_KEYS.has(key));
-    };
-
     /**
      * Walk a `where` clause and throw on the first reference to a masked column.
      *
@@ -752,6 +733,18 @@ const wrapDatabase = <Context>(
     };
 
     /**
+     * The masked-column set a ROOT-level `where`/`orderBy` on `tableName` is
+     * checked against: that table's own masked columns, or nothing when the root
+     * table carries no policy — an unmasked root still descends into
+     * {@link maskedAnywhere} at its relation nodes.
+     */
+    const rootScope = (tableName: string): ReadonlySet<string> => {
+        const columns = perTable.get(tableName);
+
+        return columns ? new Set(Object.keys(columns)) : new Set<string>();
+    };
+
+    /**
      * SECURITY (value oracle): masking only redacts OUTPUT values — it does not
      * stop a caller filtering by a masked column. `findMany({ where: { ssn: { eq:
      * X } } })` (row present ⇒ value confirmed) or a range predicate lets a caller
@@ -774,11 +767,7 @@ const wrapDatabase = <Context>(
             return;
         }
 
-        // The root level is checked against the ROOT table's masked columns only
-        // (an unmasked root has none — but its relation nodes still descend).
-        const columns = perTable.get(tableName);
-
-        assertWhereScope(where, columns ? new Set(Object.keys(columns)) : new Set<string>(), tableName, method);
+        assertWhereScope(where, rootScope(tableName), tableName, method);
     };
 
     /**
@@ -790,32 +779,13 @@ const wrapDatabase = <Context>(
      * (`order()` over a masked `withIndex` already throws). `orderBy` is a
      * `Partial<Record<column, "asc" | "desc">>[]`, so each entry's keys are the
      * ordered columns.
+     *
+     * `scope` is the masked-column set this level is checked against — the same
+     * split `assertWhereScope` makes: {@link rootScope} at the root, and
+     * {@link maskedAnywhere} for a `with` hop, whose sort is the same oracle one
+     * level down over a table this middleware cannot resolve.
      */
-    const assertOrderByAllowed = (tableName: string, orderBy: unknown, method: string): void => {
-        const columns = perTable.get(tableName);
-
-        if (!columns || !Array.isArray(orderBy)) {
-            return;
-        }
-
-        for (const entry of orderBy) {
-            if (entry && typeof entry === "object" && !Array.isArray(entry)) {
-                for (const field of Object.keys(entry as Record<string, unknown>)) {
-                    if (field in columns) {
-                        throw new LunoraError("MASK_UNSUPPORTED", `${method}() ordering "${tableName}" by masked column "${field}" is not supported`);
-                    }
-                }
-            }
-        }
-    };
-
-    /**
-     * The `orderBy` half of {@link assertWithAllowed}: a relation hop sorted by a
-     * masked column is the same sort/rank oracle `assertOrderByAllowed` closes at
-     * the root, one level down. Checked against {@link maskedAnywhere} for the
-     * same reason the hop's `where` is.
-     */
-    const assertHopOrderByAllowed = (orderBy: unknown, label: string, method: string): void => {
+    const assertOrderByAllowed = (label: string, orderBy: unknown, scope: ReadonlySet<string>, method: string): void => {
         if (!Array.isArray(orderBy)) {
             return;
         }
@@ -826,7 +796,7 @@ const wrapDatabase = <Context>(
             }
 
             for (const field of Object.keys(entry as Record<string, unknown>)) {
-                if (maskedAnywhere.has(field)) {
+                if (scope.has(field)) {
                     throw new LunoraError("MASK_UNSUPPORTED", `${method}() ordering "${label}" by masked column "${field}" is not supported`);
                 }
             }
@@ -846,7 +816,7 @@ const wrapDatabase = <Context>(
      * why the hop's real target table is not resolvable here). `_count` carries
      * relation names, not a predicate, so it is skipped.
      */
-    const assertWithAllowed = (withInput: unknown, label: string, method: string): void => {
+    const assertWithAllowed = (label: string, withInput: unknown, method: string): void => {
         if (maskedAnywhere.size === 0 || !withInput || typeof withInput !== "object" || Array.isArray(withInput)) {
             return;
         }
@@ -860,9 +830,30 @@ const wrapDatabase = <Context>(
             const hopLabel = `${label}.${relationName}`;
 
             assertWhereScope(nested.where, maskedAnywhere, hopLabel, method);
-            assertHopOrderByAllowed(nested.orderBy, hopLabel, method);
-            assertWithAllowed(nested.with, hopLabel, method);
+            assertOrderByAllowed(hopLabel, nested.orderBy, maskedAnywhere, method);
+            assertWithAllowed(hopLabel, nested.with, method);
         }
+    };
+
+    /**
+     * The whole caller-reachable read surface of `findMany`/`findFirst`/
+     * `findFirstOrThrow`, in one place: both filters (`where` and the equally
+     * caller-reachable `baseWhere`), the sort, and the `with` tree.
+     *
+     * The scalar readers deliberately get LESS than this, and the difference is
+     * a property of their argument shapes, not an oversight:
+     * `count`/`aggregate`/`groupBy` take a bare `where` (`aggregate`/`groupBy`
+     * additionally route their column arguments through
+     * `assertReductionAllowed`) — none of the three accepts an `orderBy` or a
+     * `with`, so there is no sort oracle and no relation hop to walk. Should one
+     * of them grow either argument, route it through here instead of widening
+     * its own call site.
+     */
+    const assertReadArgsAllowed = (tableName: string, args: QueryArgs | undefined, method: string): void => {
+        assertWhereAllowed(tableName, args?.where, method);
+        assertWhereAllowed(tableName, args?.baseWhere, method);
+        assertOrderByAllowed(tableName, args?.orderBy, rootScope(tableName), method);
+        assertWithAllowed(tableName, args?.with, method);
     };
 
     /**
@@ -889,7 +880,7 @@ const wrapDatabase = <Context>(
 
         assertWhereAllowed(tableName, wrapper?.["where"], method);
         assertWhereAllowed(tableName, wrapper?.["baseWhere"], method);
-        assertWithAllowed(wrapper?.["with"], tableName, method);
+        assertWithAllowed(tableName, wrapper?.["with"], method);
     };
 
     const wrapped: MaskDatabase = {
@@ -942,10 +933,7 @@ const wrapDatabase = <Context>(
         },
 
         async findFirst(tableName, args) {
-            assertWhereAllowed(tableName, args?.where, "findFirst");
-            assertWhereAllowed(tableName, args?.baseWhere, "findFirst");
-            assertOrderByAllowed(tableName, args?.orderBy, "findFirst");
-            assertWithAllowed(args?.with, tableName, "findFirst");
+            assertReadArgsAllowed(tableName, args, "findFirst");
 
             const row = await base.findFirst(tableName, withRelationMask(args));
             const columns = perTable.get(tableName);
@@ -954,10 +942,7 @@ const wrapDatabase = <Context>(
         },
 
         async findFirstOrThrow(tableName, args) {
-            assertWhereAllowed(tableName, args?.where, "findFirstOrThrow");
-            assertWhereAllowed(tableName, args?.baseWhere, "findFirstOrThrow");
-            assertOrderByAllowed(tableName, args?.orderBy, "findFirstOrThrow");
-            assertWithAllowed(args?.with, tableName, "findFirstOrThrow");
+            assertReadArgsAllowed(tableName, args, "findFirstOrThrow");
 
             const row = await base.findFirstOrThrow(tableName, withRelationMask(args));
             const columns = perTable.get(tableName);
@@ -966,10 +951,7 @@ const wrapDatabase = <Context>(
         },
 
         async findMany(tableName, args) {
-            assertWhereAllowed(tableName, args?.where, "findMany");
-            assertWhereAllowed(tableName, args?.baseWhere, "findMany");
-            assertOrderByAllowed(tableName, args?.orderBy, "findMany");
-            assertWithAllowed(args?.with, tableName, "findMany");
+            assertReadArgsAllowed(tableName, args, "findMany");
 
             const page = await base.findMany(tableName, withRelationMask(args));
             const columns = perTable.get(tableName);
@@ -1062,16 +1044,30 @@ const wrapDatabase = <Context>(
     // SECURITY: the generated runtime glues a per-table facade
     // (`ctx.db.users.findMany(...)`) onto `ctx.db`, bound to the UNWRAPPED
     // writer. The `...base` spread copies those raw-bound accessors verbatim, so
-    // without this loop a masked table's facade would read around the mask. Re-
-    // bind the masked tables through the wrapped writer using the SAME
-    // `bindTableFacade` codegen emits, so the two can't drift. Only MASKED
-    // tables are re-bound (a non-masked entry, including a `.global()` D1-bound
-    // one, must keep its original binding).
+    // without this loop a table's facade would read around the mask. Re-bind
+    // through the wrapped writer using the SAME `bindTableFacade` codegen emits,
+    // so the two can't drift.
+    //
+    // EVERY facade entry is re-bound, not just the masked tables'. A read of an
+    // UNMASKED root reaches a masked column two ways — a `with` hop or a
+    // relation predicate hydrates the masked child (`relationMask` is what
+    // redacts it), and a per-hop `where`/`orderBy` on that child is the value
+    // oracle `assertWithAllowed` closes. Both live on the wrapper, so
+    // `ctx.db.posts.findMany({ with: { author: … } })` under
+    // `mask({ users: { ssn } })` served the child's `ssn` in the clear while
+    // `ctx.db.findMany("posts", …)` refused it. Which unmasked tables can reach
+    // a masked one is exactly the relation→table map this middleware does not
+    // have (see `maskedAnywhere`), so the condition is the same fail-closed one
+    // every guard uses: any mask at all ⇒ re-bind everything. Codegen binds all
+    // facade entries — `.global()` D1 tables included — through the one shard
+    // ctx-db, so re-binding cannot send a read to the wrong backend.
     const writableFacade = wrapped as unknown as Record<string, unknown>;
 
-    for (const tableName of perTable.keys()) {
-        if (isFacadeEntry((base as unknown as Record<string, unknown>)[tableName])) {
-            writableFacade[tableName] = bindTableFacade(wrapped, tableName);
+    if (maskedAnywhere.size > 0) {
+        for (const [tableName, entry] of Object.entries(base as unknown as Record<string, unknown>)) {
+            if (isFacadeEntry(entry)) {
+                writableFacade[tableName] = bindTableFacade(wrapped, tableName);
+            }
         }
     }
 
