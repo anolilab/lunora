@@ -198,7 +198,22 @@ export interface ApplyOnDeleteOptions {
     tableName: string;
 }
 
+/**
+ * The remaining per-REQUEST budget for capped-relation fan-out reads, shared by
+ * every `with` level of one read.
+ *
+ * Mutable and passed by reference on purpose: the bound that matters is the
+ * TOTAL number of reads a single request issues, and each nested `with` level
+ * resolves inside its own `fetcher` call, so a per-level cap bounds nothing.
+ * Threaded exactly the way `relationBaseWhere` is, and for the same reason —
+ * nested levels have to inherit it.
+ */
+export interface FanOutBudget {
+    remaining: number;
+}
+
 export interface ResolveWithOptions {
+    fanOutBudget?: FanOutBudget;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
     parents: Record<string, unknown>[];
@@ -223,8 +238,6 @@ export type OrderByInput = Record<string, SortDirection>;
 export interface QueryArgs {
     baseWhere?: WhereInput;
     cursor?: null | string;
-    includeDeleted?: boolean;
-    limit?: number;
 
     /**
      * Return `continueCursor: null` without building one. **Engine-internal**, in
@@ -240,6 +253,10 @@ export interface QueryArgs {
      * next page exists, and pages nowhere. `isDone` stays honest either way, so
      * prefer it for "is there more". Nothing but `findFirst` should set this.
      */
+    fanOutBudget?: FanOutBudget;
+    includeDeleted?: boolean;
+
+    limit?: number;
     omitContinueCursor?: boolean;
     orderBy?: OrderByInput[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;

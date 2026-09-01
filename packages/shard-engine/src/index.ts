@@ -330,6 +330,7 @@ export type {
     ColumnMetaLike,
     CrossShardReadArgs,
     DatabaseWriterLike,
+    FanOutBudget,
     GeoFilterBuilderLike,
     GeoIndexDefinitionLike,
     GeoScoredDocument,

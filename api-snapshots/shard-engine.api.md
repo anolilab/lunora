@@ -870,6 +870,14 @@ interface FacetValue {
 }
 ```
 
+### `FanOutBudget` (interface)
+
+```ts
+interface FanOutBudget {
+    remaining: number;
+}
+```
+
 ### `FanoutMetricsResult` (interface)
 
 ```ts
@@ -1556,6 +1564,7 @@ const QUEUE_TABLE = "__lunora_queue_messages";
 interface QueryArgs {
     baseWhere?: WhereInput;
     cursor?: null | string;
+    fanOutBudget?: FanOutBudget;
     includeDeleted?: boolean;
     limit?: number;
     omitContinueCursor?: boolean;
@@ -2169,6 +2178,7 @@ interface ResolveRelationPredicatesOptions {
 
 ```ts
 interface ResolveWithOptions {
+    fanOutBudget?: FanOutBudget;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
     parents: Record<string, unknown>[];
@@ -4416,7 +4426,7 @@ const recordShapeProbePass: (counters: ShapeProbeCounters, run: number, served: 
 ### `relationHooks` (const)
 
 ```ts
-const relationHooks: (args: Pick<QueryArgs, "relationBaseWhere" | "relationMask">) => Pick<QueryArgs, "relationBaseWhere" | "relationMask">;
+const relationHooks: (args: Pick<QueryArgs, "fanOutBudget" | "relationBaseWhere" | "relationMask">) => Pick<QueryArgs, "fanOutBudget" | "relationBaseWhere" | "relationMask">;
 ```
 
 ### `relayCountFor` (const)

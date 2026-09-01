@@ -320,6 +320,76 @@ describe("ctx-db relations", () => {
             expect(page.every((row) => (row["reactions"] as Record<string, unknown>[]).length === 1)).toBe(true);
         });
 
+        it("spends the fan-out budget across nested levels, not per level", async () => {
+            expect.assertions(3);
+
+            // A per-LEVEL cap bounds nothing. Each level-1 fan-out read resolves
+            // its own nested `with` inside its own fetcher call, seeing only its
+            // own `cap` parents — under any per-level threshold — so the levels
+            // multiply instead of falling back. The budget is therefore a total,
+            // shared by reference across every level of one read.
+            const seen: string[] = [];
+            const recording: SqlExec = {
+                exec: (query: string, ...parameters: unknown[]) => {
+                    seen.push(query);
+
+                    return harness.sql.exec(query, ...parameters);
+                },
+            };
+
+            runShardMigrations(recording, schema);
+
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: recording });
+
+            // 20 users, each with 3 messages, each message with 3 reactions.
+            // Level 1 spends 20 of the 32, leaving 12 — far fewer than the 60
+            // distinct messages level 2 would need, so level 2 goes batched.
+            for (let user = 0; user < 20; user += 1) {
+                const userId = `u${String(user)}`;
+
+                // eslint-disable-next-line no-await-in-loop -- sequential seeding on one SQLite handle
+                await writer.insert("users", { _id: userId, name: "n" }, { allowExplicitId: true });
+
+                for (let message = 0; message < 3; message += 1) {
+                    const messageId = `${userId}-m${String(message)}`;
+
+                    // eslint-disable-next-line no-await-in-loop -- same handle
+                    await writer.insert("messages", { _id: messageId, authorId: userId, body: "b" }, { allowExplicitId: true });
+
+                    for (let reaction = 0; reaction < 3; reaction += 1) {
+                        // eslint-disable-next-line no-await-in-loop -- same handle
+                        await writer.insert("reactions", { _id: `${messageId}-r${String(reaction)}`, emoji: "🎉", messageId }, { allowExplicitId: true });
+                    }
+                }
+            }
+
+            seen.length = 0;
+
+            const { page } = await writer.findMany("users", {
+                limit: 20,
+                orderBy: [{ _id: "asc" }],
+                with: { messages: { limit: 2, orderBy: [{ _id: "asc" }], with: { reactions: { limit: 2, orderBy: [{ _id: "asc" }] } } } },
+            });
+
+            // A fan-out read pins one parent key with `=`; the batched fallback
+            // asks for them all with `IN (...)`. That is what separates budgeted
+            // reads from the unbudgeted fallback in the recorded SQL.
+            const childReads = seen.filter((query) => query.includes(`FROM "messages"`) || query.includes(`FROM "reactions"`));
+            const fannedOut = childReads.filter((query) => !query.includes("IN (")).length;
+
+            // The invariant: fan-out spend is a TOTAL across levels. 20 goes at
+            // level 1 and the remaining 12 at level 2, after which level 2 falls
+            // back. Bounded per level instead, level 2 alone would fan out 40
+            // more (2 per level-1 read) and nothing would stop a third level.
+            expect(fannedOut).toBe(32);
+            expect(fannedOut).toBeLessThanOrEqual(32);
+
+            // And the caps still hold in the batched branch.
+            const messages = page[0]!["messages"] as Record<string, unknown>[];
+
+            expect(messages.every((row) => (row["reactions"] as Record<string, unknown>[]).length === 2)).toBe(true);
+        });
+
         it("_count attaches per-parent aggregate without loading rows", async () => {
             expect.assertions(4);
 
