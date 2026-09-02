@@ -1,22 +1,18 @@
-import { planSearchBackfillPass } from "@lunora/search-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { migrateSearchState, readSearchBackfillState, readSearchIndexCoverage, SEARCH_STATE_TABLE, writeSearchBackfillState } from "../src/ctx-db-search-state";
+import { migrateSearchState, readSearchIndexCoverage, SEARCH_STATE_TABLE, writeSearchBackfillState } from "../src/ctx-db-search-state";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * The `covered` latch is what lets a REBUILDING companion keep serving while a
- * NEW one refuses, and it survives an analyzer-version bump on purpose. What it
- * must not survive is a rebuild it cannot vouch for.
+ * How this plane spells `searchCoverageSurvives`' answer in SQL — the `MAX(...)`
+ * latch against the `excluded.covered` replace, over a real upsert.
  *
- * A progress row written before profile tracking existed carries `covered = 1`
- * and no profile. `planSearchBackfillPass` reads "no profile" as a mismatch —
- * it wipes the companion and re-walks from the top — but the latch used to
- * classify the same absence as "unchanged" and hold `covered` at 1 through the
- * wipe. An emptied companion then reported itself complete, and every read until
- * the walk finished returned a fraction of the matches as the whole answer.
+ * WHEN the latch may carry, and what it costs when it may not, is decided and
+ * argued once in `@lunora/search-core` (`searchCoverageSurvives`) and tested
+ * there. These cases exist because the two engines write the flag with different
+ * statements, and a shared policy spelled wrong on one plane is still wrong.
  */
-describe("search backfill coverage across a legacy progress row", () => {
+describe("search backfill coverage upsert", () => {
     let database: ReturnType<typeof createSqliteExec>;
 
     beforeEach(() => {
@@ -35,21 +31,7 @@ describe("search backfill coverage across a legacy progress row", () => {
         database.raw(`INSERT INTO "${SEARCH_STATE_TABLE}" ("companion", "cursor", "done", "profile", "covered") VALUES (?, NULL, 1, NULL, 1)`, COMPANION);
     };
 
-    it("plans a wipe-and-rewalk for a row with no recorded profile", () => {
-        expect.assertions(1);
-
-        seedLegacyRow();
-
-        // The premise the latch has to answer to: the companion's rows are about
-        // to be discarded.
-        expect(planSearchBackfillPass(readSearchBackfillState(database.sql, COMPANION), "en-v1:body")).toStrictEqual({
-            cursor: undefined,
-            finished: false,
-            wipe: true,
-        });
-    });
-
-    it("drops coverage on the first incomplete page of that rewalk", () => {
+    it("replaces coverage on the first incomplete page of a rebuild it cannot vouch for", () => {
         expect.assertions(2);
 
         seedLegacyRow();
@@ -72,12 +54,11 @@ describe("search backfill coverage across a legacy progress row", () => {
         expect(readSearchIndexCoverage(database.sql, COMPANION)).toBe(true);
     });
 
-    it("still holds the latch through an analyzer bump that keeps the same field", () => {
+    it("holds a latched 1 against an incomplete page of a rebuild it can vouch for", () => {
         expect.assertions(1);
 
-        // The case the latch exists for: the rows are all present, just analyzed
-        // by older rules, so refusing every search for the length of the re-walk
-        // would be the worse answer.
+        // `MAX(covered, excluded.covered)` rather than the replace: the second
+        // write carries `done = 0`, and a plain assignment would drop the flag.
         writeSearchBackfillState(database.sql, COMPANION, "doc-1200", true, "en-v1:body");
         writeSearchBackfillState(database.sql, COMPANION, "doc-0500", false, "en-v2:body");
 

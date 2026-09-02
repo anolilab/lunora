@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { backfillSearchIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { searchIndexCoversTable } from "../src/ctx-db-backfill";
+import { SEARCH_STATE_TABLE } from "../src/ctx-db-search-state";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -232,6 +233,46 @@ describe("search over a still-backfilling index", () => {
             backfillSearchIndexes(harness.sql, reanalyzedSchema);
 
             await expect(searchTitles("needle", reanalyzedSchema)).resolves.toStrictEqual([`t${String(NEW_NEEDLE)}`, `t${String(OLD_NEEDLE)}`]);
+        });
+
+        it("refuses for the length of one re-walk after an upgrade from before profile tracking", async () => {
+            expect.assertions(5);
+
+            await seedThenDeployIndex();
+            backfillSearchIndexes(harness.sql, indexedSchema);
+
+            // Exactly what `migrateSearchState` leaves on a deployment whose rows
+            // predate the `profile` column: finished, latched covered, and nothing
+            // recorded about what analyzed them or over which field. No schema
+            // change is involved — this is the upgrade itself.
+            harness.raw(`UPDATE "${SEARCH_STATE_TABLE}" SET "profile" = NULL`);
+
+            expect(searchIndexCoversTable(harness.sql, "docs", indexedSchema.tables["docs"]!.searchIndexes![0]!)).toBe(true);
+
+            // …and the first read flips it. The absent profile reads as a
+            // mismatch, so the pass restarts at the top, and the write of its
+            // first page cannot vouch for what the stored rows are about — the
+            // field could have moved in the same deploy that added tracking, and
+            // no record survives to say it did not. `covered` drops and stays
+            // down until the re-walk finishes.
+            //
+            // THE COST, which is the whole point of this case: every search on
+            // this index answers 503 `SEARCH_INDEX_BUILDING` for the length of
+            // that walk — 500 rows per request-driven pass — where the build
+            // before this one kept serving. It is bounded, loud, and closed in
+            // one call by the `backfillSearch` admin op named in the error; the
+            // alternative is serving matches over a column nothing can confirm.
+            await expect(searchTitles("needle")).rejects.toThrow(/still backfilling/u);
+            expect(searchIndexCoversTable(harness.sql, "docs", indexedSchema.tables["docs"]!.searchIndexes![0]!)).toBe(false);
+
+            // Nothing was emptied — every row is still in the companion. The
+            // refusal is a judgement about what those rows can be trusted to
+            // mean, not a gap in them.
+            expect(indexedRows()).toBe(ROW_COUNT);
+
+            backfillSearchIndexes(harness.sql, indexedSchema);
+
+            await expect(searchTitles("needle")).resolves.toStrictEqual([`t${String(NEW_NEEDLE)}`, `t${String(OLD_NEEDLE)}`]);
         });
 
         it("refuses again while a re-POINTED index rebuilds, instead of serving the abandoned column", async () => {

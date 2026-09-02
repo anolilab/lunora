@@ -29,7 +29,7 @@
 
 import type { SearchBackfillState } from "@lunora/search-core";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { searchIndexField } from "@lunora/search-core";
+import { searchCoverageSurvives } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
 
 // Type-only import for the structural surface threaded in — a value import
@@ -131,35 +131,24 @@ const readSearchBackfillState = (sql: SqlExec, companion: string): SearchBackfil
  * only ever rises — which is what lets a rebuild that has cleared `done` still
  * be told apart from a first walk.
  *
- * The one thing that BREAKS the latch is re-pointing the index at another
- * FIELD. The latch's whole justification is that a rebuilding companion still
- * holds an answer about the column that was asked for, just under older rules.
- * After a field change it does not: every stored row holds the text of the
- * abandoned column, so a latched `covered` had the read path serve confidently
- * wrong matches for the whole re-walk (500 rows per read on this plane). Only
- * the FIELD half of the profile is compared, so an analyzer-version or language
- * bump keeps the latch exactly as before.
+ * Whether the latch may carry into a given rebuild is
+ * {@link searchCoverageSurvives}'s call, shared with the sql-store twin so the
+ * two planes cannot answer it differently. That docblock carries the reasoning
+ * and the operational cost — including the 503 window an upgrade from before
+ * profile tracking pays once.
  */
 const writeSearchBackfillState = (sql: SqlExec, companion: string, cursor: string | undefined, done: boolean, profile: string): void => {
     // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
     const cursorValue = cursor ?? null;
-    const recorded = readSearchBackfillState(sql, companion).profile;
-    // An ABSENT recorded profile breaks the latch too. A row written before
-    // profile tracking existed can carry `covered = 1` and no profile, and
-    // `planSearchBackfillPass` treats "no profile" as a mismatch: it wipes the
-    // companion and re-walks. Latching `covered` through that wipe reports an
-    // emptied companion as complete, and every read until the walk finishes
-    // returns partial matches as the whole answer. Nothing says what analyzed
-    // those rows or over which field, so the only sound reading is "unverified,
-    // reset". A companion with no state row at all takes this branch as well and
+    // A companion with no state row at all takes the "unverified" branch too and
     // is unaffected: its INSERT writes `covered = done` either way.
-    const fieldUnverified = recorded === undefined || searchIndexField(recorded) !== searchIndexField(profile);
+    const verified = searchCoverageSurvives(readSearchBackfillState(sql, companion).profile, profile);
     // `MAX(...)` latches; `excluded.covered` (which is `done`) replaces. Only the
     // FIRST page of a field-change rebuild sees a differing recorded profile —
     // from the second page on, the recorded profile is already the new one.
-    const coveredValue = fieldUnverified
-        ? dsql`excluded.${dsql.identifier("covered")}`
-        : dsql`MAX(${dsql.identifier(SEARCH_STATE_TABLE)}.${dsql.identifier("covered")}, excluded.${dsql.identifier("covered")})`;
+    const coveredValue = verified
+        ? dsql`MAX(${dsql.identifier(SEARCH_STATE_TABLE)}.${dsql.identifier("covered")}, excluded.${dsql.identifier("covered")})`
+        : dsql`excluded.${dsql.identifier("covered")}`;
 
     runDrizzle(
         sql,
