@@ -383,6 +383,13 @@ class SchedulerDO {
 
     protected readonly env: SchedulerEnv;
 
+    /**
+     * Whether {@link SchedulerDO.reindexOrphanedRecords} has already run in THIS
+     * instance. Once is enough: an orphan can only be minted by an eviction, and
+     * an eviction ends the instance that minted it.
+     */
+    private reindexed = false;
+
     public constructor(state: SchedulerDOState, env: SchedulerEnv) {
         this.state = state;
         this.env = env;
@@ -440,6 +447,10 @@ class SchedulerDO {
 
     /** Called by the Workers runtime when the alarm previously set by `_rescheduleAlarm()` fires. */
     public async alarm(): Promise<void> {
+        // BEFORE the due slice is read, so a job recovered here fires in this
+        // very pass rather than waiting for the next one.
+        await this.reindexOrphanedRecords();
+
         const now = Date.now();
         const due: ScheduleRecord[] = [];
 
@@ -1346,6 +1357,58 @@ class SchedulerDO {
 
         if (current === null || scheduledFor < current) {
             await this.state.storage.setAlarm(scheduledFor);
+        }
+    }
+
+    /**
+     * Re-index every pending job whose time-index entry is gone.
+     *
+     * {@link SchedulerDO.drainRecordGuarded} claims a job by DELETING its `t:`
+     * entry, awaited (so durable) BEFORE {@link SchedulerDO.dispatch}'s outbound
+     * fetch. If the Durable Object is evicted or crashes during that fetch, the
+     * `id:` header (and any `retry:` row) survives with no `t:` entry — and
+     * nothing puts one back: {@link SchedulerDO.rescheduleAlarm} derives the
+     * clock from `t:` alone, and `alarm()`'s inline reconciliation only handles
+     * the INVERSE orphan (a `t:` entry whose header is gone). The job then sits
+     * in `/list` and `/status.backlog` forever, never fires, never reaches
+     * `/dead`. The at-least-once contract `drainRecordGuarded` documents covers
+     * a thrown storage op, not a lost instance.
+     *
+     * Re-firing is safe: the dispatch carries the record id as
+     * `x-lunora-mutation-id`, which the receiver dedups on, so a job that DID
+     * reach the origin before the crash is not run twice.
+     *
+     * Two bounded walks (all `t:` values, then all `id:` headers) rather than a
+     * per-header `get`, so the cost is one pass over each prefix.
+     */
+    private async reindexOrphanedRecords(): Promise<void> {
+        if (this.reindexed) {
+            return;
+        }
+
+        this.reindexed = true;
+
+        const indexed = new Set<string>();
+
+        await this.forEachPage<string>("t:", (recordId) => {
+            indexed.add(recordId);
+        });
+
+        const orphans: ScheduleRecord[] = [];
+
+        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
+            // A record whose `scheduledFor` is not representable as an index key
+            // is deliberately unindexed (see `isIndexableTime`) — leave it alone.
+            if (!indexed.has(record.id) && isIndexableTime(record.scheduledFor)) {
+                orphans.push(record);
+            }
+        });
+
+        for (const record of orphans) {
+            // eslint-disable-next-line no-await-in-loop -- Durable Object storage is single-threaded local state; the index write and the alarm arm must land in order per record
+            await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
+            // eslint-disable-next-line no-await-in-loop -- same
+            await this.armAlarmIfEarlier(record.scheduledFor);
         }
     }
 

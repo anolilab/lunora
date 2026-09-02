@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -64,8 +65,18 @@ const waitForTerminator = async (ws: FakeWebSocket, deadlineMs = 200): Promise<v
 class StreamShard extends ShardDO {
     public registered = new Map<string, (args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>>();
 
-    // eslint-disable-next-line class-methods-use-this -- override stub; the streaming tests never dispatch a plain RPC
+    /** Function paths this shard reports as `.x402`-paid; stands in for the codegen registry lookup. */
+    public readonly paidPaths = new Set<string>();
+
+    /** The identity handed to `executeStream`, in call order — what the stream handler's ctx is built from. */
+    public readonly streamIdentities: ({ identity?: Record<string, unknown>; userId?: string } | undefined)[] = [];
+
+    /** When set, `handleRpc` parks on this promise, holding a dispatch open across an interleaved stream frame. */
+    public rpcGate: Promise<void> | undefined;
+
     public override async handleRpc(): Promise<unknown> {
+        await this.rpcGate;
+
         return null;
     }
 
@@ -82,13 +93,22 @@ class StreamShard extends ShardDO {
         ws.serializeAttachment(attachment);
     }
 
+    protected override isPaidFunction(functionPath: string): boolean {
+        return this.paidPaths.has(functionPath);
+    }
+
     /**
      * @returns the stream iterator for the registered function, or `null` when the path is unknown
      */
     protected override executeStream(
         functionPath: string,
         args: Record<string, unknown>,
+        identity?: { identity?: Record<string, unknown>; userId?: string },
     ): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        // Records what the codegen override forwards into `buildCtx` — the
+        // identity the stream handler's `ctx.auth`/`rls()` actually evaluates.
+        this.streamIdentities.push(identity);
+
         const fn = this.registered.get(functionPath);
 
         if (!fn) {
@@ -389,5 +409,113 @@ describe("shardDO streaming queries", () => {
         expect(errorSpy).toHaveBeenCalledWith("[@lunora/do] unhandled stream error:", expect.anything());
 
         errorSpy.mockRestore();
+    });
+
+    // -----------------------------------------------------------------------
+    // A `.stream()` handler runs under the SOCKET's identity — never the shared
+    // per-request fields, which a concurrently in-flight `/rpc` owns.
+    // -----------------------------------------------------------------------
+    const socketAttachment: SocketAttachment = {
+        connectionId: "c1",
+        identity: { roles: ["member"], userId: "socket-user" },
+        subs: {},
+        userId: "socket-user",
+    };
+
+    it("threads the socket's identity into executeStream when nothing else is in flight", async () => {
+        expect.assertions(1);
+
+        const shard = new StreamShard(state, {});
+
+        shard.registered.set("chat:answer", async function* answer() {
+            yield { token: "hi" };
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { ...socketAttachment, subs: {} });
+        await shard.driveMessage(ws, { id: "s1", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(ws);
+
+        // Without the explicit thread the ctx falls back to the per-request
+        // fields, which no dispatch has set here: an `rls()`-scoped stream
+        // would evaluate as nobody and return an empty result.
+        expect(shard.streamIdentities).toEqual([{ identity: { roles: ["member"], userId: "socket-user" }, userId: "socket-user" }]);
+    });
+
+    it("does not let a concurrently in-flight /rpc's identity reach a stream handler", async () => {
+        expect.assertions(2);
+
+        const shard = new StreamShard(state, {});
+
+        shard.registered.set("chat:answer", async function* answer() {
+            yield { token: "hi" };
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { ...socketAttachment, subs: {} });
+
+        // Park an `/rpc` for a DIFFERENT, privileged user mid-handler. The
+        // stream frame below interleaves with it: the shared per-request
+        // identity fields are stamped with `rpc-user`/`admin` right now.
+        let releaseRpc!: () => void;
+
+        shard.rpcGate = new Promise<void>((resolve) => {
+            releaseRpc = resolve;
+        });
+
+        const rpc = shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "notes:list" }),
+                headers: {
+                    "content-type": "application/json",
+                    "x-lunora-identity": encodeIdentityHeader({ roles: ["admin"], userId: "rpc-user" }),
+                    "x-lunora-userid": encodeUserIdHeader("rpc-user"),
+                },
+                method: "POST",
+            }),
+        );
+
+        await shard.driveMessage(ws, { id: "s2", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(ws);
+
+        releaseRpc();
+        await rpc;
+
+        expect(shard.streamIdentities).toHaveLength(1);
+        expect(shard.streamIdentities[0]).toEqual({ identity: { roles: ["member"], userId: "socket-user" }, userId: "socket-user" });
+    });
+
+    it("refuses a paid (.x402) stream instead of serving it free", async () => {
+        expect.assertions(3);
+
+        const shard = new StreamShard(state, {});
+
+        shard.paidPaths.add("reports:generate");
+        shard.registered.set("reports:generate", async function* generate() {
+            yield { row: 1 };
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+        await shard.driveMessage(ws, { id: "s3", query: { functionPath: "reports:generate" }, type: "stream" });
+
+        // The paywall lives at the origin worker, which a WS frame never
+        // crosses — mirrors the `subscribe` refusal.
+        expect(parseFrames(ws)).toEqual([
+            {
+                code: "BAD_REQUEST",
+                error: {
+                    code: "BAD_REQUEST",
+                    message: 'paid (`.x402`) function "reports:generate" cannot be streamed; call it individually over /_lunora/rpc',
+                },
+                id: "s3",
+                type: "error",
+            },
+        ]);
+        expect(shard.streamIdentities).toHaveLength(0);
+        expect(ws.sent).toHaveLength(1);
     });
 });
